@@ -234,13 +234,7 @@ type SectionKey =
   | "noAbYet"
   | "cashed"
   | "dead"
-  | "modelReview"
-  // Phase 1 (3-tier ladder) — synthetic display bucket that merges the two
-  // actionable tiers (FIRE + READY) into a single "HR Max Window" section.
-  // The user-facing live ladder collapses to exactly three tiers:
-  // Watch → Building → HR Max Window. attackNow/ready are still computed for
-  // counts and downstream logic; only the render order swaps them for hrMax.
-  | "hrMax";
+  | "modelReview";
 
 const SECTION_META: Record<SectionKey, {
   label: string;
@@ -260,22 +254,13 @@ const SECTION_META: Record<SectionKey, {
     sublabel: "Act now — conviction confirmed",
     defaultCollapsed: false,
   },
-  hrMax: {
-    label: "HR MAX WINDOW",
-    icon: Flame,
-    accent: "border-red-500/40 bg-red-500/5",
-    badge: "bg-red-500 text-white",
-    description: "Actionable HR signals in their max window — the only tier that grades to the record.",
-    sublabel: "Bet window open — conviction confirmed",
-    defaultCollapsed: false,
-  },
   ready: {
     label: "READY",
     icon: Zap,
     accent: "border-orange-500/40 bg-orange-500/5",
     badge: "bg-orange-500 text-white",
     description: "Playable HR setup — contact quality and matchup are aligned.",
-    sublabel: "High readiness, waiting for final trigger",
+    sublabel: "High conviction, waiting for final trigger",
     defaultCollapsed: false,
   },
   building: {
@@ -288,11 +273,11 @@ const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   watch: {
-    label: "WATCH",
+    label: "TRACK",
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
-    description: "Watching. HR conditions are forming, not actionable yet.",
+    description: "Tracking. HR conditions are forming, not actionable yet.",
     sublabel: "Early formation detected",
     defaultCollapsed: false,
   },
@@ -678,9 +663,11 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
     : momentum === "cooling_off" ? { glyph: "↓", color: "text-orange-400" }
     : momentum === "holding_strong" ? { glyph: "→", color: "text-amber-400" }
     : null;
-  // Phase 1 (3-tier ladder) — "hrMax" is the merged actionable section
-  // (FIRE + READY). Treat it like the old attackNow for styling + slip actions.
-  const isAttack = section === "attackNow" || section === "hrMax";
+  // Fire + Ready are the actionable, graded tier — the "HR Max Window". They
+  // are distinct ladder stages (Track → Build → Ready → Fire); "HR Max Window"
+  // is a contextual badge on these two, not a stage of its own.
+  const isAttack = section === "attackNow" || section === "ready";
+  const isHrMaxWindow = section === "attackNow" || section === "ready";
   // Goldmaster Phase 5 — derive live vs resolved mode. Resolved cards must
   // never carry "next AB" copy or any live-only verbiage.
   // HR Radar Final-Game Reconciliation — Phase 5: a card whose game is
@@ -696,7 +683,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   // Task #121 Step 3 — Take it / Pass are available on every LIVE card
   // (Attack Now / Building / Watch). Resolved sections (cashed/dead) get
   // no actions.
-  const isLiveSection = section === "attackNow" || section === "hrMax" || section === "building" || section === "watch";
+  const isLiveSection = section === "attackNow" || section === "ready" || section === "building" || section === "watch";
   const canAdd = !isResolved && isLiveSection && !!onAddToSlip;
   // Goldmaster Phase 7 — pregame indicator for 0-AB rows.
   const isPregameOnly =
@@ -748,7 +735,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
       const hrProbPct = entry.conversionProbability != null ? Math.round(entry.conversionProbability * 100) : null;
       const readPct   = entry.currentReadinessScore != null ? Math.round(entry.currentReadinessScore) : null;
       const scoreStr  = score10Val != null ? ` | Score: ${Number(score10Val).toFixed(1)}/10` : "";
-      const readStr   = readPct   != null ? ` | Readiness: ${readPct}%` : "";
+      const readStr   = readPct   != null ? ` | Conviction: ${readPct}%` : "";
       const probStr   = hrProbPct != null ? ` | HR Prob: ${hrProbPct}%` : "";
       const hdLine    = entry.headlineReason ? `\n"${entry.headlineReason.slice(0, 80)}"` : "";
       const tweetText = `${emoji} HR Radar: ${entry.playerName} (${entry.team})${scoreStr}${readStr}${probStr}${hdLine}\n\n#MLB #HRRadar #LiveLocks`;
@@ -831,6 +818,17 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
+            {/* "HR Max Window" is a contextual badge on the graded actionable
+                tier (Fire + Ready), not a ladder stage of its own. */}
+            {!isResolved && isHrMaxWindow && (
+              <span
+                className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30 shrink-0 whitespace-nowrap"
+                data-testid={`badge-hr-max-window-${entry.playerId}`}
+                title="HR Max Window — graded to the record"
+              >
+                HR MAX WINDOW
+              </span>
+            )}
           </div>
           {/* HR Radar contract: `detected` is frozen first-detection inning;
               never substitute `signalInning` or `scoreIncreaseInning` here. */}
@@ -878,6 +876,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                 <span
                   className={`text-base font-mono font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
                   data-testid={`text-signal-score-10-${entry.playerId}`}
+                  title="HR Conviction Score (0–10) — how many reasons the engine has to back this HR setup"
                 >
                   {score10.toFixed(1)}
                 </span>
@@ -1558,11 +1557,6 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
         ...buildingP.parked,
         ...watchP.parked,
       ],
-      // Phase 1 (3-tier ladder) — merged actionable display bucket. FIRE +
-      // READY collapse into the single "HR Max Window" tier the user sees and
-      // that grades to the record. attackNow/ready above are kept for counts
-      // and downstream pulse/cap logic.
-      hrMax: [...attackP.keep, ...readyP.keep],
       cashed: rawSections.cashed ?? [],
       dead: userMissed,
       modelReview: adminModelReview,
@@ -1671,11 +1665,12 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
   // Batch A — Phase 5: `modelReview` only appears for admins, at the very
   // bottom (after CASHED + MISSED) so it never competes with user-facing
   // sections. Hidden completely when not admin.
-  // Phase 1 (3-tier ladder) — render exactly three live tiers in order of
-  // conviction: HR Max Window (merged FIRE+READY) → Building → Watch.
+  // Single user-facing ladder, rendered top-down in order of conviction:
+  // Fire → Ready → Build → Track. (Fire + Ready are the graded "HR Max Window"
+  // tier, surfaced via a per-card badge rather than a merged section.)
   const allOrder: SectionKey[] = isAdmin
-    ? ["hrMax", "building", "watch", "noAbYet", "cashed", "dead", "modelReview"]
-    : ["hrMax", "building", "watch", "noAbYet", "cashed", "dead"];
+    ? ["attackNow", "ready", "building", "watch", "noAbYet", "cashed", "dead", "modelReview"]
+    : ["attackNow", "ready", "building", "watch", "noAbYet", "cashed", "dead"];
   const order: SectionKey[] = hideFinished
     ? allOrder.filter(k => k !== "cashed" && k !== "dead" && k !== "modelReview")
     : allOrder;
@@ -1696,8 +1691,8 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span data-testid="text-ladder-total" title="HR Max Window signals are graded to the record; Building/Watch are non-graded context.">
-            {counts.attackNow + counts.ready} HR Max
+          <span data-testid="text-ladder-total" title="Fire + Ready (HR Max Window) signals are graded to the record; Build/Track are non-graded context.">
+            {counts.attackNow + counts.ready} graded
             <span className="text-muted-foreground/60"> · {counts.building + counts.watch} context</span>
           </span>
           <Button
@@ -1756,7 +1751,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           )}
           {counts.watch > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-watch">
-              <Eye className="w-3 h-3" /> WATCH {counts.watch}
+              <Eye className="w-3 h-3" /> TRACK {counts.watch}
             </span>
           )}
           {counts.cashed > 0 && (

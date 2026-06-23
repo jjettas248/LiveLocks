@@ -77,7 +77,7 @@ function getWhyChips(entry: HrRadarLadderEntry): WhyChip[] {
     chips.push({ label: `Vuln ${Math.min(100, Math.round(entry.pitcherHrVulnerability))}`, tone: "neutral" });
   }
   if (entry.currentReadinessScore != null) {
-    chips.push({ label: `Ready ${Math.min(100, Math.round(entry.currentReadinessScore))}`, tone: "neutral" });
+    chips.push({ label: `Conviction ${Math.min(100, Math.round(entry.currentReadinessScore))}`, tone: "neutral" });
   }
   switch (entry.momentumLabel) {
     case "heating_up":
@@ -146,7 +146,10 @@ function QuickCard({
           {cfg.label}
         </span>
         {score != null && (
-          <span className={`text-xl font-bold tabular-nums ${cfg.badgeText}`}>
+          <span
+            className={`text-xl font-bold tabular-nums ${cfg.badgeText}`}
+            title="HR Conviction Score (0–10) — how many reasons the engine has to back this HR setup"
+          >
             {score.toFixed(1)}
             <span className="text-sm font-normal text-muted-foreground"> / 10</span>
           </span>

@@ -833,6 +833,9 @@ export function enrichWithUserStage(input: {
         emitHrRadarTransition({
           signalId: sid, gameId: gid, playerId: pid,
           fromStage: String(prevForTrace), toStage: String(userStage),
+          // Additive precision/recall fields — slice false-positive rate by path.
+          signalPath: input.alertPath ?? null,
+          score10: toSignalScore10(input.currentSignalScore10 ?? input.currentReadinessScore),
         });
       } catch { /* analytics never blocks runtime */ }
       rememberUserStage(identityKey, userStage);

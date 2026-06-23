@@ -60,6 +60,15 @@ export interface AnalyticsEvent {
   toStage?: string;
   reason?: string;
 
+  // HR Radar precision/recall instrumentation (read-only, additive).
+  // `signalPath` = engine alertPath (PATH_A..PATH_F_BLOCKED_BRIDGE, etc.) so
+  //   false-positive rate can be sliced by bridge path.
+  // `score10`   = user-facing conviction score (0–10) at the event moment.
+  // `finalStage`= highest user stage reached when a terminal outcome was stamped.
+  signalPath?: string;
+  score10?: number;
+  finalStage?: string;
+
   // HR Radar recall / lead-time measurement (read-only).
   // `blockedGate` = derived reason a miss never fired (conv_low / below_prepare
   // / below_bet_now / suppressed:<reason> / decayed / no_alert).

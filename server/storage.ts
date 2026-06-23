@@ -3496,6 +3496,26 @@ export class DatabaseStorage implements IStorage {
             alertSignalState: alert.signalState ?? null,
           });
         }
+
+        // Precision instrumentation — terminal outcome for HR radar signals.
+        // called_hit → cashed, called_miss → missed. (late_signal is a recall
+        // miss handled by the tracer above, not a precision miss.) This
+        // populates hr_radar_cashed/hr_radar_missed for the shadow rollups.
+        if (decision.gradingStatus === "called_hit" || decision.gradingStatus === "called_miss") {
+          const { emitHrRadarOutcome } = require("./analytics/eventEmitters");
+          const peakScore10 = alert.peakReadinessScore != null
+            ? Math.round((Number(alert.peakReadinessScore) / 10) * 10) / 10
+            : null;
+          emitHrRadarOutcome({
+            signalId: `mlb:${params.gameId}:${params.playerId}:home_runs:OVER`,
+            gameId: params.gameId, playerId: params.playerId,
+            kind: decision.gradingStatus === "called_hit" ? "cashed" : "missed",
+            signalPath: alert.alertPath ?? null,
+            score10: peakScore10,
+            finalStage: (alert as any).userStage ?? alert.signalState ?? null,
+            gradingStatus: decision.gradingStatus,
+          });
+        }
       } catch {}
 
       // Phase 1 — enrich decision with the matched alert's persisted tier

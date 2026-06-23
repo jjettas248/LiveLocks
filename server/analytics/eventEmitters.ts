@@ -201,6 +201,9 @@ export function emitHrRadarTransition(args: {
   playerId: string;
   fromStage: string;
   toStage: string;
+  // Additive precision/recall fields — no-op when absent (older callers).
+  signalPath?: string | null;
+  score10?: number | null;
 }): void {
   try {
     recordAnalyticsEvent({
@@ -215,8 +218,53 @@ export function emitHrRadarTransition(args: {
       lifecycleState: null,
       fromStage: args.fromStage,
       toStage: args.toStage,
+      ...(args.signalPath ? { signalPath: args.signalPath } : {}),
+      ...(typeof args.score10 === "number" && Number.isFinite(args.score10) ? { score10: args.score10 } : {}),
     });
   } catch (err: any) {
     console.warn(`[LL_ANALYTICS_EVENT] hr_radar emit failed err=${err?.message ?? err}`);
+  }
+}
+
+// ── HR Radar terminal outcome (precision measurement) ──────────────────
+// Emits the canonical hr_radar_cashed / hr_radar_missed events at the HR
+// grading boundary. These event types were declared but never emitted, so
+// every precision rollup that depended on them (falseFireRate, fireToCashed,
+// per-path false-positive rate) was silently empty. Read-only analytics tap.
+//
+//   kind="cashed"  → the tracked player hit a HR after a real call (called_hit)
+//   kind="missed"  → the player did NOT HR while we tracked them (called_miss)
+//
+// `late_signal` is intentionally NOT routed here — it is an uncalled/late HR
+// (a recall miss, not a precision miss) and is already captured by the
+// miss-tracer. Mixing it into hr_radar_missed would understate precision.
+export function emitHrRadarOutcome(args: {
+  signalId: string;
+  gameId: string;
+  playerId: string;
+  kind: "cashed" | "missed";
+  signalPath?: string | null;
+  score10?: number | null;
+  finalStage?: string | null;
+  gradingStatus?: string | null;
+}): void {
+  try {
+    recordAnalyticsEvent({
+      eventType: args.kind === "cashed" ? "hr_radar_cashed" : "hr_radar_missed",
+      signalId: args.signalId,
+      sport: "mlb",
+      gameId: args.gameId,
+      playerId: args.playerId,
+      market: "home_runs",
+      side: "OVER",
+      signalTier: null,
+      lifecycleState: null,
+      outcome: args.gradingStatus ?? args.kind,
+      ...(args.signalPath ? { signalPath: args.signalPath } : {}),
+      ...(typeof args.score10 === "number" && Number.isFinite(args.score10) ? { score10: args.score10 } : {}),
+      ...(args.finalStage ? { finalStage: args.finalStage } : {}),
+    });
+  } catch (err: any) {
+    console.warn(`[LL_ANALYTICS_EVENT] hr_radar_outcome emit failed err=${err?.message ?? err}`);
   }
 }
