@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Check, X, Zap, ListFilter } from "lucide-react";
+import { Check, X, Zap, Flame, ListFilter } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { type HrRadarLadderEntry, type HrRadarLadderResponse } from "@/components/mlb/HrRadarLadder";
-import { hrEntryCurrentScore10 } from "@/components/mlb/hrRadarScore";
+import { hrEntryCurrentScore10, hrEntryHrChancePct, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
 
 // Session key format mirrors HrRadarLadder.tsx exactly so Quick Decide and
 // Full Ladder share the same accept/dismiss state across view toggles.
@@ -29,15 +29,20 @@ interface HrQuickDecideProps {
   onSwitchToLadder?: () => void;
 }
 
+// Both actionable Quick Decide stages live in the TOP WINDOW tier; the icon
+// distinguishes urgency (fire = committed now, ready = top window). The headline
+// uses the true HR chance %, identical to the Full Ladder.
 const STAGE_CONFIG = {
   fire: {
-    label: "FIRE",
+    label: "TOP WINDOW",
+    icon: Flame,
     border: "border-red-500/50",
     badgeBg: "bg-red-500/20",
     badgeText: "text-red-400",
   },
   ready: {
-    label: "READY",
+    label: "TOP WINDOW",
+    icon: Zap,
     border: "border-orange-500/50",
     badgeBg: "bg-orange-500/20",
     badgeText: "text-orange-400",
@@ -46,8 +51,13 @@ const STAGE_CONFIG = {
 
 type ActionableStage = "fire" | "ready";
 
-function getDisplayScore(entry: HrRadarLadderEntry): number | null {
-  return hrEntryCurrentScore10(entry);
+// True HR chance % (preferred), falling back to the tier-banded action score
+// then the legacy /10 — all server-stamped, formatted only.
+function getHrChancePct(entry: HrRadarLadderEntry): number | null {
+  return hrEntryHrChancePct(entry);
+}
+function getFallbackScore10(entry: HrRadarLadderEntry): number | null {
+  return hrEntryActionScore10(entry) ?? hrEntryCurrentScore10(entry);
 }
 
 function getReasons(entry: HrRadarLadderEntry): string[] {
@@ -123,7 +133,12 @@ function QuickCard({
   onDismiss: () => void;
 }) {
   const cfg = STAGE_CONFIG[stage];
-  const score = getDisplayScore(entry);
+  const StageIcon = cfg.icon;
+  const hrChancePct = getHrChancePct(entry);
+  const fallbackScore10 = getFallbackScore10(entry);
+  const actionPct = hrEntryActionPct(entry);
+  const primaryReason = entry.displayPrimaryReason ?? entry.headlineReason ?? null;
+  const recordEligible = entry.displayRecordEligible === true;
   const reasons = getReasons(entry);
   const whyChips = getWhyChips(entry);
   const pa = formatPA(entry.remainingPAExpectation);
@@ -138,22 +153,25 @@ function QuickCard({
       className={`rounded-xl border ${cfg.border} bg-card p-4 space-y-3`}
       data-testid={`quick-decide-card-${entry.playerId}`}
     >
-      {/* Stage badge + score */}
+      {/* Stage badge (big icon) + HR chance hero */}
       <div className="flex items-center justify-between">
         <span
-          className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${cfg.badgeBg} ${cfg.badgeText} tracking-widest uppercase`}
+          className={`flex items-center gap-1.5 text-[11px] font-bold px-2.5 py-1 rounded-full ${cfg.badgeBg} ${cfg.badgeText} tracking-widest uppercase`}
         >
+          <StageIcon className="w-4 h-4" />
           {cfg.label}
         </span>
-        {score != null && (
-          <span
-            className={`text-xl font-bold tabular-nums ${cfg.badgeText}`}
-            title="HR Conviction Score (0–10) — how many reasons the engine has to back this HR setup"
-          >
-            {score.toFixed(1)}
-            <span className="text-sm font-normal text-muted-foreground"> / 10</span>
+        {hrChancePct != null ? (
+          <span className={`text-2xl font-bold tabular-nums ${cfg.badgeText}`} data-testid={`text-quick-hr-chance-${entry.playerId}`}>
+            {hrChancePct}%
+            <span className="text-[11px] font-normal uppercase tracking-wide text-muted-foreground"> HR chance</span>
           </span>
-        )}
+        ) : fallbackScore10 != null ? (
+          <span className={`text-2xl font-bold tabular-nums ${cfg.badgeText}`} data-testid={`text-quick-strength-${entry.playerId}`}>
+            {fallbackScore10.toFixed(1)}
+            <span className="text-[11px] font-normal uppercase tracking-wide text-muted-foreground"> strength</span>
+          </span>
+        ) : null}
       </div>
 
       {/* Player + team */}
@@ -167,7 +185,36 @@ function QuickCard({
         <span className="text-xs text-muted-foreground uppercase tracking-wide shrink-0">
           {entry.team}
         </span>
+        {recordEligible && (
+          <span
+            className="text-[8px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-300 border border-red-500/30 shrink-0"
+            data-testid={`badge-quick-record-eligible-${entry.playerId}`}
+            title="This signal counts toward the official HR Radar record"
+          >
+            Counts in record
+          </span>
+        )}
       </div>
+
+      {/* Plain-English reason */}
+      {primaryReason && (
+        <p className="text-sm font-medium text-foreground/90 leading-snug" data-testid={`text-quick-primary-reason-${entry.playerId}`}>
+          {primaryReason}
+        </p>
+      )}
+
+      {/* Window strength — tier-banded actionability bar (not HR chance). */}
+      {actionPct != null && (
+        <div data-testid={`quick-window-strength-${entry.playerId}`}>
+          <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
+            <span>Window strength</span>
+            <span>{actionPct}%</span>
+          </div>
+          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+            <div className={`h-full rounded-full ${cfg.badgeText.replace("text-", "bg-")}`} style={{ width: `${actionPct}%` }} />
+          </div>
+        </div>
+      )}
 
       {/* Why — top reasons (verbatim server evidence) */}
       {reasons.length > 0 && (

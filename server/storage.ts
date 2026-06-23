@@ -5,6 +5,7 @@ import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar
 import { traceMissedHr } from "./analytics/hrRadarMissTracer";
 import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
 import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow, qualifiesForNearHrCredit, isContactInCommittedWindow } from "./mlb/hrRadarSection";
+import { buildHrRadarDisplayContract, getRawCurrentReadinessScore10 } from "./mlb/hrRadarDisplayContract";
 import type { HrRadarOutcomeStatus, HrRadarPeakContact } from "./mlb/hrRadarSection";
 import type { PersistedHrRadarOutcomeStamp } from "./mlb/hrRadarOutcomeStamp";
 import { classifyHrMaxWindowAtFinal } from "./mlb/hrMaxWindow";
@@ -5396,6 +5397,25 @@ export class DatabaseStorage implements IStorage {
     parkWeatherScore: number | null;
     atBatIndex: number | null;
     resolvedAt: Date | null;
+    // Review bucket taxonomy (diagnosticsSnapshot.hrReview) — additive, nullable
+    // when the classifier has not stamped this row yet.
+    reviewBucket: string | null;
+    reviewReason: string | null;
+    reviewDataQuality: string | null;
+    reviewDataQualityReasons: string[] | null;
+    preHrPeakStage: string | null;
+    preHrPeakScore10: number | null;
+    currentStage: string | null;
+    currentScore10: number | null;
+    completedAbsBeforeHr: number | null;
+    hadPregameTargetTag: boolean | null;
+    hadNearHrBeforeHr: boolean | null;
+    hadHrCandidateContactBeforeHr: boolean | null;
+    hadPitcherCollapseBeforeHr: boolean | null;
+    signalBusHadPreHrRecord: boolean | null;
+    lifecycleHadPreHrRecord: boolean | null;
+    checkedSignalIds: string[] | null;
+    classifierVersion: number | null;
   }>> {
     try {
       const cutoffStr = daysAgoET(daysBack);
@@ -5442,6 +5462,11 @@ export class DatabaseStorage implements IStorage {
             (typeof contact.hardHits === "number" && contact.hardHits > 0)
           );
 
+        const hrReview = (diag.hrReview ?? null) as Record<string, any> | null;
+        const reviewSnap = (hrReview?.snapshot ?? null) as Record<string, any> | null;
+        const numOrNull = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+        const boolOrNull = (v: unknown): boolean | null => (typeof v === "boolean" ? v : null);
+
         return {
           id: r.id,
           sessionDate: r.sessionDate,
@@ -5465,6 +5490,23 @@ export class DatabaseStorage implements IStorage {
           parkWeatherScore: parkWeather as number | null,
           atBatIndex,
           resolvedAt: r.resolvedAt,
+          reviewBucket: typeof hrReview?.bucket === "string" ? hrReview.bucket : null,
+          reviewReason: typeof hrReview?.reason === "string" ? hrReview.reason : null,
+          reviewDataQuality: typeof reviewSnap?.dataQuality === "string" ? reviewSnap.dataQuality : null,
+          reviewDataQualityReasons: Array.isArray(reviewSnap?.dataQualityReasons) ? reviewSnap!.dataQualityReasons : null,
+          preHrPeakStage: typeof reviewSnap?.preHrPeakStage === "string" ? reviewSnap.preHrPeakStage : null,
+          preHrPeakScore10: numOrNull(reviewSnap?.preHrPeakScore10),
+          currentStage: typeof reviewSnap?.currentStage === "string" ? reviewSnap.currentStage : null,
+          currentScore10: numOrNull(reviewSnap?.currentScore10),
+          completedAbsBeforeHr: numOrNull(reviewSnap?.completedAbsBeforeHr),
+          hadPregameTargetTag: boolOrNull(reviewSnap?.hadPregameTargetTag),
+          hadNearHrBeforeHr: boolOrNull(reviewSnap?.hadNearHrBeforeHr),
+          hadHrCandidateContactBeforeHr: boolOrNull(reviewSnap?.hadHrCandidateContactBeforeHr),
+          hadPitcherCollapseBeforeHr: boolOrNull(reviewSnap?.hadPitcherCollapseBeforeHr),
+          signalBusHadPreHrRecord: boolOrNull(reviewSnap?.signalBusHadPreHrRecord),
+          lifecycleHadPreHrRecord: boolOrNull(reviewSnap?.lifecycleHadPreHrRecord),
+          checkedSignalIds: Array.isArray(reviewSnap?.checkedSignalIds) ? reviewSnap!.checkedSignalIds : null,
+          classifierVersion: numOrNull(hrReview?.classifierVersion),
         };
       });
     } catch (err: any) {
@@ -5643,6 +5685,52 @@ export class DatabaseStorage implements IStorage {
       }).onConflictDoNothing();
     } catch (err: any) {
       console.warn(`[HR_RADAR_STAMP_PERSIST] failed game=${stamp.gameId} player=${stamp.playerId}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Persist an HR review-bucket classification onto the alert's diagnostics
+   * jsonb (`diagnosticsSnapshot.hrReview`). SAFE ADDITIVE / diagnostic-only:
+   *   - never touches gradingStatus / userVisible / ROI / W-L fields
+   *   - never throws (fire-and-forget from the grader)
+   *   - no migration — reuses the existing diagnostics_snapshot column
+   *
+   * Fallback ladder: update latest hr_radar_alerts row for game+player; if no
+   * such row exists (a true uncalled HR with no alert), log
+   * `[HR_REVIEW_PERSIST_SKIPPED]` and return — we do NOT synthesize a W/L row.
+   */
+  async persistHrReviewClassification(
+    gameId: string,
+    playerId: string | number,
+    payload: {
+      bucket: string;
+      reason: string;
+      snapshot: Record<string, unknown>;
+      classifiedAt: string;
+      classifierVersion: number;
+    },
+  ): Promise<void> {
+    try {
+      const pid = String(playerId);
+      const rows = await db.select().from(hrRadarAlerts)
+        .where(and(
+          eq(hrRadarAlerts.gameId, gameId),
+          eq(hrRadarAlerts.playerId, pid),
+        ))
+        .orderBy(desc(hrRadarAlerts.detectedAt))
+        .limit(1);
+      const row = rows[0];
+      if (!row) {
+        console.log(`[HR_REVIEW_PERSIST_SKIPPED] gameId=${gameId} playerId=${pid} bucket=${payload.bucket} reason=no_alert_row`);
+        return;
+      }
+      const prevDiag = (row.diagnosticsSnapshot ?? {}) as Record<string, unknown>;
+      const mergedDiag = { ...prevDiag, hrReview: payload };
+      await db.update(hrRadarAlerts)
+        .set({ diagnosticsSnapshot: mergedDiag })
+        .where(eq(hrRadarAlerts.id, row.id));
+    } catch (err: any) {
+      console.warn(`[HR_REVIEW_PERSIST] failed game=${gameId} player=${playerId}: ${err?.message ?? err}`);
     }
   }
 
@@ -6311,12 +6399,26 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
-    // Within sections, order by priority signal: cashed by hit time desc; everyone else by peak score desc
+    // ── HR Radar display contract (presentation-only). Stamp AFTER final
+    // bucketing — a live `userStage === "ready"` row is re-routed into
+    // sections.ready above, so its tier-banded action score must be computed
+    // against the section it actually ended up in. Never touches grading.
+    const LIVE_SECTION_KEYS = ["attackNow", "ready", "building", "watch"] as const;
+    for (const sectionKey of LIVE_SECTION_KEYS) {
+      for (const entry of sections[sectionKey]) {
+        Object.assign(entry, buildHrRadarDisplayContract(entry, sectionKey));
+      }
+    }
+
+    // Within sections, order by CURRENT readiness desc (never peak — peak was
+    // the old "backwards" bug). cashed by hit time desc; dead by resolved desc.
+    const sortKeyCurrent = (e: HrRadarLadderEntry): number =>
+      e.displayReadinessScore10 ?? getRawCurrentReadinessScore10(e) ?? 0;
     sections.cashed.sort((a, b) => (b.hitDetectedAt?.getTime() ?? 0) - (a.hitDetectedAt?.getTime() ?? 0));
-    sections.attackNow.sort((a, b) => (b.signalStrengthScore ?? 0) - (a.signalStrengthScore ?? 0));
-    sections.ready.sort((a, b) => (b.currentSignalScore10 ?? b.signalStrengthScore ?? 0) - (a.currentSignalScore10 ?? a.signalStrengthScore ?? 0));
-    sections.building.sort((a, b) => (b.peakScore ?? 0) - (a.peakScore ?? 0));
-    sections.watch.sort((a, b) => (b.peakScore ?? 0) - (a.peakScore ?? 0));
+    sections.attackNow.sort((a, b) => sortKeyCurrent(b) - sortKeyCurrent(a));
+    sections.ready.sort((a, b) => sortKeyCurrent(b) - sortKeyCurrent(a));
+    sections.building.sort((a, b) => sortKeyCurrent(b) - sortKeyCurrent(a));
+    sections.watch.sort((a, b) => sortKeyCurrent(b) - sortKeyCurrent(a));
     sections.dead.sort((a, b) => (b.resolvedAt?.getTime() ?? 0) - (a.resolvedAt?.getTime() ?? 0));
 
     const counts = {
@@ -6725,6 +6827,27 @@ export interface HrRadarLadderEntry {
   /** Hidden debug surface — admin-only. */
   debugReasons: string[];
   enginePath: string | null;
+
+  // ── HR Radar display contract (presentation-only; see hrRadarDisplayContract.ts).
+  // Stamped after final bucketing. All optional + additive — never replace any
+  // legacy field, never affect grading/qualification/W-L.
+  /** True calibrated HR probability as a whole percent. Never tier-capped. */
+  displayHrChancePct?: number | null;
+  /** Raw current readiness on the 0-10 scale (NOT path/section-capped). */
+  displayReadinessScore10?: number | null;
+  /** Tier-banded actionability score on the 0-10 scale. */
+  displayActionScore10?: number | null;
+  /** Tier-banded actionability as a whole percent (drives the window bar). */
+  displayActionPct?: number | null;
+  /** Friendly live tier. */
+  displayStageLabel?: "TOP WINDOW" | "ALMOST" | "WATCHING";
+  displayStageSubLabel?: string;
+  /** First user-safe reason (humanized). */
+  displayPrimaryReason?: string | null;
+  /** Why a lower-tier card is not yet a top-window play (null for TOP WINDOW). */
+  displayWhyNotTopWindow?: string | null;
+  /** Display-only: derived from officialSignalStage. Not a grading write. */
+  displayRecordEligible?: boolean;
 }
 
 export const storage = new DatabaseStorage();

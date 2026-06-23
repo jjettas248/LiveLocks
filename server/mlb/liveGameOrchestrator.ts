@@ -108,6 +108,11 @@ import * as hrRadarOutcomeStampMod from "./hrRadarOutcomeStamp";
 import * as hrRadarSectionMod from "./hrRadarSection";
 import * as hrRadarUserStageMod from "./hrRadarUserStage";
 import * as liveSignalBusMod from "../services/liveSignalBus";
+import { classifyHrReview } from "./hrReviewClassifier";
+import { getPreHrContactEvents } from "./hrPreHrEventResolver";
+import { getPreHrHrRadarBusEvidence } from "./hrPreHrBusEvidence";
+import { getPregameSignalFor } from "./pregamePowerRadar/pregamePowerRadarStore";
+import { resolveMlbGameSessionDate } from "../utils/mlbSessionDate";
 
 // Max of the finite numbers in a list, or null when none are finite.
 function maxFinite(values: Array<number | null | undefined>): number | null {
@@ -656,9 +661,9 @@ function gradeSingleHRPlay(
   }
   storage.resolveAlertAsHit(playerId, gameId, inning, halfInning, atBatIndex, endTimeMs).catch(() => {});
   storage.resolveHrRadarAlertAsHit(playerId, gameId, inning, hitHalf, hitLabel, endTimeMs)
-    .then((count) => {
+    .then(async (count) => {
       if (count === 0) {
-        storage.ensureHrRadarAlertHit({
+        await storage.ensureHrRadarAlertHit({
           gameId,
           playerId,
           playerName,
@@ -671,6 +676,174 @@ function gradeSingleHRPlay(
           // even outside inning 1.
           atBatIndex,
         }).catch(err => console.warn(`[HR_RADAR_ENSURE_HIT] Failed: ${err.message}`));
+      }
+      // ── HR Review Classifier (additive diagnostic) ──────────────────────────
+      // Grade this HR against the strongest valid signal state BEFORE the HR and
+      // classify WHY it was/wasn't caught into an explainable review bucket. Runs
+      // AFTER settlement so it can read the authoritative matcher result
+      // (gradingStatus / matchedBeforeHr / matchMethod) and so the alert row —
+      // including the count===0 fallback — exists for persistence. Pure
+      // diagnostic: never mutates gradingStatus/W-L, never blocks grading.
+      try {
+        const settledRow = await storage.getHrRadarAlertForAnalyze(playerId, gameId).catch(() => null);
+        const reviewSnap = getHrAlertState(gameId, playerId);
+        // Prefer the settled DB grading status (authoritative); fall back to the
+        // in-memory outcome stamp if the row isn't readable.
+        const existingOutcomeStatus =
+          settledRow?.gradingStatus ??
+          hrRadarOutcomeStampMod.getHrRadarOutcomeStamp(gameId, playerId)?.outcomeStatus ??
+          null;
+
+        const liveAbs = mlbGameCache.contactData?.[gameId]?.byPlayerId?.[playerId]?.priorABResults ?? null;
+        const preHrResolved = getPreHrContactEvents({
+          gameId,
+          playerId,
+          hrEvent: { hrEndTimeMs: endTimeMs, hrAtBatIndex: atBatIndex, inning, half: halfInning },
+          liveCacheContactEvents: liveAbs,
+        });
+
+        const _parkFactor = getMarketParkFactor(gameId) ?? null;
+        const nearHrPeak = detectNearHrContactPeak(
+          preHrResolved.events.map((ab) => ({
+            ev: ab.exitVelocity ?? undefined,
+            la: ab.launchAngle ?? undefined,
+            distance: ab.distance ?? undefined,
+            xba: ab.xba ?? undefined,
+            isBarrel: ab.isBarrel === true,
+            outcome: ab.outcome ?? undefined,
+            hitType: ab.hitType ?? undefined,
+            parkFactor: _parkFactor ?? undefined,
+          })) as any,
+          5,
+        );
+
+        const busEvidence = getPreHrHrRadarBusEvidence({ gameId, playerId, hrEndTimeMs: endTimeMs });
+
+        const pregame = getPregameSignalFor({
+          // Canonical per-game ET official date (not todayET()) so late-night /
+          // replay grading still matches the pregame snapshot for this game.
+          gameDateET: resolveMlbGameSessionDate(gameId),
+          gameId,
+          batterId: playerId,
+          mlbamId: playerId,
+          playerName,
+          teamAbbr: team,
+        });
+
+        // Best-effort context flags from the engine's accumulated drivers (robust
+        // to scale; no-op false when absent). Never blocks classification.
+        const drivers = (reviewSnap?.positiveDrivers ?? []).map((d) => String(d).toLowerCase());
+        const driverHas = (...tokens: string[]) => drivers.some((d) => tokens.some((t) => d.includes(t)));
+        const peakStateOfficial = ["bet_now", "prepare"].includes(String(reviewSnap?.peakState ?? "").toLowerCase());
+
+        // The HR's own swing: was it genuinely barrel / HR-shaped? Read from the
+        // HR's own AB entry in the live contact cache (the resolver drops it from
+        // preHrAbs, but here we inspect it directly). A barrel/HR-shaped HR with no
+        // prior live evidence is `same_pa`; a cheap/wall-scraper HR with no signal
+        // falls through to true_uncalled/context. When the HR AB isn't in the
+        // cache yet, default to true (a HR is hard contact) — dataQuality gating
+        // handles the missing case.
+        const hrOwnAb = Array.isArray(liveAbs)
+          ? (liveAbs as any[]).find((ab) => ab?.hitType === "home_run" && (ab?.inning == null || ab.inning === inning))
+          : null;
+        const hrEventWasBarrelOrHrShaped = hrOwnAb
+          ? hrOwnAb.isBarrel === true ||
+            (typeof hrOwnAb.exitVelocity === "number" &&
+              hrOwnAb.exitVelocity >= 98 &&
+              typeof hrOwnAb.launchAngle === "number" &&
+              hrOwnAb.launchAngle >= 20 &&
+              hrOwnAb.launchAngle <= 38)
+          : true;
+
+        const review = classifyHrReview({
+          existingOutcomeStatus,
+          playerId,
+          playerName,
+
+          peakState: reviewSnap?.peakState ?? null,
+          peakConversionProbability: reviewSnap?.peakConversionProbability ?? null,
+          peakReadinessScore: reviewSnap?.peakReadinessScore ?? null,
+          peakAtMs: reviewSnap?.peakAt ?? null,
+          detectedInning: reviewSnap?.detectedInning ?? null,
+          // Map peak→official timestamps: a peak in an official dynamic state
+          // before the HR is a surfaced-official-signal proxy (consistent with the
+          // existing reachedHrMaxWindowPeak grading in this same function).
+          firstOfficialSignalAtMs: peakStateOfficial ? (reviewSnap?.peakAt ?? null) : null,
+
+          currentReadinessScore: reviewSnap?.hrReadinessScore ?? null,
+          canonicalStage: reviewSnap?.canonicalStage ?? null,
+          alertTier: reviewSnap?.alertResult?.alertTier ?? null,
+          signalState: reviewSnap?.alertResult?.signalState ?? null,
+
+          // Authoritative matcher result (now available post-settlement) — drives
+          // attribution_miss / post-HR-fallback late_signal detection.
+          matchedBeforeHr: settledRow?.matchedBeforeHr ?? null,
+          matchMethod: settledRow?.matchMethod ?? null,
+
+          hrEndTimeMs: endTimeMs,
+          hrInning: inning,
+          hrAtBatIndex: atBatIndex,
+          hrEventWasBarrelOrHrShaped,
+
+          preHrAbs: preHrResolved.events,
+          preHrResolverStatus: preHrResolved.status,
+          preHrEventSource: preHrResolved.source,
+
+          nearHrPeakTier: nearHrPeak?.tier ?? null,
+          nearHrSourceAbIndex: nearHrPeak?.sourceAbIndex ?? null,
+
+          hadPregameWatch: pregame.found && pregame.tier != null && pregame.tier !== "track",
+          hadPregameTargetTag: pregame.found,
+
+          pitcherCollapsing: driverHas("fatigue", "collapse", "pitch count", "depleted"),
+          hrPronePitcher: driverHas("hr-prone", "vulnerable", "homer-prone"),
+          bullpenDepleted: driverHas("bullpen"),
+          parkWeatherBoost: driverHas("park", "wind", "weather", "altitude"),
+          powerProfile: driverHas("power", "slugger", "barrel rate", "iso"),
+
+          signalBusHadPreHrRecord: busEvidence.signalBusHadPreHrRecord,
+          lifecycleHadPreHrRecord: busEvidence.lifecycleHadPreHrRecord,
+          engineGeneratedBeforeHr: busEvidence.engineGeneratedBeforeHr,
+          checkedSignalIds: busEvidence.checkedSignalIds,
+        });
+
+        const s = review.snapshot;
+        console.log(
+          `[HR_REVIEW_PRE_SNAPSHOT] gameId=${gameId} playerId=${playerId} player=${playerName} ` +
+          `bucket=${review.bucket} dataQuality=${s.dataQuality} preHrPeakStage=${s.preHrPeakStage} ` +
+          `preHrPeakScore10=${s.preHrPeakScore10 ?? "-"} currentStage=${s.currentStage} currentScore10=${s.currentScore10 ?? "-"} ` +
+          `completedAbsBeforeHr=${s.completedAbsBeforeHr} hadPregameTargetTag=${s.hadPregameTargetTag} ` +
+          `hadNearHrBeforeHr=${s.hadNearHrBeforeHr} hadHrCandidate=${s.hadHrCandidateContactBeforeHr} ` +
+          `hadPitcherCollapse=${s.hadPitcherCollapseBeforeHr}`,
+        );
+        console.log(
+          `[HR_REVIEW_BUCKET] gameId=${gameId} playerId=${playerId} player=${playerName} ` +
+          `bucket=${review.bucket} reason="${review.reason}" existingOutcomeStatus=${existingOutcomeStatus ?? "-"}`,
+        );
+        const perBucketTag: Record<string, string> = {
+          called_hit: "HR_REVIEW_CALLED_HIT",
+          late_signal: "HR_REVIEW_LATE_SIGNAL",
+          attribution_miss: "HR_REVIEW_ATTRIBUTION_MISS",
+          same_pa_hr_no_prior_live_signal: "HR_REVIEW_SAME_PA_HR",
+          early_window_hr: "HR_REVIEW_EARLY_WINDOW_HR",
+          live_promotion_miss: "HR_REVIEW_LIVE_PROMOTION_MISS",
+          context_miss: "HR_REVIEW_CONTEXT_MISS",
+          true_uncalled_hr: "HR_REVIEW_TRUE_UNCALLED",
+          insufficient_review_data: "HR_REVIEW_INSUFFICIENT_DATA",
+        };
+        console.log(`[${perBucketTag[review.bucket] ?? "HR_REVIEW_BUCKET"}] gameId=${gameId} playerId=${playerId} reason="${review.reason}"`);
+
+        await storage
+          .persistHrReviewClassification(gameId, playerId, {
+            bucket: review.bucket,
+            reason: review.reason,
+            snapshot: review.snapshot as unknown as Record<string, unknown>,
+            classifiedAt: new Date().toISOString(),
+            classifierVersion: 3,
+          })
+          .catch(() => {});
+      } catch (err) {
+        console.warn(`[HR_REVIEW_CLASSIFIER_FAILED] gameId=${gameId} playerId=${playerId} err=${(err as Error).message}`);
       }
     }).catch(() => {});
   // Phase 2 — best-effort brand auto-tweet when a tracked player homers.

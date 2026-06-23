@@ -41,3 +41,36 @@ export function hrEntryPeakScore10(entry: HrRadarLadderEntry): number | null {
     null
   );
 }
+
+// ── HR Radar display contract — FORMATTING ONLY. ────────────────────────────
+// These read server-stamped fields (see server/mlb/hrRadarDisplayContract.ts)
+// and clamp for safety. They must NOT recompute probability, infer the tier, or
+// rebuild the action bands — the server owns all of that.
+
+// Guard null/blank FIRST — Number(null) === 0 and Number("") === 0 would
+// otherwise coerce a missing value into a false 0 (e.g. "0% HR chance" for a
+// row the server intentionally stamped null). Missing must stay null so the UI
+// falls back (HR chance → tier-banded strength).
+function formatStampedNumber(value: unknown, min: number, max: number, decimals: 0 | 1): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const rounded = decimals === 0 ? Math.round(n) : Math.round(n * 10) / 10;
+  return Math.max(min, Math.min(max, rounded));
+}
+
+export function hrEntryHrChancePct(entry: HrRadarLadderEntry): number | null {
+  return formatStampedNumber(entry?.displayHrChancePct, 0, 100, 0);
+}
+
+export function hrEntryActionPct(entry: HrRadarLadderEntry): number | null {
+  return formatStampedNumber(entry?.displayActionPct, 0, 100, 0);
+}
+
+export function hrEntryActionScore10(entry: HrRadarLadderEntry): number | null {
+  return formatStampedNumber(entry?.displayActionScore10, 0, 10, 1);
+}
+
+export function hrEntryReadinessScore10(entry: HrRadarLadderEntry): number | null {
+  return formatStampedNumber(entry?.displayReadinessScore10, 0, 10, 1);
+}
