@@ -199,7 +199,11 @@ function stateKey(gameId: string, playerId: string): string {
 //      cost of some false positives, per product directive).
 //   2. PATH PEAK / BUILDING is folded into the engine result as a hard
 //      override on the canonical stage (terminal CLOSED still wins).
-const BET_NOW_THRESHOLD = 0.10;
+// Hit-rate tightening (2026-06): committing on ~10% calibrated probability put
+// far too many borderline bats into the graded HR Max Window (269 misses / 6
+// hits). Lift the top-conviction floor to 0.14 so BET_NOW reflects a genuinely
+// elite spot, not an average one. (Phase 1.5 caps still bind above; §7a change.)
+const BET_NOW_THRESHOLD = 0.14;
 // Audit fix C1 — BUILDING converted at/below the MONITOR floor (7.7% vs 19.2%)
 // because the PREPARE band sat one point above WATCH (0.06 vs 0.05), so
 // "building" carried almost no separation from "monitor". Lift PREPARE to 0.07

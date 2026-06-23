@@ -1231,13 +1231,13 @@ export class LiveGameOrchestrator {
       // Derive counts from the post-reconcile table state.
       const rows = await storage.getTodayHrRadarBoardForSession(sessionDate).catch(() => [] as any[]);
       const gameRows = (rows as any[]).filter((r) => r.gameId === gameId);
-      const calledHitStatuses = new Set([
-        "called_hit", "called_hit_attack", "called_hit_ready", "called_hit_build", "called_hit_watch",
-      ]);
+      // Use the canonical hit-class set (includes tiered called_hit_* AND
+      // called_near_hr) so new hit-class outcomes are never under-counted here.
+      const calledHitStatuses = hrRadarSectionMod.CALLED_HIT_OUTCOME_STATUSES;
       for (const r of gameRows) {
         const gs = String(r.gradingStatus ?? "").toLowerCase();
         const st = String(r.status ?? "").toLowerCase();
-        if (calledHitStatuses.has(gs)) counts.resolvedHits++;
+        if (calledHitStatuses.has(gs as any)) counts.resolvedHits++;
         else if (gs === "called_miss" || st === "miss") counts.resolvedMisses++;
         else if (gs === "uncalled_hr") counts.uncalledHrs++;
         else if (gs === "late_signal" || gs === "early_hr_insufficient_sample") counts.expiredInactive++;
@@ -2939,6 +2939,8 @@ export class LiveGameOrchestrator {
         launchAngle: ab.launchAngle ?? null,
         distance: ab.distance ?? null,
         outcome: ab.outcome ?? "out",
+        inning: ab.inning ?? null,
+        half: ab.half ?? null,
       })),
       preHrDangerScore: p.preHrDangerScore ?? undefined,
       dangerFlags: p.dangerFlags ?? undefined,
@@ -3402,6 +3404,8 @@ export class LiveGameOrchestrator {
         distance: lastAB.distance ?? null,
         hardHit: (lastAB.exitVelocity ?? 0) >= 95,
         barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
+        inning: lastAB.inning ?? null,
+        half: lastAB.half ?? null,
       } : null;
 
       const convSnap = alertResult.diagnostics?.hrConversion ? {
@@ -3433,6 +3437,7 @@ export class LiveGameOrchestrator {
           contactClass: c.contactClass, exitVelocity: c.exitVelocity,
           launchAngle: c.launchAngle, distance: c.distance,
           outcome: c.outcome, isBarrel: c.isBarrel,
+          inning: c.inning ?? null, half: c.half ?? null,
         })),
         pitcherHrVulnerability: getHrAlertState(gameId, batter.playerId)?.pitcherHrVulnerability ?? null,
       } : null;
@@ -4312,6 +4317,8 @@ export class LiveGameOrchestrator {
                 distance: lastAB.distance ?? null,
                 hardHit: (lastAB.exitVelocity ?? 0) >= 95,
                 barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
+                inning: lastAB.inning ?? null,
+                half: lastAB.half ?? null,
               } : null;
 
               const convSnap = alertResult.diagnostics?.hrConversion ? {
@@ -4343,6 +4350,7 @@ export class LiveGameOrchestrator {
                   contactClass: c.contactClass, exitVelocity: c.exitVelocity,
                   launchAngle: c.launchAngle, distance: c.distance,
                   outcome: c.outcome, isBarrel: c.isBarrel,
+                  inning: c.inning ?? null, half: c.half ?? null,
                 })),
                 pitcherHrVulnerability: hrDynSnap?.pitcherHrVulnerability ?? null,
               } : null;
@@ -4507,6 +4515,8 @@ export class LiveGameOrchestrator {
             distance: lastAB.distance ?? null,
             hardHit: (lastAB.exitVelocity ?? 0) >= 95,
             barrel: isBarrel(lastAB.exitVelocity ?? null, lastAB.launchAngle ?? null),
+            inning: lastAB.inning ?? null,
+            half: lastAB.half ?? null,
           } : null;
           console.log(`[HR_PRESENCE_PROMOTE][${gameId}] ${batter.playerName} stage=${dynSnap.canonicalStage} readiness=${dynSnap.hrReadinessScore} — promoting live-contact row left behind by PATH gate`);
           storage.createOrUpdateHrRadarAlert({

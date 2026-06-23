@@ -81,6 +81,11 @@ export interface PlayerContactData {
     hitType?: "single" | "double" | "triple" | "home_run" | null;
     rbi?: number;
     runScored?: boolean;
+    // Committed-window scoping (2026-06) — inning/half this AB occurred, from
+    // the play feed (`play.about`). Threaded to ClassifiedContact so near-HR
+    // credit can be limited to the committed window.
+    inning?: number | null;
+    half?: "top" | "bottom" | null;
   }>;
 }
 
@@ -726,6 +731,8 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
         }
 
         const contactClass = classifyContact(bestEV, bestLA);
+        const abAboutInning = Number(play.about?.inning);
+        const abAboutHalf = (play.about?.halfInning ?? "").toString().toLowerCase();
         byPlayerId[playerId].priorABResults.push({
           exitVelocity: bestEV,
           launchAngle: bestLA,
@@ -740,6 +747,8 @@ export async function syncContactData(statsPk: string, cacheKey?: string): Promi
           hitType,
           rbi,
           runScored,
+          inning: Number.isFinite(abAboutInning) && abAboutInning > 0 ? abAboutInning : null,
+          half: abAboutHalf === "top" ? "top" : abAboutHalf === "bottom" ? "bottom" : null,
         });
 
         const abIndex = byPlayerId[playerId].priorABResults.length;

@@ -344,8 +344,13 @@ export function computeCalibrationBuckets(): HrCalibrationBucket[] {
     // probability it is a valid positive for calibration, and excluding it was a
     // major source of the starved denominator that kept empirical buckets from
     // ever qualifying. Count it as cashed.
+    // NOTE: `called_near_hr` is a product-level "danger called" win, NOT an
+    // actual home run. It must be EXCLUDED from probability calibration —
+    // counting near-HRs as HRs would bias the conversion model upward. The
+    // product hit-rate (storage.getCanonicalHrRadarOutcomes) still credits it.
     const isCashed = (status: string): boolean =>
-      CALLED_HIT_OUTCOME_STATUSES.has(status as any) || status === "uncalled_hr";
+      (CALLED_HIT_OUTCOME_STATUSES.has(status as any) && status !== "called_near_hr") ||
+      status === "uncalled_hr";
     const settled = stamps.filter(s =>
       s.rawConversionProbability != null &&
       (isCashed(s.outcomeStatus) || s.outcomeStatus === "called_miss"),
