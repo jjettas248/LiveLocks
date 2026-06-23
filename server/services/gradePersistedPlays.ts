@@ -409,44 +409,28 @@ async function fetchBoxScore(gameId: string, sport: string): Promise<unknown | n
 
 // A play whose game is already final (box score fetched successfully — the
 // fetchers only return data for final games) but which still can't be resolved
-// — player absent from the box score, stat field missing, or unsupported
-// market — will NEVER resolve. Left pending it accumulates forever and, once
+// — player absent from a FINAL box score, or a stat field missing for a final
+// box score — will NEVER resolve. Left pending it accumulates forever and, once
 // the backlog grows, re-starves the oldest-first grading window. Once the play
-// is older than this threshold the box score is stable, so we settle it "void"
-// (excluded from ROI / hit-rate, same as the existing DNP path) to retire it
-// from the pending set. Younger plays keep their current retry behaviour so a
-// briefly-incomplete final box score can still self-heal.
+// is older than this threshold the (already-fetched, final) box score is
+// stable, so we settle it "void" (excluded from ROI / hit-rate, same as the
+// existing DNP path) to retire it from the pending set. Younger plays keep
+// their current retry behaviour so a briefly-incomplete final box score can
+// still self-heal.
+//
+// IMPORTANT: this gate is only applied AFTER a box score has been successfully
+// fetched (which the fetchers only do for FINAL games). It is deliberately NOT
+// applied to the null-boxscore branches: `fetchMlbBoxScore` / `fetchBoxScore`
+// return `null` both for dead/postponed games AND for transient, retryable
+// failures (game not final yet, stats-API outage). Voiding on that overloaded
+// `null` could erase valid pending plays during an outage, so those plays stay
+// pending and retry indefinitely instead.
 const TERMINAL_VOID_AGE_HOURS = 48;
 
 function isTerminalVoidEligible(play: { timestamp?: Date | string | null }): boolean {
   const ts = play.timestamp ? new Date(play.timestamp).getTime() : Date.now();
   const ageHrs = (Date.now() - ts) / (60 * 60 * 1000);
   return ageHrs >= TERMINAL_VOID_AGE_HOURS;
-}
-
-// Retire stuck plays whose box score is unavailable (game never resolves a
-// gamePk / box score, e.g. a long-postponed game whose original gameId is
-// dead). Younger plays stay pending so a still-in-progress game self-heals.
-// Voided plays are excluded from ROI / hit-rate, so this is non-destructive to
-// metrics — it only stops the pending set from growing without bound and
-// re-starving the oldest-first grading window.
-async function voidAgedStuckPlays(
-  plays: Array<{ id: string; timestamp?: Date | string | null; playerName?: string | null }>,
-  storage: IStorage,
-  ctx: { sport: string; gameId: string; reason: string },
-): Promise<number> {
-  let voided = 0;
-  for (const p of plays) {
-    if (!isTerminalVoidEligible(p)) continue;
-    try {
-      await storage.settlePlay(p.id, "void", null, new Date());
-      console.warn("[GRADING_RESULT]", JSON.stringify({ status: "void", sport: ctx.sport.toUpperCase(), playId: p.id, player: p.playerName ?? null, gameId: ctx.gameId, reason: ctx.reason }));
-      voided++;
-    } catch (err) {
-      console.warn("[GRADE] terminal void failed for play", p.id, ":", (err as Error).message);
-    }
-  }
-  return voided;
 }
 
 export async function gradePersistedPlays(
@@ -523,7 +507,6 @@ export async function gradePersistedPlays(
           const ages = plays.map(p => Math.floor((Date.now() - new Date(p.timestamp ?? Date.now()).getTime()) / (60 * 60 * 1000)));
           const oldestHrs = ages.length > 0 ? Math.max(...ages) : 0;
           console.warn(`[GRADE_NULL_BOXSCORE] sport=mlb gameId=${gameId} plays=${plays.length} oldest_age_hrs=${oldestHrs} — boxscore unavailable (game not final / postponed / API failure)`);
-          await voidAgedStuckPlays(plays, storage, { sport: "mlb", gameId, reason: "null_boxscore_terminal" });
           skipped += plays.length;
           continue;
         }
@@ -655,7 +638,6 @@ export async function gradePersistedPlays(
         const ages = plays.map(p => Math.floor((Date.now() - new Date(p.timestamp ?? Date.now()).getTime()) / (60 * 60 * 1000)));
         const oldestHrs = ages.length > 0 ? Math.max(...ages) : 0;
         console.warn(`[GRADE_NULL_BOXSCORE] sport=${sport} gameId=${gameId} plays=${plays.length} oldest_age_hrs=${oldestHrs} — boxscore unavailable (game not final / postponed / API failure)`);
-        await voidAgedStuckPlays(plays, storage, { sport, gameId, reason: "null_boxscore_terminal" });
         skipped += plays.length;
         continue;
       }
