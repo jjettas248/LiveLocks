@@ -51,7 +51,10 @@ export type HrRadarSection =
   | "EXPIRED"
   | "INACTIVE";
 
-export type HrRadarUserStage = "fire" | "ready" | "build" | "track" | "resolved";
+// Canonical stage lives in shared/hrRadarStage.ts — alias so this module and
+// hrRadarUserStage share ONE definition (Step 5 consolidation).
+import type { CanonicalHrRadarStage } from "@shared/hrRadarStage";
+export type HrRadarUserStage = CanonicalHrRadarStage;
 
 export const ACTIVE_STATES: ReadonlySet<HrRadarLifecycleState> = new Set<HrRadarLifecycleState>([
   "watch",

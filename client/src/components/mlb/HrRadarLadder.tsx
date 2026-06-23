@@ -9,6 +9,16 @@ import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows
 import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10 } from "@/components/mlb/hrRadarScore";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
+import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
+
+// Tailwind classes per badge tone — UI styling only; labels/semantics come
+// from the shared HR_RADAR_BADGE_META (single source of truth).
+const HR_BADGE_TONE_CLASS: Record<HrRadarBadgeTone, string> = {
+  fire: "bg-red-500/15 text-red-400 border-red-500/30",
+  warn: "bg-orange-500/15 text-orange-300 border-orange-500/30",
+  info: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+  good: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+};
 
 // ── Signal-first inning pill (LiveLocks MLB UX Phase 1) ───────────────
 // Pure read of the row's currentInning (preferred) or detectedInning.
@@ -167,6 +177,8 @@ export interface HrRadarLadderEntry {
   stageLabel?: string;
   stageDescription?: string;
   qualifyingSignals?: string[];
+  // Step 5 — canonical badge set, server-derived; rendered verbatim.
+  badges?: HrRadarBadge[];
   cleanReasons?: string[];
   officialSignalStage?: "ready" | "fire" | null;
   officialSignalAt?: string | null;
@@ -667,7 +679,6 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   // are distinct ladder stages (Track → Build → Ready → Fire); "HR Max Window"
   // is a contextual badge on these two, not a stage of its own.
   const isAttack = section === "attackNow" || section === "ready";
-  const isHrMaxWindow = section === "attackNow" || section === "ready";
   // Goldmaster Phase 5 — derive live vs resolved mode. Resolved cards must
   // never carry "next AB" copy or any live-only verbiage.
   // HR Radar Final-Game Reconciliation — Phase 5: a card whose game is
@@ -818,17 +829,23 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
-            {/* "HR Max Window" is a contextual badge on the graded actionable
-                tier (Fire + Ready), not a ladder stage of its own. */}
-            {!isResolved && isHrMaxWindow && (
-              <span
-                className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30 shrink-0 whitespace-nowrap"
-                data-testid={`badge-hr-max-window-${entry.playerId}`}
-                title="HR Max Window — graded to the record"
-              >
-                HR MAX WINDOW
-              </span>
-            )}
+            {/* Step 5 — canonical badge set, server-derived and rendered
+                verbatim from shared/hrRadarStage.ts. "HR Max Window" is one of
+                these badges, not a ladder stage of its own. */}
+            {!isResolved && (entry.badges ?? []).map((b: HrRadarBadge) => {
+              const meta = HR_RADAR_BADGE_META[b];
+              if (!meta) return null;
+              return (
+                <span
+                  key={b}
+                  className={`text-[8px] font-black px-1.5 py-0.5 rounded-full border shrink-0 whitespace-nowrap ${HR_BADGE_TONE_CLASS[meta.tone]}`}
+                  data-testid={`badge-${b.replace(/_/g, "-")}-${entry.playerId}`}
+                  title={meta.title}
+                >
+                  {meta.label}
+                </span>
+              );
+            })}
           </div>
           {/* HR Radar contract: `detected` is frozen first-detection inning;
               never substitute `signalInning` or `scoreIncreaseInning` here. */}

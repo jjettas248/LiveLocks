@@ -39,7 +39,12 @@ export const HR_RADAR_GOLDMASTER_V1: boolean = (() => {
 })();
 
 // ── Phase 1 ────────────────────────────────────────────────────────────────
-export type HrRadarUserStage = "track" | "build" | "ready" | "fire" | "resolved";
+// Single source of truth lives in shared/hrRadarStage.ts. This is a re-export
+// alias so existing importers keep working while there is exactly ONE canonical
+// stage definition across server + client (Step 5 consolidation).
+import type { CanonicalHrRadarStage } from "@shared/hrRadarStage";
+import { deriveHrRadarBadges, type HrRadarBadge } from "@shared/hrRadarStage";
+export type HrRadarUserStage = CanonicalHrRadarStage;
 
 // ── Path-based promotion table ─────────────────────────────────────────────
 // The HR Radar runs two parallel scoring tracks. The dynamic state machine
@@ -628,6 +633,10 @@ export interface UserStageEnrichment {
   stageLabel: string;       // "Track" / "Build" / "Ready" / "Fire" / "Resolved"
   stageDescription: string; // user-facing copy
   qualifyingSignals: HrQualifyingSignalType[];
+  // Step 5 — single canonical badge set (shared/hrRadarStage.ts). Derived
+  // server-side from evidence; the UI renders these verbatim and never invents
+  // its own. Replaces ad-hoc per-component badge logic.
+  badges: HrRadarBadge[];
   cleanReasons: string[];   // user-safe reasons (alias of provided userReasons)
   // 10-point user-facing scores (Phase 2/3). Falls back to fallbackScoreForStage
   // when the canonical score is null/zero AND useFallbackScore is true.
@@ -919,11 +928,26 @@ export function enrichWithUserStage(input: {
   const officialSignalAt = officialSignalStage ? signalIso : null;
   const officialSignalInning = officialSignalStage ? signalInning : null;
 
+  // Step 5 — derive the canonical badge set from already-computed evidence.
+  // parkBoost is inferred from the engine's own driver/tag text (it surfaces
+  // "park"/"wind" favorability there); absent ⇒ no park_boost badge.
+  const parkBoost = [
+    ...(input.positiveDrivers ?? []),
+    ...(input.triggerTags ?? []),
+  ].some((t) => /park|wind/i.test(String(t)));
+  const badges = deriveHrRadarBadges({
+    stage: userStage,
+    qualifyingSignals,
+    alertPath: input.alertPath ?? null,
+    parkBoost,
+  });
+
   return {
     userStage,
     stageLabel: getUserStageLabel(userStage),
     stageDescription: getUserStageCopy(userStage),
     qualifyingSignals,
+    badges,
     cleanReasons: input.userReasons ?? [],
     initialSignalScore10,
     currentSignalScore10,

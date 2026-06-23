@@ -17,6 +17,7 @@ import {
   type HrQualifyingSignalType,
 } from "./mlb/hrRadarUserStage";
 import { calculateRemainingMinutes } from "./minutesModel";
+import type { HrRadarBadge } from "@shared/hrRadarStage";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { getPlayoffRotationProfile, type PlayoffRotationProfile } from "./services/nbaRotationHistoryService";
 import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, isStableArchetype, getSafetyCeiling, getPlayoffSafetyCeiling, getPlayoffFragilityMultiplier } from "./nba/archetypes";
@@ -6195,6 +6196,7 @@ export class DatabaseStorage implements IStorage {
         stageLabel: enrichment.stageLabel,
         stageDescription: enrichment.stageDescription,
         qualifyingSignals: enrichment.qualifyingSignals,
+        badges: enrichment.badges,
         cleanReasons: enrichment.cleanReasons,
         officialSignalStage: enrichment.officialSignalStage,
         officialSignalAt: enrichment.officialSignalAt,
@@ -6700,6 +6702,8 @@ export interface HrRadarLadderEntry {
   stageDescription: string;
   /** Qualifying signals derived from existing diagnostic snapshot. */
   qualifyingSignals: HrQualifyingSignalType[];
+  /** Canonical badge set (shared/hrRadarStage.ts) — rendered verbatim by UI. */
+  badges: HrRadarBadge[];
   /** Alias of userReasons — explicit "clean" channel for the new UI. */
   cleanReasons: string[];
   /** Additive grading shadow: which official stage was reached, if any. */
