@@ -366,7 +366,7 @@ device gets network.
 ### 6.4 Interrupted deploy (server in a partially-rolled state)
 
 **Cause:** Deploy is in progress; some requests hit the new build, others
-hit the old build. (On Replit Deploy this window is very short, but it
+hit the old build. (On Railway deploys this window is very short, but it
 exists.)
 
 **Possible inconsistencies:**

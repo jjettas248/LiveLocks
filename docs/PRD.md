@@ -387,7 +387,7 @@ DraftKings, FanDuel, Hard Rock Bet, PrizePicks, Underdog Fantasy, BetMGM, BetRiv
 
 ## 13. Deployment
 
-- **Platform**: Replit (cloud deployment)
+- **Platform**: Railway (cloud deployment)
 - **Runtime**: Node.js + TypeScript (tsx)
 - **Database**: PostgreSQL with Drizzle ORM
 - **Frontend**: React + Vite + Tailwind + shadcn/ui

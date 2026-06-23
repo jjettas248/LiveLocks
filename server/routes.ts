@@ -990,6 +990,182 @@ export async function registerRoutes(
     }
   });
 
+  // ── Buyer Track Record — credibility view (read-only) ──────────────────────
+  // Single source of truth for "what happened to every surfaced play". Reads
+  // persisted_plays (the durable historical engine record) + the shadow store
+  // (experimental, non-surfaced, MLB-only, session-scoped). NEVER mutates the
+  // engine, bus, lifecycle, or any canonical field (CLAUDE.md §3.6).
+  const trackRecordStartDate = (range: string): string => {
+    if (range === "1d" || range === "today") return todayET();
+    if (range === "7d") return daysAgoET(7);
+    if (range === "30d") return daysAgoET(30);
+    return ""; // "all"
+  };
+
+  app.get("/api/admin/track-record", requireAdmin, async (req, res) => {
+    try {
+      const sport = ((req.query.sport as string) || "all").toLowerCase();
+      const market = (req.query.market as string) || "";
+      const tier = ((req.query.tier as string) || "").toLowerCase();
+      const range = ((req.query.range as string) || "all").toLowerCase();
+
+      const { buildFullROIReport, normalizeTier } = await import("./services/roiEngine");
+      const { getShadowSummary } = await import("./mlb/shadowQualification");
+      const { MLB_GOLDMASTER_VERSION } = await import("./mlb/goldmasterGuard");
+
+      const startDate = trackRecordStartDate(range);
+      let plays = await storage.getPlaysInRange({
+        sport: sport === "all" ? undefined : sport,
+        startDate: startDate || undefined,
+      });
+      if (market) plays = plays.filter(p => p.market === market);
+      if (tier) plays = plays.filter(p => normalizeTier(p.confidenceTier) === tier);
+
+      const report = buildFullROIReport(plays as unknown as PersistedPlay[]);
+
+      return res.json({
+        filters: { sport, market: market || "all", tier: tier || "all", range },
+        engineVersion: MLB_GOLDMASTER_VERSION,
+        generatedAt: new Date().toISOString(),
+        historical: {
+          surfaced: plays.length,
+          settled: report.global.totalBets,
+          pending: report.global.pending,
+          ...report,
+        },
+        shadow: getShadowSummary(),
+      });
+    } catch (e: any) {
+      console.error("[admin/track-record]", e.message);
+      return res.status(500).json({ error: "Failed to generate track record" });
+    }
+  });
+
+  // RFC-4180-ish CSV serialization. No dependency added (do not edit package.json).
+  const csvCell = (v: unknown): string => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csvRows = (rows: unknown[][]): string =>
+    rows.map(r => r.map(csvCell).join(",")).join("\r\n") + "\r\n";
+
+  const TRACK_RECORD_CSV_HEADER = [
+    "record_type", "signal_timestamp", "game_date", "sport", "player", "market",
+    "direction", "line", "odds", "probability", "signal_tier", "signal_score",
+    "engine_version", "result", "status", "final_stat", "profit_loss", "profit_loss_basis",
+  ];
+
+  app.get("/api/admin/track-record/export/historical.csv", requireAdmin, async (req, res) => {
+    try {
+      const sport = ((req.query.sport as string) || "all").toLowerCase();
+      const market = (req.query.market as string) || "";
+      const tier = ((req.query.tier as string) || "").toLowerCase();
+      const range = ((req.query.range as string) || "all").toLowerCase();
+
+      const { calculatePayout, normalizeTier } = await import("./services/roiEngine");
+      const startDate = trackRecordStartDate(range);
+      let plays = await storage.getPlaysInRange({
+        sport: sport === "all" ? undefined : sport,
+        startDate: startDate || undefined,
+      });
+      if (market) plays = plays.filter(p => p.market === market);
+      if (tier) plays = plays.filter(p => normalizeTier(p.confidenceTier) === tier);
+
+      const body = (plays as unknown as PersistedPlay[]).map(p => {
+        // A "void" (DNP) result is terminal & financially neutral — the ROI
+        // engine drops it from both settled and pending. Treat any non-null
+        // result as terminal so the CSV never mislabels a void as pending.
+        const financiallySettled = p.result === "hit" || p.result === "miss" || p.result === "push";
+        const isVoid = p.result === "void";
+        const terminal = p.result != null;
+        const hasOdds = p.odds != null && Number.isFinite(Number(p.odds));
+        return [
+          "historical_engine",
+          (p.timestamp ?? p.createdAt)?.toISOString?.() ?? "",
+          p.gameDate ?? "",
+          p.sport ?? "",
+          p.playerName ?? "",
+          p.market ?? "",
+          p.direction ?? "",
+          p.line ?? "",
+          hasOdds ? p.odds : "",
+          p.prob ?? "",
+          p.confidenceTier ?? "untiered",
+          p.signalScore ?? "",
+          p.engineVersion ?? "unknown",
+          p.result ?? "",
+          terminal ? "settled" : "pending",
+          p.finalStat ?? "",
+          financiallySettled ? Math.round(calculatePayout(p) * 1000) / 1000 : isVoid ? 0 : "",
+          financiallySettled ? (hasOdds ? "actual_odds" : "assumed_-110") : isVoid ? "void_no_action" : "",
+        ];
+      });
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="livelocks-historical-track-record-${range}.csv"`,
+      );
+      return res.send(csvRows([TRACK_RECORD_CSV_HEADER, ...body]));
+    } catch (e: any) {
+      console.error("[admin/track-record/historical.csv]", e.message);
+      return res.status(500).json({ error: "Failed to export historical track record" });
+    }
+  });
+
+  app.get("/api/admin/track-record/export/shadow.csv", requireAdmin, async (req, res) => {
+    try {
+      const market = (req.query.market as string) || "";
+      const range = ((req.query.range as string) || "all").toLowerCase();
+      const { listShadowSignals } = await import("./mlb/shadowQualification");
+
+      // Shadow ROI proxy at -110 vig (cashed=+0.909u, missed=-1u, push=0).
+      const SHADOW_VIG_PAYOUT = 0.909;
+      let records = listShadowSignals();
+      if (market) records = records.filter(r => r.market === market);
+
+      const body = records.map(r => {
+        // "expired" (TTL reached without resolution) is terminal but has no
+        // financial outcome — mirror the historical void handling so it is not
+        // mislabeled as pending.
+        const financiallySettled = r.outcome === "cashed" || r.outcome === "missed" || r.outcome === "push";
+        const terminal = r.outcome != null && r.outcome !== "pending";
+        const pl = r.outcome === "cashed" ? SHADOW_VIG_PAYOUT : r.outcome === "missed" ? -1 : r.outcome === "push" ? 0 : "";
+        return [
+          "shadow_experimental",
+          new Date(r.qualifiedAt).toISOString(),
+          "", // shadow store does not retain gameDate
+          "mlb",
+          r.playerName ?? "",
+          r.market ?? "",
+          r.side ?? "",
+          r.bookLine ?? "",
+          "", // no real odds
+          r.probability ?? "",
+          "", // no confidence tier
+          r.signalScore ?? "",
+          "shadow",
+          r.outcome ?? "",
+          terminal ? "settled" : "pending",
+          "", // final stat not retained on shadow record
+          pl,
+          financiallySettled ? "shadow_proxy_-110" : "",
+        ];
+      });
+
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="livelocks-shadow-track-record-${range}.csv"`,
+      );
+      return res.send(csvRows([TRACK_RECORD_CSV_HEADER, ...body]));
+    } catch (e: any) {
+      console.error("[admin/track-record/shadow.csv]", e.message);
+      return res.status(500).json({ error: "Failed to export shadow track record" });
+    }
+  });
+
   app.get("/api/recent-results", requireAuth, async (req, res) => {
     try {
       const user = (req as any).user;

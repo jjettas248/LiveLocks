@@ -16,7 +16,7 @@ Guidance for Claude (and other AI coding assistants) working in this repo.
 | API codegen | `npm run codegen` |
 | DB migrate (Drizzle) | `drizzle-kit push:pg` |
 
-**Required env vars:** `ODDS_API_KEY`, `ODDS_API_KEY_2`, `ODDS_API_KEY_3` (rotation), `DATABASE_URL`, plus Stripe / Resend / Twilio credentials managed through Replit Secrets — **never** hardcode or echo their values.
+**Required env vars:** `ODDS_API_KEY`, `ODDS_API_KEY_2`, `ODDS_API_KEY_3` (rotation), `DATABASE_URL`, plus Stripe / Resend / Twilio credentials managed through Railway environment variables (Railway Variables) — **never** hardcode or echo their values.
 
 **Regression suites (run before merging engine-adjacent changes):**
 ```
@@ -30,7 +30,7 @@ npx tsx server/mlb/pullAndPregame.test.ts           # pull rate + pregame HR-for
 npx tsx server/mlb/ibbAndRecentForm.test.ts         # recent form streak + IBB feared-slugger prior
 ```
 
-The `Start application` workflow runs `npm run dev` automatically; restart it after server changes.
+Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
 
 ---
 
@@ -41,7 +41,7 @@ The `Start application` workflow runs `npm run dev` automatically; restart it af
 - **DB:** PostgreSQL with Drizzle ORM
 - **Auth:** JWT + role-based access (`requireAuth`, `requireAdmin`, `requirePlayAccess`, `requireMLBAccess`, `requireTier`)
 - **Notifications:** Twilio (SMS), Resend (email), web push
-- **Payments:** Stripe (Replit-managed integration; do not re-install)
+- **Payments:** Stripe (credentials supplied via Railway env vars; was a Replit-managed integration — do not re-install)
 - **PWA:** custom service worker in `client/public/sw.js`
 
 ---
@@ -168,7 +168,7 @@ Admin pages live under `/admin` and `/admin/mlb-signal-intelligence`.
 7. **Do not** edit `package.json` directly — use the package management tools, and never modify Vite / Drizzle config without strong cause.
 8. **Do not** add analytics code paths that mutate runtime state. Analytics are read-only and wrapped in `try/catch` so they can never break runtime.
 9. **Do not** use `new Date()` for slate / window logic — use `todayET()`.
-10. **Do not** display or write secret values. Use Replit-managed env vars.
+10. **Do not** display or write secret values. Use Railway-managed env vars.
 
 ---
 
