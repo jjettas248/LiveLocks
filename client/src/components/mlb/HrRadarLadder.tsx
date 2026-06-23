@@ -127,6 +127,12 @@ export interface HrRadarLadderEntry {
   pregameSeedScore10?: number | null;
   pregameDrivers?: string[];
   pregameSeedTier?: string | null;
+  // Pre-Game Power Radar bridge (additive, display-only; from the separate
+  // Pre-Game Power Radar, not the seed above).
+  pregamePowerTarget?: boolean;
+  pregamePowerTier?: string | null;
+  pregamePowerScore10?: number | null;
+  pregamePowerMarket?: string | null;
   // Legacy fields (still populated for backwards compat).
   state: string | null;
   confidenceTier: string | null;
@@ -935,6 +941,18 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
               title="Pregame power profile — display-only tier"
             >
               {entry.pregameSeedTier}
+            </span>
+          )}
+          {/* Pre-Game Power Radar bridge — this live row was flagged pre-game.
+              Additive/display-only; distinct from the seed tier above. */}
+          {!isResolved && entry.pregamePowerTarget && (
+            <span
+              className="text-[9px] font-semibold px-1.5 py-0 rounded-full border whitespace-nowrap text-amber-200 bg-amber-500/15 border-amber-400/40"
+              data-testid={`badge-pregame-power-${entry.playerId}`}
+              title={`Pre-game power target — score ${typeof entry.pregamePowerScore10 === "number" ? entry.pregamePowerScore10.toFixed(1) : "?"}${entry.pregamePowerMarket ? ` · ${entry.pregamePowerMarket === "home_runs" ? "HR" : entry.pregamePowerMarket === "total_bases" ? "TB" : entry.pregamePowerMarket}` : ""}`}
+            >
+              {`Pre-Game ${entry.pregamePowerTier ? entry.pregamePowerTier.charAt(0).toUpperCase() + entry.pregamePowerTier.slice(1) : "Target"}`}
+              {entry.pregamePowerMarket ? ` · ${entry.pregamePowerMarket === "home_runs" ? "HR" : entry.pregamePowerMarket === "total_bases" ? "TB" : ""}` : ""}
             </span>
           )}
           {isResolved && section === "dead" && (

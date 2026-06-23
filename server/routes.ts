@@ -3713,6 +3713,37 @@ export async function registerRoutes(
       } catch {
         // best-effort — clients fall back to existing isResolved logic.
       }
+
+      // ── Pre-Game Power Radar bridge ─────────────────────────────────────
+      // Additive, read-only: stamp `pregamePower*` on any live row that matches
+      // a current non-suppressed pre-game target (same gameId + playerId). Pure
+      // read of the in-memory Pre-Game Power snapshot — never touches the live
+      // engine, bus, lifecycle, or any live canonical field.
+      let pregamePowerMatches = 0;
+      try {
+        const { getPregamePowerTargetMap, bridgeKey } = await import(
+          "./mlb/pregamePowerRadar/liveBridge"
+        );
+        const targetMap = getPregamePowerTargetMap();
+        if (targetMap.size > 0) {
+          const ladderSections = (ladder as any)?.sections ?? {};
+          for (const bucket of Object.values(ladderSections) as any[]) {
+            if (!Array.isArray(bucket)) continue;
+            for (const card of bucket) {
+              if (!card || typeof card !== "object") continue;
+              const ref = targetMap.get(bridgeKey(String(card.gameId), String(card.playerId)));
+              if (!ref) continue;
+              card.pregamePowerTarget = true;
+              card.pregamePowerTier = ref.tier;
+              card.pregamePowerScore10 = ref.score10;
+              card.pregamePowerMarket = ref.primaryMarket;
+              pregamePowerMatches++;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("[mlb/hr-radar/ladder] pregame-power bridge failed:", (err as any)?.message);
+      }
       // Master Fix Phase 6/8 — additive diagnostics block. Lets the empty
       // state on the client (and any operator/admin probe) honestly report
       // why the radar is empty: was it 0 live games, 0 rows in DB, or both?
@@ -3786,6 +3817,7 @@ export async function registerRoutes(
         rowsFound,
         liveGamesFound,
         hrWatchCount: hrWatchEntries.length,
+        pregamePowerTargets: pregamePowerMatches,
         fallbackRowsGenerated: 0,
         source: rowsFound > 0 ? "engine" : (liveGamesFound > 0 ? "engine_no_candidates" : "no_live_games"),
         generatedAt: new Date().toISOString(),

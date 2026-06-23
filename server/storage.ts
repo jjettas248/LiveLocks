@@ -6503,6 +6503,17 @@ export interface HrRadarLadderEntry {
   /** Display-only lifted tier label from the seed ("LEAN"/"WATCH"); null = no lift. */
   pregameSeedTier?: string | null;
 
+  // ── Pre-Game Power Radar bridge (additive, display-only; stamped in the
+  // ladder route from the separate Pre-Game Power Radar — NOT the seed above). ─
+  /** True when this live row matched a current non-suppressed pre-game target. */
+  pregamePowerTarget?: boolean;
+  /** Pre-Game Power tier: "watch"|"strong"|"elite"|"nuclear". */
+  pregamePowerTier?: string | null;
+  /** Pre-Game Power 0.0–10.0 score. */
+  pregamePowerScore10?: number | null;
+  /** Pre-Game Power primary market: "home_runs"|"total_bases". */
+  pregamePowerMarket?: string | null;
+
   // ── Legacy fields preserved for backwards compat. ──────────────────────────
   /** @deprecated use currentStage. Internal signal state string. */
   state: string | null;
