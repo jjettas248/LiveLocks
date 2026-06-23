@@ -87,7 +87,7 @@ function getWhyChips(entry: HrRadarLadderEntry): WhyChip[] {
     chips.push({ label: `Vuln ${Math.min(100, Math.round(entry.pitcherHrVulnerability))}`, tone: "neutral" });
   }
   if (entry.currentReadinessScore != null) {
-    chips.push({ label: `Ready ${Math.min(100, Math.round(entry.currentReadinessScore))}`, tone: "neutral" });
+    chips.push({ label: `Conviction ${Math.min(100, Math.round(entry.currentReadinessScore))}`, tone: "neutral" });
   }
   switch (entry.momentumLabel) {
     case "heating_up":

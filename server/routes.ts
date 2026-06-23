@@ -554,6 +554,29 @@ export async function registerRoutes(
     }
   });
 
+  // HR Radar precision/recall instrumentation (Recommendation #4). Read-only.
+  // ?windowMs=N to change the lookback; ?includeRecords=1 for per-signal rows.
+  app.get("/api/admin/mlb-hr-radar-shadow", requireAdmin, async (req, res) => {
+    try {
+      const { computeHrRadarShadowSnapshot, computeHrRadarShadowRecords } =
+        await import("./analytics/hrRadarShadowMetrics");
+      const windowMs = req.query.windowMs ? Number(req.query.windowMs) : undefined;
+      const snapshot = computeHrRadarShadowSnapshot(
+        windowMs && Number.isFinite(windowMs) ? { windowMs } : undefined,
+      );
+      if (String(req.query.includeRecords ?? "") === "1") {
+        const records = computeHrRadarShadowRecords(
+          windowMs && Number.isFinite(windowMs) ? { windowMs } : undefined,
+        );
+        return res.json({ ...snapshot, records });
+      }
+      return res.json(snapshot);
+    } catch (err) {
+      console.error("[admin/mlb-hr-radar-shadow]", err);
+      return res.status(500).json({ error: "Failed to fetch HR Radar shadow metrics" });
+    }
+  });
+
   app.get("/api/admin/signal-lifecycle/:signalId", requireAdmin, async (req, res) => {
     try {
       const { getCanonical } = await import("./services/lifecycleStore");
@@ -3144,7 +3167,11 @@ export async function registerRoutes(
   // ── MLB HR Radar Route ───────────────────────────────────────────────────────
   app.get("/api/mlb/hr-radar", requireAuth, async (req, res) => {
     try {
-      try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/hr-radar"); } catch {}
+      // NOTE: this endpoint is the canonical HR Radar data source consumed by
+      // the active ladder (client/src/components/mlb/HrRadarLadder.tsx). It is
+      // NOT a legacy/bus-bypass consumer, so it is intentionally not marked via
+      // markLegacyConsumer — doing so previously polluted the admin
+      // [LL_LEGACY_SIGNAL_CONSUMER] metric with the primary radar route.
       const hrEdges: any[] = [];
       const hrWatchlist: any[] = [];
 

@@ -313,6 +313,25 @@ export function startHrRadarIntelligenceAggregator(intervalMs: number = 5 * 60 *
           `recall=${snap.recall ?? "n/a"} ` +
           `missStrongContact=${snap.missedWithStrongContact}`,
       );
+      // Precision/recall shadow rollup (Recommendation #4) — keep the bridge-path
+      // false-positive picture visible per cycle so a threshold change can be
+      // judged against it, not assumed safe.
+      try {
+        const { computeHrRadarShadowSnapshot } = require("./hrRadarShadowMetrics");
+        const sh = computeHrRadarShadowSnapshot({ windowMs: 60 * 60 * 1000 });
+        const worstPath = sh.falsePositiveRateByPath[0];
+        console.log(
+          `[LL_ANALYTICS_HR_RADAR_SHADOW] signals=${sh.totals.signalsObserved} ` +
+            `games=${sh.totals.gamesObserved} ` +
+            `readyHitRate=${sh.readyHitRate ?? "n/a"} fireHitRate=${sh.fireHitRate ?? "n/a"} ` +
+            `fireOutperformsReady=${sh.fireOutperformsReady ?? "n/a"} ` +
+            `readyToFire=${sh.readyToFireConversion ?? "n/a"} ` +
+            `signalsPerGame=${sh.signalsPerGame ?? "n/a"} hrsPerGame=${sh.hrsCapturedPerGame ?? "n/a"} ` +
+            `worstPath=${worstPath ? `${worstPath.path}:${worstPath.falsePositiveRate ?? "n/a"}` : "n/a"}`,
+        );
+      } catch (e: any) {
+        console.warn(`[LL_ANALYTICS_HR_RADAR_SHADOW] snapshot failed err=${e?.message ?? e}`);
+      }
     } catch (err: any) {
       console.warn(`[LL_ANALYTICS_HR_RADAR] snapshot failed err=${err?.message ?? err}`);
     }

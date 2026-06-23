@@ -18,6 +18,7 @@ import {
   type HrQualifyingSignalType,
 } from "./mlb/hrRadarUserStage";
 import { calculateRemainingMinutes } from "./minutesModel";
+import type { HrRadarBadge } from "@shared/hrRadarStage";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { getPlayoffRotationProfile, type PlayoffRotationProfile } from "./services/nbaRotationHistoryService";
 import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, isStableArchetype, getSafetyCeiling, getPlayoffSafetyCeiling, getPlayoffFragilityMultiplier } from "./nba/archetypes";
@@ -3497,6 +3498,26 @@ export class DatabaseStorage implements IStorage {
             alertSignalState: alert.signalState ?? null,
           });
         }
+
+        // Precision instrumentation — terminal outcome for HR radar signals.
+        // called_hit → cashed, called_miss → missed. (late_signal is a recall
+        // miss handled by the tracer above, not a precision miss.) This
+        // populates hr_radar_cashed/hr_radar_missed for the shadow rollups.
+        if (decision.gradingStatus === "called_hit" || decision.gradingStatus === "called_miss") {
+          const { emitHrRadarOutcome } = require("./analytics/eventEmitters");
+          const peakScore10 = alert.peakReadinessScore != null
+            ? Math.round((Number(alert.peakReadinessScore) / 10) * 10) / 10
+            : null;
+          emitHrRadarOutcome({
+            signalId: `mlb:${params.gameId}:${params.playerId}:home_runs:OVER`,
+            gameId: params.gameId, playerId: params.playerId,
+            kind: decision.gradingStatus === "called_hit" ? "cashed" : "missed",
+            signalPath: alert.alertPath ?? null,
+            score10: peakScore10,
+            finalStage: (alert as any).userStage ?? alert.signalState ?? null,
+            gradingStatus: decision.gradingStatus,
+          });
+        }
       } catch {}
 
       // Phase 1 — enrich decision with the matched alert's persisted tier
@@ -6263,6 +6284,7 @@ export class DatabaseStorage implements IStorage {
         stageLabel: enrichment.stageLabel,
         stageDescription: enrichment.stageDescription,
         qualifyingSignals: enrichment.qualifyingSignals,
+        badges: enrichment.badges,
         cleanReasons: enrichment.cleanReasons,
         officialSignalStage: enrichment.officialSignalStage,
         officialSignalAt: enrichment.officialSignalAt,
@@ -6782,6 +6804,8 @@ export interface HrRadarLadderEntry {
   stageDescription: string;
   /** Qualifying signals derived from existing diagnostic snapshot. */
   qualifyingSignals: HrQualifyingSignalType[];
+  /** Canonical badge set (shared/hrRadarStage.ts) — rendered verbatim by UI. */
+  badges: HrRadarBadge[];
   /** Alias of userReasons — explicit "clean" channel for the new UI. */
   cleanReasons: string[];
   /** Additive grading shadow: which official stage was reached, if any. */
