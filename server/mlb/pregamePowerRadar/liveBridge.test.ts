@@ -1,7 +1,7 @@
 // Pre-Game Power Radar → live ladder bridge invariants.
 // Run: npx tsx server/mlb/pregamePowerRadar/liveBridge.test.ts
 
-import { buildPregamePowerTargetMap, bridgeKey } from "./liveBridge";
+import { buildPregamePowerTargetMap, bridgeKey } from "./liveBridgeCore";
 import type { PregamePowerSignal } from "./types";
 
 let passed = 0;
