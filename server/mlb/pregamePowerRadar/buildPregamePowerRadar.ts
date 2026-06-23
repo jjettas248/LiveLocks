@@ -378,7 +378,13 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           hasMarketLine: false,
           isOfficialPlay: false,
           isPregameTarget: true,
-          status: isLocked ? "locked" : gameStatus === "final" ? "expired" : "active",
+          // `isLocked` already covers live/final games (see above), so by the
+          // time we reach the else branch `gameStatus` can only be a non-final
+          // pre-game/limbo state (scheduled/pre/postponed/delayed/unknown) →
+          // "active". A separate `gameStatus === "final" ? "expired"` check here
+          // was dead code (final games are always "locked" first) and tripped
+          // TS2367. Final → "graded" is owned by the shadow grader, not here.
+          status: isLocked ? "locked" : "active",
           suppressed: scoring.suppressed,
           suppressedReasons: scoring.suppressedReasons,
           outcomes: null,
