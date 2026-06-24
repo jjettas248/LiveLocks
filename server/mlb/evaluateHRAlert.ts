@@ -116,6 +116,13 @@ export interface HRSuppressionFlag {
 export interface HRAlertDiagnostics {
   alertPath: string | null;
   positiveFactors: string[];
+  // Data-quality discipline (2026-06) — populated on every evaluation so the
+  // persistence/analytics layer can tell a clean below-threshold call from one
+  // made on degraded/absent inputs. suppressionReason is set only when a gate
+  // actually suppresses; dataQuality/missingInputs are always present.
+  suppressionReason?: string | null;
+  dataQuality?: "full" | "degraded";
+  missingInputs?: string[];
   suppressionFlags: HRSuppressionFlag[];
   hrShapedCount: number;
   missedHrCount: number;
@@ -245,7 +252,9 @@ function buildSuppression(input: HRAlertInput, classified: ClassifiedContact[]):
     }
   }
 
-  const laValues = classified.filter(c => c.exitVelocity >= 95).map(c => c.launchAngle);
+  const laValues = classified
+    .filter(c => c.exitVelocity != null && c.exitVelocity >= 95 && c.launchAngle != null)
+    .map(c => c.launchAngle as number);
   if (laValues.length >= 2) {
     const avgLA = laValues.reduce((s, v) => s + v, 0) / laValues.length;
     if (avgLA > 42 || avgLA < 15) {
@@ -424,9 +433,22 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
 
   const convProb = hrConversion?.calibratedProbability ?? hrConversion?.hrConversionProbability ?? null;
 
+  // ── Data-quality assessment (2026-06) — missing data must REDUCE CONFIDENCE,
+  // not masquerade as weak contact. Collect which inputs were absent so a
+  // suppression can be honestly labeled degraded-vs-full. ──
+  const missingInputs: string[] = [];
+  if (classified.some(c => c.dataQuality === "missing")) missingInputs.push("missing_statcast");
+  if (classified.some(c => c.dataQuality === "degraded")) missingInputs.push("degraded_contact_data");
+  if (input.seasonHRRate == null && (input.barrelRate ?? null) == null) missingInputs.push("missing_batter_power");
+  if (input.batterHand == null || input.pitcherThrows == null) missingInputs.push("missing_handedness_splits");
+  const dataQuality: "full" | "degraded" = missingInputs.length > 0 ? "degraded" : "full";
+
   const baseDiagnostics: HRAlertDiagnostics = {
     alertPath: null,
     positiveFactors: [],
+    suppressionReason: null,
+    dataQuality,
+    missingInputs,
     suppressionFlags,
     hrShapedCount,
     missedHrCount,
@@ -485,13 +507,20 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
     ? 0.015
     : HR_CONVERSION_WATCH_MIN;
   if (convProb !== null && convProb < convWatchMin) {
-    console.log(`[HR_ALERT_CONV_GATE] ${input.playerName} game=${input.gameId} — convProb=${(convProb * 100).toFixed(1)}% below watch min ${(convWatchMin * 100).toFixed(1)}%. Suppressing.`);
+    // Truthful suppression reason: distinguish a clean below-threshold call
+    // (all inputs present, the player really is below the bar) from one made
+    // on degraded/absent data (which should read as low-confidence, not weak).
+    const suppressionReason = dataQuality === "degraded"
+      ? "below_threshold_with_degraded_data"
+      : "below_threshold_with_full_data";
+    console.log(`[HR_ALERT_CONV_GATE] ${input.playerName} game=${input.gameId} — convProb=${(convProb * 100).toFixed(1)}% below watch min ${(convWatchMin * 100).toFixed(1)}% (${suppressionReason}${missingInputs.length ? `; missing=${missingInputs.join(",")}` : ""}). Suppressing.`);
     return {
       ...nullResult,
       diagnostics: {
         ...baseDiagnostics,
         alertPath: "CONV_LOW",
         positiveFactors: [],
+        suppressionReason,
       },
     };
   }
@@ -546,7 +575,7 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
   // `inning` the rest of this evaluator uses; downstream storage freezes
   // the first detected inning at CREATE time.
   const eliteBarrelHit = classified.some(
-    c => c.exitVelocity >= 100 && c.distance >= 380
+    c => c.exitVelocity != null && c.exitVelocity >= 100 && c.distance != null && c.distance >= 380
   );
   const dangerousSecondaryCount = factors.hardHits + factors.deepFlyouts;
 
@@ -992,7 +1021,7 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
     (input.seasonHRRate != null && input.seasonHRRate >= 0.040);
 
   const hasQualityPowerContact = classified.some(c =>
-    c.contactClass === "powerContact" && c.exitVelocity >= 92 && c.distance >= 320
+    c.contactClass === "powerContact" && c.exitVelocity != null && c.exitVelocity >= 92 && c.distance != null && c.distance >= 320
   );
 
   if (
@@ -1441,10 +1470,16 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   // actionable. Clear every actionable marker: drop to BUILDING/PREPARE and
   // downgrade the level from ALERT → WATCH so cooldown/notifications (gated on
   // level === "ALERT") don't fire for a non-bet signal.
+  // Truthful demote reason: an EV demote driven by a model probability that
+  // was itself deflated by absent inputs is a data-quality outcome, not a clean
+  // "the market is simply better priced" call.
+  const evSuppressionReason = result.diagnostics.dataQuality === "degraded"
+    ? "below_threshold_with_degraded_data"
+    : "below_threshold_with_full_data";
   console.log(
     `[HR_RADAR_EV_GATE] DEMOTE ${input.playerName} game=${input.gameId} ` +
     `model=${(modelProb * 100).toFixed(1)}% mkt=${(marketImplied * 100).toFixed(1)}% ` +
-    `edge=${edgePct.toFixed(0)}% need≥${(required * 100).toFixed(1)}% → building`,
+    `edge=${edgePct.toFixed(0)}% need≥${(required * 100).toFixed(1)}% → building (${evSuppressionReason})`,
   );
   return {
     ...result,
@@ -1455,5 +1490,6 @@ export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
     triggerReason:
       `${result.triggerReason} · EV-gated (model ${(modelProb * 100).toFixed(1)}% ` +
       `vs mkt ${(marketImplied * 100).toFixed(1)}%, edge ${edgePct.toFixed(0)}%)`,
+    diagnostics: { ...result.diagnostics, suppressionReason: evSuppressionReason },
   };
 }
