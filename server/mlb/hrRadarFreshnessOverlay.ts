@@ -21,6 +21,7 @@
 //   • Additive & no-op when the canonical store is empty (partial data safe).
 
 import type { CanonicalHrRadarState } from "./hrRadarCanonicalStore";
+import { buildHrRadarDisplayContract } from "./hrRadarDisplayContract";
 
 type LadderEntry = Record<string, any> & { playerId: string; gameId: string };
 
@@ -161,6 +162,7 @@ export function applyCanonicalFreshnessOverlay(
         e.currentStatus = "live";
         if (canon.displayScore10 != null) {
           e.currentSignalScore10 = canon.displayScore10;
+          e.displayCurrentScore10 = canon.displayScore10;
           diagnostics.scoreRefreshed++;
         }
         const age = ageMsOf(canon.updatedAt, nowMs);
@@ -170,6 +172,14 @@ export function applyCanonicalFreshnessOverlay(
         e.freshEvidenceAgeMs = evidenceAge;
         if (age != null) diagnostics.maxLiveRowAgeMs = Math.max(diagnostics.maxLiveRowAgeMs ?? 0, age);
         if (evidenceAge != null) diagnostics.maxEvidenceAgeMs = Math.max(diagnostics.maxEvidenceAgeMs ?? 0, evidenceAge);
+        // Re-stamp the display contract for the (possibly new) bucket so a
+        // promoted row never carries stale stage label / actionability /
+        // record-eligibility from its old DB bucket. FIRE-only official record:
+        // a row canonical now says is FIRE becomes record-eligible ("Counts in
+        // record"); anything below FIRE is not. Mirrors getHrRadarLadder's
+        // Object.assign(entry, buildHrRadarDisplayContract(entry, sectionKey)).
+        e.officialSignalStage = canon.section === "FIRE" ? "fire" : null;
+        Object.assign(e, buildHrRadarDisplayContract(e as any, target));
       } else if (e.freshSource == null) {
         e.freshSource = "db";
       }

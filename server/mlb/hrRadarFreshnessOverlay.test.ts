@@ -55,6 +55,10 @@ console.log("HR Radar freshness overlay");
   eq("2c. rebucketed counted", diagnostics.rebucketed, 1);
   eq("2d. score refreshed from canonical", (l.sections.attackNow[0] as any).currentSignalScore10, 8.0);
   eq("2e. freshSource=canonical", (l.sections.attackNow[0] as any).freshSource, "canonical");
+  // C2 (review) — promoted FIRE row gets fresh display contract, not stale BUILD copy.
+  eq("2f. promoted row officialSignalStage=fire", (l.sections.attackNow[0] as any).officialSignalStage, "fire");
+  eq("2g. promoted row displayRecordEligible=true", (l.sections.attackNow[0] as any).displayRecordEligible, true);
+  eq("2h. promoted row has a stage label", typeof (l.sections.attackNow[0] as any).displayStageLabel, "string");
 }
 
 // 3. Demotion: DB has row in attackNow, canonical cooled to BUILD → moves down
@@ -65,6 +69,9 @@ console.log("HR Radar freshness overlay");
   applyCanonicalFreshnessOverlay(l, [canon("3", "g1", "BUILD", { userStage: "build" as any })], NOW);
   eq("3. attackNow→building on canonical cool-off", l.sections.building.map((e: any) => e.playerId), ["3"]);
   eq("3b. attackNow empty", l.sections.attackNow.length, 0);
+  // C2 (review) — demoted row loses record-eligibility (no longer FIRE).
+  eq("3c. demoted row displayRecordEligible=false", (l.sections.building[0] as any).displayRecordEligible, false);
+  eq("3d. demoted row officialSignalStage=null", (l.sections.building[0] as any).officialSignalStage, null);
 }
 
 // 4. Surface: canonical has a FIRE row with NO DB row → synthesized into attackNow.

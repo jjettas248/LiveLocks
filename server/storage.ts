@@ -4333,9 +4333,11 @@ export class DatabaseStorage implements IStorage {
             half: hitHalfVal,
             source: "grader",
           } as InsertHrRadarSignalEvent);
-          // Goldmaster Phase 9 — canonical alias. Only emit the called-hit alias
-          // for genuine HR-Max-Window wins; sub-actionable HRs are uncalled.
-          if (reachedMax) {
+          // Goldmaster Phase 9 — canonical alias. FIRE-only (2026-06): emit the
+          // called-hit alias ONLY for an official FIRE-committed win, so the
+          // signal-event stream agrees with gradingStatus. A READY-only /
+          // sub-actionable HR is `uncalled_hr` and gets no called-hit alias.
+          if (officialCall) {
             await this.appendHrRadarSignalEvent({
               sessionDate: today, gameId, playerId, team: "",
               alertId: matchResult.alertId,
@@ -5039,6 +5041,29 @@ export class DatabaseStorage implements IStorage {
               inning: 0, half: "F",
               source: "grader",
             } as InsertHrRadarSignalEvent);
+            // FIRE-only official record (2026-06) — the per-poll matcher emits
+            // hr_radar_missed for called_miss, but this game-final reconcile path
+            // (the normal no-HR settlement for a FIRE signal) did not, leaving
+            // the analytics official split's fireMissed at 0 and inflating
+            // fireHitRate. Emit here too so the FIRE record matches the ledger.
+            // This block only runs for FIRE-committed rows (sub-FIRE settles as
+            // `expired` above), and is disjoint from the per-poll path (that
+            // resolves the row out of `live` before reconcile), so no double-count.
+            try {
+              const { emitHrRadarOutcome } = require("./analytics/eventEmitters");
+              const peakScore10 = alert.peakReadinessScore != null
+                ? Math.round((Number(alert.peakReadinessScore) / 10) * 10) / 10
+                : null;
+              emitHrRadarOutcome({
+                signalId: `mlb:${gameId}:${alert.playerId}:home_runs:OVER`,
+                gameId, playerId: alert.playerId,
+                kind: "missed",
+                signalPath: alert.alertPath ?? null,
+                score10: peakScore10,
+                finalStage: (alert as any).userStage ?? alert.signalState ?? null,
+                gradingStatus: "called_miss",
+              });
+            } catch {}
           } else {
             // `expired` — either sub-actionable Watch/Building context (never a
             // pick) OR an HR Max Window signal whose PA window was cut short by
