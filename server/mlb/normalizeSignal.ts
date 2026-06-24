@@ -408,6 +408,22 @@ function buildBaseMLBSignal(
         ? Math.round((qs.engineProbability as number) * 10) / 10
         : null);
 
+  // HR occurrence engine (2026-06) — for home_runs the OVER probability IS
+  // P(HR>=1). If the calibrated OVER prob sits below the UNDER prob while the
+  // recommended side is OVER, the sided `probability` field is ambiguous /
+  // inverted. HR Radar must never read that field for HR chance — it consumes
+  // hrConversion.hrOccurrenceProbability. Flag it so the ambiguity is visible.
+  if (
+    normalizedMkt === "home_runs" && qs.side === "OVER" &&
+    calibProbOver != null && calibProbUnder != null && calibProbOver < calibProbUnder
+  ) {
+    console.log(
+      `[HR_PROBABILITY_FIELD_AMBIGUOUS] player=${(qs as any).playerName ?? "?"} market=home_runs ` +
+      `side=OVER pOver=${calibProbOver} pUnder=${calibProbUnder} — sided probability inverted; ` +
+      `HR Radar uses hrOccurrenceProbability, not this field`,
+    );
+  }
+
   const formRaw = qs.formIndicator;
   const formUpper = formRaw ? String(formRaw).toUpperCase() : null;
 
