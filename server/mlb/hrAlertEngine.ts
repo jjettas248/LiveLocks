@@ -3,6 +3,21 @@ import { evaluateHRAlert } from "./evaluateHRAlert";
 import type { BatterEvidenceQuality } from "./hrConversionModel";
 import type { HrRadarLifecycleEvent, HrRadarLifecycleState } from "./hrRadarStateMachine";
 
+// ── Per-tick diagnostic throttle (2026-06) ──────────────────────────────────
+// [HR_OCCURRENCE_PROB] / [HR_CONV_CAL_RAIL_BLOCKED] / [HR_PITCHER_FADE_ONLY_BLOCKED]
+// fire on every recompute tick per batter; without throttling a full slate
+// floods the logs. Emit at most once per key per window (the state itself is
+// observable in the canonical store / freshness endpoint between samples).
+const HR_DIAG_THROTTLE_MS = 30_000;
+const _hrDiagLastLogMs = new Map<string, number>();
+function shouldLogHrDiag(key: string, everyMs: number = HR_DIAG_THROTTLE_MS): boolean {
+  const now = Date.now();
+  const last = _hrDiagLastLogMs.get(key);
+  if (last != null && now - last < everyMs) return false;
+  _hrDiagLastLogMs.set(key, now);
+  return true;
+}
+
 export type DynamicHRState = "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
 
 /**
@@ -538,14 +553,16 @@ export function recomputeHrAlertState(
   // independent of sportsbook odds/edge/line.
   const batterEvidenceQuality: BatterEvidenceQuality = convResult?.occurrenceEvidenceQuality ?? "none";
   const hrOccurrenceProbability = convResult?.hrOccurrenceProbability ?? effectiveCalibrated;
-  console.log(
-    `[HR_OCCURRENCE_PROB] player=${input.playerName} gameId=${input.gameId} ` +
-    `projection=${rawProb.toFixed(3)} remainingPA=${remainingPA.toFixed(1)} ` +
-    `rawOccurrenceProb=${rawProb.toFixed(3)} calibratedOccurrenceProb=${hrOccurrenceProbability.toFixed(3)} ` +
-    `evidence=${batterEvidenceQuality} drivers=${(positiveDrivers ?? []).slice(0, 3).join("|") || "none"} ` +
-    `source=hr_occurrence_only`,
-  );
-  if (convResult?.calibrationRailBlocked) {
+  if (shouldLogHrDiag(`occ:${input.gameId}:${input.playerId}`)) {
+    console.log(
+      `[HR_OCCURRENCE_PROB] player=${input.playerName} gameId=${input.gameId} ` +
+      `projection=${rawProb.toFixed(3)} remainingPA=${remainingPA.toFixed(1)} ` +
+      `rawOccurrenceProb=${rawProb.toFixed(3)} calibratedOccurrenceProb=${hrOccurrenceProbability.toFixed(3)} ` +
+      `evidence=${batterEvidenceQuality} drivers=${(positiveDrivers ?? []).slice(0, 3).join("|") || "none"} ` +
+      `source=hr_occurrence_only`,
+    );
+  }
+  if (convResult?.calibrationRailBlocked && shouldLogHrDiag(`rail:${input.gameId}:${input.playerId}`)) {
     console.log(
       `[HR_CONV_CAL_RAIL_BLOCKED] player=${input.playerName} gameId=${input.gameId} ` +
       `convRaw=${(convResult.hrConversionProbability ?? 0).toFixed(3)} ` +
@@ -662,12 +679,14 @@ export function deriveCanonicalPromotionIntent(
         reason: `pitcher_fade_vuln_${Math.round(snap.pitcherHrVulnerability)}`,
       };
     }
-    console.log(
-      `[HR_PITCHER_FADE_ONLY_BLOCKED] pitVuln=${Math.round(snap.pitcherHrVulnerability)} ` +
-      `inning=${inning} evidence=${snap.batterEvidenceQuality} state=${state} ` +
-      `reason=${!hasBatterEvidence ? "no_batter_evidence" : "early_inning_1_3"} — ` +
-      `pitcher-fade not floored to READY (capped at BUILD)`,
-    );
+    if (shouldLogHrDiag(`fade:${Math.round(snap.pitcherHrVulnerability)}:${inning}:${state}`)) {
+      console.log(
+        `[HR_PITCHER_FADE_ONLY_BLOCKED] pitVuln=${Math.round(snap.pitcherHrVulnerability)} ` +
+        `inning=${inning} evidence=${snap.batterEvidenceQuality} state=${state} ` +
+        `reason=${!hasBatterEvidence ? "no_batter_evidence" : "early_inning_1_3"} — ` +
+        `pitcher-fade not floored to READY (capped at BUILD)`,
+      );
+    }
     // fall through to the build/watch floors below.
   }
 
@@ -677,10 +696,12 @@ export function deriveCanonicalPromotionIntent(
   if (state === "BET_NOW" && stage === "attack") {
     if (!sustained) return { event: null, floor: null, reason: "bet_now_attack_awaiting_sustain" };
     if (!hasBatterEvidence) {
-      console.log(
-        `[HR_PITCHER_FADE_ONLY_BLOCKED] bet_now_attack without batter evidence — ` +
-        `capped at BUILD inning=${inning} pitVuln=${Math.round(snap.pitcherHrVulnerability)} evidence=none`,
-      );
+      if (shouldLogHrDiag(`fade_betnow:${inning}:${Math.round(snap.pitcherHrVulnerability)}`)) {
+        console.log(
+          `[HR_PITCHER_FADE_ONLY_BLOCKED] bet_now_attack without batter evidence — ` +
+          `capped at BUILD inning=${inning} pitVuln=${Math.round(snap.pitcherHrVulnerability)} evidence=none`,
+        );
+      }
       return { event: "PROMOTE", promoteTo: "build", floor: "build", reason: "bet_now_attack_no_batter_evidence_capped_build" };
     }
     return { event: "PROMOTE", promoteTo: "ready", floor: "ready", reason: "bet_now_attack_sustained" };
