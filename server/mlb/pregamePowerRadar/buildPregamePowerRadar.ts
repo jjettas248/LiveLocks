@@ -32,6 +32,7 @@ import type {
   PregameLineupStatus,
   PregameWeatherStatus,
   PowerDriver,
+  PregameParkContext,
 } from "./types";
 import { computeBatterPowerProfile, type BatterPowerInputs } from "./batterPowerProfile";
 import { computePitcherVulnerability } from "./pitcherVulnerability";
@@ -72,6 +73,17 @@ export type PregameBuildSink = (
 let buildSink: PregameBuildSink | null = null;
 export function setPregameBuildSink(sink: PregameBuildSink): void {
   buildSink = sink;
+}
+
+/** Plain-English wind-direction label for the park-context display contract. */
+function windDirectionLabel(dir: "in" | "out" | "cross" | "calm" | null): string | null {
+  switch (dir) {
+    case "out": return "Out";
+    case "in": return "In";
+    case "cross": return "Crosswind";
+    case "calm": return "Calm";
+    default: return null;
+  }
 }
 
 function mapGameStatus(espnStatus: string | undefined): PregameGameStatus {
@@ -431,6 +443,18 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             ? "estimated"
             : "unknown";
 
+        // Server-owned park/weather display contract. Carry label/type come
+        // straight from the scorer (display-only — never re-derived on the client).
+        const parkContext: PregameParkContext = {
+          venueName,
+          temperatureF: isIndoors ? null : weather?.temperature ?? null,
+          windMph: isIndoors ? null : weather?.windSpeed ?? null,
+          windDirectionLabel: isIndoors ? null : windDirectionLabel(weather?.windDirection ?? null),
+          carryLabel: parkWeather.carryLabel,
+          carryType: parkWeather.carryType,
+          driverText: parkWeather.carryDriverText,
+        };
+
         const signalId = `mlb-pregame:${sessionDate}:${game.gameId}:${player.playerId}`;
         const generatedAt = new Date().toISOString();
         const isLocked = !firstPitchLockEligible && (gameStatus === "live" || gameStatus === "final");
@@ -458,6 +482,8 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           primaryMarket: marketTags.primaryMarket,
           marketTags: marketTags.marketTags,
           marketScores: marketTags.marketScores,
+          marketSetups: marketTags.marketSetups,
+          parkContext,
           score10: scoring.score10,
           tier: scoring.tier,
           drivers,

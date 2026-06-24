@@ -59,6 +59,40 @@ export interface PowerDriver {
   weight?: number;
 }
 
+/**
+ * Server-owned park / weather display contract. The UI renders these fields
+ * verbatim — it must NOT infer carry direction from raw wind, nor expose raw
+ * weather-modifier values on the compact card. All fields are nullable so a
+ * card stays stable when data is missing.
+ */
+export interface PregameParkContext {
+  venueName: string | null;
+  temperatureF: number | null;
+  windMph: number | null;
+  /** Plain-English wind direction ("Out" / "In" / "Crosswind" / "Calm"). */
+  windDirectionLabel: string | null;
+  carryLabel:
+    | "HR Carry"
+    | "Carry Boost"
+    | "Carry Suppressed"
+    | "Neutral Air"
+    | "Neutral Conditions"
+    // Only when weather is genuinely unavailable — NOT a claim of neutral.
+    | "Conditions Unavailable";
+  carryType: "boost" | "suppress" | "neutral" | "unknown";
+  /** Optional concise evidence string for the dominant park/weather effect. */
+  driverText?: string | null;
+}
+
+/** Qualitative per-market setup for the compact card (numeric score is debug-only). */
+export interface PregameMarketSetup {
+  market: PregamePowerMarket;
+  /** 0–10 setup score — shown only in expanded/detail/debug views. */
+  setupScore: number;
+  setupLabel: "Elite" | "Strong" | "Solid" | "Watch";
+  isPrimary: boolean;
+}
+
 /** Future market-edge context — kept separate so sportsbook edge never blends into score10. */
 export interface PregameMarketEdgeContext {
   line?: number;
@@ -164,6 +198,15 @@ export interface PregamePowerSignal {
   primaryMarket: PregamePowerMarket;
   marketTags: PregamePowerMarket[];
   marketScores: Partial<Record<PregamePowerMarket, number>>;
+  /** Qualitative per-market setup labels (Elite/Strong/Solid/Watch) for the card. */
+  marketSetups: PregameMarketSetup[];
+  /**
+   * Server-owned park/weather display contract (UI renders verbatim). `null`
+   * means the context is genuinely unknown (e.g. the DB-fallback path, where
+   * park/weather is not persisted) — the UI shows "Park context unavailable"
+   * rather than fabricating neutral conditions.
+   */
+  parkContext: PregameParkContext | null;
 
   score10: number;
   tier: PregamePowerTier;
