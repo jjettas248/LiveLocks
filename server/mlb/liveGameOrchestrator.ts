@@ -572,7 +572,15 @@ function gradeSingleHRPlay(
             peakState: snap?.peakState ?? null,
             peakConversionProbability: snap?.peakConversionProbability ?? null,
           });
-        if (!reachedWindow) {
+        // FIRE-only official record (2026-06) — the in-memory cash stamp must
+        // match the DB grading paths: only a FIRE-committed signal is a counted
+        // called_hit. A READY-only row that happened to hit a HR stamps the
+        // non-official `uncalled_hr` so the live UI never shows a false cash.
+        const fireCommitted = hrRadarSectionMod.reachedFireCommitment({
+          alertPath: snap?.alertResult?.diagnostics?.alertPath ?? null,
+          peakConversionProbability: snap?.peakConversionProbability ?? null,
+        });
+        if (!reachedWindow || !fireCommitted) {
           return "uncalled_hr" as const;
         }
         return hrRadarSectionMod.inferCashedFromTierStatus({

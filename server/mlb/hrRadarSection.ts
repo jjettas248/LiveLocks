@@ -255,6 +255,18 @@ export function reachedFireCommitment(args: {
 }
 
 /**
+ * Read the peak calibrated HR-conversion probability persisted on an alert's
+ * `diagnosticsSnapshot.scoreContract` (written by createOrUpdateHrRadarAlert).
+ * Returns null when absent/non-finite so `reachedFireCommitment` treats it
+ * conservatively. Pure; tolerant of any snapshot shape.
+ */
+export function extractPeakConversionProbability(diagnosticsSnapshot: unknown): number | null {
+  const sc = (diagnosticsSnapshot as any)?.scoreContract;
+  const v = sc?.peakConversionProbability;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/**
  * Phase 1 — given a still-active alert at game-final with NO home run, decide
  * the honest terminal grade. Only HR-Max-Window alerts become a counted
  * `called_miss`; sub-actionable Watch/Building rows become `expired` (which

@@ -92,6 +92,38 @@ eq("10. a genuine FIRE row (peakConv 0.18) IS fire-committed → called_miss sta
 eq("11. prepare/building no-HR → expired (never a pick, pre-FIRE-gate)",
   resolveFinalNoHrGrading({ alertTier: "prepare", confidenceTier: "building", signalState: "live" }), "expired");
 
+// ── WIN side (HR occurred) — symmetric FIRE gate ───────────────────────────
+// The cashed write sites compute `officialCall = reachedHrMaxWindow && reachedFireCommitment`
+// and stamp a counted called_hit only when officialCall is true; otherwise the
+// HR is `uncalled_hr` (diagnostic, excluded from the official win count). This
+// suite models that exact composition.
+console.log("\nWIN side — officialCall = reachedHrMaxWindow && reachedFireCommitment");
+
+function officialCall(args: {
+  alertTier?: string | null; signalState?: string | null;
+  alertPath?: string | null; peakConversionProbability?: number | null;
+}): "called_hit" | "uncalled_hr" {
+  const reachedMax = reachedHrMaxWindow({ alertTier: args.alertTier, confidenceTier: null, signalState: args.signalState });
+  const fire = reachedFireCommitment({ alertPath: args.alertPath, peakConversionProbability: args.peakConversionProbability });
+  return reachedMax && fire ? "called_hit" : "uncalled_hr";
+}
+
+// FIRE-committed officialAlert HR → counted called_hit.
+eq("12. officialAlert + peakConv 0.20 + HR → called_hit",
+  officialCall({ alertTier: "officialAlert", signalState: "actionable", alertPath: "PATH_C", peakConversionProbability: 0.20 }), "called_hit");
+
+// READY-only officialAlert (low peak conv, non-elite) HR → uncalled_hr (NOT counted).
+eq("13. officialAlert + peakConv 0.09 + HR → uncalled_hr (READY-only, not counted)",
+  officialCall({ alertTier: "officialAlert", signalState: "actionable", alertPath: "PATH_C", peakConversionProbability: 0.09 }), "uncalled_hr");
+
+// FAST_PROMOTE_ELITE officialAlert HR → counted even with null peak conv.
+eq("14. officialAlert + FAST_PROMOTE_ELITE + null conv + HR → called_hit",
+  officialCall({ alertTier: "officialAlert", signalState: "actionable", alertPath: "FAST_PROMOTE_ELITE", peakConversionProbability: null }), "called_hit");
+
+// Sub-actionable (watch/building) HR → uncalled_hr regardless of conv.
+eq("15. prepare/building + high conv + HR → uncalled_hr (never reached Max Window)",
+  officialCall({ alertTier: "prepare", signalState: "live", alertPath: "PATH_C", peakConversionProbability: 0.20 }), "uncalled_hr");
+
 console.log(`\n=== Result: ${pass} pass, ${fail} fail ===`);
 if (fail > 0) {
   for (const f of failures) console.log(` - ${f}`);
