@@ -1109,8 +1109,12 @@ async function fetchPitcherRecentStarts(pitcherId: string): Promise<{
 
 // ── fetchPitcherHandednessSplits ──────────────────────────────────────────────
 // Gap 4: pitcher ERA and HR rate split by opposing batter handedness.
-// MLB Stats API stats=byHand&group=pitching returns separate rows for "vs. Left"
-// and "vs. Right" batters. Cached 24h — season-level stats don't change intraday.
+// MLB Stats API: stats=statSplits&sitCodes=vl,vr returns separate rows for
+// "vs Left" (code vl) and "vs Right" (code vr) handed batters. NOTE: the prior
+// `stats=byHand` value is NOT a valid statType and the API returned an empty
+// `stats` array, so every pitcher came back with null splits — which capped the
+// Pre-Game Power Radar at 5.9 and suppressed the entire slate. Cached 24h —
+// season-level stats don't change intraday.
 
 const pitcherSplitsCache = new Map<string, { data: PitcherHandednessSplits; fetchedAt: number }>();
 const batterSplitsCache = new Map<string, { data: BatterHandednessSplits; fetchedAt: number }>();
@@ -1123,19 +1127,22 @@ export async function fetchPitcherHandednessSplits(pitcherId: string): Promise<P
   if (cached && Date.now() - cached.fetchedAt < SPLITS_TTL) return cached.data;
   try {
     const currentYear = new Date().getFullYear();
-    const url = `https://statsapi.mlb.com/api/v1/people/${pitcherId}/stats?stats=byHand&group=pitching&season=${currentYear}&gameType=R`;
+    const url = `https://statsapi.mlb.com/api/v1/people/${pitcherId}/stats?stats=statSplits&sitCodes=vl,vr&group=pitching&season=${currentYear}&gameType=R`;
     const data = await fetchJson(url);
     const splits: any[] = data.stats?.[0]?.splits ?? [];
     const result = { ...empty };
     for (const s of splits) {
+      const code: string = (s.split?.code ?? "").toLowerCase();
       const desc: string = (s.split?.description ?? "").toLowerCase();
       const stat = s.stat ?? {};
       const era = safeNum(stat.era);
       const hr = safeNum(stat.homeRuns);
       const ip = parseBaseballInnings(stat.inningsPitched);
       const hrPer9 = ip != null && ip > 0 && hr != null ? parseFloat(((hr / ip) * 9).toFixed(2)) : null;
-      if (desc.includes("left")) { result.eraVsLHB = era; result.hrPer9VsLHB = hrPer9; }
-      else if (desc.includes("right")) { result.eraVsRHB = era; result.hrPer9VsRHB = hrPer9; }
+      const isLeft = code === "vl" || desc.includes("left");
+      const isRight = code === "vr" || desc.includes("right");
+      if (isLeft) { result.eraVsLHB = era; result.hrPer9VsLHB = hrPer9; }
+      else if (isRight) { result.eraVsRHB = era; result.hrPer9VsRHB = hrPer9; }
     }
     pitcherSplitsCache.set(pitcherId, { data: result, fetchedAt: Date.now() });
     console.log(`[HR_RADAR_SPLITS] pitcher=${pitcherId} eraVsLHB=${result.eraVsLHB} eraVsRHB=${result.eraVsRHB} hrPer9VsLHB=${result.hrPer9VsLHB} hrPer9VsRHB=${result.hrPer9VsRHB}`);
@@ -1152,19 +1159,22 @@ export async function fetchBatterHandednessSplits(batterId: string): Promise<Bat
   if (cached && Date.now() - cached.fetchedAt < SPLITS_TTL) return cached.data;
   try {
     const currentYear = new Date().getFullYear();
-    const url = `https://statsapi.mlb.com/api/v1/people/${batterId}/stats?stats=byHand&group=hitting&season=${currentYear}&gameType=R`;
+    const url = `https://statsapi.mlb.com/api/v1/people/${batterId}/stats?stats=statSplits&sitCodes=vl,vr&group=hitting&season=${currentYear}&gameType=R`;
     const data = await fetchJson(url);
     const splits: any[] = data.stats?.[0]?.splits ?? [];
     const result = { ...empty };
     for (const s of splits) {
+      const code: string = (s.split?.code ?? "").toLowerCase();
       const desc: string = (s.split?.description ?? "").toLowerCase();
       const stat = s.stat ?? {};
       const ab = safeNum(stat.atBats) ?? 0;
       const hr = safeNum(stat.homeRuns) ?? 0;
       const hrRate = ab >= 30 ? parseFloat((hr / ab).toFixed(4)) : null;
       const ops = safeNum(stat.ops);
-      if (desc.includes("left")) { result.hrRateVsLHP = hrRate; result.opsVsLHP = ops; }
-      else if (desc.includes("right")) { result.hrRateVsRHP = hrRate; result.opsVsRHP = ops; }
+      const isLeft = code === "vl" || desc.includes("left");
+      const isRight = code === "vr" || desc.includes("right");
+      if (isLeft) { result.hrRateVsLHP = hrRate; result.opsVsLHP = ops; }
+      else if (isRight) { result.hrRateVsRHP = hrRate; result.opsVsRHP = ops; }
     }
     batterSplitsCache.set(batterId, { data: result, fetchedAt: Date.now() });
     return result;
