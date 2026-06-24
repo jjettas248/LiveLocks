@@ -3668,6 +3668,18 @@ export class DatabaseStorage implements IStorage {
      * stamped from a seed — only real in-game contact qualifies a row.
      */
     presenceSeedScore?: number | null;
+    // ── Phase 0 diagnostic persistence (2026-06). All optional/additive — make
+    // a future miss diagnosable from the DB alone (model weakness vs missing
+    // data). Stamped from the engine's HRAlertDiagnostics when available. ──
+    rawPreCapScore?: number | null;        // readiness before any data-quality cap (null until the engine surfaces it)
+    finalScore?: number | null;            // readiness after caps; defaults to readinessScore
+    capReason?: string | null;             // which cap bound the score
+    suppressionReason?: string | null;     // below_threshold_with_full_data | below_threshold_with_degraded_data | ...
+    missingInputs?: string[] | null;       // missing_statcast | degraded_contact_data | missing_batter_power | missing_handedness_splits
+    confidence?: number | null;            // 0..1 confidence given data completeness
+    dataQualityFlags?: string[] | null;    // full | degraded | missing markers
+    promotedAtMs?: number | null;          // epoch ms when first reaching an actionable tier
+    alertSentAtMs?: number | null;         // epoch ms when an alert was actually dispatched
   }): Promise<HrRadarAlert | null> {
     // Embed canonical score contract into diagnosticsSnapshot so consumers
     // can read explicit per-domain values without DB schema changes.
@@ -3947,6 +3959,23 @@ export class DatabaseStorage implements IStorage {
             alertPath: data.alertPath ?? alert.alertPath,
             alertTier: data.alertTier ?? alert.alertTier,
             diagnosticsSnapshot: mergedDiag,
+            // ── Phase 0 diagnostic persistence — these fields describe the
+            // CURRENT tick's data-quality/gate state, so they must reflect the
+            // incoming value (an explicit `null` CLEARS a stale gate reason).
+            // We only preserve the prior value when the caller OMITS the field
+            // entirely (`undefined`) — e.g. a presence-floor path that doesn't
+            // evaluate suppression — never when it explicitly passes null.
+            // Set-once timestamps (firstSeenAt/promotedAt/alertSentAt) are the
+            // exception and stay first-stamp only.
+            rawPreCapScore: data.rawPreCapScore !== undefined ? (data.rawPreCapScore != null ? String(data.rawPreCapScore) : null) : alert.rawPreCapScore,
+            finalScore: String(data.finalScore ?? newScore),
+            capReason: data.capReason !== undefined ? data.capReason : alert.capReason,
+            suppressionReason: data.suppressionReason !== undefined ? data.suppressionReason : alert.suppressionReason,
+            missingInputs: data.missingInputs !== undefined ? data.missingInputs : alert.missingInputs,
+            confidence: data.confidence !== undefined ? (data.confidence != null ? String(data.confidence) : null) : alert.confidence,
+            dataQualityFlags: data.dataQualityFlags !== undefined ? data.dataQualityFlags : alert.dataQualityFlags,
+            promotedAt: alert.promotedAt ?? (data.promotedAtMs != null ? new Date(data.promotedAtMs) : null),
+            alertSentAt: alert.alertSentAt ?? (data.alertSentAtMs != null ? new Date(data.alertSentAtMs) : null),
             // ── Presence→Qualified one-time backfill (see comment above) ──
             // These fields are only included when the row is being promoted
             // from presence-only to engine-qualified. T003 immutability is
@@ -4116,6 +4145,17 @@ export class DatabaseStorage implements IStorage {
         signalDetectedAt: isPresence ? null : detectedAtForRow,
         signalInning: isPresence ? null : persistInning,
         signalHalf: isPresence ? null : persistHalf,
+        // ── Phase 0 diagnostic persistence ──
+        rawPreCapScore: data.rawPreCapScore != null ? String(data.rawPreCapScore) : null,
+        finalScore: String(data.finalScore ?? data.readinessScore),
+        capReason: data.capReason ?? null,
+        suppressionReason: data.suppressionReason ?? null,
+        missingInputs: data.missingInputs ?? null,
+        confidence: data.confidence != null ? String(data.confidence) : null,
+        dataQualityFlags: data.dataQualityFlags ?? null,
+        firstSeenAt: detectedAtForRow,
+        promotedAt: data.promotedAtMs != null ? new Date(data.promotedAtMs) : null,
+        alertSentAt: data.alertSentAtMs != null ? new Date(data.alertSentAtMs) : null,
         analyticsPersisted: false,
       }).onConflictDoNothing();
       if ((insertResult as any).rowCount === 0) {
@@ -4595,6 +4635,11 @@ export class DatabaseStorage implements IStorage {
         fallbackCreated: true,
         userVisible: false,
         matchMethod: "post_hr_fallback",
+        // Phase 0 — this admin-only row was first materialized at HR time (no
+        // pre-HR signal existed). Stamping first_seen_at lets the backtest tell
+        // a row-created-at-HR (late/uncalled) apart from a true full-miss (no
+        // row at all). Purely additive — no grading/attribution change.
+        firstSeenAt: nowDate,
         analyticsPersisted: false,
       });
       if (earlyExempt) {

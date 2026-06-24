@@ -3662,6 +3662,16 @@ export class LiveGameOrchestrator {
         firstDetectedInning: earlyDetect?.detectedInning ?? null,
         firstDetectedHalf: earlyDetect?.detectedHalf ?? null,
         firstDetectedAtMs: earlyDetect?.detectedAtMs ?? null,
+        // ── Phase 0 diagnostic persistence — surface the engine's data-quality
+        // verdict so a future miss is diagnosable (model weakness vs missing
+        // data) directly from the persisted row. ──
+        suppressionReason: alertResult.diagnostics?.suppressionReason ?? null,
+        missingInputs: alertResult.diagnostics?.missingInputs ?? null,
+        dataQualityFlags: alertResult.diagnostics?.dataQuality ? [alertResult.diagnostics.dataQuality] : null,
+        confidence: alertResult.confidenceScore != null ? alertResult.confidenceScore / 10 : null,
+        // promoted_at: first tick this contact-reeval row is actionable
+        // (set-once in storage). No alert dispatched here, so alert_sent_at null.
+        promotedAtMs: contactCanonicalStage === "attack" ? Date.now() : null,
       }).catch(err => console.warn(`[HR_RADAR_CONTACT_UPDATE] persist failed: ${err.message}`));
     }
   }
@@ -4613,6 +4623,21 @@ export class LiveGameOrchestrator {
                 firstDetectedInning: hrDynSnap?.detectedInning ?? null,
                 firstDetectedHalf: hrDynSnap?.detectedHalf ?? null,
                 firstDetectedAtMs: hrDynSnap?.detectedAtMs ?? null,
+                // ── Phase 0 diagnostic lifecycle stamps (additive, set-once in
+                // storage; pure observability — no behavior/timing change). ──
+                // promoted_at: first tick this candidate is actionable (canonical
+                // attack stage / actionable signalState / officialAlert tier).
+                promotedAtMs: (canonicalStage === "attack"
+                  || (stateMap[alertResult.signalState ?? "FORMATION"] ?? "live") === "actionable"
+                  || alertResult.alertTier === "officialAlert")
+                  ? Date.now() : null,
+                // alert_sent_at: only when an alert was actually dispatched
+                // (level === ALERT — the same condition that burned cooldown above).
+                alertSentAtMs: alertResult.level === "ALERT" ? Date.now() : null,
+                suppressionReason: alertResult.diagnostics?.suppressionReason ?? null,
+                missingInputs: alertResult.diagnostics?.missingInputs ?? null,
+                dataQualityFlags: alertResult.diagnostics?.dataQuality ? [alertResult.diagnostics.dataQuality] : null,
+                confidence: alertResult.confidenceScore != null ? alertResult.confidenceScore / 10 : null,
               }).catch(err => console.warn(`[HR_RADAR_ALERT] persist failed: ${err.message}`));
               // Task #126 — record that PATH A–E (or PATH_E_CONVICTION) wrote
               // a real HR-radar row for this player; the presence-floor pass
@@ -4723,6 +4748,10 @@ export class LiveGameOrchestrator {
             plateAppearancesTracked: priorABs.length,
             hasLiveABContext: true,
             isPresenceOnly: false,
+            // Phase 0 — this is a real promotion path; stamp promoted_at when the
+            // canonical stage is actionable (set-once in storage). No alert is
+            // dispatched here, so alert_sent_at stays null. Additive only.
+            promotedAtMs: dynSnap.canonicalStage === "attack" ? Date.now() : null,
           }).catch(err => console.warn(`[HR_PRESENCE_PROMOTE] persist failed for ${batter.playerName}: ${err.message}`));
           // Promoted rows are real (non-presence) rows — they have their own
           // [HR_PRESENCE_PROMOTE] log line and must not inflate the presence
