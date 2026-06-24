@@ -33,6 +33,19 @@ export type DynamicHRState = "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "C
  */
 export type HrRadarStage = "watch" | "building" | "attack" | "cooling" | "closed";
 
+/**
+ * HR occurrence engine (2026-06) — clamp the PERSISTED canonical stage so a
+ * no-batter-evidence signal can never persist as attack/strong. Mirrors the
+ * deriveCanonicalPromotionIntent gate for DB-backed readers (ladder/board) and
+ * grading, which read snapshot.canonicalStage rather than the FSM upsert. Pure.
+ */
+export function clampPersistedCanonicalStage(
+  stage: HrRadarStage,
+  evidenceQuality: BatterEvidenceQuality,
+): HrRadarStage {
+  return stage === "attack" && evidenceQuality === "none" ? "building" : stage;
+}
+
 export function mapDynamicStateToStage(s: DynamicHRState): HrRadarStage {
   switch (s) {
     case "BET_NOW":    return "attack";
@@ -535,7 +548,24 @@ export function recomputeHrAlertState(
   // the PATH evaluator's signalState into ONE stage at the engine boundary
   // so every downstream consumer sees the same value.
   const dynamicStage = mapDynamicStateToStage(newState);
-  const canonicalStage = computeUnifiedCanonicalStage(dynamicStage, alertResult.signalState);
+  // HR occurrence contract (2026-06) — batter-side evidence class (from the
+  // conversion model's contact classifier). Derived BEFORE the canonical stage
+  // so it can clamp the PERSISTED stage too, not just the FSM upsert.
+  const batterEvidenceQuality: BatterEvidenceQuality = convResult?.occurrenceEvidenceQuality ?? "none";
+  // A no-batter-evidence signal must never PERSIST as attack/strong. The DB ladder/
+  // board and grading read snapshot.canonicalStage (not the FSM upsert), so
+  // without this they could surface/credit a row that
+  // deriveCanonicalPromotionIntent already capped at BUILD. Mirror that gate on
+  // the persisted stage: attack → building when there is no fresh batter evidence.
+  const rawCanonicalStage = computeUnifiedCanonicalStage(dynamicStage, alertResult.signalState);
+  let canonicalStage = clampPersistedCanonicalStage(rawCanonicalStage, batterEvidenceQuality);
+  if (canonicalStage !== rawCanonicalStage && shouldLogHrDiag(`stageclamp:${input.gameId}:${input.playerId}`)) {
+    console.log(
+      `[HR_PITCHER_FADE_ONLY_BLOCKED] persisted-stage clamp ${rawCanonicalStage}→${canonicalStage} ` +
+      `player=${input.playerName} game=${input.gameId} inning=${input.inning} ` +
+      `pitVuln=${Math.round(pitcherVuln)} evidence=none`,
+    );
+  }
 
   // Observability: emit when the unified stage promotes above the dynamic
   // stage so we can audit how often PATH override is firing.
@@ -548,10 +578,9 @@ export function recomputeHrAlertState(
     );
   }
 
-  // HR occurrence contract (2026-06) — evidence-rail-capped P(HR>=1) and the
-  // batter-side evidence class. HR Radar promotion reads these; both are
-  // independent of sportsbook odds/edge/line.
-  const batterEvidenceQuality: BatterEvidenceQuality = convResult?.occurrenceEvidenceQuality ?? "none";
+  // HR occurrence contract (2026-06) — evidence-rail-capped P(HR>=1). The
+  // batter-side evidence class (batterEvidenceQuality) is derived above so it
+  // can also clamp the persisted canonical stage.
   const hrOccurrenceProbability = convResult?.hrOccurrenceProbability ?? effectiveCalibrated;
   if (shouldLogHrDiag(`occ:${input.gameId}:${input.playerId}`)) {
     console.log(

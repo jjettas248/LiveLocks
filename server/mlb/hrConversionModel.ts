@@ -663,20 +663,27 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
 
   // Gap 1: pitch mix × handedness model. HR occurrence engine (2026-06):
   // handedness/platoon advantage requires BOTH the batter's bat side AND the
-  // pitcher's throwing hand to be known. If either is unknown, stay NEUTRAL
-  // (no matchup/platoon boost or penalty) so the deterministic HR score is not
-  // inflated by fake matchup confidence.
-  if (input.batterHand == null || input.pitcherThrows == null) {
+  // pitcher's throwing hand to be known. When either is unknown we drop only the
+  // PLATOON confidence — NOT the pitch-arsenal signal. The pitch-mix helper
+  // already neutralizes its platoon component for unknown hands while keeping
+  // arsenal effects (breaking/off-speed suppression, fastball-heavy carry), so
+  // we still apply it; only the simple ±handedness boost is gated on both hands.
+  const handednessUnknown = input.batterHand == null || input.pitcherThrows == null;
+  if (input.pitchMix && input.pitchMix.length > 0) {
+    multiplier *= computePitchMixHandednessMultiplier(input.pitchMix, input.batterHand, input.pitcherThrows);
+    if (handednessUnknown) {
+      console.log(
+        `[MLB_HANDEDNESS_UNKNOWN_NEUTRALIZED] pitcherThrows=${input.pitcherThrows ?? "null"} ` +
+        `batterHand=${input.batterHand ?? "null"} — platoon neutral; pitch-mix arsenal effects kept`,
+      );
+    }
+  } else if (!handednessUnknown) {
+    multiplier *= input.batterHand !== input.pitcherThrows ? 1.06 : 0.94;
+  } else {
     console.log(
       `[MLB_HANDEDNESS_UNKNOWN_NEUTRALIZED] pitcherThrows=${input.pitcherThrows ?? "null"} ` +
-      `batterHand=${input.batterHand ?? "null"} — handedness neutral (no platoon boost)`,
+      `batterHand=${input.batterHand ?? "null"} — no pitch mix; handedness neutral (no platoon boost)`,
     );
-  } else if (input.pitchMix && input.pitchMix.length > 0) {
-    multiplier *= computePitchMixHandednessMultiplier(input.pitchMix, input.batterHand, input.pitcherThrows);
-  } else if (input.batterHand !== input.pitcherThrows) {
-    multiplier *= 1.06;
-  } else {
-    multiplier *= 0.94;
   }
 
   // Player-specific park/wind fit (shared parkWindFit module). A BOUNDED

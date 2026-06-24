@@ -2,7 +2,7 @@
 // calibration-rail / pitcher-fade-only fixes (2026-06).
 //   npx tsx server/mlb/hrOccurrenceEngine.test.ts
 import { classifyBatterEvidenceQuality, OCCURRENCE_CEILING } from "./hrConversionModel";
-import { deriveCanonicalPromotionIntent, type HRAlertSnapshot } from "./hrAlertEngine";
+import { deriveCanonicalPromotionIntent, clampPersistedCanonicalStage, type HRAlertSnapshot } from "./hrAlertEngine";
 
 let pass = 0, fail = 0;
 function eq(name: string, got: unknown, want: unknown) {
@@ -84,6 +84,15 @@ const betNowEvidence = deriveCanonicalPromotionIntent(snap({
   currentState: "BET_NOW", canonicalStage: "attack", batterEvidenceQuality: "fresh", currentInning: 7,
 }));
 eq("BET_NOW attack + fresh evidence → ready", betNowEvidence.floor, "ready");
+
+// ── P1 (Codex review) — persisted canonical stage is also clamped ─────────
+// The DB ladder/board read snapshot.canonicalStage, not the FSM upsert, so a
+// no-evidence attack must be demoted to building there too.
+eq("P1 attack + no evidence → building (persisted stage)", clampPersistedCanonicalStage("attack", "none"), "building");
+eq("P1 attack + fresh evidence → attack (kept)", clampPersistedCanonicalStage("attack", "fresh"), "attack");
+eq("P1 attack + elite evidence → attack (kept)", clampPersistedCanonicalStage("attack", "elite"), "attack");
+eq("P1 building stays building", clampPersistedCanonicalStage("building", "none"), "building");
+eq("P1 watch stays watch", clampPersistedCanonicalStage("watch", "none"), "watch");
 
 // ── Fix 2/3/5 — promotion takes no edge/side/odds input (structural) ───────
 // deriveCanonicalPromotionIntent's only inputs are the snapshot's occurrence
