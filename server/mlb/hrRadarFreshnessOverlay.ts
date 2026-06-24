@@ -177,6 +177,15 @@ export function applyCanonicalFreshnessOverlay(
     }
   }
 
+  // A player already resolved in a terminal bucket must NEVER be re-surfaced as
+  // live, even if a stale active canonical state lingers (the DB resolution is
+  // authoritative). Seed `seen` with terminal keys so surfacing skips them.
+  for (const bucket of ["cashed", "dead"] as const) {
+    for (const e of ladder.sections[bucket] ?? []) {
+      seen.add(keyOf(e.gameId, e.playerId));
+    }
+  }
+
   // Surface actionable canonical rows the DB hasn't persisted yet (FIRE/READY
   // only — never inject BUILD/WATCH noise, which the DB will catch up on).
   for (const [key, s] of Array.from(byKey.entries())) {
