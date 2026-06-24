@@ -251,10 +251,18 @@ function calibrate(rawProb: number): { value: number; source: "static_table" | "
 // sportsbook line/odds/edge — purely baseball contact evidence.
 export type BatterEvidenceQuality = "elite" | "fresh" | "none";
 
+// Caps are env-configurable (safe defaults). A value is only honored when it
+// parses to a probability in (0, 1]; anything else falls back to the default so
+// a bad env var can never disable the rail.
+function occurrenceCapFromEnv(name: string, def: number): number {
+  const v = Number(process.env[name]);
+  return Number.isFinite(v) && v > 0 && v <= 1 ? v : def;
+}
+
 export const OCCURRENCE_CEILING: Record<BatterEvidenceQuality, number> = {
-  elite: 0.60,
-  fresh: 0.45,
-  none: 0.35,
+  elite: occurrenceCapFromEnv("HR_OCCURRENCE_CAP_ELITE", 0.60),
+  fresh: occurrenceCapFromEnv("HR_OCCURRENCE_CAP_FRESH", 0.45),
+  none: occurrenceCapFromEnv("HR_OCCURRENCE_CAP_NONE", 0.35),
 };
 
 export function classifyBatterEvidenceQuality(
