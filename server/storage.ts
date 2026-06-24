@@ -3668,6 +3668,18 @@ export class DatabaseStorage implements IStorage {
      * stamped from a seed — only real in-game contact qualifies a row.
      */
     presenceSeedScore?: number | null;
+    // ── Phase 0 diagnostic persistence (2026-06). All optional/additive — make
+    // a future miss diagnosable from the DB alone (model weakness vs missing
+    // data). Stamped from the engine's HRAlertDiagnostics when available. ──
+    rawPreCapScore?: number | null;        // readiness before any data-quality cap (null until the engine surfaces it)
+    finalScore?: number | null;            // readiness after caps; defaults to readinessScore
+    capReason?: string | null;             // which cap bound the score
+    suppressionReason?: string | null;     // below_threshold_with_full_data | below_threshold_with_degraded_data | ...
+    missingInputs?: string[] | null;       // missing_statcast | degraded_contact_data | missing_batter_power | missing_handedness_splits
+    confidence?: number | null;            // 0..1 confidence given data completeness
+    dataQualityFlags?: string[] | null;    // full | degraded | missing markers
+    promotedAtMs?: number | null;          // epoch ms when first reaching an actionable tier
+    alertSentAtMs?: number | null;         // epoch ms when an alert was actually dispatched
   }): Promise<HrRadarAlert | null> {
     // Embed canonical score contract into diagnosticsSnapshot so consumers
     // can read explicit per-domain values without DB schema changes.
@@ -3947,6 +3959,18 @@ export class DatabaseStorage implements IStorage {
             alertPath: data.alertPath ?? alert.alertPath,
             alertTier: data.alertTier ?? alert.alertTier,
             diagnosticsSnapshot: mergedDiag,
+            // ── Phase 0 diagnostic persistence — refresh diagnostic state each
+            // tick; preserve set-once timestamps (firstSeenAt is never touched
+            // on UPDATE; promotedAt/alertSentAt are first-stamp only). ──
+            rawPreCapScore: data.rawPreCapScore != null ? String(data.rawPreCapScore) : alert.rawPreCapScore,
+            finalScore: String(data.finalScore ?? newScore),
+            capReason: data.capReason ?? alert.capReason,
+            suppressionReason: data.suppressionReason ?? alert.suppressionReason,
+            missingInputs: data.missingInputs ?? alert.missingInputs,
+            confidence: data.confidence != null ? String(data.confidence) : alert.confidence,
+            dataQualityFlags: data.dataQualityFlags ?? alert.dataQualityFlags,
+            promotedAt: alert.promotedAt ?? (data.promotedAtMs != null ? new Date(data.promotedAtMs) : null),
+            alertSentAt: alert.alertSentAt ?? (data.alertSentAtMs != null ? new Date(data.alertSentAtMs) : null),
             // ── Presence→Qualified one-time backfill (see comment above) ──
             // These fields are only included when the row is being promoted
             // from presence-only to engine-qualified. T003 immutability is
@@ -4116,6 +4140,17 @@ export class DatabaseStorage implements IStorage {
         signalDetectedAt: isPresence ? null : detectedAtForRow,
         signalInning: isPresence ? null : persistInning,
         signalHalf: isPresence ? null : persistHalf,
+        // ── Phase 0 diagnostic persistence ──
+        rawPreCapScore: data.rawPreCapScore != null ? String(data.rawPreCapScore) : null,
+        finalScore: String(data.finalScore ?? data.readinessScore),
+        capReason: data.capReason ?? null,
+        suppressionReason: data.suppressionReason ?? null,
+        missingInputs: data.missingInputs ?? null,
+        confidence: data.confidence != null ? String(data.confidence) : null,
+        dataQualityFlags: data.dataQualityFlags ?? null,
+        firstSeenAt: detectedAtForRow,
+        promotedAt: data.promotedAtMs != null ? new Date(data.promotedAtMs) : null,
+        alertSentAt: data.alertSentAtMs != null ? new Date(data.alertSentAtMs) : null,
         analyticsPersisted: false,
       }).onConflictDoNothing();
       if ((insertResult as any).rowCount === 0) {

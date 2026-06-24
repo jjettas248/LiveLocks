@@ -3662,6 +3662,14 @@ export class LiveGameOrchestrator {
         firstDetectedInning: earlyDetect?.detectedInning ?? null,
         firstDetectedHalf: earlyDetect?.detectedHalf ?? null,
         firstDetectedAtMs: earlyDetect?.detectedAtMs ?? null,
+        // ── Phase 0 diagnostic persistence — surface the engine's data-quality
+        // verdict so a future miss is diagnosable (model weakness vs missing
+        // data) directly from the persisted row. ──
+        suppressionReason: alertResult.diagnostics?.suppressionReason ?? null,
+        missingInputs: alertResult.diagnostics?.missingInputs ?? null,
+        dataQualityFlags: alertResult.diagnostics?.dataQuality ? [alertResult.diagnostics.dataQuality] : null,
+        confidence: alertResult.confidenceScore != null ? alertResult.confidenceScore / 10 : null,
+        finalScore: hrBuild.score,
       }).catch(err => console.warn(`[HR_RADAR_CONTACT_UPDATE] persist failed: ${err.message}`));
     }
   }
