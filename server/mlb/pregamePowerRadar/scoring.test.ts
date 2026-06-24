@@ -75,12 +75,13 @@ ok(rNoBatter.suppressedReasons.includes("batter_power_missing"), "batter_power_m
 const rFewDrivers = composePregameScore(comps, { ...fullFlags, positiveDriverCount: 1 });
 ok(rFewDrivers.suppressedReasons.includes("insufficient_drivers"), "insufficient_drivers reason");
 
-// ── Below-strong → suppressed ─────────────────────────────────────────────────
+// ── Below threshold with full data → suppressed (distinct from data-capped) ───
 const rWeak = composePregameScore(
   { batterPowerScore: 3, pitcherVulnerabilityScore: 3, matchupFitScore: 3, parkWeatherScore: 3, lineupOpportunityScore: 3, bvpModifier: 0 },
   fullFlags,
 );
-ok(rWeak.suppressedReasons.includes("below_strong_threshold"), "below_strong_threshold reason");
+ok(rWeak.suppressedReasons.includes("below_threshold_after_full_data"), "below_threshold_after_full_data reason");
+ok(!rWeak.suppressedReasons.includes("capped_by_data_quality"), "full-data weak is NOT capped_by_data_quality");
 
 // ── Unconfirmed lineup → suppressed ───────────────────────────────────────────
 const rNoLineup = composePregameScore(comps, { ...fullFlags, confirmedLineup: false });

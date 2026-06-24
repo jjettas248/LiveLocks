@@ -11,7 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Flame, Zap, Target, Wind, ShieldAlert, Lock } from "lucide-react";
 
-type Tier = "track" | "watch" | "strong" | "elite" | "nuclear";
+type Tier = "track" | "watch" | "power_watch" | "strong" | "elite" | "nuclear";
 type Market = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
 
 interface PowerDriver {
@@ -62,6 +62,8 @@ const TIER_STYLE: Record<Tier, { label: string; color: string; glow: string }> =
   nuclear: { label: "Nuclear Setup", color: "#f43f5e", glow: "rgba(244,63,94,0.35)" },
   elite: { label: "Elite Setup", color: "#f59e0b", glow: "rgba(245,158,11,0.30)" },
   strong: { label: "Strong Setup", color: "#a78bfa", glow: "rgba(167,139,250,0.25)" },
+  // Elite raw power, but the pitcher matchup does NOT support an elite setup.
+  power_watch: { label: "Batter Power Only", color: "#38bdf8", glow: "rgba(56,189,248,0.18)" },
   watch: { label: "Watch", color: "#94a3b8", glow: "rgba(148,163,184,0.15)" },
   track: { label: "Track", color: "#64748b", glow: "rgba(100,116,139,0.1)" },
 };
@@ -177,6 +179,7 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const style = TIER_STYLE[s.tier];
   const TierIcon = s.tier === "nuclear" || s.tier === "elite" ? Flame : s.tier === "strong" ? Zap : Target;
   const positives = s.drivers.filter((d) => d.direction === "positive").slice(0, 4);
+  const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
 
   return (
@@ -247,6 +250,21 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
               title={d.evidence}
             >
               {d.key.startsWith("pw_wind") ? <Wind className="w-3 h-3" /> : d.key.startsWith("pv_") ? <ShieldAlert className="w-3 h-3" /> : null}
+              {d.label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {negatives.length > 0 && (
+        <div className="flex items-start gap-1.5 mt-2 flex-wrap" data-testid={`pregame-warnings-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}>
+          {negatives.map((d) => (
+            <span
+              key={d.key}
+              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/20"
+              title={d.evidence}
+            >
+              <ShieldAlert className="w-3 h-3" />
               {d.label}
             </span>
           ))}
