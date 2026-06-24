@@ -76,8 +76,10 @@ export interface PregameParkContext {
     | "Carry Boost"
     | "Carry Suppressed"
     | "Neutral Air"
-    | "Neutral Conditions";
-  carryType: "boost" | "suppress" | "neutral";
+    | "Neutral Conditions"
+    // Only when weather is genuinely unavailable — NOT a claim of neutral.
+    | "Conditions Unavailable";
+  carryType: "boost" | "suppress" | "neutral" | "unknown";
   /** Optional concise evidence string for the dominant park/weather effect. */
   driverText?: string | null;
 }
@@ -198,8 +200,13 @@ export interface PregamePowerSignal {
   marketScores: Partial<Record<PregamePowerMarket, number>>;
   /** Qualitative per-market setup labels (Elite/Strong/Solid/Watch) for the card. */
   marketSetups: PregameMarketSetup[];
-  /** Server-owned park/weather display contract (UI renders verbatim). */
-  parkContext: PregameParkContext;
+  /**
+   * Server-owned park/weather display contract (UI renders verbatim). `null`
+   * means the context is genuinely unknown (e.g. the DB-fallback path, where
+   * park/weather is not persisted) — the UI shows "Park context unavailable"
+   * rather than fabricating neutral conditions.
+   */
+  parkContext: PregameParkContext | null;
 
   score10: number;
   tier: PregamePowerTier;

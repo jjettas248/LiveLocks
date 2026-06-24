@@ -35,8 +35,14 @@ interface ParkContext {
   temperatureF: number | null;
   windMph: number | null;
   windDirectionLabel: string | null;
-  carryLabel: "HR Carry" | "Carry Boost" | "Carry Suppressed" | "Neutral Air" | "Neutral Conditions";
-  carryType: "boost" | "suppress" | "neutral";
+  carryLabel:
+    | "HR Carry"
+    | "Carry Boost"
+    | "Carry Suppressed"
+    | "Neutral Air"
+    | "Neutral Conditions"
+    | "Conditions Unavailable";
+  carryType: "boost" | "suppress" | "neutral" | "unknown";
   driverText?: string | null;
 }
 
@@ -54,7 +60,7 @@ interface PregameSignal {
   marketTags: Market[];
   marketScores: Partial<Record<Market, number>>;
   marketSetups?: MarketSetup[];
-  parkContext?: ParkContext;
+  parkContext?: ParkContext | null;
   score10: number;
   tier: Tier;
   drivers: PowerDriver[];
@@ -114,12 +120,14 @@ const CARRY_EMOJI: Record<ParkContext["carryLabel"], string> = {
   "Carry Suppressed": "🧊",
   "Neutral Air": "↔",
   "Neutral Conditions": "🏟️",
+  "Conditions Unavailable": "🚫",
 };
 
 const CARRY_COLOR: Record<ParkContext["carryType"], string> = {
   boost: "text-amber-300",
   suppress: "text-sky-300",
   neutral: "text-muted-foreground",
+  unknown: "text-muted-foreground/70 italic",
 };
 
 type FilterKey = "all" | "hr" | "tb" | "elite" | "confirmed" | "park" | "pitcher";
@@ -289,15 +297,15 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
       {/* Park / weather context — secondary line, server-stamped, renders verbatim. */}
       <ParkConditionsRow park={s.parkContext} />
 
-      {/* Market chips — qualitative setup labels only (raw setup score lives in the
-          tooltip / debug view, never beside the market name). */}
+      {/* Market chips — qualitative setup labels only. Numeric setup scores are
+          intentionally NOT shown here (compact face OR tooltip); they live in the
+          admin/debug diagnostics views. */}
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         {marketSetups.map((setup) => (
           <Badge
             key={setup.market}
             variant="secondary"
             className={`text-[10px] px-1.5 py-0 ${setup.isPrimary ? "bg-amber-500/20 text-amber-200" : ""}`}
-            title={setup.setupLabel ? `${MARKET_LABEL[setup.market]} Setup Score: ${setup.setupScore.toFixed(1)}/10` : undefined}
           >
             {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
             {setup.setupLabel ? ` · ${setup.setupLabel}` : ""}
@@ -341,12 +349,25 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
 // Compact, visually-secondary park/weather context line. Renders ONLY the
 // server-stamped parkContext fields — no client-side carry/wind inference, no raw
 // weather-modifier values. One line on desktop; wraps on mobile.
-function ParkConditionsRow({ park }: { park?: ParkContext }) {
-  if (!park) return null;
+function ParkConditionsRow({ park }: { park?: ParkContext | null }) {
+  // `null`/absent parkContext means the server genuinely does NOT know the
+  // conditions (e.g. DB-fallback path). Be honest — never imply neutral.
+  if (!park) {
+    return (
+      <div
+        className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground/70 italic flex-wrap"
+        data-testid="pregame-park-conditions-unavailable"
+      >
+        <span>🏟️ Park context unavailable</span>
+      </div>
+    );
+  }
 
-  const hasWeather = park.venueName != null || park.temperatureF != null || park.windMph != null;
+  const hasContext =
+    park.venueName != null || park.temperatureF != null || park.windMph != null;
   const carryIsMeaningful = park.carryType !== "neutral" || park.carryLabel !== "Neutral Conditions";
-  if (!hasWeather && !carryIsMeaningful) return null;
+  // Nothing known and no meaningful carry call → hide rather than render an empty row.
+  if (!hasContext && !carryIsMeaningful && park.carryType !== "unknown") return null;
 
   const segments: JSX.Element[] = [];
   if (park.venueName) segments.push(<span key="venue">🏟️ {park.venueName}</span>);

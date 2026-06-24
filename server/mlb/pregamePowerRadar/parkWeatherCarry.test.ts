@@ -27,10 +27,11 @@ const roof = computeParkWeatherScore({ ...base, isIndoors: true });
 ok(roof.carryType === "neutral", "indoors → neutral carry");
 ok(roof.carryLabel === "Neutral Conditions", "indoors → Neutral Conditions label");
 
-// ── No weather data → neutral conditions (never fabricated) ───────────────────
+// ── No weather data → UNKNOWN (never claims neutral) ──────────────────────────
 const noWx = computeParkWeatherScore({ ...base, weatherAvailable: false, temperature: null, windSpeed: null, windDirection: null });
-ok(noWx.carryType === "neutral", "missing weather → neutral carry");
-ok(noWx.carryLabel === "Neutral Conditions", "missing weather → Neutral Conditions");
+ok(noWx.carryType === "unknown", "missing weather → unknown carry (not neutral)");
+ok(noWx.carryLabel === "Conditions Unavailable", "missing weather → Conditions Unavailable");
+ok(noWx.carryType !== "neutral", "missing weather must NOT assert neutral conditions");
 
 // ── Strong wind out → HR Carry (boost) ────────────────────────────────────────
 const windOut = computeParkWeatherScore({ ...base, windDirection: "out", windSpeed: 16, temperature: 70 });

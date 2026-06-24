@@ -18,13 +18,16 @@ export interface ParkWeatherInputs {
 }
 
 /** Plain-English carry display contract (UI renders verbatim — never re-derives). */
-export type CarryType = "boost" | "suppress" | "neutral";
+export type CarryType = "boost" | "suppress" | "neutral" | "unknown";
 export type CarryLabel =
   | "HR Carry"
   | "Carry Boost"
   | "Carry Suppressed"
   | "Neutral Air"
-  | "Neutral Conditions";
+  | "Neutral Conditions"
+  // "unknown" — used only when weather is genuinely unavailable. Distinct from
+  // "Neutral Conditions", which asserts the conditions are *known* to be neutral.
+  | "Conditions Unavailable";
 
 export interface ParkWeatherResult extends ComponentScore {
   /** True when the only positive contribution came from the park factor. */
@@ -98,12 +101,14 @@ export function computeParkWeatherScore(inputs: ParkWeatherInputs): ParkWeatherR
   let carryDriverText: string | null = null;
 
   if (inputs.isIndoors) {
+    // Roof closed is a *known* controlled environment — genuinely neutral air.
     carryType = "neutral";
     carryLabel = "Neutral Conditions";
     carryDriverText = "Roof closed — neutral air";
   } else if (!inputs.weatherAvailable) {
-    carryType = "neutral";
-    carryLabel = "Neutral Conditions";
+    // We do NOT know the conditions — never assert "neutral" here.
+    carryType = "unknown";
+    carryLabel = "Conditions Unavailable";
   } else {
     const windOut = inputs.windDirection === "out" && sWind != null;
     const mildWindOut = windOut && sWind! >= 6.5;

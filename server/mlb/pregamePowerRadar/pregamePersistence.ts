@@ -10,7 +10,7 @@ import type {
   InsertPregamePowerRadarSignal,
   PregamePowerRadarSignalRow,
 } from "@shared/schema";
-import type { PregamePowerSignal, PregameMarketSetup, PregameParkContext } from "./types";
+import type { PregamePowerSignal, PregameMarketSetup } from "./types";
 import { marketSetupLabel } from "./marketTagger";
 import { setPregameBuildSink } from "./buildPregamePowerRadar";
 import { setDbFallback } from "./pregamePowerRadarService";
@@ -59,8 +59,9 @@ function signalToRow(s: PregamePowerSignal): InsertPregamePowerRadarSignal {
 }
 
 function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
-  // Park/weather context is not persisted — the DB-fallback path degrades to a
-  // neutral card (nulls + "Neutral Conditions") rather than fabricating carry.
+  // marketSetups are reconstructed from the *persisted* marketScores — honest,
+  // not fabricated. Park/weather context is NOT persisted, so parkContext is null
+  // here (the UI shows "Park context unavailable" rather than faking neutral).
   const primaryMarket = r.primaryMarket as PregamePowerSignal["primaryMarket"];
   const marketTags = (r.marketTags as PregamePowerSignal["marketTags"]) ?? [];
   const marketScores = (r.marketScores as PregamePowerSignal["marketScores"]) ?? {};
@@ -68,15 +69,6 @@ function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
     const setupScore = marketScores[market] ?? 0;
     return { market, setupScore, setupLabel: marketSetupLabel(setupScore), isPrimary: market === primaryMarket };
   });
-  const parkContext: PregameParkContext = {
-    venueName: null,
-    temperatureF: null,
-    windMph: null,
-    windDirectionLabel: null,
-    carryLabel: "Neutral Conditions",
-    carryType: "neutral",
-    driverText: null,
-  };
   return {
     signalId: r.signalId,
     sport: "mlb",
@@ -99,7 +91,7 @@ function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
     marketTags,
     marketScores,
     marketSetups,
-    parkContext,
+    parkContext: null,
     score10: typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number),
     tier: r.tier as PregamePowerSignal["tier"],
     drivers: (r.drivers as PregamePowerSignal["drivers"]) ?? [],
