@@ -3669,7 +3669,6 @@ export class LiveGameOrchestrator {
         missingInputs: alertResult.diagnostics?.missingInputs ?? null,
         dataQualityFlags: alertResult.diagnostics?.dataQuality ? [alertResult.diagnostics.dataQuality] : null,
         confidence: alertResult.confidenceScore != null ? alertResult.confidenceScore / 10 : null,
-        finalScore: hrBuild.score,
         // promoted_at: first tick this contact-reeval row is actionable
         // (set-once in storage). No alert dispatched here, so alert_sent_at null.
         promotedAtMs: contactCanonicalStage === "attack" ? Date.now() : null,
@@ -4639,7 +4638,6 @@ export class LiveGameOrchestrator {
                 missingInputs: alertResult.diagnostics?.missingInputs ?? null,
                 dataQualityFlags: alertResult.diagnostics?.dataQuality ? [alertResult.diagnostics.dataQuality] : null,
                 confidence: alertResult.confidenceScore != null ? alertResult.confidenceScore / 10 : null,
-                finalScore: seededReadiness,
               }).catch(err => console.warn(`[HR_RADAR_ALERT] persist failed: ${err.message}`));
               // Task #126 — record that PATH A–E (or PATH_E_CONVICTION) wrote
               // a real HR-radar row for this player; the presence-floor pass
@@ -4754,7 +4752,6 @@ export class LiveGameOrchestrator {
             // canonical stage is actionable (set-once in storage). No alert is
             // dispatched here, so alert_sent_at stays null. Additive only.
             promotedAtMs: dynSnap.canonicalStage === "attack" ? Date.now() : null,
-            finalScore: dynSnap.buildScore ?? 0,
           }).catch(err => console.warn(`[HR_PRESENCE_PROMOTE] persist failed for ${batter.playerName}: ${err.message}`));
           // Promoted rows are real (non-presence) rows — they have their own
           // [HR_PRESENCE_PROMOTE] log line and must not inflate the presence

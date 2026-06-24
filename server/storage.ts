@@ -3959,16 +3959,21 @@ export class DatabaseStorage implements IStorage {
             alertPath: data.alertPath ?? alert.alertPath,
             alertTier: data.alertTier ?? alert.alertTier,
             diagnosticsSnapshot: mergedDiag,
-            // ── Phase 0 diagnostic persistence — refresh diagnostic state each
-            // tick; preserve set-once timestamps (firstSeenAt is never touched
-            // on UPDATE; promotedAt/alertSentAt are first-stamp only). ──
-            rawPreCapScore: data.rawPreCapScore != null ? String(data.rawPreCapScore) : alert.rawPreCapScore,
+            // ── Phase 0 diagnostic persistence — these fields describe the
+            // CURRENT tick's data-quality/gate state, so they must reflect the
+            // incoming value (an explicit `null` CLEARS a stale gate reason).
+            // We only preserve the prior value when the caller OMITS the field
+            // entirely (`undefined`) — e.g. a presence-floor path that doesn't
+            // evaluate suppression — never when it explicitly passes null.
+            // Set-once timestamps (firstSeenAt/promotedAt/alertSentAt) are the
+            // exception and stay first-stamp only.
+            rawPreCapScore: data.rawPreCapScore !== undefined ? (data.rawPreCapScore != null ? String(data.rawPreCapScore) : null) : alert.rawPreCapScore,
             finalScore: String(data.finalScore ?? newScore),
-            capReason: data.capReason ?? alert.capReason,
-            suppressionReason: data.suppressionReason ?? alert.suppressionReason,
-            missingInputs: data.missingInputs ?? alert.missingInputs,
-            confidence: data.confidence != null ? String(data.confidence) : alert.confidence,
-            dataQualityFlags: data.dataQualityFlags ?? alert.dataQualityFlags,
+            capReason: data.capReason !== undefined ? data.capReason : alert.capReason,
+            suppressionReason: data.suppressionReason !== undefined ? data.suppressionReason : alert.suppressionReason,
+            missingInputs: data.missingInputs !== undefined ? data.missingInputs : alert.missingInputs,
+            confidence: data.confidence !== undefined ? (data.confidence != null ? String(data.confidence) : null) : alert.confidence,
+            dataQualityFlags: data.dataQualityFlags !== undefined ? data.dataQualityFlags : alert.dataQualityFlags,
             promotedAt: alert.promotedAt ?? (data.promotedAtMs != null ? new Date(data.promotedAtMs) : null),
             alertSentAt: alert.alertSentAt ?? (data.alertSentAtMs != null ? new Date(data.alertSentAtMs) : null),
             // ── Presence→Qualified one-time backfill (see comment above) ──
