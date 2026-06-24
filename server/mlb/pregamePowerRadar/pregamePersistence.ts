@@ -10,7 +10,8 @@ import type {
   InsertPregamePowerRadarSignal,
   PregamePowerRadarSignalRow,
 } from "@shared/schema";
-import type { PregamePowerSignal } from "./types";
+import type { PregamePowerSignal, PregameMarketSetup, PregameParkContext } from "./types";
+import { marketSetupLabel } from "./marketTagger";
 import { setPregameBuildSink } from "./buildPregamePowerRadar";
 import { setDbFallback } from "./pregamePowerRadarService";
 import type { PregamePowerSnapshot } from "./pregamePowerRadarStore";
@@ -58,6 +59,24 @@ function signalToRow(s: PregamePowerSignal): InsertPregamePowerRadarSignal {
 }
 
 function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
+  // Park/weather context is not persisted — the DB-fallback path degrades to a
+  // neutral card (nulls + "Neutral Conditions") rather than fabricating carry.
+  const primaryMarket = r.primaryMarket as PregamePowerSignal["primaryMarket"];
+  const marketTags = (r.marketTags as PregamePowerSignal["marketTags"]) ?? [];
+  const marketScores = (r.marketScores as PregamePowerSignal["marketScores"]) ?? {};
+  const marketSetups: PregameMarketSetup[] = marketTags.map((market) => {
+    const setupScore = marketScores[market] ?? 0;
+    return { market, setupScore, setupLabel: marketSetupLabel(setupScore), isPrimary: market === primaryMarket };
+  });
+  const parkContext: PregameParkContext = {
+    venueName: null,
+    temperatureF: null,
+    windMph: null,
+    windDirectionLabel: null,
+    carryLabel: "Neutral Conditions",
+    carryType: "neutral",
+    driverText: null,
+  };
   return {
     signalId: r.signalId,
     sport: "mlb",
@@ -76,9 +95,11 @@ function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
     pitcherName: r.pitcherName ?? null,
     battingOrderSlot: r.battingOrderSlot ?? null,
     handednessMatchup: null,
-    primaryMarket: r.primaryMarket as PregamePowerSignal["primaryMarket"],
-    marketTags: (r.marketTags as PregamePowerSignal["marketTags"]) ?? [],
-    marketScores: (r.marketScores as PregamePowerSignal["marketScores"]) ?? {},
+    primaryMarket,
+    marketTags,
+    marketScores,
+    marketSetups,
+    parkContext,
     score10: typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number),
     tier: r.tier as PregamePowerSignal["tier"],
     drivers: (r.drivers as PregamePowerSignal["drivers"]) ?? [],

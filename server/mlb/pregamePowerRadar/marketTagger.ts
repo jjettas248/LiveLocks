@@ -18,10 +18,31 @@ export interface MarketTaggerInputs {
   hardHitRatePct: number | null;
 }
 
+/** Qualitative market-setup label — server-owned so the UI never re-derives it. */
+export type MarketSetupLabel = "Elite" | "Strong" | "Solid" | "Watch";
+
+export interface MarketSetup {
+  market: PregamePowerMarket;
+  /** Numeric 0–10 setup score — for expanded/detail/debug views only. */
+  setupScore: number;
+  /** Plain-English qualitative label rendered on the compact card. */
+  setupLabel: MarketSetupLabel;
+  isPrimary: boolean;
+}
+
 export interface MarketTaggerResult extends ComponentScore {
   primaryMarket: PregamePowerMarket;
   marketTags: PregamePowerMarket[];
   marketScores: Partial<Record<PregamePowerMarket, number>>;
+  marketSetups: MarketSetup[];
+}
+
+/** Map a 0–10 market-setup score onto its qualitative label (display contract). */
+export function marketSetupLabel(score: number): MarketSetupLabel {
+  if (score >= 8.5) return "Elite";
+  if (score >= 7) return "Strong";
+  if (score >= 6) return "Solid";
+  return "Watch";
 }
 
 export function computeMarketTags(inputs: MarketTaggerInputs): MarketTaggerResult {
@@ -67,6 +88,16 @@ export function computeMarketTags(inputs: MarketTaggerInputs): MarketTaggerResul
 
   const marketFitScore = round1(Math.max(hrScore, tbScore));
 
+  const marketSetups: MarketSetup[] = marketTags.map((market) => {
+    const setupScore = marketScores[market] ?? 0;
+    return {
+      market,
+      setupScore,
+      setupLabel: marketSetupLabel(setupScore),
+      isPrimary: market === primaryMarket,
+    };
+  });
+
   return {
     score10: marketFitScore,
     available: true,
@@ -75,5 +106,6 @@ export function computeMarketTags(inputs: MarketTaggerInputs): MarketTaggerResul
     primaryMarket,
     marketTags,
     marketScores,
+    marketSetups,
   };
 }

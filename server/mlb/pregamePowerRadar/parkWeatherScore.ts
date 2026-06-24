@@ -17,9 +17,24 @@ export interface ParkWeatherInputs {
   windDirection: "in" | "out" | "cross" | "calm" | null;
 }
 
+/** Plain-English carry display contract (UI renders verbatim — never re-derives). */
+export type CarryType = "boost" | "suppress" | "neutral";
+export type CarryLabel =
+  | "HR Carry"
+  | "Carry Boost"
+  | "Carry Suppressed"
+  | "Neutral Air"
+  | "Neutral Conditions";
+
 export interface ParkWeatherResult extends ComponentScore {
   /** True when the only positive contribution came from the park factor. */
   parkIsOnlyPositiveDriver: boolean;
+  /** Server-owned plain-English carry label (display contract). */
+  carryLabel: CarryLabel;
+  /** Server-owned carry direction — the client must NOT infer this from wind. */
+  carryType: CarryType;
+  /** Optional concise evidence string for the dominant park/weather effect. */
+  carryDriverText: string | null;
 }
 
 export function computeParkWeatherScore(inputs: ParkWeatherInputs): ParkWeatherResult {
@@ -73,5 +88,63 @@ export function computeParkWeatherScore(inputs: ParkWeatherInputs): ParkWeatherR
   const parkPositive = sPark != null && sPark >= 6.5;
   const parkIsOnlyPositiveDriver = parkPositive && !weatherPositive;
 
-  return { score10: round1(score), available: sPark != null, drivers, warnings, parkIsOnlyPositiveDriver };
+  // ── Carry classification (display-only) ──────────────────────────────────────
+  // Maps the SAME already-computed sub-scores into a plain-English carry label so
+  // the UI never re-derives carry from raw wind/temp. Does NOT touch score10 — the
+  // modifier weights above are unchanged. No-op (Neutral Conditions) when weather
+  // data is absent so partial data never fabricates a carry claim.
+  let carryType: CarryType = "neutral";
+  let carryLabel: CarryLabel = "Neutral Conditions";
+  let carryDriverText: string | null = null;
+
+  if (inputs.isIndoors) {
+    carryType = "neutral";
+    carryLabel = "Neutral Conditions";
+    carryDriverText = "Roof closed — neutral air";
+  } else if (!inputs.weatherAvailable) {
+    carryType = "neutral";
+    carryLabel = "Neutral Conditions";
+  } else {
+    const windOut = inputs.windDirection === "out" && sWind != null;
+    const mildWindOut = windOut && sWind! >= 6.5;
+    const strongWindOut = windOut && sWind! >= 7.5;
+    const windInStrong = inputs.windDirection === "in" && sWind != null && sWind <= 3.5;
+    const warm = sTemp != null && sTemp >= 7;
+    const hot = sTemp != null && sTemp >= 8.5;
+    const cold = sTemp != null && sTemp <= 3;
+
+    if (cold || windInStrong) {
+      carryType = "suppress";
+      carryLabel = "Carry Suppressed";
+      carryDriverText = windInStrong
+        ? `Wind suppressing carry (${inputs.windSpeed} mph in)`
+        : `Cold air suppressing carry (${inputs.temperature}°F)`;
+    } else if (strongWindOut || (mildWindOut && warm) || hot) {
+      carryType = "boost";
+      carryLabel = "HR Carry";
+      carryDriverText = windOut
+        ? `Wind out boosting carry (${inputs.windSpeed} mph out)`
+        : `Warm air carry (${inputs.temperature}°F)`;
+    } else if (mildWindOut || warm) {
+      carryType = "boost";
+      carryLabel = "Carry Boost";
+      carryDriverText = windOut
+        ? `Wind out to the field (${inputs.windSpeed} mph)`
+        : `Warm air carry (${inputs.temperature}°F)`;
+    } else {
+      carryType = "neutral";
+      carryLabel = "Neutral Air";
+    }
+  }
+
+  return {
+    score10: round1(score),
+    available: sPark != null,
+    drivers,
+    warnings,
+    parkIsOnlyPositiveDriver,
+    carryLabel,
+    carryType,
+    carryDriverText,
+  };
 }
