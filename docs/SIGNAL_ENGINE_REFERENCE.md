@@ -216,7 +216,7 @@ The history endpoint adds a `subBuckets` object per day:
 
 ```ts
 {
-  missedOfficialSignals: number;  // ready/fire signal that did not produce a HR
+  missedOfficialSignals: number;  // FIRE signal that did not produce a HR (called_miss)
   lateSignals:           number;  // signal detected AFTER the HR
   uncalledHrs:           number;  // HR hit with no official signal at all
   earlyWindowHrs:        number;  // HR before the suggested window opened
