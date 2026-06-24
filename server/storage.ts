@@ -4,7 +4,7 @@ import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
 import { traceMissedHr } from "./analytics/hrRadarMissTracer";
 import { emitCalledHitLeadTime } from "./analytics/eventEmitters";
-import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow, qualifiesForNearHrCredit, isContactInCommittedWindow } from "./mlb/hrRadarSection";
+import { applyHrRadarResolvedStateFixup, inferCashedFromTierStatus, CALLED_HIT_OUTCOME_STATUSES, resolveFinalNoHrGrading, reachedHrMaxWindow, reachedFireCommitment, qualifiesForNearHrCredit, isContactInCommittedWindow } from "./mlb/hrRadarSection";
 import { buildHrRadarDisplayContract, getRawCurrentReadinessScore10 } from "./mlb/hrRadarDisplayContract";
 import type { HrRadarOutcomeStatus, HrRadarPeakContact } from "./mlb/hrRadarSection";
 import type { PersistedHrRadarOutcomeStamp } from "./mlb/hrRadarOutcomeStamp";
@@ -4928,6 +4928,33 @@ export class DatabaseStorage implements IStorage {
               windowCutShort = true;
             }
           }
+          // ── FIRE-only official grading (2026-06) ─────────────────────────
+          // Only a row that reached the user-facing FIRE commitment counts as
+          // a money `called_miss`. A row the alert-path engine surfaced as
+          // `officialAlert` whose dynamic conviction never crossed the BET_NOW
+          // band (and that did not take the FAST_PROMOTE_ELITE fire path) was
+          // only user-stage READY — high-watch, not an official call — so it
+          // expires instead of polluting the official HR record with a false
+          // miss. peakConversionProbability is read from the persisted
+          // diagnosticsSnapshot.scoreContract (no new write path). Going
+          // forward only; historical rows are untouched.
+          let readyOnlyNotFire = false;
+          if (finalGrade === "called_miss") {
+            const peakConv = (() => {
+              const sc = (alert.diagnosticsSnapshot as any)?.scoreContract;
+              const v = sc?.peakConversionProbability;
+              return typeof v === "number" && Number.isFinite(v) ? v : null;
+            })();
+            const fireCommitted = reachedFireCommitment({
+              alertPath: alert.alertPath,
+              peakConversionProbability: peakConv,
+            });
+            if (!fireCommitted) {
+              finalGrade = "expired";
+              readyOnlyNotFire = true;
+              console.log(`[HR_RADAR_READY_NOT_FIRE] playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel ?? "presence"} alertPath=${alert.alertPath ?? "?"} peakConv=${peakConv ?? "null"} — READY-only no-HR row expired (not an official FIRE call), excluded from miss record`);
+            }
+          }
           // ── Near-HR credit ───────────────────────────────────────────────
           // A genuine HR-Max-Window pick that played out without an HR but whose
           // batter squared up an "almost HR" (barrel / warning-track / elite EV)
@@ -4987,7 +5014,9 @@ export class DatabaseStorage implements IStorage {
             // pick) OR an HR Max Window signal whose PA window was cut short by
             // game-end. Admin-only; leaves the active set without polluting the
             // user-facing miss record / W/L ledger.
-            const expiredReason = windowCutShort
+            const expiredReason = readyOnlyNotFire
+              ? "reconcile: READY-only signal (never reached FIRE commitment / BET_NOW) — game ended without HR; high-watch context, not an official FIRE call"
+              : windowCutShort
               ? "reconcile: HR Max Window signal fired too late — PA window cut short by game-end; not counted"
               : "reconcile: sub-actionable (Watch/Building) signal — game ended without HR; not a called pick";
             await db.update(hrRadarAlerts)
@@ -5006,7 +5035,7 @@ export class DatabaseStorage implements IStorage {
                 matchMethod: "direct_pre_hr_signal",
               })
               .where(eq(hrRadarAlerts.id, alert.id));
-            console.log(`[HR_RADAR_INACTIVE] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel ?? "presence"} reason=${windowCutShort ? "hr_max_window_cut_short" : "sub_actionable_not_graded"} confTier=${alert.confidenceTier ?? "?"} signalState=${alert.signalState ?? "?"} alertTier=${alert.alertTier ?? "?"}`);
+            console.log(`[HR_RADAR_INACTIVE] (reconcile) playerId=${alert.playerId} gameId=${gameId} detectedLabel=${alert.detectedLabel ?? "presence"} reason=${readyOnlyNotFire ? "ready_only_not_fire" : windowCutShort ? "hr_max_window_cut_short" : "sub_actionable_not_graded"} confTier=${alert.confidenceTier ?? "?"} signalState=${alert.signalState ?? "?"} alertTier=${alert.alertTier ?? "?"}`);
           }
         }
       }
@@ -6837,8 +6866,8 @@ export interface HrRadarLadderEntry {
   badges: HrRadarBadge[];
   /** Alias of userReasons — explicit "clean" channel for the new UI. */
   cleanReasons: string[];
-  /** Additive grading shadow: which official stage was reached, if any. */
-  officialSignalStage: "ready" | "fire" | null;
+  /** Additive grading shadow: FIRE-only official stage (null unless committed). */
+  officialSignalStage: "fire" | null;
   officialSignalAt: string | null;
   officialSignalInning: number | null;
   /** Write-once user-stage timestamps (in-memory; not persisted yet). */

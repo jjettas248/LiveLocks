@@ -603,7 +603,7 @@ Currently derived in-memory from `detectedAt` / `signalDetectedAt` / `hitDetecte
 
 ### 14.7 Official signal stage (additive grading shadow)
 
-`officialSignalStage` is set ONLY when the row reaches `ready` or `fire`. Track and Build rows are NEVER counted as official misses against the radar grade. Pairs with `officialSignalAt` and `officialSignalInning`.
+`officialSignalStage` is set **ONLY when the row reaches `fire`** (FIRE-only official record, 2026-06). Track, Build, and **Ready** rows are NEVER counted as official calls/misses against the radar grade — Ready is high-watch context, not an official HR call. At game-final reconciliation a no-HR row that never reached the FIRE commitment (peak HR-conversion in the BET_NOW band `>= 0.14`, or the `FAST_PROMOTE_ELITE` path) is stamped `expired`, not `called_miss` (`reachedFireCommitment` in `hrRadarSection.ts`). Pairs with `officialSignalAt` and `officialSignalInning`.
 
 ### 14.8 Grading sub-buckets
 

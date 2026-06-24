@@ -296,7 +296,7 @@ The user-stage is the STRONGER of (a) the legacy mapped stage from the existing 
 
 **Stage timestamps** (additive, surfaced on the wire, write-once when persisted): `firstTrackedAt/Inning`, `firstBuiltAt/Inning`, `firstReadyAt/Inning`, `firstFireAt/Inning`, `hrOccurredAt/Inning`.
 
-**Official signal stage**: `officialSignalStage` is set only when a row reaches `ready` or `fire`. Track and Build rows are never counted as "official misses" against the radar grade.
+**Official signal stage**: `officialSignalStage` is set **only when a row reaches `fire`** (FIRE-only official record, 2026-06). Track, Build, and **Ready** rows are never counted as "official misses" against the radar grade — Ready is high-watch context, not an official HR call. At game-final reconciliation a no-HR row that never reached the FIRE commitment (BET_NOW conversion band or the FAST_PROMOTE_ELITE path) is stamped `expired`, not `called_miss`.
 
 **Grading sub-buckets** (additive — original `dead`/`missed`/`hit` buckets unchanged): per-day `subBuckets` on `/api/mlb/hr-radar-grading-history` adds five new keys for finer analysis: `missedOfficialSignals`, `lateSignals`, `uncalledHrs`, `earlyWindowHrs`, `expiredTracking`.
 

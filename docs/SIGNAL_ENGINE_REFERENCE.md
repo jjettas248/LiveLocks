@@ -180,7 +180,7 @@ Every ladder entry, board row, and legacy `/api/mlb/hr-radar` row gains (when th
   currentSignalScore10: number | null;
   peakSignalScore10: number | null;
 
-  officialSignalStage: "ready" | "fire" | null;
+  officialSignalStage: "fire" | null;  // FIRE-only official record (2026-06)
   officialSignalAt: string | null;     // ISO
   officialSignalInning: number | null;
 
@@ -210,7 +210,7 @@ attackNow=1 → ready=3 → building=2 → watch=4 → cooling=5 → closed=6
 
 ### 5.5 Grading shadow
 
-`officialSignalStage` is recorded only when the row reaches `ready` or `fire`. The Phase 12 trace log (`[HR_RADAR_V1_TRACE]`) captures the candidate "v1 called hit" outcome (`wouldCountAsCalledHitV1` true iff the official signal precedes the HR). This is **shadow only** — current grading still uses `called_hit` until the shadow is validated.
+`officialSignalStage` is recorded **only when the row reaches `fire`** (FIRE-only official record, 2026-06). READY is high-watch context and is **not** an official call — it never stamps an official stage, so READY false positives cannot resolve as cashed/missed in the official HR record. The Phase 12 trace log (`[HR_RADAR_V1_TRACE]`) captures the candidate "v1 called hit" outcome (`wouldCountAsCalledHitV1` true iff the official signal precedes the HR). This is **shadow only** — current grading still uses `called_hit` until the shadow is validated.
 
 The history endpoint adds a `subBuckets` object per day:
 

@@ -108,9 +108,13 @@ assert("WATCHING actionPct < TOP WINDOW actionPct (hierarchy holds)",
   (watching.displayActionPct ?? 0) < (top.displayActionPct ?? 0),
   `watching=${watching.displayActionPct} top=${top.displayActionPct}`);
 
-// Record eligibility derives ONLY from officialSignalStage.
-eq("record-eligible when officialSignalStage=ready",
-  buildHrRadarDisplayContract({ officialSignalStage: "ready" }, "ready").displayRecordEligible, true);
+// Record eligibility derives ONLY from officialSignalStage, and FIRE-ONLY
+// (2026-06): a committed FIRE call is record-eligible; READY (high-watch
+// context) is NOT part of the official record and must be ineligible.
+eq("record-eligible when officialSignalStage=fire",
+  buildHrRadarDisplayContract({ currentSignalScore10: 9.0, officialSignalStage: "fire" }, "attackNow").displayRecordEligible, true);
+eq("NOT record-eligible when officialSignalStage=null (was ready)",
+  buildHrRadarDisplayContract({ currentSignalScore10: 7.0, officialSignalStage: null }, "building").displayRecordEligible, false);
 
 console.log(`\n=== Result: ${pass} pass, ${fail} fail ===`);
 if (fail > 0) {

@@ -186,7 +186,7 @@ export interface HrRadarLadderEntry {
   // Step 5 — canonical badge set, server-derived; rendered verbatim.
   badges?: HrRadarBadge[];
   cleanReasons?: string[];
-  officialSignalStage?: "ready" | "fire" | null;
+  officialSignalStage?: "fire" | null;
   officialSignalAt?: string | null;
   officialSignalInning?: number | null;
   firstTrackedAt?: string | null;
