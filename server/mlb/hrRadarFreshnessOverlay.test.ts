@@ -1,6 +1,6 @@
 // Unit test — HR Radar canonical freshness overlay.
 //   npx tsx server/mlb/hrRadarFreshnessOverlay.test.ts
-import { applyCanonicalFreshnessOverlay, type OverlayLadder } from "./hrRadarFreshnessOverlay";
+import { applyCanonicalFreshnessOverlay, computeHrRadarFreshnessReport, type OverlayLadder } from "./hrRadarFreshnessOverlay";
 import type { CanonicalHrRadarState } from "./hrRadarCanonicalStore";
 
 let pass = 0, fail = 0;
@@ -107,6 +107,32 @@ console.log("HR Radar freshness overlay");
   eq("7b. ready count (surfaced 10)", l.counts!.ready, 1);
   eq("7c. cashed count preserved", l.counts!.cashed, 1);
   eq("7d. total", l.counts!.total, 3);
+}
+
+// 8. Read-only freshness report — does NOT mutate, and reports per-row provenance.
+{
+  const l = emptyLadder();
+  l.sections.building.push(entry("1", "g1"));      // DB row, canonical says FIRE → rebucket/stale
+  l.sections.watch.push(entry("2", "g1"));          // DB-only, no canonical
+  l.sections.cashed.push(entry("9", "g1", { gradingStatus: "called_hit" }));
+  const states = [
+    canon("1", "g1", "FIRE"),
+    canon("3", "g1", "FIRE"),                        // canonical-only → surfaced in report
+    canon("9", "g1", "FIRE", { active: false, terminal: true }), // terminal → ignored
+  ];
+  const report = computeHrRadarFreshnessReport(l, states, NOW);
+  eq("8. report does NOT mutate ladder (building still has 1)", l.sections.building.map((e: any) => e.playerId), ["1"]);
+  eq("8b. liveDbRows = 2", report.summary.liveDbRows, 2);
+  eq("8c. canonicalActive = 2 (terminal ignored)", report.summary.canonicalActive, 2);
+  eq("8d. rebucketed/stale = 1 (player 1)", report.summary.rebucketed, 1);
+  eq("8e. canonicalOnly = 1 (player 3)", report.summary.canonicalOnly, 1);
+  const r1 = report.rows.find((r) => r.playerId === "1")!;
+  eq("8f. player 1 source=canonical, overlayApplied", [r1.source, r1.overlayApplied], ["canonical", true]);
+  eq("8g. player 1 has fresh ages + canonicalUpdatedAt", [typeof r1.freshAgeMs, typeof r1.freshEvidenceAgeMs, r1.canonicalUpdatedAt != null], ["number", "number", true]);
+  const r2 = report.rows.find((r) => r.playerId === "2")!;
+  eq("8h. player 2 db-only, reasonSkipped", [r2.source, r2.reasonSkipped], ["db", "no_active_canonical"]);
+  const r3 = report.rows.find((r) => r.playerId === "3")!;
+  eq("8i. player 3 canonical_only, dbStage null", [r3.source, r3.dbStage], ["canonical_only", null]);
 }
 
 console.log(`\n=== Result: ${pass} pass, ${fail} fail ===`);

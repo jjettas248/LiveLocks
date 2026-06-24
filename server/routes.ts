@@ -434,6 +434,24 @@ export async function registerRoutes(
     }
   });
 
+  // HR Radar freshness diagnostic — READ-ONLY. Reports, per active live row,
+  // how the canonical-store overlay reconciles the DB ladder (which lags the
+  // engine by up to one reconcile interval) against the fresher in-memory
+  // canonical state. No DB writes, no overlay/grading/engine changes — it
+  // recomputes what the overlay WOULD do without mutating anything.
+  app.get("/api/admin/mlb-hr-radar-freshness", requireAdmin, async (_req, res) => {
+    try {
+      const { computeHrRadarFreshnessReport } = await import("./mlb/hrRadarFreshnessOverlay");
+      const { getActiveCanonicalHrRadarStates } = await import("./mlb/hrRadarCanonicalStore");
+      const ladder = await storage.getHrRadarLadder();
+      const states = getActiveCanonicalHrRadarStates();
+      return res.json(computeHrRadarFreshnessReport(ladder as any, states, Date.now()));
+    } catch (err: any) {
+      console.error("[admin/mlb-hr-radar-freshness]", err?.message ?? err);
+      return res.status(500).json({ error: "Failed to compute HR Radar freshness report" });
+    }
+  });
+
   // MLB Shadow Qualification panel — passive parallel-runtime evaluation of a
   // candidate threshold (batter_over signalScore >= 43) vs the live floor (46).
   // Shadow signals are recorded for analytics ONLY and never surface to users,

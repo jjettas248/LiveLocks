@@ -220,3 +220,169 @@ export function applyCanonicalFreshnessOverlay(
 
   return { ladder, diagnostics };
 }
+
+// Bucket → coarse user stage label, for the read-only diagnostic report.
+const BUCKET_TO_STAGE: Record<LiveBucket, string> = {
+  attackNow: "fire",
+  ready: "ready",
+  building: "build",
+  watch: "track",
+};
+
+export interface FreshnessReportRow {
+  gameId: string;
+  playerId: string;
+  playerName: string | null;
+  dbStage: string | null;
+  canonicalStage: string | null;
+  overlayApplied: boolean;        // overlay would touch this row (refresh/rebucket/surface)
+  source: "db" | "canonical" | "canonical_only";
+  freshAgeMs: number | null;      // canonical updatedAt → now
+  freshEvidenceAgeMs: number | null; // canonical latestEvidenceAt → now
+  dbUpdatedAt: string | null;
+  canonicalUpdatedAt: string | null;
+  reasonSkipped: string | null;   // why the overlay left the row on the DB value
+}
+
+export interface FreshnessReport {
+  generatedAt: string;
+  nowMs: number;
+  summary: {
+    liveDbRows: number;
+    canonicalActive: number;
+    overlayApplied: number;       // rows the overlay would touch
+    rebucketed: number;           // rows whose DB bucket disagrees with the fresher canonical
+    canonicalOnly: number;        // actionable rows the DB hasn't persisted yet
+    duplicateCount: number;       // (game,player) keys appearing in >1 section
+    staleCount: number;           // live DB rows whose stage lags the fresher canonical
+  };
+  rows: FreshnessReportRow[];
+}
+
+/**
+ * READ-ONLY freshness report. Computes what the overlay WOULD do for the
+ * current ladder + canonical store WITHOUT mutating either — for the admin
+ * diagnostic endpoint. Never writes; never changes overlay behavior.
+ */
+export function computeHrRadarFreshnessReport(
+  ladder: OverlayLadder,
+  canonicalStates: CanonicalHrRadarState[],
+  nowMs: number,
+): FreshnessReport {
+  // Index active, non-terminal canonical rows mapping to a live bucket.
+  const byKey = new Map<string, CanonicalHrRadarState>();
+  let canonicalActive = 0;
+  for (const s of canonicalStates) {
+    if (!s.active || s.terminal) continue;
+    if (!SECTION_TO_BUCKET[s.section]) continue;
+    byKey.set(keyOf(s.gameId, s.playerId), s);
+    canonicalActive++;
+  }
+
+  // Duplicate detection across ALL sections (live + terminal).
+  const keyCounts = new Map<string, number>();
+  for (const bucket of ["attackNow", "ready", "building", "watch", "cashed", "dead"] as const) {
+    for (const e of ladder.sections[bucket] ?? []) {
+      const k = keyOf(e.gameId, e.playerId);
+      keyCounts.set(k, (keyCounts.get(k) ?? 0) + 1);
+    }
+  }
+  let duplicateCount = 0;
+  for (const n of Array.from(keyCounts.values())) if (n > 1) duplicateCount++;
+
+  // Keys present in terminal buckets — these are never surfaced as live.
+  const terminalKeys = new Set<string>();
+  for (const bucket of ["cashed", "dead"] as const) {
+    for (const e of ladder.sections[bucket] ?? []) terminalKeys.add(keyOf(e.gameId, e.playerId));
+  }
+
+  const rows: FreshnessReportRow[] = [];
+  const seen = new Set<string>();
+  let liveDbRows = 0, overlayApplied = 0, rebucketed = 0, staleCount = 0;
+
+  for (const bucket of LIVE_BUCKETS) {
+    for (const e of ladder.sections[bucket] ?? []) {
+      liveDbRows++;
+      const key = keyOf(e.gameId, e.playerId);
+      seen.add(key);
+      const canon = byKey.get(key);
+      const dbStage = (e.userStage as string) ?? BUCKET_TO_STAGE[bucket];
+      const dbUpdatedAt = (e.updatedAt as string) ?? (e.signalDetectedAt as string) ?? (e.detectedAt as string) ?? null;
+      if (canon) {
+        const mapped = SECTION_TO_BUCKET[canon.section]!;
+        const moved = mapped !== bucket;
+        if (moved) { rebucketed++; staleCount++; }
+        overlayApplied++;
+        rows.push({
+          gameId: String(e.gameId),
+          playerId: String(e.playerId),
+          playerName: (e.playerName as string) ?? canon.playerName ?? null,
+          dbStage,
+          canonicalStage: canon.userStage ?? canon.section,
+          overlayApplied: true,
+          source: "canonical",
+          freshAgeMs: ageMsOf(canon.updatedAt, nowMs),
+          freshEvidenceAgeMs: ageMsOf(canon.latestEvidenceAt, nowMs),
+          dbUpdatedAt,
+          canonicalUpdatedAt: canon.updatedAt,
+          reasonSkipped: null,
+        });
+      } else {
+        rows.push({
+          gameId: String(e.gameId),
+          playerId: String(e.playerId),
+          playerName: (e.playerName as string) ?? null,
+          dbStage,
+          canonicalStage: null,
+          overlayApplied: false,
+          source: "db",
+          freshAgeMs: null,
+          freshEvidenceAgeMs: null,
+          dbUpdatedAt,
+          canonicalUpdatedAt: null,
+          reasonSkipped: "no_active_canonical",
+        });
+      }
+    }
+  }
+
+  // Actionable canonical rows the DB hasn't persisted yet (FIRE/READY only),
+  // excluding any already resolved in a terminal bucket.
+  let canonicalOnly = 0;
+  for (const [key, s] of Array.from(byKey.entries())) {
+    if (seen.has(key) || terminalKeys.has(key)) continue;
+    const bucket = SECTION_TO_BUCKET[s.section];
+    if (bucket !== "attackNow" && bucket !== "ready") continue;
+    canonicalOnly++;
+    overlayApplied++;
+    rows.push({
+      gameId: String(s.gameId),
+      playerId: String(s.playerId),
+      playerName: s.playerName ?? null,
+      dbStage: null,
+      canonicalStage: s.userStage ?? s.section,
+      overlayApplied: true,
+      source: "canonical_only",
+      freshAgeMs: ageMsOf(s.updatedAt, nowMs),
+      freshEvidenceAgeMs: ageMsOf(s.latestEvidenceAt, nowMs),
+      dbUpdatedAt: null,
+      canonicalUpdatedAt: s.updatedAt,
+      reasonSkipped: null,
+    });
+  }
+
+  return {
+    generatedAt: new Date(nowMs).toISOString(),
+    nowMs,
+    summary: {
+      liveDbRows,
+      canonicalActive,
+      overlayApplied,
+      rebucketed,
+      canonicalOnly,
+      duplicateCount,
+      staleCount,
+    },
+    rows,
+  };
+}
