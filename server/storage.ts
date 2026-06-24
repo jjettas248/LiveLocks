@@ -4630,6 +4630,11 @@ export class DatabaseStorage implements IStorage {
         fallbackCreated: true,
         userVisible: false,
         matchMethod: "post_hr_fallback",
+        // Phase 0 — this admin-only row was first materialized at HR time (no
+        // pre-HR signal existed). Stamping first_seen_at lets the backtest tell
+        // a row-created-at-HR (late/uncalled) apart from a true full-miss (no
+        // row at all). Purely additive — no grading/attribution change.
+        firstSeenAt: nowDate,
         analyticsPersisted: false,
       });
       if (earlyExempt) {
