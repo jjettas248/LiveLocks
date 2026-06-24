@@ -661,6 +661,20 @@ export const hrRadarAlerts = pgTable("hr_radar_alerts", {
   signalHalf: text("signal_half"),
   hitDetectedAt: timestamp("hit_detected_at"),
 
+  // ── Phase 0 diagnostic persistence (2026-06) — make future misses
+  // diagnosable from the DB alone, separating model weakness from missing
+  // data. All nullable/additive; absent on legacy rows. ──
+  rawPreCapScore: numeric("raw_pre_cap_score"),      // readiness before any data-quality cap
+  finalScore: numeric("final_score"),                 // readiness after caps/suppression
+  capReason: text("cap_reason"),                      // which cap bound the score, if any
+  suppressionReason: text("suppression_reason"),      // below_threshold_with_full_data | below_threshold_with_degraded_data | ...
+  missingInputs: text("missing_inputs").array(),      // missing_statcast | degraded_contact_data | missing_batter_power | missing_handedness_splits
+  confidence: numeric("confidence"),                  // 0..1 confidence given data completeness
+  dataQualityFlags: text("data_quality_flags").array(), // full | degraded | missing markers
+  firstSeenAt: timestamp("first_seen_at"),            // first time this candidate entered the radar
+  promotedAt: timestamp("promoted_at"),               // first time it reached an actionable tier
+  alertSentAt: timestamp("alert_sent_at"),            // when an alert was actually dispatched
+
   analyticsPersisted: boolean("analytics_persisted").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({

@@ -21,6 +21,31 @@ interface PowerDriver {
   evidence?: string;
 }
 
+type SetupLabel = "Elite" | "Strong" | "Solid" | "Watch";
+
+interface MarketSetup {
+  market: Market;
+  setupScore: number; // 0–10 — expanded/debug only, never shown on the compact chip
+  setupLabel: SetupLabel;
+  isPrimary: boolean;
+}
+
+interface ParkContext {
+  venueName: string | null;
+  temperatureF: number | null;
+  windMph: number | null;
+  windDirectionLabel: string | null;
+  carryLabel:
+    | "HR Carry"
+    | "Carry Boost"
+    | "Carry Suppressed"
+    | "Neutral Air"
+    | "Neutral Conditions"
+    | "Conditions Unavailable";
+  carryType: "boost" | "suppress" | "neutral" | "unknown";
+  driverText?: string | null;
+}
+
 interface PregameSignal {
   signalId: string;
   gameId: string;
@@ -34,6 +59,8 @@ interface PregameSignal {
   primaryMarket: Market;
   marketTags: Market[];
   marketScores: Partial<Record<Market, number>>;
+  marketSetups?: MarketSetup[];
+  parkContext?: ParkContext | null;
   score10: number;
   tier: Tier;
   drivers: PowerDriver[];
@@ -74,6 +101,33 @@ const MARKET_LABEL: Record<Market, string> = {
   hits: "Hits",
   rbi: "RBI",
   hrr: "HRR",
+};
+
+// Display-only emoji per market (formatting, not logic). HR-family → 🎯, contact → 📈.
+const MARKET_EMOJI: Record<Market, string> = {
+  home_runs: "🎯",
+  total_bases: "📈",
+  hits: "📈",
+  rbi: "📈",
+  hrr: "🎯",
+};
+
+// Carry label → emoji prefix. The label text itself is server-owned (parkContext);
+// the client only picks the leading glyph + color from the server's carryType.
+const CARRY_EMOJI: Record<ParkContext["carryLabel"], string> = {
+  "HR Carry": "🔥",
+  "Carry Boost": "🌬️",
+  "Carry Suppressed": "🧊",
+  "Neutral Air": "↔",
+  "Neutral Conditions": "🏟️",
+  "Conditions Unavailable": "🚫",
+};
+
+const CARRY_COLOR: Record<ParkContext["carryType"], string> = {
+  boost: "text-amber-300",
+  suppress: "text-sky-300",
+  neutral: "text-muted-foreground",
+  unknown: "text-muted-foreground/70 italic",
 };
 
 type FilterKey = "all" | "hr" | "tb" | "elite" | "confirmed" | "park" | "pitcher";
@@ -182,6 +236,18 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
 
+  // Prefer server-stamped qualitative setups. Fall back to bare market tags (no
+  // qualitative label, no raw score) for older payloads — never compute a tier here.
+  const marketSetups: MarketSetup[] =
+    s.marketSetups && s.marketSetups.length > 0
+      ? s.marketSetups
+      : s.marketTags.map((m) => ({
+          market: m,
+          setupScore: s.marketScores[m] ?? 0,
+          setupLabel: undefined as unknown as SetupLabel,
+          isPrimary: m === s.primaryMarket,
+        }));
+
   return (
     <Card
       className="p-3.5"
@@ -228,15 +294,21 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
         </div>
       </div>
 
+      {/* Park / weather context — secondary line, server-stamped, renders verbatim. */}
+      <ParkConditionsRow park={s.parkContext} />
+
+      {/* Market chips — qualitative setup labels only. Numeric setup scores are
+          intentionally NOT shown here (compact face OR tooltip); they live in the
+          admin/debug diagnostics views. */}
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-        {s.marketTags.map((m) => (
+        {marketSetups.map((setup) => (
           <Badge
-            key={m}
+            key={setup.market}
             variant="secondary"
-            className={`text-[10px] px-1.5 py-0 ${m === s.primaryMarket ? "bg-amber-500/20 text-amber-200" : ""}`}
+            className={`text-[10px] px-1.5 py-0 ${setup.isPrimary ? "bg-amber-500/20 text-amber-200" : ""}`}
           >
-            {MARKET_LABEL[m]}
-            {s.marketScores[m] != null ? ` ${s.marketScores[m]!.toFixed(1)}` : ""}
+            {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
+            {setup.setupLabel ? ` · ${setup.setupLabel}` : ""}
           </Badge>
         ))}
       </div>
@@ -271,6 +343,63 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
         </div>
       )}
     </Card>
+  );
+}
+
+// Compact, visually-secondary park/weather context line. Renders ONLY the
+// server-stamped parkContext fields — no client-side carry/wind inference, no raw
+// weather-modifier values. One line on desktop; wraps on mobile.
+function ParkConditionsRow({ park }: { park?: ParkContext | null }) {
+  // `null`/absent parkContext means the server genuinely does NOT know the
+  // conditions (e.g. DB-fallback path). Be honest — never imply neutral.
+  if (!park) {
+    return (
+      <div
+        className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground/70 italic flex-wrap"
+        data-testid="pregame-park-conditions-unavailable"
+      >
+        <span>🏟️ Park context unavailable</span>
+      </div>
+    );
+  }
+
+  const hasContext =
+    park.venueName != null || park.temperatureF != null || park.windMph != null;
+  const carryIsMeaningful = park.carryType !== "neutral" || park.carryLabel !== "Neutral Conditions";
+  // Nothing known and no meaningful carry call → hide rather than render an empty row.
+  if (!hasContext && !carryIsMeaningful && park.carryType !== "unknown") return null;
+
+  const segments: JSX.Element[] = [];
+  if (park.venueName) segments.push(<span key="venue">🏟️ {park.venueName}</span>);
+  if (park.temperatureF != null) segments.push(<span key="temp">{Math.round(park.temperatureF)}°</span>);
+  if (park.windMph != null) {
+    segments.push(
+      <span key="wind" className="inline-flex items-center gap-0.5">
+        <Wind className="w-3 h-3" />
+        {Math.round(park.windMph)}
+        {park.windDirectionLabel ? ` ${park.windDirectionLabel}` : ""}
+      </span>,
+    );
+  }
+  segments.push(
+    <span key="carry" className={`font-semibold ${CARRY_COLOR[park.carryType]}`}>
+      {CARRY_EMOJI[park.carryLabel]} {park.carryLabel}
+    </span>,
+  );
+
+  return (
+    <div
+      className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground flex-wrap"
+      data-testid="pregame-park-conditions"
+      title={park.driverText ?? undefined}
+    >
+      {segments.map((seg, i) => (
+        <span key={i} className="inline-flex items-center gap-1.5">
+          {i > 0 && <span className="opacity-40">·</span>}
+          {seg}
+        </span>
+      ))}
+    </div>
   );
 }
 

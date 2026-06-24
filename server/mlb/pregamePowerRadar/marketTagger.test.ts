@@ -28,6 +28,19 @@ const tb = computeMarketTags({
 });
 ok(tb.primaryMarket === "total_bases", `sub-elite HR ceiling → total_bases (got ${tb.primaryMarket})`);
 
+// ── Qualitative market setups are server-stamped, one per market tag ──────────
+ok(hr.marketSetups.length === hr.marketTags.length, "one marketSetup per market tag");
+ok(hr.marketSetups.every((m) => hr.marketTags.includes(m.market)), "setups cover only tagged markets");
+ok(hr.marketSetups.some((m) => m.isPrimary && m.market === hr.primaryMarket), "primary market flagged in setups");
+ok(
+  hr.marketSetups.every((m) => ["Elite", "Strong", "Solid", "Watch"].includes(m.setupLabel)),
+  "setupLabel is a qualitative tier (never a raw number)",
+);
+ok(
+  hr.marketSetups.every((m) => Math.abs(m.setupScore - (hr.marketScores[m.market] ?? -1)) < 1e-9),
+  "setupScore mirrors marketScores (debug-only numeric)",
+);
+
 // ── Phase 1 only emits HR + TB markets ────────────────────────────────────────
 const allTags = new Set([...hr.marketTags, ...tb.marketTags]);
 ok(![...allTags].some((m) => m === "hits" || m === "rbi" || m === "hrr"), "no hits/rbi/hrr in Phase 1");
@@ -56,6 +69,11 @@ function makeSignal(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     generatedAt: "", buildId: "b", batterId: "b1", batterName: "X", team: "NYY", opponent: "BOS",
     pitcherId: "p1", pitcherName: "P", battingOrderSlot: 3, handednessMatchup: "R vs L",
     primaryMarket: "home_runs", marketTags: ["home_runs"], marketScores: { home_runs: 7 },
+    marketSetups: [{ market: "home_runs", setupScore: 7, setupLabel: "Strong", isPrimary: true }],
+    parkContext: {
+      venueName: null, temperatureF: null, windMph: null, windDirectionLabel: null,
+      carryLabel: "Neutral Conditions", carryType: "neutral", driverText: null,
+    },
     score10: 7, tier: "strong",
     drivers: [
       { key: "a", label: "A", direction: "positive" },

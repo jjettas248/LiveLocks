@@ -7,6 +7,7 @@ export type HRIntensity = "weak" | "watch" | "strong" | "imminent";
 
 export type HRContactClass =
   | "noiseContact"
+  | "missingDataContact"
   | "deadPopup"
   | "airBallWarning"
   | "batSpeedWarning"
@@ -18,9 +19,11 @@ export type HRContactClass =
 
 export interface ClassifiedContact {
   contactClass: HRContactClass;
-  exitVelocity: number;
-  launchAngle: number;
-  distance: number;
+  // Null when the underlying Statcast metric was absent. NEVER coerced to 0 —
+  // a 0 makes missing data masquerade as the worst possible contact.
+  exitVelocity: number | null;
+  launchAngle: number | null;
+  distance: number | null;
   outcome: string;
   isBarrel: boolean;
   // Committed-window scoping (2026-06) — when this contact occurred, threaded
@@ -28,6 +31,11 @@ export interface ClassifiedContact {
   // committed window. Optional; null when the source AB carried no timing.
   inning?: number | null;
   half?: string | null;
+  // Data-quality discipline (2026-06): distinguishes a genuinely weak contact
+  // from one we simply lack the data to assess. "missing" = core EV absent;
+  // "degraded" = EV present but LA and/or distance absent; "full" = complete.
+  dataQuality: "full" | "degraded" | "missing";
+  missingFields: string[];
 }
 
 export interface HitterPowerProfile {
@@ -177,66 +185,101 @@ export function classifyContactEvent(
   },
   context?: { batSpeedZ?: number; hitterPowerProfileScore?: number },
 ): ClassifiedContact {
-  const ev = ab.exitVelocity ?? 0;
-  const la = ab.launchAngle ?? 0;
-  const dist = ab.distance ?? 0;
-  // Canonical EV-scaled Statcast barrel — single source of truth shared with
-  // the display BRL tag, so engine barrel counts and the UI never disagree.
-  const isBarrel = isCanonicalBarrel(ev, la);
+  // ── Missing-data discipline (2026-06): NEVER coerce a null Statcast metric
+  // to 0. A 0 from "?? 0" makes absent data masquerade as the worst possible
+  // contact (noiseContact), silently burying true HR candidates. Instead we
+  // tag dataQuality and let missing/degraded data REDUCE CONFIDENCE without
+  // fabricating negative evidence. Mirrors nearHrContact.ts's null handling. ──
+  const rawEv = ab.exitVelocity;
+  const rawLa = ab.launchAngle;
+  const rawDist = ab.distance;
+
+  const missingFields: string[] = [];
+  if (rawEv == null) missingFields.push("exitVelocity");
+  if (rawLa == null) missingFields.push("launchAngle");
+  if (rawDist == null) missingFields.push("distance");
+
+  // Exit velocity is the core contact-quality signal. Without it the contact
+  // cannot be assessed at all — this is DATA UNAVAILABLE, not weak contact.
+  // Returning `missingDataContact` keeps it out of BOTH the positive HR-shaped
+  // buckets and the negative noise/popup buckets.
+  if (rawEv == null) {
+    return {
+      contactClass: "missingDataContact",
+      exitVelocity: null,
+      launchAngle: rawLa ?? null,
+      distance: rawDist ?? null,
+      outcome: ab.outcome ?? "out",
+      isBarrel: false,
+      inning: ab.inning ?? null,
+      half: ab.half ?? null,
+      dataQuality: "missing",
+      missingFields,
+    };
+  }
+
+  const ev = rawEv;
+  const hasFullData = rawLa != null && rawDist != null;
+  const dataQuality: "full" | "degraded" = hasFullData ? "full" : "degraded";
+  // Barrel needs a real launch angle; never infer it from a defaulted 0.
+  const isBarrel = rawLa != null ? isCanonicalBarrel(ev, rawLa) : false;
 
   let contactClass: HRContactClass = "noiseContact";
 
-  // Strong-damage classes — further relaxed per user spec (2026-04-30):
-  // "anything over 95 EV is good", "what forms a good HR attempt = our
-  // minimum thresholds". Brady House (106/25°/385ft), Spencer Horwitz
-  // (100.9/36°/397ft), and Juan Soto (100.4/28°/332ft + 101.1/33°/375ft)
-  // all had clearly elite contact yet went unsignaled. Loosened distance
-  // floors on missedHrContact (340→320) and powerContact entry (92→90)
-  // so borderline-distance elite EV still classifies as HR-shaped damage.
-  if (ev >= 98 && la >= 22 && la <= 36 && dist >= 360) {
-    contactClass = "eliteHrContact";
-  } else if (ev >= 95 && la >= 20 && la <= 38 && dist >= 320) {
-    contactClass = "missedHrContact";
-  } else if (ev >= 93 && la >= 16 && la <= 42 && dist >= 300) {
-    contactClass = "hrShapedContact";
-  } else if (ev >= 95) {
-    // ── EV-only "minimum threshold" bucket per user spec (2026-04-30):
-    // a 95+ mph ball that missed barrel by launch angle alone (e.g. a
-    // 96 mph line drive at 12°, or a 100 mph air ball at 42°) is still
-    // a meaningful pre-HR signal even without barrel-class LA/distance.
-    contactClass = "solidContact";
-  } else if (ev >= 90) {
-    contactClass = "powerContact";
-  } else {
-    // ── New sub-95 EV pre-HR classes ──
-    const bsZ = context?.batSpeedZ ?? 0;
-    const profile = context?.hitterPowerProfileScore ?? 0;
-
-    // Dead popup: high LA, low EV, no distance, no power profile
-    const isDeadPopup =
-      la >= 45 && ev < 90 && (dist === 0 || dist < 250) && profile < 0.4;
-
-    if (isDeadPopup) {
-      contactClass = "deadPopup";
-    } else if (bsZ >= 1.28 && la >= 12 && la <= 45 && ev >= 80) {
-      // Bat-speed warning: elite swing speed + lifted-or-near-lifted contact
-      // even if EV not yet hard-hit. Caminero precursor.
-      contactClass = "batSpeedWarning";
-    } else if (la >= 18 && la <= 45 && ev >= 84 && (profile >= 0.45 || dist >= 320)) {
-      // Air-ball warning: useful loft + modest EV when supported by profile/distance
-      contactClass = "airBallWarning";
+  if (hasFullData) {
+    const la = rawLa as number;
+    const dist = rawDist as number;
+    // ── Full-data classification — thresholds UNCHANGED from prior behavior
+    // (2026-04-30 spec) so regression fixtures with complete Statcast stay
+    // byte-identical. Brady House (106/25°/385ft), Spencer Horwitz
+    // (100.9/36°/397ft), Juan Soto (100.4/28°/332ft) are the relaxed-floor
+    // cases this ladder was tuned to catch.
+    if (ev >= 98 && la >= 22 && la <= 36 && dist >= 360) {
+      contactClass = "eliteHrContact";
+    } else if (ev >= 95 && la >= 20 && la <= 38 && dist >= 320) {
+      contactClass = "missedHrContact";
+    } else if (ev >= 93 && la >= 16 && la <= 42 && dist >= 300) {
+      contactClass = "hrShapedContact";
+    } else if (ev >= 95) {
+      contactClass = "solidContact";
+    } else if (ev >= 90) {
+      contactClass = "powerContact";
+    } else {
+      // ── New sub-95 EV pre-HR classes ──
+      const bsZ = context?.batSpeedZ ?? 0;
+      const profile = context?.hitterPowerProfileScore ?? 0;
+      const isDeadPopup =
+        la >= 45 && ev < 90 && (dist === 0 || dist < 250) && profile < 0.4;
+      if (isDeadPopup) {
+        contactClass = "deadPopup";
+      } else if (bsZ >= 1.28 && la >= 12 && la <= 45 && ev >= 80) {
+        contactClass = "batSpeedWarning";
+      } else if (la >= 18 && la <= 45 && ev >= 84 && (profile >= 0.45 || dist >= 320)) {
+        contactClass = "airBallWarning";
+      }
     }
+  } else {
+    // ── DEGRADED: EV present but LA and/or distance missing. The distance/LA-
+    // confirmed HR-shaped classes (hrShaped/missed/elite) REQUIRE full data,
+    // so we cap at the EV-only buckets. Missing data reduces confidence; it
+    // never fabricates an elite tag NOR a deadPopup tag. A genuinely soft EV
+    // is still real negative evidence even when LA/distance are absent.
+    if (ev >= 95) contactClass = "solidContact";
+    else if (ev >= 90) contactClass = "powerContact";
+    else contactClass = "noiseContact";
   }
 
   return {
     contactClass,
     exitVelocity: ev,
-    launchAngle: la,
-    distance: dist,
+    launchAngle: rawLa ?? null,
+    distance: rawDist ?? null,
     outcome: ab.outcome ?? "out",
     isBarrel,
     inning: ab.inning ?? null,
     half: ab.half ?? null,
+    dataQuality,
+    missingFields,
   };
 }
 
@@ -294,31 +337,37 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
   const warningContactCount = airBallWarningCount + batSpeedWarningCount;
 
   const evValues = classified
-    .filter(c => c.exitVelocity > 0)
-    .map(c => c.exitVelocity);
+    .map(c => c.exitVelocity)
+    .filter((v): v is number => v != null && v > 0);
   const laValues = classified
-    .filter(c => c.launchAngle !== 0 || c.exitVelocity > 0)
-    .map(c => c.launchAngle);
+    .filter(c => c.launchAngle != null && (c.launchAngle !== 0 || (c.exitVelocity ?? 0) > 0))
+    .map(c => c.launchAngle as number);
 
   const avgEV = evValues.length > 0 ? evValues.reduce((s, v) => s + v, 0) / evValues.length : null;
   const maxEV = evValues.length > 0 ? Math.max(...evValues) : null;
   const avgLA = laValues.length > 0 ? laValues.reduce((s, v) => s + v, 0) / laValues.length : null;
 
-  const qualifiedEVs = hrShapedEvents.map(e => e.exitVelocity);
+  const qualifiedEVs = hrShapedEvents
+    .map(e => e.exitVelocity)
+    .filter((v): v is number => v != null);
   const qualifiedEVMean = qualifiedEVs.length > 0
     ? qualifiedEVs.reduce((s, v) => s + v, 0) / qualifiedEVs.length
     : null;
 
-  const allDistances = classified.filter(c => c.distance > 0).map(c => c.distance);
+  const allDistances = classified
+    .map(c => c.distance)
+    .filter((v): v is number => v != null && v > 0);
   const maxDistance = allDistances.length > 0 ? Math.max(...allDistances) : null;
 
   const barrels = classified.filter(c => c.isBarrel).length;
-  const hardHits = classified.filter(c => c.exitVelocity >= EV_HARD_HIT_THRESHOLD).length;
+  const hardHits = classified.filter(c => c.exitVelocity != null && c.exitVelocity >= EV_HARD_HIT_THRESHOLD).length;
 
   const deepFlyouts = classified.filter(c =>
     (c.outcome === "out" || c.outcome === "other") &&
-    ((c.distance >= DEEP_FLY_DISTANCE && c.launchAngle >= 20) ||
-     (c.distance === 0 && c.launchAngle >= 20 && c.exitVelocity >= 95))
+    ((c.distance != null && c.distance >= DEEP_FLY_DISTANCE && (c.launchAngle ?? 0) >= 20) ||
+     // Distance unknown but EV/LA say it was a deep-fly candidate (was the old
+     // `distance === 0` sentinel; distance is now null when absent).
+     (c.distance == null && (c.launchAngle ?? 0) >= 20 && (c.exitVelocity ?? 0) >= 95))
   ).length;
 
   // ── Existing damage-shape scoring (unchanged) ──
@@ -473,8 +522,14 @@ export function buildHRSignal(input: MLBPropInput): HRBuildResult {
 
   // Air-ball danger: average air-ball intent over warning + power air contacts
   const airIntentSamples = classified
-    .filter(c => c.launchAngle >= 18 && c.launchAngle <= 50 && c.exitVelocity >= 80)
-    .map(c => scoreAirBallIntent(c, hitterProfile.score));
+    .filter(c => c.launchAngle != null && c.launchAngle >= 18 && c.launchAngle <= 50 && c.exitVelocity != null && c.exitVelocity >= 80)
+    .map(c => scoreAirBallIntent(
+      // ev/la guaranteed non-null by the filter; scoreAirBallIntent already
+      // treats distance 0 as "no distance", so an absent distance maps to 0
+      // there (its own unknown-distance sentinel) — not a fabricated value.
+      { exitVelocity: c.exitVelocity as number, launchAngle: c.launchAngle as number, distance: c.distance ?? 0 },
+      hitterProfile.score,
+    ));
   const airDangerScore = airIntentSamples.length > 0
     ? airIntentSamples.reduce((s, v) => s + v, 0) / airIntentSamples.length
     : 0;
