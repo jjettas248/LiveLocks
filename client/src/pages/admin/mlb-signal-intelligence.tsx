@@ -57,6 +57,21 @@ interface IntelligencePayload {
     readyEffectiveness: number | null;
     buildMaturation: number | null;
     sampleSizeWarning: string | null;
+    // FIRE-only official record vs shadow/watch (2026-06). Optional so older
+    // server payloads still type-check.
+    officialFireRecord?: {
+      fireCalls: number;
+      fireCashed: number;
+      fireMissed: number;
+      fireHitRate: number | null;
+    };
+    shadowWatchIntelligence?: {
+      readyReached: number;
+      watchPromotedToFire: number;
+      readyOnly: number;
+      watchCashedWithoutFire: number;
+      readyOnlyMissed: number;
+    };
   };
   drivers: {
     observedDrivers: number;
@@ -291,6 +306,31 @@ export default function MlbSignalIntelligencePage() {
               <Badge key={s} variant="outline" className="mr-1 mb-1" data-testid={`badge-stage-${s}`}>{s}: {n}</Badge>
             ))}
           </div>
+          {/* FIRE-only official record vs shadow/watch (2026-06) — only FIRE
+              signals count toward the official ledger; READY/BUILD/WATCH that
+              resolve are shadow intelligence, never official W/L. */}
+          {hr.officialFireRecord && (
+            <div className="space-y-2" data-testid="block-hr-official-shadow">
+              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-500">Official record (FIRE only)</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <StatCard label="FIRE calls" value={hr.officialFireRecord.fireCalls} sub="resolved FIRE signals" />
+                <StatCard label="FIRE cashed" value={hr.officialFireRecord.fireCashed} />
+                <StatCard label="FIRE missed" value={hr.officialFireRecord.fireMissed} />
+                <StatCard label="FIRE hit rate" value={pct(hr.officialFireRecord.fireHitRate)} sub="official W/L" />
+              </div>
+              {hr.shadowWatchIntelligence && (
+                <>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-amber-500 pt-1">Shadow / watch (not official)</div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <StatCard label="READY reached" value={hr.shadowWatchIntelligence.readyReached} />
+                    <StatCard label="READY → FIRE" value={hr.shadowWatchIntelligence.watchPromotedToFire} sub="promoted" />
+                    <StatCard label="READY-only" value={hr.shadowWatchIntelligence.readyOnly} sub="never fired" />
+                    <StatCard label="Watch cashed (no FIRE)" value={hr.shadowWatchIntelligence.watchCashedWithoutFire} sub="shadow win, not official" />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           {hr.sampleSizeWarning && (
             <div className="text-xs text-amber-500 flex items-center gap-1">
               <AlertCircle className="h-3 w-3" /> {hr.sampleSizeWarning}
