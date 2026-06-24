@@ -1,5 +1,6 @@
 import type { HRAlertInput, HRAlertResult } from "./evaluateHRAlert";
 import { evaluateHRAlert } from "./evaluateHRAlert";
+import type { BatterEvidenceQuality } from "./hrConversionModel";
 import type { HrRadarLifecycleEvent, HrRadarLifecycleState } from "./hrRadarStateMachine";
 
 export type DynamicHRState = "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
@@ -125,6 +126,11 @@ export interface HRAlertSnapshot {
   hrConversionProbabilityRaw: number;
   hrConversionProbabilityCalibrated: number;
   peakConversionProbability: number;
+  // HR occurrence contract (2026-06) — evidence-rail-capped P(HR>=1) and the
+  // batter-side contact-evidence class. Promotion reads these; both are
+  // independent of sportsbook odds/edge/line.
+  hrOccurrenceProbability: number;
+  batterEvidenceQuality: BatterEvidenceQuality;
   /** @deprecated Use peakConversionProbability for probabilities or peakReadinessScore for readiness. */
   peakScore: number;
 
@@ -527,6 +533,29 @@ export function recomputeHrAlertState(
     );
   }
 
+  // HR occurrence contract (2026-06) — evidence-rail-capped P(HR>=1) and the
+  // batter-side evidence class. HR Radar promotion reads these; both are
+  // independent of sportsbook odds/edge/line.
+  const batterEvidenceQuality: BatterEvidenceQuality = convResult?.occurrenceEvidenceQuality ?? "none";
+  const hrOccurrenceProbability = convResult?.hrOccurrenceProbability ?? effectiveCalibrated;
+  console.log(
+    `[HR_OCCURRENCE_PROB] player=${input.playerName} gameId=${input.gameId} ` +
+    `projection=${rawProb.toFixed(3)} remainingPA=${remainingPA.toFixed(1)} ` +
+    `rawOccurrenceProb=${rawProb.toFixed(3)} calibratedOccurrenceProb=${hrOccurrenceProbability.toFixed(3)} ` +
+    `evidence=${batterEvidenceQuality} drivers=${(positiveDrivers ?? []).slice(0, 3).join("|") || "none"} ` +
+    `source=hr_occurrence_only`,
+  );
+  if (convResult?.calibrationRailBlocked) {
+    console.log(
+      `[HR_CONV_CAL_RAIL_BLOCKED] player=${input.playerName} gameId=${input.gameId} ` +
+      `convRaw=${(convResult.hrConversionProbability ?? 0).toFixed(3)} ` +
+      `oldConvCal=${(convResult.preCapCalibratedProbability ?? 0).toFixed(3)} ` +
+      `newConvCal=${hrOccurrenceProbability.toFixed(3)} inning=${input.inning} ` +
+      `pitchCount=${input.pitchCount ?? "n/a"} pitVuln=${Math.round(pitcherVuln)} ` +
+      `evidenceQuality=${batterEvidenceQuality}`,
+    );
+  }
+
   const snapshot: HRAlertSnapshot = {
     isInitialized: true,
     currentState: newState,
@@ -544,6 +573,8 @@ export function recomputeHrAlertState(
     peakReadinessScore: prev.peakReadinessScore,
     hrConversionProbabilityRaw: rawProb,
     hrConversionProbabilityCalibrated: effectiveCalibrated,
+    hrOccurrenceProbability,
+    batterEvidenceQuality,
     peakConversionProbability: prev.peakConversionProbability,
     peakScore: prev.peakConversionProbability, // deprecated alias
     remainingPAExpectation: remainingPA,
@@ -601,30 +632,57 @@ export function deriveCanonicalPromotionIntent(
   const stage = snap.canonicalStage;
   const sustained = (snap.consecutivePromoteTicks ?? 0) >= PROMOTE_SUSTAIN_TICKS;
 
+  // HR occurrence engine (2026-06) — READY/FIRE require FRESH batter-side
+  // contact evidence. Pitcher vulnerability is supporting context, never the
+  // sole driver, and in innings 1–3 pitcher-fade alone cannot promote past
+  // BUILD/WATCH. `batterEvidenceQuality` comes from the conversion model's
+  // contact-evidence classifier (no sportsbook odds/edge involved).
+  const inning = snap.currentInning > 0 ? snap.currentInning : (snap.detectedInning ?? 0);
+  const hasBatterEvidence = snap.batterEvidenceQuality !== "none";
+  const earlyInning = inning > 0 && inning <= 3;
+
   // Cool-off / closed — let the FSM own decay + terminal stickiness.
   if (state === "COOLED_OFF" || state === "CLOSED") {
     return { event: null, floor: null, reason: `no_promote_from_${state.toLowerCase()}` };
   }
 
-  // Pitcher fade — wire the previously-dead PITCHER_FADE event. A fading /
-  // fatigued pitcher (vuln >= floor) while the batter is already building is a
-  // ready-grade promotion regardless of contact. Gated by sustain.
+  // Pitcher fade — a fading/fatigued pitcher (vuln >= floor) is SUPPORTING
+  // context. It may floor to READY only when paired with fresh batter-side
+  // evidence, and never as the sole driver in innings 1–3. Otherwise it falls
+  // through to the build/watch floors below (it does not vanish).
   if (
     snap.pitcherHrVulnerability >= FADE_VULN_THRESHOLD &&
     (state === "PREPARE" || state === "BET_NOW")
   ) {
     if (!sustained) return { event: null, floor: null, reason: "pitcher_fade_awaiting_sustain" };
-    return {
-      event: "PITCHER_FADE",
-      floor: "ready",
-      reason: `pitcher_fade_vuln_${Math.round(snap.pitcherHrVulnerability)}`,
-    };
+    if (hasBatterEvidence && !earlyInning) {
+      return {
+        event: "PITCHER_FADE",
+        floor: "ready",
+        reason: `pitcher_fade_vuln_${Math.round(snap.pitcherHrVulnerability)}`,
+      };
+    }
+    console.log(
+      `[HR_PITCHER_FADE_ONLY_BLOCKED] pitVuln=${Math.round(snap.pitcherHrVulnerability)} ` +
+      `inning=${inning} evidence=${snap.batterEvidenceQuality} state=${state} ` +
+      `reason=${!hasBatterEvidence ? "no_batter_evidence" : "early_inning_1_3"} — ` +
+      `pitcher-fade not floored to READY (capped at BUILD)`,
+    );
+    // fall through to the build/watch floors below.
   }
 
-  // Top conviction + attack window → ready (fire is gated separately in the
-  // user-stage layer). Requires sustain to avoid single-tick flapping.
+  // Top conviction + attack window → ready, but ONLY with fresh batter-side
+  // evidence (occurrence engine). A BET_NOW driven by pitcher context alone
+  // (no batter contact) caps at BUILD, never READY/FIRE.
   if (state === "BET_NOW" && stage === "attack") {
     if (!sustained) return { event: null, floor: null, reason: "bet_now_attack_awaiting_sustain" };
+    if (!hasBatterEvidence) {
+      console.log(
+        `[HR_PITCHER_FADE_ONLY_BLOCKED] bet_now_attack without batter evidence — ` +
+        `capped at BUILD inning=${inning} pitVuln=${Math.round(snap.pitcherHrVulnerability)} evidence=none`,
+      );
+      return { event: "PROMOTE", promoteTo: "build", floor: "build", reason: "bet_now_attack_no_batter_evidence_capped_build" };
+    }
     return { event: "PROMOTE", promoteTo: "ready", floor: "ready", reason: "bet_now_attack_sustained" };
   }
 
@@ -672,6 +730,8 @@ export function getHrAlertState(gameId: string, playerId: string): HRAlertSnapsh
       peakReadinessScore: prev.peakReadinessScore,
       hrConversionProbabilityRaw: 0,
       hrConversionProbabilityCalibrated: 0,
+      hrOccurrenceProbability: 0,
+      batterEvidenceQuality: "none",
       peakConversionProbability: prev.peakConversionProbability,
       peakScore: prev.peakConversionProbability,
       remainingPAExpectation: 0,

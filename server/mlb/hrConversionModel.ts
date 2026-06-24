@@ -104,6 +104,14 @@ export interface HRConversionInput {
 export interface HRConversionResult {
   hrConversionProbability: number;
   calibratedProbability: number;
+  // HR occurrence contract (2026-06) — P(HR >= 1), post evidence-rail cap.
+  // Equals calibratedProbability; named explicitly so HR Radar consumers read
+  // an unambiguous occurrence probability (never a side-dependent value).
+  hrOccurrenceProbability: number;
+  occurrenceEvidenceQuality: BatterEvidenceQuality;
+  occurrenceCeiling: number;
+  preCapCalibratedProbability: number;
+  calibrationRailBlocked: boolean;
   perPAHRRate: number;
   expectedRemainingPA: number;
   liveContactMultiplier: number;
@@ -234,6 +242,41 @@ function calibrate(rawProb: number): { value: number; source: "static_table" | "
     bucketLabel: null,
     samples: 0,
   };
+}
+
+// ── Batter-side evidence quality (2026-06) ──────────────────────────────────
+// Classifies how much FRESH in-game batter contact evidence exists, used to
+// rail the calibrated HR-occurrence probability (and, upstream, to gate
+// promotion). Pure; tolerant of partial/absent factors. NOT a function of any
+// sportsbook line/odds/edge — purely baseball contact evidence.
+export type BatterEvidenceQuality = "elite" | "fresh" | "none";
+
+export const OCCURRENCE_CEILING: Record<BatterEvidenceQuality, number> = {
+  elite: 0.60,
+  fresh: 0.45,
+  none: 0.35,
+};
+
+export function classifyBatterEvidenceQuality(
+  factors: HRBuildResult["factors"] | null | undefined,
+): BatterEvidenceQuality {
+  if (!factors) return "none";
+  const hrShaped = factors.hrShapedCount ?? 0;
+  const missedHr = factors.missedHrCount ?? 0;   // near-HR (barrel that stayed in park)
+  const eliteHr = factors.eliteHrCount ?? 0;
+  const evMean = factors.qualifiedEVMean ?? 0;
+  const maxDist = factors.maxDistance ?? 0;
+  // Elite: a near-HR / elite-shaped contact, multiple HR-shaped balls, a 390ft+
+  // blast, or a sustained 104+ EV mean — genuine top-end power evidence.
+  if (eliteHr >= 1 || missedHr >= 1 || hrShaped >= 2 || maxDist >= 390 || evMean >= 104) {
+    return "elite";
+  }
+  // Fresh: at least one HR-shaped ball, a 350ft+ drive, or solid 97+ EV mean.
+  if (hrShaped >= 1 || maxDist >= 350 || evMean >= 97) {
+    return "fresh";
+  }
+  // None: no qualified hard contact this game (pitcher context cannot rail HR%).
+  return "none";
 }
 
 function computeLiveContactMultiplier(factors: HRBuildResult["factors"]): number {
@@ -1026,13 +1069,36 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
 
   const rawProbability = Math.max(0, Math.min(1, 1 - pZeroHR));
   const cal = calibrate(rawProbability);
-  const calibratedProbability = cal.value;
+  const preCapCalibrated = cal.value;
+
+  // ── HR occurrence calibration rail (2026-06) ──────────────────────────────
+  // The empirical calibration buckets (loaded from analytics) can bind ABOVE
+  // the static table and, on thin samples, map a raw ~0.30 to a calibrated
+  // ~0.95 — an unrealistic HR-occurrence probability with no batter-side
+  // evidence. Cap the calibrated occurrence probability by the QUALITY of the
+  // batter's in-game contact evidence so pitcher context alone can't rail it:
+  //   • no fresh batter-side contact → <= 0.35
+  //   • fresh (some qualified contact) → <= 0.45
+  //   • elite (near-HR / barrel / 390ft+ / multi HR-shaped) → <= 0.60
+  // Elite barrel/near-HR may exceed the lower caps; nothing reaches 0.95.
+  const evidenceQuality = classifyBatterEvidenceQuality(input.factors);
+  const occurrenceCeiling = OCCURRENCE_CEILING[evidenceQuality];
+  const calibratedProbability = Math.min(preCapCalibrated, occurrenceCeiling);
+  const calibrationRailBlocked = calibratedProbability < preCapCalibrated - 1e-9;
 
   const pitcherDeteriorationState = describePitcherDeteriorationState(input);
 
   return {
     hrConversionProbability: Math.round(rawProbability * 10000) / 10000,
     calibratedProbability: Math.round(calibratedProbability * 10000) / 10000,
+    // HR occurrence contract (2026-06) — P(HR >= 1) at the fixed 0.5 threshold,
+    // post evidence-rail cap. This is the ONLY probability HR Radar promotion
+    // should use; it is independent of sportsbook odds/edge/line.
+    hrOccurrenceProbability: Math.round(calibratedProbability * 10000) / 10000,
+    occurrenceEvidenceQuality: evidenceQuality,
+    occurrenceCeiling,
+    preCapCalibratedProbability: Math.round(preCapCalibrated * 10000) / 10000,
+    calibrationRailBlocked,
     perPAHRRate: Math.round(finalPerPARate * 10000) / 10000,
     expectedRemainingPA: Math.round(expectedPA * 100) / 100,
     liveContactMultiplier: Math.round(liveContactMultiplier * 100) / 100,
