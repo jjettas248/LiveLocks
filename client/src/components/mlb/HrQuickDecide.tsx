@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
-import { Check, X, Zap, Flame, ListFilter } from "lucide-react";
+import { Check, X, Zap, Flame, ListFilter, Eye, Trophy, CircleSlash } from "lucide-react";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { type HrRadarLadderEntry, type HrRadarLadderResponse } from "@/components/mlb/HrRadarLadder";
 import { hrEntryCurrentScore10, hrEntryHrChancePct, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
@@ -271,6 +271,90 @@ function QuickCard({
   );
 }
 
+// ── WATCHLIST row — compact, read-only, explicitly "not an official call" ──
+// Combines the old Track / Almost / Ready stages. Never shows Take/Pass; these
+// are forming conditions to monitor, not actionable picks.
+function WatchRow({ entry }: { entry: HrRadarLadderEntry }) {
+  const hrChancePct = getHrChancePct(entry);
+  const fallback = getFallbackScore10(entry);
+  const primaryReason =
+    entry.displayPrimaryReason ?? entry.headlineReason ?? entry.stageDescription ?? null;
+  const inning = formatInning(entry.currentInning ?? entry.detectedInning, entry.detectedHalf);
+  const pa = formatPA(entry.remainingPAExpectation);
+  const timing = [pa, inning].filter(Boolean).join(" · ");
+  return (
+    <div
+      className="flex items-start gap-3 rounded-lg border border-border/40 bg-card/60 px-3 py-2.5"
+      data-testid={`watchlist-row-${entry.playerId}`}
+    >
+      <Eye className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-semibold text-foreground truncate" data-testid={`text-watch-player-${entry.playerId}`}>
+            {entry.playerName}
+          </span>
+          <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">{entry.team}</span>
+        </div>
+        {primaryReason && (
+          <p className="text-xs text-muted-foreground leading-snug truncate" data-testid={`text-watch-reason-${entry.playerId}`}>
+            {primaryReason}
+          </p>
+        )}
+        {timing && <p className="text-[10px] text-muted-foreground/70 mt-0.5">{timing}</p>}
+      </div>
+      {(hrChancePct != null || fallback != null) && (
+        <span className="text-sm font-bold tabular-nums text-muted-foreground shrink-0" data-testid={`text-watch-metric-${entry.playerId}`}>
+          {hrChancePct != null ? `${hrChancePct}%` : fallback!.toFixed(1)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Official miss outcomes (FIRE-only record). Non-official resolutions
+// (uncalled_hr / late_signal / expired / early-window) are NOT shown here.
+function isOfficialMiss(entry: HrRadarLadderEntry): boolean {
+  const o = String(entry.outcome ?? entry.outcomeStatus ?? "").toLowerCase();
+  return o === "called_miss" || o === "miss" || o === "missed";
+}
+
+// ── RESULTS row — resolved official FIRE calls only (Cashed / Missed) ──────
+function ResultRow({ entry, kind }: { entry: HrRadarLadderEntry; kind: "cashed" | "missed" }) {
+  const cashed = kind === "cashed";
+  const Icon = cashed ? Trophy : CircleSlash;
+  const detected = formatInning(entry.detectedInning, entry.detectedHalf);
+  const hit = formatInning(entry.hitInning, entry.hitHalf);
+  const arc = cashed && detected && hit ? `Called ${detected} → Hit ${hit}` : detected ? `Called ${detected}` : "";
+  return (
+    <div
+      className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${cashed ? "border-emerald-500/30 bg-emerald-500/5" : "border-zinc-600/30 bg-zinc-500/5"}`}
+      data-testid={`result-row-${entry.playerId}`}
+    >
+      <Icon className={`w-4 h-4 shrink-0 ${cashed ? "text-emerald-400" : "text-zinc-400"}`} />
+      <div className="min-w-0 flex-1">
+        <span className="text-sm font-semibold text-foreground truncate">{entry.playerName}</span>
+        {arc && <p className="text-[10px] text-muted-foreground/80 leading-snug">{arc}</p>}
+      </div>
+      <span
+        className={`text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full shrink-0 ${cashed ? "bg-emerald-500/15 text-emerald-400" : "bg-zinc-600/20 text-zinc-300"}`}
+        data-testid={`badge-result-${kind}-${entry.playerId}`}
+      >
+        {cashed ? "Cashed" : "Missed"}
+      </span>
+    </div>
+  );
+}
+
+function SectionHeader({ icon: Icon, title, subtitle, tone }: { icon: any; title: string; subtitle?: string; tone: string }) {
+  return (
+    <div className="flex items-center gap-1.5 px-1">
+      <Icon className={`w-3.5 h-3.5 ${tone}`} />
+      <span className={`text-xs font-bold uppercase tracking-wide ${tone}`}>{title}</span>
+      {subtitle && <span className="text-[10px] text-muted-foreground normal-case font-normal">· {subtitle}</span>}
+    </div>
+  );
+}
+
 export function HrQuickDecide({ onAddToSlip, onSwitchToLadder }: HrQuickDecideProps) {
   const { data, isLoading } = useQuery<HrRadarLadderResponse>({
     queryKey: ["/api/mlb/hr-radar/ladder"],
@@ -297,22 +381,38 @@ export function HrQuickDecide({ onAddToSlip, onSwitchToLadder }: HrQuickDecidePr
     setAccepted(readSet(acceptKey(sessionDate)));
   }
 
+  // ── Three user-facing buckets (Quick Decide simplification, 2026-06) ──────
+  //  LIVE CALLS = FIRE only (old attackNow). Official, actionable, rare.
+  //  WATCHLIST  = old Ready + Building + Watch combined. NOT an official call.
+  //  RESULTS    = resolved official FIRE calls only (Cashed / official Missed).
   const attackNow = data?.sections?.attackNow ?? [];
   const ready = data?.sections?.ready ?? [];
   const building = data?.sections?.building ?? [];
   const watch = data?.sections?.watch ?? [];
+  const cashed = data?.sections?.cashed ?? [];
+  const dead = data?.sections?.dead ?? [];
 
-  const undecidedFire = attackNow.filter((e) => {
+  // LIVE CALLS — FIRE rows still awaiting the user's decision.
+  const liveCalls = attackNow.filter((e) => {
     const k = entryKey(e.playerId, e.gameId);
     return !dismissed.has(k) && !accepted.has(k);
   });
-  const undecidedReady = ready.filter((e) => {
-    const k = entryKey(e.playerId, e.gameId);
-    return !dismissed.has(k) && !accepted.has(k);
+
+  // WATCHLIST — Ready + Building + Watch, sorted by HR chance, then conviction,
+  // then expected remaining PA. All server-stamped values; formatted only.
+  const watchlist = [...ready, ...building, ...watch].sort((a, b) => {
+    const hc = (getHrChancePct(b) ?? -1) - (getHrChancePct(a) ?? -1);
+    if (hc !== 0) return hc;
+    const conv = (b.currentReadinessScore ?? -1) - (a.currentReadinessScore ?? -1);
+    if (conv !== 0) return conv;
+    return (b.remainingPAExpectation ?? -1) - (a.remainingPAExpectation ?? -1);
   });
 
-  const totalUndecided = undecidedFire.length + undecidedReady.length;
-  const buildingCount = building.length + watch.length;
+  // RESULTS — official FIRE outcomes only. cashed = called_hit (FIRE-only by
+  // the server contract); missed = official called_miss. Non-official
+  // resolutions (uncalled_hr / late_signal / expired / early-window) excluded.
+  const resultsMissed = dead.filter(isOfficialMiss);
+  const hasResults = cashed.length > 0 || resultsMissed.length > 0;
 
   const handleAccept = (entry: HrRadarLadderEntry) => {
     const k = entryKey(entry.playerId, entry.gameId);
@@ -349,39 +449,13 @@ export function HrQuickDecide({ onAddToSlip, onSwitchToLadder }: HrQuickDecidePr
     );
   }
 
-  if (totalUndecided === 0) {
-    return (
-      <div className="rounded-xl border border-border/40 bg-card/50 p-10 text-center space-y-3">
-        <div className="text-3xl text-emerald-400">✓</div>
-        <p className="font-semibold text-foreground">All caught up</p>
-        <p className="text-sm text-muted-foreground">
-          {buildingCount > 0
-            ? `${buildingCount} signal${buildingCount !== 1 ? "s" : ""} still building — check the Full Ladder`
-            : "No active HR signals right now"}
-        </p>
-        {onSwitchToLadder && (
-          <button
-            data-testid="button-switch-to-ladder"
-            onClick={onSwitchToLadder}
-            className="text-xs text-primary hover:text-primary/80 underline transition-colors mt-1"
-          >
-            View Full Ladder
-          </button>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-3">
-      {/* Header */}
+    <div className="space-y-5" data-testid="hr-quick-decide">
+      {/* Header — Full Ladder toggle always available */}
       <div className="flex items-center justify-between px-1">
-        <div className="flex items-center gap-1.5">
-          <Zap className="w-3.5 h-3.5 text-yellow-400" />
-          <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            {totalUndecided} signal{totalUndecided !== 1 ? "s" : ""} need a decision
-          </span>
-        </div>
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          Quick Decide
+        </span>
         {onSwitchToLadder && (
           <button
             data-testid="button-view-full-ladder"
@@ -393,25 +467,48 @@ export function HrQuickDecide({ onAddToSlip, onSwitchToLadder }: HrQuickDecidePr
         )}
       </div>
 
-      {/* FIRE signals first, then READY */}
-      {undecidedFire.map((entry) => (
-        <QuickCard
-          key={`${entry.playerId}|${entry.gameId}`}
-          entry={entry}
-          stage="fire"
-          onAccept={() => handleAccept(entry)}
-          onDismiss={() => handleDismiss(entry)}
-        />
-      ))}
-      {undecidedReady.map((entry) => (
-        <QuickCard
-          key={`${entry.playerId}|${entry.gameId}`}
-          entry={entry}
-          stage="ready"
-          onAccept={() => handleAccept(entry)}
-          onDismiss={() => handleDismiss(entry)}
-        />
-      ))}
+      {/* ── LIVE CALLS — FIRE only. Always shown (with a calm empty state). ── */}
+      <section className="space-y-2" data-testid="section-live-calls">
+        <SectionHeader icon={Flame} title="Live Calls" tone="text-red-400" />
+        {liveCalls.length > 0 ? (
+          liveCalls.map((entry) => (
+            <QuickCard
+              key={`${entry.playerId}|${entry.gameId}`}
+              entry={entry}
+              stage="fire"
+              onAccept={() => handleAccept(entry)}
+              onDismiss={() => handleDismiss(entry)}
+            />
+          ))
+        ) : (
+          <p className="text-sm text-muted-foreground px-1 py-2" data-testid="empty-live-calls">
+            No live HR calls right now.
+          </p>
+        )}
+      </section>
+
+      {/* ── WATCHLIST — Ready/Building/Watch. Hidden when empty. ── */}
+      {watchlist.length > 0 && (
+        <section className="space-y-2" data-testid="section-watchlist">
+          <SectionHeader icon={Eye} title="Watchlist" subtitle="Not an official call yet" tone="text-amber-400" />
+          {watchlist.map((entry) => (
+            <WatchRow key={`${entry.playerId}|${entry.gameId}`} entry={entry} />
+          ))}
+        </section>
+      )}
+
+      {/* ── RESULTS — resolved official FIRE calls. Hidden when empty. ── */}
+      {hasResults && (
+        <section className="space-y-2" data-testid="section-results">
+          <SectionHeader icon={Trophy} title="Results" tone="text-emerald-400" />
+          {cashed.map((entry) => (
+            <ResultRow key={`${entry.playerId}|${entry.gameId}`} entry={entry} kind="cashed" />
+          ))}
+          {resultsMissed.map((entry) => (
+            <ResultRow key={`${entry.playerId}|${entry.gameId}`} entry={entry} kind="missed" />
+          ))}
+        </section>
+      )}
     </div>
   );
 }
