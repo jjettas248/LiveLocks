@@ -34,9 +34,7 @@ import type {
 } from "./types";
 import { computeBatterPowerProfile, type BatterPowerInputs } from "./batterPowerProfile";
 import { computePitcherVulnerability } from "./pitcherVulnerability";
-import { computePitcherOrderSplit } from "./pitcherOrderSplit";
 import { computeMatchupFit } from "./matchupFit";
-import { round1 as round1Score } from "./scoreUtils";
 import { computeParkWeatherScore } from "./parkWeatherScore";
 import { computeLineupOpportunity } from "./lineupOpportunity";
 import { computeMarketTags } from "./marketTagger";
@@ -290,32 +288,13 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           bvpOps: bvp?.ops ?? null,
         });
 
-        // Pitcher batting-order-slot split (PITCHER perspective: allowed stats to
-        // the batter's slot). No live feed is wired yet — the scorer is additive
-        // and a no-op (available:false, direction "unknown") until a pitcher
-        // allowed-by-slot source is connected, so it never penalizes on absence.
-        const orderSplit = computePitcherOrderSplit({
-          slot: slot.battingOrderSlot,
-          atBats: null,
-          hr: null,
-          ops: null,
-          slg: null,
-          obp: null,
-          avg: null,
-          strikeouts: null,
-        });
-
-        // Combined pitcher vulnerability = handedness + order-split (when present).
-        // The order-split is matchup-specific, so it is weighted strongly; a
-        // suppressive slot pulls combined vulnerability down (and can block elite).
-        const pitcherVulnerabilityScore = (() => {
-          if (pitcherVuln.available && orderSplit.available) {
-            return round1Score((pitcherVuln.score10 * 2 + orderSplit.score10 * 3) / 5);
-          }
-          if (orderSplit.available) return orderSplit.score10;
-          return pitcherVuln.score10; // handedness (or neutral 5 when unavailable)
-        })();
-        const pitcherProfileAvailable = pitcherVuln.available || orderSplit.available;
+        // Pitcher vulnerability is handedness-based (HR/9 + ERA vs the batter's
+        // hand). There is NO pitcher allowed-by-batting-order-slot feed wired into
+        // the build, so we deliberately do not fabricate an order-split component —
+        // the matchup gate validates with handedness + BvP only. (Order-split is a
+        // tracked follow-up: wire a real feed first, then score it with tests.)
+        const pitcherVulnerabilityScore = pitcherVuln.score10;
+        const pitcherProfileAvailable = pitcherVuln.available;
 
         const lineupOpp = computeLineupOpportunity({
           battingOrderSlot: slot.battingOrderSlot,
@@ -336,7 +315,6 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         const drivers: PowerDriver[] = [
           ...batterPower.drivers,
           ...pitcherVuln.drivers,
-          ...orderSplit.drivers,
           ...matchupFit.drivers,
           ...parkWeather.drivers,
           ...lineupOpp.drivers,
@@ -365,7 +343,6 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             parkIsOnlyPositiveDriver: parkWeather.parkIsOnlyPositiveDriver,
             positiveDriverCount,
             bvpDirection: matchupFit.bvpDirection,
-            orderSplitDirection: orderSplit.direction,
           },
         );
         if (batterPower.available) batterWithPower++;
@@ -447,7 +424,6 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             batterPowerScore: batterPower.available ? batterPower.score10 : null,
             pitcherVulnerabilityScore: pitcherProfileAvailable ? pitcherVulnerabilityScore : null,
             pitcherHandednessScore: pitcherVuln.available ? pitcherVuln.score10 : null,
-            pitcherBattingOrderScore: orderSplit.available ? orderSplit.score10 : null,
             matchupFitScore: matchupFit.available ? matchupFit.score10 : null,
             parkWeatherScore: parkWeather.available ? parkWeather.score10 : null,
             lineupOpportunityScore: lineupOpp.available ? lineupOpp.score10 : null,
@@ -455,7 +431,6 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             bvpScore: matchupFit.bvpScore,
             bvpSampleSize: matchupFit.bvpAvailable ? matchupFit.bvpSampleSize : null,
             bvpDirection: matchupFit.bvpDirection,
-            pitcherOrderSplitDirection: orderSplit.direction,
             dataCoverageScore: scoring.dataCoverageScore,
             finalScoreCap: scoring.finalScoreCap,
             finalScoreBeforeCaps: scoring.finalScoreBeforeCaps,

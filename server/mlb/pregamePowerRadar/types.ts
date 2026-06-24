@@ -71,12 +71,10 @@ export interface PregameMarketEdgeContext {
 export interface PregamePowerDiagnostics {
   // Component sub-scores (all 0–10, null when not computed).
   batterPowerScore: number | null;
-  /** Combined pitcher matchup (handedness + batting-order split). */
+  /** Pitcher matchup vulnerability (handedness: HR/9 + ERA vs the batter's hand). */
   pitcherVulnerabilityScore: number | null;
-  /** Pitcher vulnerability from handedness (HR/9 + ERA vs batter hand) alone. */
+  /** Explicit handedness sub-score (== pitcherVulnerabilityScore today; documents provenance). */
   pitcherHandednessScore: number | null;
-  /** Pitcher vulnerability from the opposing batting-order slot split alone. */
-  pitcherBattingOrderScore: number | null;
   matchupFitScore: number | null;
   parkWeatherScore: number | null;
   lineupOpportunityScore: number | null;
@@ -88,8 +86,6 @@ export interface PregamePowerDiagnostics {
   /** BvP sample size (AB or PA, whichever is present). */
   bvpSampleSize: number | null;
   bvpDirection: "positive" | "neutral" | "negative";
-  /** Direction of the pitcher's batting-order-slot split (vs the batter's slot). */
-  pitcherOrderSplitDirection: "vulnerable" | "neutral" | "suppressive" | "unknown";
 
   /** 0–1 coverage of critical inputs (fixed formula in scoring.ts). */
   dataCoverageScore: number;

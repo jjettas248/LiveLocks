@@ -29,11 +29,9 @@ export interface ScoringFlags {
   bvpAvailable: boolean;
   parkIsOnlyPositiveDriver: boolean;
   positiveDriverCount: number;
-  // ── Matchup-quality context (optional; default neutral/unknown) ──────────────
+  // ── Matchup-quality context (optional; default neutral) ─────────────────────
   /** Direction of the batter-vs-pitcher history. */
   bvpDirection?: "positive" | "neutral" | "negative";
-  /** Direction of the pitcher's batting-order-slot split. */
-  orderSplitDirection?: "vulnerable" | "neutral" | "suppressive" | "unknown";
 }
 
 export interface ScoringResult {
@@ -56,10 +54,9 @@ export interface ScoringResult {
 export const PUBLISH_MIN_SCORE = 6.0;
 
 /**
- * Gated public tier. "Elite Setup" REQUIRES both batter power AND a positive
- * pitcher matchup — high batter power alone can only reach `power_watch`
- * ("Batter Power Only"). A negative BvP/order-split blocks the elite/nuclear/
- * clean-strong tiers.
+ * Gated public tier. "Elite Setup" REQUIRES both batter power AND positive
+ * pitcher evidence — high batter power alone can only reach `power_watch`
+ * ("Batter Power Only"). A negative BvP history blocks the elite/nuclear tiers.
  */
 export function classifyTier(
   score10: number,
@@ -150,17 +147,15 @@ export function composePregameScore(
   const cappedScore = Math.min(bvpAdjustedScore, cap);
 
   // ── Matchup penalty (visible) ───────────────────────────────────────────────
-  // A weak pitcher matchup or bearish BvP/order-split downgrades the score AND
-  // (via classifyTier) blocks elite labeling. This is the orientation fix: the
-  // pitcher's strength is never read as the hitter's opportunity.
+  // A weak pitcher matchup or bearish BvP history downgrades the score AND (via
+  // classifyTier) blocks elite labeling. This is the evidence gate: batter power
+  // is never enough on its own to mint an "Elite Setup".
   const bvpDirection = flags.bvpDirection ?? "neutral";
-  const orderSplitDirection = flags.orderSplitDirection ?? "unknown";
-  const negativeMatchup = bvpDirection === "negative" || orderSplitDirection === "suppressive";
+  const negativeMatchup = bvpDirection === "negative";
 
   let matchupPenalty = 0;
   if (c.pitcherVulnerabilityScore < 5) matchupPenalty += (5 - c.pitcherVulnerabilityScore) * 0.2;
   if (bvpDirection === "negative") matchupPenalty += 0.4;
-  if (orderSplitDirection === "suppressive") matchupPenalty += 0.8;
   matchupPenalty = round1(Math.min(matchupPenalty, 2.5));
 
   const score10 = round1(clamp10(cappedScore - matchupPenalty));
@@ -168,7 +163,6 @@ export function composePregameScore(
 
   // ── Downgrade tags (UI / debug) ─────────────────────────────────────────────
   const warningTags: string[] = [];
-  if (orderSplitDirection === "suppressive") warningTags.push("Pitcher Slot Suppression");
   if (bvpDirection === "negative") warningTags.push("Poor BvP History");
   if (matchupPenalty > 0 || negativeMatchup) warningTags.push("Matchup Downgrade");
   if (tier === "power_watch") warningTags.push("Batter Power Only");
