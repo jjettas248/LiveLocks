@@ -630,12 +630,21 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
     }
   }
 
-  // Gap 1: replace simple handedness ±% with full pitch mix × handedness model.
-  if (input.pitchMix && input.pitchMix.length > 0) {
+  // Gap 1: pitch mix × handedness model. HR occurrence engine (2026-06):
+  // handedness/platoon advantage requires BOTH the batter's bat side AND the
+  // pitcher's throwing hand to be known. If either is unknown, stay NEUTRAL
+  // (no matchup/platoon boost or penalty) so the deterministic HR score is not
+  // inflated by fake matchup confidence.
+  if (input.batterHand == null || input.pitcherThrows == null) {
+    console.log(
+      `[MLB_HANDEDNESS_UNKNOWN_NEUTRALIZED] pitcherThrows=${input.pitcherThrows ?? "null"} ` +
+      `batterHand=${input.batterHand ?? "null"} — handedness neutral (no platoon boost)`,
+    );
+  } else if (input.pitchMix && input.pitchMix.length > 0) {
     multiplier *= computePitchMixHandednessMultiplier(input.pitchMix, input.batterHand, input.pitcherThrows);
-  } else if (input.batterHand && input.pitcherThrows && input.batterHand !== input.pitcherThrows) {
+  } else if (input.batterHand !== input.pitcherThrows) {
     multiplier *= 1.06;
-  } else if (input.batterHand && input.pitcherThrows && input.batterHand === input.pitcherThrows) {
+  } else {
     multiplier *= 0.94;
   }
 
