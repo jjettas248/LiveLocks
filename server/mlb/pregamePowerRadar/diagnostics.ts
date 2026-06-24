@@ -17,9 +17,18 @@ export function batterPowerAvailable(signal: PregamePowerSignal): boolean {
  * non-suppressed, strong+ targets. Live games show only locked rows.
  */
 export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
+  // Tier gate: surface only strong+ setups and `power_watch` (Batter Power Only)
+  // candidates — never bare `watch`/`track`.
+  const tierEligible =
+    signal.tier === "power_watch" ||
+    signal.tier === "strong" ||
+    signal.tier === "elite" ||
+    signal.tier === "nuclear";
+
   const base =
     signal.lineupStatus === "confirmed" &&
     (signal.status === "active" || signal.status === "locked") &&
+    tierEligible &&
     signal.score10 >= 6.0 &&
     positiveDrivers(signal).length >= 2 &&
     signal.diagnostics.dataCoverageScore >= 0.6 &&

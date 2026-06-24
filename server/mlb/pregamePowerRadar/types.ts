@@ -15,8 +15,18 @@
 //     fabricated.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Pre-game tiers. `fire` is intentionally absent — it is reserved for the live radar. */
-export type PregamePowerTier = "track" | "watch" | "strong" | "elite" | "nuclear";
+/**
+ * Pre-game tiers. `fire` is intentionally absent — it is reserved for the live radar.
+ * `power_watch` ("Batter Power Only") is a hitter with elite raw power but a weak/negative
+ * pitcher matchup — surfaced as a watch candidate, never as an elite *setup*.
+ */
+export type PregamePowerTier =
+  | "track"
+  | "watch"
+  | "power_watch"
+  | "strong"
+  | "elite"
+  | "nuclear";
 
 /** Markets the radar can tag. Phase 1 surfaces only home_runs + total_bases. */
 export type PregamePowerMarket = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
@@ -61,16 +71,40 @@ export interface PregameMarketEdgeContext {
 export interface PregamePowerDiagnostics {
   // Component sub-scores (all 0–10, null when not computed).
   batterPowerScore: number | null;
+  /** Combined pitcher matchup (handedness + batting-order split). */
   pitcherVulnerabilityScore: number | null;
+  /** Pitcher vulnerability from handedness (HR/9 + ERA vs batter hand) alone. */
+  pitcherHandednessScore: number | null;
+  /** Pitcher vulnerability from the opposing batting-order slot split alone. */
+  pitcherBattingOrderScore: number | null;
   matchupFitScore: number | null;
   parkWeatherScore: number | null;
   lineupOpportunityScore: number | null;
   marketFitScore: number | null;
 
+  // ── Batter-vs-pitcher (BvP) context — low/medium confidence, never the model ──
+  /** Directional 0–10 BvP score (null when no usable sample). */
+  bvpScore: number | null;
+  /** BvP sample size (AB or PA, whichever is present). */
+  bvpSampleSize: number | null;
+  bvpDirection: "positive" | "neutral" | "negative";
+  /** Direction of the pitcher's batting-order-slot split (vs the batter's slot). */
+  pitcherOrderSplitDirection: "vulnerable" | "neutral" | "suppressive" | "unknown";
+
   /** 0–1 coverage of critical inputs (fixed formula in scoring.ts). */
   dataCoverageScore: number;
   /** When a coverage cap was applied, the cap value. */
   finalScoreCap?: number;
+  /** Weighted composite + BvP modifier, BEFORE coverage caps and matchup penalty. */
+  finalScoreBeforeCaps: number;
+  /** Final published score, AFTER coverage caps and the matchup penalty. */
+  finalScoreAfterCaps: number;
+  /** Visible matchup penalty applied for weak/negative pitcher matchup or BvP. */
+  matchupPenalty: number;
+  /** The gated public tier (mirrors signal.tier). */
+  publicTier: PregamePowerTier;
+  /** Human-readable downgrade tags ("Matchup Downgrade", "Poor BvP History", …). */
+  warningTags: string[];
 
   suppressed: boolean;
   suppressedReasons: string[];
