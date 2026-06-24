@@ -49,7 +49,7 @@ type DisplayContractInput = {
   isCoolingOff?: boolean;
   hasLiveABContext?: boolean | null;
   plateAppearancesTracked?: number | null;
-  officialSignalStage?: "ready" | "fire" | null;
+  officialSignalStage?: "fire" | null;
 };
 
 /**
@@ -147,9 +147,13 @@ function mapScoreIntoBand(
   return { actionPct, actionScore10: Math.round((actionPct / 10) * 10) / 10 };
 }
 
-/** Display-only record eligibility — mirrors reachedHrMaxWindow markers. */
+/**
+ * Display-only record eligibility. FIRE-ONLY (2026-06): only a committed FIRE
+ * call is part of the official HR record, so only FIRE rows are record-eligible.
+ * READY is high-watch context and is intentionally excluded.
+ */
 function deriveDisplayRecordEligible(entry: DisplayContractInput): boolean {
-  return entry.officialSignalStage === "ready" || entry.officialSignalStage === "fire";
+  return entry.officialSignalStage === "fire";
 }
 
 /** Humanize an existing reason string — strips obvious engine-token formatting. */

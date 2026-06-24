@@ -219,6 +219,53 @@ export function reachedHrMaxWindowPeak(args: {
   return peak === "bet_now" && conv >= HR_MAX_WINDOW_PEAK_CONV_FLOOR;
 }
 
+// ── FIRE-only official grading (2026-06 false-call reduction) ───────────────
+// `reachedHrMaxWindow` marks the gradeable Attack tier, but the alert-path
+// engine can surface a row as `officialAlert` (Attack) while the *dynamic*
+// conviction track never crossed into BET_NOW — that row is only user-stage
+// READY (high-watch), NOT a committed FIRE call. Per the FIRE-only record
+// contract, only a row that reached user-stage FIRE may resolve as a counted
+// `called_miss`. This predicate is the persisted-data FIRE proxy used at
+// game-final reconciliation.
+//
+// A row reached FIRE commitment when EITHER:
+//   1. it took the engine's fast-fire path (alertPath === FAST_PROMOTE_ELITE,
+//      the sole PATH_PROMOTES_TO_FIRE), OR
+//   2. its peak calibrated HR-conversion probability crossed the BET_NOW band
+//      (>= FIRE_BET_NOW_CONV_THRESHOLD). BET_NOW is the dynamic state machine's
+//      top conviction and the gate behind user-stage fire; its calibrated
+//      entry threshold is ~14%. peakConversionProbability is persisted on the
+//      alert's diagnosticsSnapshot.scoreContract, so this is read-only at grade
+//      time — no new write path, no schema change.
+//
+// Pure. Conservative on missing data: an unknown peak conversion (null) scores
+// 0 and only the FAST_PROMOTE_ELITE path can still qualify, so a row with no
+// FIRE evidence is never counted as an official miss.
+export const FIRE_BET_NOW_CONV_THRESHOLD = 0.14;
+
+export function reachedFireCommitment(args: {
+  alertPath?: string | null;
+  peakConversionProbability?: number | null;
+}): boolean {
+  if (norm(args.alertPath) === "fast_promote_elite") return true;
+  const conv = typeof args.peakConversionProbability === "number"
+    ? args.peakConversionProbability
+    : 0;
+  return conv >= FIRE_BET_NOW_CONV_THRESHOLD;
+}
+
+/**
+ * Read the peak calibrated HR-conversion probability persisted on an alert's
+ * `diagnosticsSnapshot.scoreContract` (written by createOrUpdateHrRadarAlert).
+ * Returns null when absent/non-finite so `reachedFireCommitment` treats it
+ * conservatively. Pure; tolerant of any snapshot shape.
+ */
+export function extractPeakConversionProbability(diagnosticsSnapshot: unknown): number | null {
+  const sc = (diagnosticsSnapshot as any)?.scoreContract;
+  const v = sc?.peakConversionProbability;
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
 /**
  * Phase 1 — given a still-active alert at game-final with NO home run, decide
  * the honest terminal grade. Only HR-Max-Window alerts become a counted

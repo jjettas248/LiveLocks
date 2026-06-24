@@ -510,6 +510,16 @@ export interface ReadyToFireContext {
 // to 3 so the model must hold top conviction longer before a card commits.
 const READY_TO_FIRE_SUSTAIN_TICKS = 3;
 
+// Fire Gate A — peak currency (2026-06 false-call reduction). FIRE must reflect
+// CURRENT contact conviction, never a stale peak the card is merely riding. The
+// current readiness must still sit within this fraction of the peak readiness;
+// a card whose readiness has since decayed below it (e.g. a weak later AB cooled
+// the bat) can no longer fire on the strength of the old peak. No-op when peak
+// readiness is unknown/zero (e.g. unit tests / fast-path rows) so the gate never
+// fabricates a block from missing data. The FAST_PROMOTE_ELITE fast-path (Rule
+// B) bypasses this — an elite barrel is itself the fresh, current evidence.
+const FIRE_PEAK_CURRENCY_RATIO = 0.85;
+
 /**
  * Promote a READY user stage to FIRE when the model holds sustained top
  * conviction. Pure & additive — never demotes and never runs on stages other
@@ -519,8 +529,10 @@ const READY_TO_FIRE_SUSTAIN_TICKS = 3;
  *   - dynamicState === "BET_NOW"            (the engine's top conviction)
  *   - canonicalStage === "attack"
  *   - consecutivePromoteTicks ≥ READY_TO_FIRE_SUSTAIN_TICKS  (held, not a blip)
- *   - ≥1 strong driver from STRONG_HR_DRIVER_SIGNALS  (a fallback-only 10/10
- *     can't fire — kept from the legacy guard)
+ *   - current readiness within FIRE_PEAK_CURRENCY_RATIO of peak  (Gate A — no
+ *     stale peak; no-op when peak readiness is unknown/zero)
+ *   - ≥1 CONTACT driver from CONTACT_HR_DRIVER_SIGNALS  (a fallback-only 10/10
+ *     or pitcher-collapse-only row can't fire — tangible bat evidence required)
  *
  * Secondary fast-path (engine conviction path):
  *   - alertPath ∈ PATH_PROMOTES_TO_FIRE AND signalState ∈ {live, actionable}
@@ -557,10 +569,17 @@ export function maybePromoteReadyToFire(
   const sustainTicks = Number(ctx.consecutivePromoteTicks ?? 0);
   const sustained = sustainTicks >= READY_TO_FIRE_SUSTAIN_TICKS;
 
+  // Fire Gate A — peak currency. Require the current readiness to still be near
+  // its peak so a decayed "old peak" card cannot fire. No-op when peak is
+  // unknown/zero (peakCurrency defaults to 1.0 = fresh) so missing readiness
+  // data never fabricates a block.
+  const peakCurrency = peak > 0 ? cur / peak : 1;
+  const peakIsCurrent = peakCurrency >= FIRE_PEAK_CURRENCY_RATIO;
+
   let rule: string | null = null;
   if (PATH_PROMOTES_TO_FIRE[path] && (sig === "live" || sig === "actionable")) {
     rule = "path_promotes_fire_live_or_actionable";
-  } else if (dyn === "BET_NOW" && canonical === "attack" && sustained && hasContactDriver) {
+  } else if (dyn === "BET_NOW" && canonical === "attack" && sustained && hasContactDriver && peakIsCurrent) {
     rule = "betnow_attack_sustained_contact_driver";
   }
 
@@ -583,6 +602,7 @@ export function maybePromoteReadyToFire(
         strongDrivers: matchedDrivers,
         currentReadinessScore: Number.isFinite(cur) ? cur : null,
         peakReadinessScore: Number.isFinite(peak) ? peak : null,
+        peakCurrency: Math.round(peakCurrency * 100) / 100,
         consecutivePromoteTicks: sustainTicks,
       }),
     );
@@ -598,6 +618,9 @@ export function maybePromoteReadyToFire(
     }
     if (!sustained) {
       reasons.push(`conviction_not_sustained (${sustainTicks}/${READY_TO_FIRE_SUSTAIN_TICKS})`);
+    }
+    if (!peakIsCurrent) {
+      reasons.push(`stale_peak (current/peak=${Math.round(peakCurrency * 100) / 100} < ${FIRE_PEAK_CURRENCY_RATIO})`);
     }
     if (!hasContactDriver) {
       reasons.push(hasStrongDriver ? "strong_driver_present_but_no_contact_driver" : "no_contact_hr_driver");
@@ -659,9 +682,12 @@ export interface UserStageEnrichment {
   displayCapBadgeLabel: string | null;
   /** One-sentence why-capped explanation for the modal/tooltip. */
   displayCapReason: string | null;
-  // Phase 8 — additive, in-memory grading shadow. Only set when userStage is
-  // ready or fire. Never replaces gradingStatus on the row.
-  officialSignalStage: "ready" | "fire" | null;
+  // Phase 8 — additive, in-memory grading shadow. FIRE-ONLY official record
+  // (2026-06): only a user-stage `fire` row is an official called HR signal.
+  // READY is high-watch context and is NOT an official call, so it must never
+  // be stamped here — otherwise READY false positives pollute the official HR
+  // record (cashed/missed). Never replaces gradingStatus on the row.
+  officialSignalStage: "fire" | null;
   officialSignalAt: string | null;       // ISO string
   officialSignalInning: number | null;
   // Phase 9 — write-once in-memory timestamps derived from the row. The
@@ -922,9 +948,12 @@ export function enrichWithUserStage(input: {
   const hrOccurredAt = isoOrNull(input.hitDetectedAt) ?? isoOrNull(input.resolvedAt);
   const hrOccurredInning = input.hitInning ?? null;
 
-  // Phase 8 — additive grading shadow (in-memory only).
-  const officialSignalStage: "ready" | "fire" | null =
-    userStage === "fire" ? "fire" : userStage === "ready" ? "ready" : null;
+  // Phase 8 — additive grading shadow (in-memory only). FIRE-ONLY (2026-06):
+  // READY no longer stamps an official stage. Only a committed FIRE call is an
+  // official HR signal, so only FIRE can later resolve as cashed/missed in the
+  // official record. READY remains visible as high-watch context elsewhere.
+  const officialSignalStage: "fire" | null =
+    userStage === "fire" ? "fire" : null;
   const officialSignalAt = officialSignalStage ? signalIso : null;
   const officialSignalInning = officialSignalStage ? signalInning : null;
 
@@ -984,7 +1013,7 @@ export interface ValidationLogPayload {
   newUserStage: HrRadarUserStage;
   score10: number | null;
   qualifyingSignals: HrQualifyingSignalType[];
-  officialSignalStage: "ready" | "fire" | null;
+  officialSignalStage: "fire" | null;
   officialSignalAt: string | null;
   hrOccurredAt: string | null;
   wouldCountAsCalledHitV1: boolean;

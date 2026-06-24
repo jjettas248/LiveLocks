@@ -24,11 +24,16 @@ npx tsx server/mlb/phase3bRegression.test.ts        # 21 invariants
 npx tsx server/mlb/shadowOutcomeWiring.test.ts      # 41 invariants
 npx tsx server/mlb/hrRadarLifecycleRepair.test.ts   # 34 invariants
 npx tsx server/mlb/hrRadarStateMachine.test.ts      # 5 invariants
-npx tsx server/mlb/hrRadarReadyToFire.test.ts       # 5 invariants
+npx tsx server/mlb/hrRadarReadyToFire.test.ts       # Ready→Fire promotion incl. peak-currency gate
+npx tsx server/mlb/hrRadarFireOnlyGrading.test.ts   # FIRE-only official grading (reachedFireCommitment)
 npx tsx server/mlb/nearHrContact.test.ts            # near-HR + "almost HR" detection
 npx tsx server/mlb/pullAndPregame.test.ts           # pull rate + pregame HR-form prior
 npx tsx server/mlb/ibbAndRecentForm.test.ts         # recent form streak + IBB feared-slugger prior
 npx tsx server/mlb/hrReviewClassifier.test.ts       # 30 invariants — pre-HR review bucket taxonomy
+npx tsx server/mlb/hrRadarFireOnlyGrading.test.ts   # FIRE-only official grading, both ledger sides
+npx tsx server/mlb/hrRadarFreshnessOverlay.test.ts  # canonical-store freshness overlay (re-bucket/surface/terminal-safety)
+npx tsx server/mlb/hrRadarRuntimeSmoke.test.ts      # read-only contract smoke (freshness + FIRE-only record)
+npx tsx server/analytics/hrRadarOfficialSplit.test.ts # analytics official(FIRE) vs shadow(watch) split
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.

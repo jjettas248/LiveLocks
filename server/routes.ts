@@ -434,6 +434,24 @@ export async function registerRoutes(
     }
   });
 
+  // HR Radar freshness diagnostic — READ-ONLY. Reports, per active live row,
+  // how the canonical-store overlay reconciles the DB ladder (which lags the
+  // engine by up to one reconcile interval) against the fresher in-memory
+  // canonical state. No DB writes, no overlay/grading/engine changes — it
+  // recomputes what the overlay WOULD do without mutating anything.
+  app.get("/api/admin/mlb-hr-radar-freshness", requireAdmin, async (_req, res) => {
+    try {
+      const { computeHrRadarFreshnessReport } = await import("./mlb/hrRadarFreshnessOverlay");
+      const { getActiveCanonicalHrRadarStates } = await import("./mlb/hrRadarCanonicalStore");
+      const ladder = await storage.getHrRadarLadder();
+      const states = getActiveCanonicalHrRadarStates();
+      return res.json(computeHrRadarFreshnessReport(ladder as any, states, Date.now()));
+    } catch (err: any) {
+      console.error("[admin/mlb-hr-radar-freshness]", err?.message ?? err);
+      return res.status(500).json({ error: "Failed to compute HR Radar freshness report" });
+    }
+  });
+
   // MLB Shadow Qualification panel — passive parallel-runtime evaluation of a
   // candidate threshold (batter_over signalScore >= 43) vs the live floor (46).
   // Shadow signals are recorded for analytics ONLY and never surface to users,
@@ -3891,6 +3909,32 @@ export async function registerRoutes(
         ? req.query.sessionDate
         : undefined;
       const ladder = await storage.getHrRadarLadder(sessionDate);
+
+      // ── Canonical-store freshness overlay (2026-06) ────────────────────
+      // The DB ladder is reconciled from the engine only every ~20s, while
+      // the in-memory canonical store updates every ~10s state poll. Overlay
+      // the fresher source onto the LIVE buckets so a just-promoted FIRE
+      // signal is never hidden behind the reconcile lag. Terminal buckets
+      // (cashed/dead) are DB-authoritative and untouched. Fully wrapped so a
+      // failure just serves the DB ladder as-is.
+      let overlayDiag: any = null;
+      try {
+        const overlayStart = Date.now();
+        const { applyCanonicalFreshnessOverlay } = await import("./mlb/hrRadarFreshnessOverlay");
+        const { getActiveCanonicalHrRadarStates } = await import("./mlb/hrRadarCanonicalStore");
+        const states = getActiveCanonicalHrRadarStates();
+        const r = applyCanonicalFreshnessOverlay(ladder as any, states, overlayStart);
+        overlayDiag = { ...r.diagnostics, overlayMs: Date.now() - overlayStart };
+        if (r.diagnostics.rebucketed > 0 || r.diagnostics.surfaced > 0 || r.diagnostics.scoreRefreshed > 0) {
+          console.log(`[HR_RADAR_LADDER_FRESHNESS] rebucketed=${r.diagnostics.rebucketed} surfaced=${r.diagnostics.surfaced} fireSurfaced=${r.diagnostics.fireSurfaced} scoreRefreshed=${r.diagnostics.scoreRefreshed} canonicalActive=${r.diagnostics.canonicalActive} maxLiveAgeMs=${r.diagnostics.maxLiveRowAgeMs ?? "n/a"} maxEvidenceAgeMs=${r.diagnostics.maxEvidenceAgeMs ?? "n/a"} overlayMs=${overlayDiag.overlayMs}`);
+        }
+        if (r.diagnostics.fireSurfaced > 0) {
+          console.log(`[HR_RADAR_STALE_SOURCE_BLOCKED] ${r.diagnostics.fireSurfaced} FIRE signal(s) surfaced live from the canonical store that the ~20s DB reconcile had not yet persisted — would otherwise have been hidden`);
+        }
+      } catch (e) {
+        console.warn(`[HR_RADAR_LADDER_FRESHNESS] overlay failed (serving DB ladder as-is): ${(e as Error).message}`);
+      }
+
       // HR Radar Final-Game Reconciliation — Phase 5.
       // Stamp `isGameFinal` on every LadderCard so the client can hide the
       // CTAs (Take it / Pass / ~X PA left / expires after T…) once a game
@@ -4023,6 +4067,9 @@ export async function registerRoutes(
         pregamePowerTargets: pregamePowerMatches,
         fallbackRowsGenerated: 0,
         source: rowsFound > 0 ? "engine" : (liveGamesFound > 0 ? "engine_no_candidates" : "no_live_games"),
+        // Canonical-store freshness overlay provenance (2026-06). `freshness`
+        // is null only if the overlay threw (DB ladder served as-is).
+        freshness: overlayDiag,
         generatedAt: new Date().toISOString(),
       };
       return res.json(ladder);
@@ -4172,7 +4219,40 @@ export async function registerRoutes(
       const live = enriched.filter((a: any) => a.status === "live");
       const hits = enriched.filter((a: any) => a.status === "hit");
       const misses = enriched.filter((a: any) => a.status === "miss");
-      return res.json({ board: enriched, live, hits, misses, total: enriched.length });
+
+      // ── Canonical-store freshness stamp (2026-06) ──────────────────────
+      // Board is a flat list (no re-bucketing), so we stamp each LIVE row with
+      // the fresher canonical age + score and expose how stale the DB row is.
+      // Same source as the ladder overlay; resolved rows are left untouched.
+      let boardFreshness: any = null;
+      try {
+        const { getCanonicalHrRadarState } = await import("./mlb/hrRadarCanonicalStore");
+        const nowMs = Date.now();
+        let stamped = 0;
+        let maxAge: number | null = null;
+        for (const row of live as any[]) {
+          const c = getCanonicalHrRadarState(row.gameId, row.playerId);
+          if (!c || !c.active || c.terminal) continue;
+          const ageMs = Math.max(0, nowMs - Date.parse(c.updatedAt));
+          const evidenceAgeMs = Math.max(0, nowMs - Date.parse(c.latestEvidenceAt));
+          row.freshSource = "canonical";
+          row.freshAgeMs = Number.isFinite(ageMs) ? ageMs : null;
+          row.freshEvidenceAgeMs = Number.isFinite(evidenceAgeMs) ? evidenceAgeMs : null;
+          row.canonicalSection = c.section;
+          row.canonicalUserStage = c.userStage;
+          if (c.displayScore10 != null) row.currentSignalScore10 = c.displayScore10;
+          stamped++;
+          if (Number.isFinite(ageMs)) maxAge = Math.max(maxAge ?? 0, ageMs);
+        }
+        boardFreshness = { liveRows: live.length, stamped, maxLiveAgeMs: maxAge };
+        if (stamped > 0) {
+          console.log(`[HR_RADAR_BOARD_FRESHNESS] liveRows=${live.length} stamped=${stamped} maxLiveAgeMs=${maxAge ?? "n/a"}`);
+        }
+      } catch (e) {
+        console.warn(`[HR_RADAR_BOARD_FRESHNESS] stamp failed: ${(e as Error).message}`);
+      }
+
+      return res.json({ board: enriched, live, hits, misses, total: enriched.length, freshness: boardFreshness });
     } catch (e: any) {
       console.error("[mlb/hr-radar-board]", e.message);
       return res.json({ board: [], live: [], hits: [], misses: [], total: 0 });

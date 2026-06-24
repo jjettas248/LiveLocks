@@ -57,6 +57,25 @@ export interface HrRadarIntelligenceSnapshot {
   missedWithStrongContact: number; // misses where engine had barrel/high-xBA evidence
   leadTimeMs: { p50: number | null; p90: number | null }; // lead before HR on called hits
   sampleSizeWarning: string | null;
+  // ── Official (FIRE) vs shadow (watch) split (2026-06) ────────────────────
+  // Mirrors the FIRE-only official ledger contract: ONLY signals that reached
+  // the FIRE stage count toward the official record. READY/BUILD/WATCH that
+  // resolve are shadow/watch intelligence — they can be analyzed but never
+  // affect the official W/L. Derived from the same observed trajectories
+  // (reachedFire / reachedReady / cashedAt / missedAt); no emit-path change.
+  officialFireRecord: {
+    fireCalls: number;   // FIRE signals that resolved (cashed or missed)
+    fireCashed: number;  // FIRE → HR
+    fireMissed: number;  // FIRE → no HR
+    fireHitRate: number | null;
+  };
+  shadowWatchIntelligence: {
+    readyReached: number;          // signals that reached READY
+    watchPromotedToFire: number;   // of those, advanced to FIRE
+    readyOnly: number;             // reached READY but never FIRE
+    watchCashedWithoutFire: number;// READY-only that still cashed a HR (shadow win, NOT official)
+    readyOnlyMissed: number;       // READY-only that resolved without a HR (NOT an official miss)
+  };
 }
 
 interface SignalTrace {
@@ -190,7 +209,32 @@ export function computeHrRadarIntelligence(opts?: {
   let buildAdvanced = 0,
     buildOutcomes = 0;
 
+  // FIRE-only official record vs shadow/watch (2026-06).
+  let fireCashed = 0,
+    fireMissed = 0;
+  let readyReached = 0,
+    watchPromotedToFire = 0,
+    readyOnly = 0,
+    watchCashedWithoutFire = 0,
+    readyOnlyMissed = 0;
+
   for (const t of Array.from(traces.values())) {
+    // Official vs shadow bucketing — independent of the conversion-rate math
+    // below; uses only whether the FIRE/READY stages were observed.
+    if (t.reachedFire != null) {
+      if (t.cashedAt != null) fireCashed++;
+      else if (t.missedAt != null) fireMissed++;
+    }
+    if (t.reachedReady != null) {
+      readyReached++;
+      if (t.reachedFire != null) {
+        watchPromotedToFire++;
+      } else {
+        readyOnly++;
+        if (t.cashedAt != null) watchCashedWithoutFire++;
+        else if (t.missedAt != null) readyOnlyMissed++;
+      }
+    }
     if (t.reachedTrack != null) {
       nTrack++;
       if (t.reachedBuild != null) {
@@ -296,6 +340,19 @@ export function computeHrRadarIntelligence(opts?: {
     missedWithStrongContact,
     leadTimeMs,
     sampleSizeWarning,
+    officialFireRecord: {
+      fireCalls: fireCashed + fireMissed,
+      fireCashed,
+      fireMissed,
+      fireHitRate: fireCashed + fireMissed > 0 ? fireCashed / (fireCashed + fireMissed) : null,
+    },
+    shadowWatchIntelligence: {
+      readyReached,
+      watchPromotedToFire,
+      readyOnly,
+      watchCashedWithoutFire,
+      readyOnlyMissed,
+    },
   };
 }
 
@@ -312,6 +369,17 @@ export function startHrRadarIntelligenceAggregator(intervalMs: number = 5 * 60 *
           `falseFireRate=${snap.falseFireRate ?? "n/a"} ` +
           `recall=${snap.recall ?? "n/a"} ` +
           `missStrongContact=${snap.missedWithStrongContact}`,
+      );
+      // FIRE-only official record vs shadow/watch (2026-06) — keep the official
+      // ledger visible separately from non-FIRE watch outcomes per cycle.
+      console.log(
+        `[LL_ANALYTICS_HR_RADAR_OFFICIAL] fireCalls=${snap.officialFireRecord.fireCalls} ` +
+          `fireCashed=${snap.officialFireRecord.fireCashed} fireMissed=${snap.officialFireRecord.fireMissed} ` +
+          `fireHitRate=${snap.officialFireRecord.fireHitRate ?? "n/a"} | ` +
+          `readyOnly=${snap.shadowWatchIntelligence.readyOnly} ` +
+          `watchCashedWithoutFire=${snap.shadowWatchIntelligence.watchCashedWithoutFire} ` +
+          `readyOnlyMissed=${snap.shadowWatchIntelligence.readyOnlyMissed} ` +
+          `watchPromotedToFire=${snap.shadowWatchIntelligence.watchPromotedToFire}`,
       );
       // Precision/recall shadow rollup (Recommendation #4) — keep the bridge-path
       // false-positive picture visible per cycle so a threshold change can be

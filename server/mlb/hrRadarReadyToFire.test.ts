@@ -234,6 +234,80 @@ const e5 = enrichWithUserStage({
 });
 eq("E.5 outcome=called_hit stays resolved", e5.userStage, "resolved");
 
+// ── Fire Gate A — peak currency (no stale peak) ───────────────────────────
+console.log("\nmaybePromoteReadyToFire — Gate A peak currency (no stale peak)");
+
+// F.1 Old peak, decayed current AB — must NOT fire even with sustained BET_NOW +
+// contact driver. current/peak = 50/100 = 0.5 < 0.85 ⇒ stale peak block.
+eq("F.1 BET_NOW + attack + sustain=3 + elite_barrel but current<<peak → ready (stale peak)",
+  maybePromoteReadyToFire("ready", {
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 3, qualifyingSignals: ["elite_barrel"],
+    currentReadinessScore: 50, peakReadinessScore: 100,
+  }), "ready");
+
+// F.2 Current still near peak (90/100 = 0.9 ≥ 0.85) ⇒ peak is current ⇒ fire.
+eq("F.2 BET_NOW + attack + sustain=3 + elite_barrel + current≈peak → fire",
+  maybePromoteReadyToFire("ready", {
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 3, qualifyingSignals: ["elite_barrel"],
+    currentReadinessScore: 90, peakReadinessScore: 100,
+  }), "fire");
+
+// F.3 Peak unknown/zero ⇒ gate is a no-op (must not fabricate a block) ⇒ fire.
+eq("F.3 BET_NOW + attack + sustain=3 + elite_barrel + no readiness scores → fire (gate no-op)",
+  maybePromoteReadyToFire("ready", {
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 3, qualifyingSignals: ["elite_barrel"],
+  }), "fire");
+
+// F.4 FAST_PROMOTE_ELITE fast-path bypasses the peak-currency gate (elite barrel
+// is itself the fresh, current evidence) even with a decayed current score.
+eq("F.4 FAST_PROMOTE_ELITE @ live bypasses stale-peak gate → fire",
+  maybePromoteReadyToFire("ready", {
+    alertPath: "FAST_PROMOTE_ELITE", signalState: "live",
+    currentReadinessScore: 10, peakReadinessScore: 100,
+    qualifyingSignals: [],
+  }), "fire");
+
+// ── FIRE-only official record (officialSignalStage) ───────────────────────
+console.log("\nenrichWithUserStage — FIRE-only officialSignalStage");
+
+// G.1 A FIRE row stamps officialSignalStage="fire".
+const g1 = enrichWithUserStage({
+  legacyTier: "strong", legacyState: "live", dynamicState: "BET_NOW",
+  canonicalStage: "attack", consecutivePromoteTicks: 3, outcome: "pending",
+  currentReadinessScore: 100, peakReadinessScore: 100,
+  factors: { barrels: 1, hardHits: 2, maxEV: 110 }, triggerTags: [], positiveDrivers: [],
+  conversionProbability: 0.16, confidenceScore: 8, inning: 7, alertPath: "PATH_C",
+  useFallbackScore: true, gameId: "gf", playerId: "pf", player: "Fire Bat",
+});
+eq("G.1 fire row → userStage=fire", g1.userStage, "fire");
+eq("G.1 fire row → officialSignalStage=fire", g1.officialSignalStage, "fire");
+
+// G.2 A READY row must NOT stamp an official stage (FIRE-only record).
+const g2 = enrichWithUserStage({
+  legacyTier: "strong", legacyState: "actionable", dynamicState: "PREPARE",
+  canonicalStage: "watch", outcome: "pending",
+  currentReadinessScore: 70, peakReadinessScore: 70,
+  factors: { barrels: 0, hardHits: 0 }, triggerTags: [], positiveDrivers: [],
+  conversionProbability: 0.08, confidenceScore: 6, inning: 5, alertPath: "PATH_C",
+  useFallbackScore: true, gameId: "gr", playerId: "pr", player: "Ready Bat",
+});
+eq("G.2 ready row → userStage=ready", g2.userStage, "ready");
+eq("G.2 ready row → officialSignalStage=null (READY not official)", g2.officialSignalStage, null);
+
+// G.3 A TRACK row → officialSignalStage=null.
+const g3 = enrichWithUserStage({
+  legacyTier: "monitor", legacyState: "watching", dynamicState: "WATCH",
+  canonicalStage: "watch", outcome: "pending",
+  currentReadinessScore: 20, peakReadinessScore: 20,
+  factors: {}, triggerTags: [], positiveDrivers: [],
+  conversionProbability: 0.03, confidenceScore: 2, inning: 2, alertPath: null,
+  useFallbackScore: true, gameId: "gt", playerId: "pt", player: "Track Bat",
+});
+eq("G.3 track row → officialSignalStage=null", g3.officialSignalStage, null);
+
 console.log(`\n=== Result: ${pass} pass, ${fail} fail ===`);
 if (fail > 0) {
   for (const f of failures) console.log(` - ${f}`);
