@@ -105,5 +105,35 @@ ok(classifyTier(7.6, 8.6, 4.0, false) === "power_watch", "classifyTier: high pow
 ok(classifyTier(7.6, 8.0, 7.0, false) === "elite", "classifyTier: strong both, not blocked → elite");
 ok(classifyTier(7.6, 8.0, 7.0, true) === "strong", "classifyTier: blocked matchup caps elite → strong");
 
+// ─────────────────────────────────────────────────────────────────────────────
+// [5] Production path: pitcher order-split UNAVAILABLE must not help or fake it
+// ─────────────────────────────────────────────────────────────────────────────
+console.log("[5] Unavailable order-split guardrails (prod path)");
+
+// Unavailable scorer: no drivers, neutral score, "unavailable" direction.
+const unavail = computePitcherOrderSplit(pRow({ slot: 5 }));
+ok(!unavail.available, "G1/G2: unavailable order-split is not available");
+ok(unavail.direction === "unavailable", "G4: direction is 'unavailable', not 'neutral'");
+ok(unavail.drivers.length === 0, "G2/G3: unavailable order-split emits NO drivers (no positive contribution, no tag)");
+
+// Colson in PRODUCTION today: order-split unavailable, but BvP zero-production +
+// the gate still downgrade him out of a clean Elite (handedness genuinely vuln).
+const colsonProd = composePregameScore(
+  { batterPowerScore: 8.6, pitcherVulnerabilityScore: 7.5, matchupFitScore: 6.5, parkWeatherScore: 5.5, lineupOpportunityScore: 5.0, bvpModifier: colsonBvp.bvpModifier },
+  { ...baseFlags, bvpDirection: colsonBvp.bvpDirection, bvpZeroProduction: colsonBvp.bvpZeroProduction, pitcherOrderSplitDirection: "unavailable", batterOrderSplitDirection: "neutral" },
+);
+ok(colsonProd.tier !== "elite" && colsonProd.tier !== "nuclear", `G6: Colson (prod, order unavailable) is NOT clean elite (got ${colsonProd.tier})`);
+ok(colsonProd.downgradeReasons.includes("bvp_zero_production"), "G6: downgrade attributed to BvP zero-production");
+ok(!colsonProd.warningTags.includes("Pitcher Slot Suppression"), "G3: no slot-suppression tag when order-split is unavailable");
+
+// Batter power alone, no pitcher evidence at all (handedness + order unavailable
+// ⇒ neutral 5) must NOT reach elite.
+const powerNoPitcher = composePregameScore(
+  { batterPowerScore: 9.5, pitcherVulnerabilityScore: 5.0, matchupFitScore: 6, parkWeatherScore: 8, lineupOpportunityScore: 7, bvpModifier: 0 },
+  { ...baseFlags, pitcherOrderSplitDirection: "unavailable", batterOrderSplitDirection: "unavailable" },
+);
+ok(powerNoPitcher.tier === "power_watch", `G5: power alone + no pitcher evidence → power_watch (got ${powerNoPitcher.tier})`);
+
 console.log(`\ndirectionalityRegression.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
+
