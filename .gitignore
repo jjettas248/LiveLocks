@@ -6,3 +6,6 @@ vite.config.ts.*
 *.tar.gz
 # Auto-saved prompt/instruction files
 attached_assets/Pasted-*.txt
+
+# Research/verification script output (issue #33 verifyPitcherOrderSplit.ts)
+tmp/
