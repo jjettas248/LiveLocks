@@ -71,21 +71,35 @@ export interface PregameMarketEdgeContext {
 export interface PregamePowerDiagnostics {
   // Component sub-scores (all 0–10, null when not computed).
   batterPowerScore: number | null;
-  /** Pitcher matchup vulnerability (handedness: HR/9 + ERA vs the batter's hand). */
+  /** Combined pitcher matchup (handedness + pitcher-allowed-by-slot when available). */
   pitcherVulnerabilityScore: number | null;
-  /** Explicit handedness sub-score (== pitcherVulnerabilityScore today; documents provenance). */
+  /** Handedness sub-score (HR/9 + ERA vs the batter's hand). */
   pitcherHandednessScore: number | null;
   matchupFitScore: number | null;
   parkWeatherScore: number | null;
   lineupOpportunityScore: number | null;
   marketFitScore: number | null;
 
-  // ── Batter-vs-pitcher (BvP) context — low/medium confidence, never the model ──
+  // ── Layer 1: pitcher vs the batter's lineup slot (allowed-by-slot) ───────────
+  pitcherOrderSplitAvailable: boolean;
+  pitcherOrderSplitScore: number | null;
+  pitcherOrderSplitDirection: "vulnerable" | "neutral" | "suppressive" | "unavailable";
+
+  // ── Batter's own production from today's lineup slot ─────────────────────────
+  batterCurrentOrderSlot: number | null;
+  batterOrderSplitAvailable: boolean;
+  batterOrderSplitScore: number | null;
+  batterOrderSplitDirection: "strong" | "neutral" | "weak" | "unavailable";
+
+  // ── Layer 2: batter-vs-pitcher (BvP) — low/medium confidence, never the model ─
+  bvpAvailable: boolean;
   /** Directional 0–10 BvP score (null when no usable sample). */
   bvpScore: number | null;
   /** BvP sample size (AB or PA, whichever is present). */
   bvpSampleSize: number | null;
   bvpDirection: "positive" | "neutral" | "negative";
+  /** Key BvP production fields at .000 (AVG/SLG/OPS). */
+  zeroProductionBvpFlags: string[];
 
   /** 0–1 coverage of critical inputs (fixed formula in scoring.ts). */
   dataCoverageScore: number;
@@ -101,6 +115,8 @@ export interface PregamePowerDiagnostics {
   publicTier: PregamePowerTier;
   /** Human-readable downgrade tags ("Matchup Downgrade", "Poor BvP History", …). */
   warningTags: string[];
+  /** Machine-readable downgrade reasons (one per applied penalty source). */
+  downgradeReasons: string[];
 
   suppressed: boolean;
   suppressedReasons: string[];

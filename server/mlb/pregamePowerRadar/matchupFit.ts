@@ -25,6 +25,7 @@ export interface MatchupFitInputs {
   bvpAtBats?: number | null;
   bvpStrikeouts?: number | null;
   bvpOps?: number | null;
+  bvpAvg?: number | null;
 }
 
 export type BvpDirection = "positive" | "neutral" | "negative";
@@ -38,6 +39,10 @@ export interface MatchupFitResult extends ComponentScore {
   /** AB (preferred) or PA used for BvP. */
   bvpSampleSize: number;
   bvpDirection: BvpDirection;
+  /** Which key production fields are .000 (AVG/SLG/OPS) — drives the zero-prod rule. */
+  zeroProductionFlags: string[];
+  /** True when 5+ AB and ≥2 key production fields are .000 (blocks a clean Elite). */
+  bvpZeroProduction: boolean;
 }
 
 function platoonEdge(batterHand: "L" | "R" | "S" | null, pitcherThrows: "L" | "R" | null): number | null {
@@ -84,6 +89,8 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
   let bvpAvailable = false;
   let bvpScore: number | null = null;
   let bvpDirection: BvpDirection = "neutral";
+  let zeroProductionFlags: string[] = [];
+  let bvpZeroProduction = false;
   const pa = inputs.bvpPlateAppearances ?? 0;
   const ab = inputs.bvpAtBats ?? pa; // prefer AB; fall back to PA
   const sample = Math.max(ab, pa);
@@ -96,6 +103,15 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
     const hitRate = denom > 0 ? inputs.bvpHits / denom : 0; // ~0.25 neutral
     const kRate = inputs.bvpStrikeouts != null && ab > 0 ? inputs.bvpStrikeouts / ab : null;
 
+    // ── Zero-production flags (AVG / SLG / OPS = .000) ─────────────────────────
+    // With cache fields (no TB), 0 hits ⇒ both AVG and SLG are .000. OPS is its
+    // own field. 0 HR ALONE is NOT a zero-production flag (most small samples are).
+    const avg = inputs.bvpAvg ?? (ab > 0 ? inputs.bvpHits / ab : null);
+    if (avg === 0 || inputs.bvpHits === 0) zeroProductionFlags.push("AVG .000");
+    if (inputs.bvpHits === 0) zeroProductionFlags.push("SLG .000"); // no hits ⇒ no total bases
+    if (inputs.bvpOps != null && inputs.bvpOps === 0) zeroProductionFlags.push("OPS .000");
+    bvpZeroProduction = sample >= 5 && zeroProductionFlags.length >= 2;
+
     // Directional 0–10 score from OPS + HR rate, penalized by a high K rate, then
     // shrunk toward neutral (5) by sample size.
     const sOps = inputs.bvpOps != null ? lin(inputs.bvpOps, 0.5, 1.0) : null;
@@ -105,24 +121,36 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
     const shrink = Math.min(1, sample / 25);
     bvpScore = round1(clamp(5 + (rawScore - 5) * shrink, 0, 10));
 
-    // Points modifier with the same shrinkage caps.
+    // Points modifier with the same shrinkage caps. The HR term is REWARD-ONLY:
+    // 0 HR in a small sample is expected and must NOT be treated as a negative
+    // (per spec). Negative signal comes from low hit rate, high K, zero-production.
     const raw =
-      (hrRate - 0.04) * 12 + (hitRate - 0.25) * 2 - (kRate != null ? Math.max(0, kRate - 0.25) * 2 : 0);
-    const cap = sample >= 25 ? 1.0 : sample >= 10 ? 0.6 : 0.3;
+      Math.max(0, hrRate - 0.04) * 12 +
+      (hitRate - 0.25) * 2 -
+      (kRate != null ? Math.max(0, kRate - 0.25) * 2 : 0) -
+      (bvpZeroProduction ? 0.3 : 0);
+    const cap = sample >= 25 ? 1.0 : sample >= 10 ? 0.6 : 0.4;
     bvpModifier = clamp(raw, -cap, cap);
 
+    // Direction. 0 HR alone never drives negative; we need genuine zero-production,
+    // a clearly low OPS with strikeouts, or a negative modifier.
     const negative =
-      (inputs.bvpHits === 0 && (inputs.bvpStrikeouts ?? 0) >= 3) ||
-      (inputs.bvpOps != null && inputs.bvpOps < 0.6) ||
+      bvpZeroProduction ||
+      (inputs.bvpOps != null && inputs.bvpOps < 0.55 && (kRate ?? 0) >= 0.25) ||
       bvpModifier <= -0.2;
     const positive =
-      inputs.bvpHr >= 1 || (inputs.bvpOps != null && inputs.bvpOps > 0.85) || bvpModifier >= 0.2;
+      (inputs.bvpHr >= 1 && sample >= 8) ||
+      (inputs.bvpOps != null && inputs.bvpOps > 0.85) ||
+      bvpModifier >= 0.2;
     bvpDirection = negative ? "negative" : positive ? "positive" : "neutral";
 
     if (bvpDirection === "positive") {
       drivers.push({ key: "fit_bvp", label: "Owns This Pitcher (BvP)", direction: "positive", weight: 40, evidence: `${inputs.bvpHr} HR / ${inputs.bvpHits} H in ${sample} AB` });
     } else if (bvpDirection === "negative") {
-      drivers.push({ key: "fit_bvp_bad", label: "Poor BvP History", direction: "negative", weight: 40, evidence: `${inputs.bvpHits} H, ${inputs.bvpStrikeouts ?? 0} K in ${sample} AB` });
+      const ev = zeroProductionFlags.length > 0
+        ? `${zeroProductionFlags.join(", ")} (${inputs.bvpHits} H, ${inputs.bvpStrikeouts ?? 0} K in ${sample} AB)`
+        : `${inputs.bvpHits} H, ${inputs.bvpStrikeouts ?? 0} K in ${sample} AB`;
+      drivers.push({ key: "fit_bvp_bad", label: "Poor BvP History", direction: "negative", weight: 40, evidence: ev });
     }
   } else if (sample > 0 && sample < 5) {
     warnings.push("BvP sample too small (<5 AB) — informational only");
@@ -130,8 +158,8 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
 
   if (coverage === 0) {
     warnings.push("No matchup-fit data available");
-    return { score10: 5, available: false, drivers, warnings, bvpModifier, bvpAvailable, bvpScore, bvpSampleSize, bvpDirection };
+    return { score10: 5, available: false, drivers, warnings, bvpModifier, bvpAvailable, bvpScore, bvpSampleSize, bvpDirection, zeroProductionFlags, bvpZeroProduction };
   }
 
-  return { score10: round1(score), available: true, drivers, warnings, bvpModifier, bvpAvailable, bvpScore, bvpSampleSize, bvpDirection };
+  return { score10: round1(score), available: true, drivers, warnings, bvpModifier, bvpAvailable, bvpScore, bvpSampleSize, bvpDirection, zeroProductionFlags, bvpZeroProduction };
 }

@@ -29,9 +29,15 @@ export interface ScoringFlags {
   bvpAvailable: boolean;
   parkIsOnlyPositiveDriver: boolean;
   positiveDriverCount: number;
-  // ── Matchup-quality context (optional; default neutral) ─────────────────────
+  // ── Matchup-quality context (optional; default neutral/unavailable) ─────────
   /** Direction of the batter-vs-pitcher history. */
   bvpDirection?: "positive" | "neutral" | "negative";
+  /** 5+ AB with ≥2 key BvP production fields at .000 (hard block on clean Elite). */
+  bvpZeroProduction?: boolean;
+  /** Pitcher's allowed production to the batter's slot. */
+  pitcherOrderSplitDirection?: "vulnerable" | "neutral" | "suppressive" | "unavailable";
+  /** Batter's own production from today's lineup slot. */
+  batterOrderSplitDirection?: "strong" | "neutral" | "weak" | "unavailable";
 }
 
 export interface ScoringResult {
@@ -48,6 +54,8 @@ export interface ScoringResult {
   suppressedReasons: string[];
   /** Human-readable downgrade tags surfaced to the UI / debug. */
   warningTags: string[];
+  /** Machine-readable downgrade reasons (one per applied penalty source). */
+  downgradeReasons: string[];
 }
 
 /** Minimum published composite score. */
@@ -62,12 +70,12 @@ export function classifyTier(
   score10: number,
   batterPowerScore: number,
   pitcherVulnerabilityScore: number,
-  negativeMatchup: boolean,
+  eliteBlocked: boolean,
 ): PregamePowerTier {
   // Power-only: elite raw power but a weak pitcher matchup → never an elite setup.
   if (batterPowerScore >= 7.0 && pitcherVulnerabilityScore < 5.5) return "power_watch";
-  if (score10 >= 8.8 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 && !negativeMatchup) return "nuclear";
-  if (score10 >= 7.3 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 && !negativeMatchup) return "elite";
+  if (score10 >= 8.8 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 && !eliteBlocked) return "nuclear";
+  if (score10 >= 7.3 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 && !eliteBlocked) return "elite";
   if (score10 >= 6.8 && batterPowerScore >= 6.7 && pitcherVulnerabilityScore >= 5.5) return "strong";
   // Gates not met: cap at "strong" max so a high raw score can never label elite.
   if (score10 >= PUBLISH_MIN_SCORE) return "strong";
@@ -146,25 +154,59 @@ export function composePregameScore(
 
   const cappedScore = Math.min(bvpAdjustedScore, cap);
 
-  // ── Matchup penalty (visible) ───────────────────────────────────────────────
-  // A weak pitcher matchup or bearish BvP history downgrades the score AND (via
-  // classifyTier) blocks elite labeling. This is the evidence gate: batter power
-  // is never enough on its own to mint an "Elite Setup".
+  // ── Matchup penalty (visible) + elite gate ──────────────────────────────────
+  // Three matchup layers downgrade the score AND (via classifyTier) block elite
+  // labeling, so batter power is never enough on its own to mint "Elite Setup":
+  //   1. pitcher vs the batter's lineup slot (allowed-by-slot)
+  //   2. batter's own production from today's slot
+  //   3. batter-vs-pitcher (BvP) history, incl. the zero-production rule
   const bvpDirection = flags.bvpDirection ?? "neutral";
-  const negativeMatchup = bvpDirection === "negative";
+  const bvpZeroProduction = flags.bvpZeroProduction ?? false;
+  const pitcherOrderSplitDirection = flags.pitcherOrderSplitDirection ?? "unavailable";
+  const batterOrderSplitDirection = flags.batterOrderSplitDirection ?? "unavailable";
 
+  const downgradeReasons: string[] = [];
+  const warningTags: string[] = [];
   let matchupPenalty = 0;
-  if (c.pitcherVulnerabilityScore < 5) matchupPenalty += (5 - c.pitcherVulnerabilityScore) * 0.2;
-  if (bvpDirection === "negative") matchupPenalty += 0.4;
+
+  if (c.pitcherVulnerabilityScore < 5) {
+    matchupPenalty += (5 - c.pitcherVulnerabilityScore) * 0.2;
+    downgradeReasons.push("weak_pitcher_vulnerability");
+  }
+  if (pitcherOrderSplitDirection === "suppressive") {
+    matchupPenalty += 0.8;
+    downgradeReasons.push("pitcher_slot_suppression");
+    warningTags.push("Pitcher Slot Suppression");
+  }
+  if (batterOrderSplitDirection === "weak") {
+    matchupPenalty += 0.5;
+    downgradeReasons.push("weak_from_lineup_slot");
+    warningTags.push("Weak From Lineup Slot");
+  }
+  if (bvpZeroProduction) {
+    matchupPenalty += 0.6;
+    downgradeReasons.push("bvp_zero_production");
+    warningTags.push("Poor BvP History");
+  } else if (bvpDirection === "negative") {
+    matchupPenalty += 0.4;
+    downgradeReasons.push("bvp_negative");
+    warningTags.push("Poor BvP History");
+  }
   matchupPenalty = round1(Math.min(matchupPenalty, 2.5));
 
+  // Elite is blocked by any meaningful pitcher/order/BvP downgrade OR a weak slot
+  // context (Elite requires favorable/neutral slot context + no downgrade).
+  const eliteBlocked =
+    bvpDirection === "negative" ||
+    bvpZeroProduction ||
+    pitcherOrderSplitDirection === "suppressive" ||
+    batterOrderSplitDirection === "weak";
+
   const score10 = round1(clamp10(cappedScore - matchupPenalty));
-  const tier = classifyTier(score10, c.batterPowerScore, c.pitcherVulnerabilityScore, negativeMatchup);
+  const tier = classifyTier(score10, c.batterPowerScore, c.pitcherVulnerabilityScore, eliteBlocked);
 
   // ── Downgrade tags (UI / debug) ─────────────────────────────────────────────
-  const warningTags: string[] = [];
-  if (bvpDirection === "negative") warningTags.push("Poor BvP History");
-  if (matchupPenalty > 0 || negativeMatchup) warningTags.push("Matchup Downgrade");
+  if (matchupPenalty > 0 || eliteBlocked) warningTags.push("Matchup Downgrade");
   if (tier === "power_watch") warningTags.push("Batter Power Only");
   if (!flags.pitcherProfileAvailable) warningTags.push("Needs Live Confirmation");
 
@@ -191,5 +233,6 @@ export function composePregameScore(
     suppressed,
     suppressedReasons,
     warningTags,
+    downgradeReasons,
   };
 }

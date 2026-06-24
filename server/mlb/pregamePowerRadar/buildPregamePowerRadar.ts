@@ -22,6 +22,7 @@ import {
   fetchBatterHandednessSplits,
   syncWeather,
   syncBvPMatchup,
+  syncBatterOrderSplits,
   mlbGameCache,
   mlbPlayerCache,
 } from "../dataPullService";
@@ -34,7 +35,10 @@ import type {
 } from "./types";
 import { computeBatterPowerProfile, type BatterPowerInputs } from "./batterPowerProfile";
 import { computePitcherVulnerability } from "./pitcherVulnerability";
+import { computePitcherOrderSplit } from "./pitcherOrderSplit";
+import { computeBatterOrderSplit } from "./batterOrderSplit";
 import { computeMatchupFit } from "./matchupFit";
+import { round1 as round1Score } from "./scoreUtils";
 import { computeParkWeatherScore } from "./parkWeatherScore";
 import { computeLineupOpportunity } from "./lineupOpportunity";
 import { computeMarketTags } from "./marketTagger";
@@ -229,6 +233,14 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           }
         }
 
+        // Batter's own production from today's lineup slot (real feed: per-game
+        // stat lines aggregated by slot). Guarded; degrades to "unavailable".
+        try {
+          await syncBatterOrderSplits(player.playerId);
+        } catch {
+          /* lineup-slot split is optional context — ignore failures */
+        }
+
         // ── Compute components ────────────────────────────────────────────────
         const powerInputs: BatterPowerInputs = savant
           ? savantToPowerInputs(savant)
@@ -286,15 +298,59 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           bvpAtBats: bvp?.atBats ?? null,
           bvpStrikeouts: bvp?.strikeouts ?? null,
           bvpOps: bvp?.ops ?? null,
+          bvpAvg: bvp?.avg ?? null,
         });
 
-        // Pitcher vulnerability is handedness-based (HR/9 + ERA vs the batter's
-        // hand). There is NO pitcher allowed-by-batting-order-slot feed wired into
-        // the build, so we deliberately do not fabricate an order-split component —
-        // the matchup gate validates with handedness + BvP only. (Order-split is a
-        // tracked follow-up: wire a real feed first, then score it with tests.)
-        const pitcherVulnerabilityScore = pitcherVuln.score10;
-        const pitcherProfileAvailable = pitcherVuln.available;
+        // ── Layer 1: pitcher ALLOWED-by-opposing-slot vulnerability ─────────────
+        // Reads the provider cache (keyed pitcherId → slot). No producer is wired
+        // yet, so this resolves to "unavailable" in production and contributes
+        // nothing — it never fabricates pitcher-order confidence. The scorer +
+        // gate + regression tests are in place for when a real feed is connected.
+        const pitcherOrderRow =
+          opposingPitcher && slot.battingOrderSlot != null
+            ? mlbPlayerCache.pitcherOrderSplits[opposingPitcher.pitcherId]?.slots?.[slot.battingOrderSlot] ?? null
+            : null;
+        const pitcherOrderSplit = computePitcherOrderSplit({
+          slot: slot.battingOrderSlot,
+          ab: pitcherOrderRow?.ab ?? null,
+          r: pitcherOrderRow?.r ?? null,
+          h: pitcherOrderRow?.h ?? null,
+          doubles: pitcherOrderRow?.doubles ?? null,
+          triples: pitcherOrderRow?.triples ?? null,
+          hr: pitcherOrderRow?.hr ?? null,
+          rbi: pitcherOrderRow?.rbi ?? null,
+          bb: pitcherOrderRow?.bb ?? null,
+          hbp: pitcherOrderRow?.hbp ?? null,
+          so: pitcherOrderRow?.so ?? null,
+          sb: pitcherOrderRow?.sb ?? null,
+          cs: pitcherOrderRow?.cs ?? null,
+          avg: pitcherOrderRow?.avg ?? null,
+          obp: pitcherOrderRow?.obp ?? null,
+          slg: pitcherOrderRow?.slg ?? null,
+          ops: pitcherOrderRow?.ops ?? null,
+        });
+
+        // Batter's own production from TODAY's lineup slot (real feed).
+        const batterSlotRow = mlbPlayerCache.batterOrderSplits[player.playerId]?.splits?.find(
+          (s) => s.slot === slot.battingOrderSlot,
+        );
+        const batterOrderSplit = computeBatterOrderSplit({
+          slot: slot.battingOrderSlot,
+          pa: batterSlotRow?.pa ?? null,
+          slg: batterSlotRow?.slg ?? null,
+          ops: batterSlotRow?.ops ?? null,
+        });
+
+        // Combined pitcher vulnerability = handedness + pitcher-allowed-by-slot
+        // (weighted strongly when present). A suppressive slot pulls it down.
+        const pitcherVulnerabilityScore = (() => {
+          if (pitcherVuln.available && pitcherOrderSplit.available) {
+            return round1Score((pitcherVuln.score10 * 2 + pitcherOrderSplit.score10 * 3) / 5);
+          }
+          if (pitcherOrderSplit.available) return pitcherOrderSplit.score10;
+          return pitcherVuln.score10; // handedness (or neutral 5 when unavailable)
+        })();
+        const pitcherProfileAvailable = pitcherVuln.available || pitcherOrderSplit.available;
 
         const lineupOpp = computeLineupOpportunity({
           battingOrderSlot: slot.battingOrderSlot,
@@ -315,6 +371,8 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         const drivers: PowerDriver[] = [
           ...batterPower.drivers,
           ...pitcherVuln.drivers,
+          ...pitcherOrderSplit.drivers,
+          ...batterOrderSplit.drivers,
           ...matchupFit.drivers,
           ...parkWeather.drivers,
           ...lineupOpp.drivers,
@@ -343,13 +401,19 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             parkIsOnlyPositiveDriver: parkWeather.parkIsOnlyPositiveDriver,
             positiveDriverCount,
             bvpDirection: matchupFit.bvpDirection,
+            bvpZeroProduction: matchupFit.bvpZeroProduction,
+            pitcherOrderSplitDirection: pitcherOrderSplit.direction,
+            batterOrderSplitDirection: batterOrderSplit.direction,
           },
         );
         if (batterPower.available) batterWithPower++;
 
-        // Surface the matchup downgrade tags as negative drivers so the UI renders
-        // them as warning chips (the scorer owns the orientation; UI is verbatim).
+        // Surface any matchup downgrade tags that aren't already a driver label as
+        // negative drivers so the UI renders them as warning chips (dedup avoids
+        // double chips like "Pitcher Slot Suppression" from both scorer + tag).
+        const existingLabels = new Set(drivers.map((d) => d.label));
         for (const tag of scoring.warningTags) {
+          if (existingLabels.has(tag)) continue;
           drivers.push({ key: `warn_${tag.replace(/\s+/g, "_").toLowerCase()}`, label: tag, direction: "negative", weight: 0 });
         }
 
@@ -428,9 +492,18 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             parkWeatherScore: parkWeather.available ? parkWeather.score10 : null,
             lineupOpportunityScore: lineupOpp.available ? lineupOpp.score10 : null,
             marketFitScore: marketTags.score10,
+            pitcherOrderSplitAvailable: pitcherOrderSplit.available,
+            pitcherOrderSplitScore: pitcherOrderSplit.available ? pitcherOrderSplit.score10 : null,
+            pitcherOrderSplitDirection: pitcherOrderSplit.direction,
+            batterCurrentOrderSlot: slot.battingOrderSlot,
+            batterOrderSplitAvailable: batterOrderSplit.available,
+            batterOrderSplitScore: batterOrderSplit.available ? batterOrderSplit.score10 : null,
+            batterOrderSplitDirection: batterOrderSplit.direction,
+            bvpAvailable: matchupFit.bvpAvailable,
             bvpScore: matchupFit.bvpScore,
             bvpSampleSize: matchupFit.bvpAvailable ? matchupFit.bvpSampleSize : null,
             bvpDirection: matchupFit.bvpDirection,
+            zeroProductionBvpFlags: matchupFit.zeroProductionFlags,
             dataCoverageScore: scoring.dataCoverageScore,
             finalScoreCap: scoring.finalScoreCap,
             finalScoreBeforeCaps: scoring.finalScoreBeforeCaps,
@@ -438,6 +511,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             matchupPenalty: scoring.matchupPenalty,
             publicTier: scoring.tier,
             warningTags: scoring.warningTags,
+            downgradeReasons: scoring.downgradeReasons,
             suppressed: scoring.suppressed,
             suppressedReasons: scoring.suppressedReasons,
             sourceFreshness: {

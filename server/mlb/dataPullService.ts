@@ -257,12 +257,33 @@ export const mlbPlayerCache: {
   batterRollingStats: Record<string, BatterRollingStats>;
   batterOrderSplits: Record<string, BatterOrderSplitsData>;
   bvpMatchups: Record<string, BvPMatchupStats>;
+  // Pitcher ALLOWED stat lines by opposing batting-order slot. No producer is
+  // wired yet (see GitHub issue: research a real pitcher-allowed-by-slot feed) —
+  // the Pre-Game Power Radar's pitcherOrderSplit scorer reads this and reports
+  // "unavailable" while it is empty, so it never fabricates pitcher-order
+  // confidence. A future sync populates `slots` keyed by lineup slot (1–9).
+  pitcherOrderSplits: Record<string, PitcherOrderSplitsData>;
 } = {
   pitcherSeasonStats: {},
   batterRollingStats: {},
   batterOrderSplits: {},
   bvpMatchups: {},
+  pitcherOrderSplits: {},
 };
+
+export interface PitcherOrderSplitRow {
+  ab: number | null; r: number | null; h: number | null;
+  doubles: number | null; triples: number | null; hr: number | null;
+  rbi: number | null; bb: number | null; hbp: number | null; so: number | null;
+  sb: number | null; cs: number | null;
+  avg: number | null; obp: number | null; slg: number | null; ops: number | null;
+}
+
+export interface PitcherOrderSplitsData {
+  /** Allowed line per opposing lineup slot (1–9). */
+  slots: Record<number, PitcherOrderSplitRow>;
+  fetchedAt: number;
+}
 
 export interface BatterOrderSplitsData {
   splits: Array<{ slot: number; slg: number | null; ops: number | null; pa: number }>;
