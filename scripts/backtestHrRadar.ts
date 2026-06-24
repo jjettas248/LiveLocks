@@ -29,7 +29,9 @@
 import { and, desc, eq, gte, inArray, asc } from "drizzle-orm";
 import { db, pool } from "../server/db";
 import { hrOutcomes, hrRadarAlerts, hrRadarSignalEvents } from "../shared/schema";
-import { reachedHrMaxWindow, reachedHrMaxWindowPeak } from "../server/mlb/hrRadarSection";
+// Grading helpers are intentionally NOT imported — classification here is driven
+// by the persisted Phase-0 lifecycle timestamps (first_seen_at / promoted_at /
+// alert_sent_at), which are the authoritative "was it surfaced in time" signal.
 
 // ── stage ranking so we can take the highest section a candidate reached ──
 const STAGE_RANK: Record<string, number> = {
@@ -58,6 +60,7 @@ async function recentGameDates(days: number, fixed?: string): Promise<string[]> 
 
 type Row = {
   player: string; game: string; hrInning: string; seen: string; firstSeen: string;
+  promoted: string; alertSent: string; leadSec: string;
   highestSection: string; scoreBeforeHr: string; rawPreCap: string; capReason: string;
   missingInputs: string; classification: string;
 };
@@ -84,6 +87,7 @@ async function main() {
 
   const rows: Row[] = [];
   const tally = { alertedTP: 0, hiddenTP: 0, latePositive: 0, fullMiss: 0, falseNegative: 0 };
+  const leads: number[] = []; // alert lead time (s) before HR, for the "are alerts late?" aggregate
 
   for (const hr of hrs) {
     const sessionDate = hr.gameDate;
@@ -115,55 +119,72 @@ async function main() {
     const lastScoreEv = [...preHr].reverse().find((e) => e.score != null) ?? null;
     const suppressEv = [...preHr].reverse().find((e) => String(e.eventType).toLowerCase() === "suppressed") ?? null;
 
-    // classification
-    const seenBeforeHr = preHr.length > 0 || (alert?.signalDetectedAt && hitAt && new Date(alert.signalDetectedAt).getTime() < hitAt);
-    const curWindow = alert ? reachedHrMaxWindow({ alertTier: alert.alertTier, confidenceTier: alert.confidenceTier, signalState: alert.signalState }) : false;
-    const peakWindow = alert ? reachedHrMaxWindowPeak({ peakState: (alert.signalState ?? null), peakConversionProbability: null }) : false;
+    // ── timestamps from Phase-0 columns (authoritative) with event fallback ──
+    const firstSeenMs = alert?.firstSeenAt ? new Date(alert.firstSeenAt).getTime()
+      : firstSeenEv?.detectedAt ? new Date(firstSeenEv.detectedAt).getTime() : null;
+    const promotedMs = alert?.promotedAt ? new Date(alert.promotedAt).getTime() : null;
+    const alertSentMs = alert?.alertSentAt ? new Date(alert.alertSentAt).getTime() : null;
+    const seenBeforeHr = (firstSeenMs != null && hitAt != null && firstSeenMs < hitAt) || preHr.length > 0;
+    const promotedBeforeHr = promotedMs != null && hitAt != null && promotedMs < hitAt;
+    const alertedBeforeHr = alertSentMs != null && hitAt != null && alertSentMs < hitAt;
     const grade = String(alert?.gradingStatus ?? "").toLowerCase();
+    // Lead time: how long the alert preceded the HR (the "are alerts late?" axis).
+    const leadSec = alertSentMs != null && hitAt != null ? Math.round((hitAt - alertSentMs) / 1000) : null;
+    if (leadSec != null) leads.push(leadSec);
 
     let classification: string;
     if (!alert && events.length === 0) {
       classification = "full-miss (never seen)"; tally.fullMiss++;
-    } else if (grade === "late_signal" || (!seenBeforeHr && (alert || events.length))) {
-      classification = "late-positive"; tally.latePositive++;
-    } else if (grade.startsWith("called_hit") || (curWindow && alert?.matchedBeforeHr)) {
+    } else if (alertedBeforeHr || (promotedBeforeHr && grade.startsWith("called_hit"))) {
       classification = "alerted true positive"; tally.alertedTP++;
-    } else if (seenBeforeHr && !curWindow && !peakWindow) {
+    } else if (promotedBeforeHr) {
+      classification = "promoted-not-alerted true positive"; tally.alertedTP++;
+    } else if (seenBeforeHr && !promotedBeforeHr) {
       classification = "HIDDEN true positive (seen, never promoted)"; tally.hiddenTP++;
+    } else if (grade === "late_signal" || (firstSeenMs != null && hitAt != null && firstSeenMs >= hitAt)) {
+      classification = "late-positive"; tally.latePositive++;
     } else if (!seenBeforeHr) {
       classification = "false-negative (no pre-HR signal)"; tally.falseNegative++;
     } else {
-      classification = "alerted true positive"; tally.alertedTP++;
+      classification = "HIDDEN true positive (seen, never promoted)"; tally.hiddenTP++;
     }
 
-    // missing-inputs inference from persisted snapshots (best-effort; many nulls = degraded)
+    // Missing inputs: prefer the persisted Phase-0 column; fall back to snapshot inference.
+    const persistedMissing: string[] = Array.isArray(alert?.missingInputs) ? alert!.missingInputs : [];
     const snap = firstSeenEv?.batterSnapshot ?? peakStageEv?.batterSnapshot ?? null;
     const psnap = firstSeenEv?.pitcherSnapshot ?? peakStageEv?.pitcherSnapshot ?? null;
-    const missing: string[] = [];
-    const checkNull = (obj: any, keys: string[], label: string) => {
-      if (!obj) { missing.push(`${label}:no-snapshot`); return; }
-      for (const k of keys) if (obj[k] == null) missing.push(`${label}.${k}`);
-    };
-    checkNull(snap, ["seasonHrRate", "barrelRate", "xISO", "handednessSplit"], "batter");
-    checkNull(psnap, ["handednessSplit", "hrPer9", "pitchMix"], "pitcher");
+    const missing: string[] = [...persistedMissing];
+    if (missing.length === 0) {
+      const checkNull = (obj: any, keys: string[], label: string) => {
+        if (!obj) { missing.push(`${label}:no-snapshot`); return; }
+        for (const k of keys) if (obj[k] == null) missing.push(`${label}.${k}`);
+      };
+      checkNull(snap, ["seasonHrRate", "barrelRate", "xISO", "handednessSplit"], "batter");
+      checkNull(psnap, ["handednessSplit", "hrPer9", "pitchMix"], "pitcher");
+    }
+
+    const fmtTime = (ms: number | null) => ms != null ? new Date(ms).toISOString().slice(11, 19) : "—";
 
     rows.push({
       player: `${hr.batterName} (${hr.batterMlbId ?? "?"})`,
       game: `${hr.batterTeam} ${sessionDate}${alert ? " g=" + alert.gameId : ""}`,
       hrInning: hrInning != null ? `inn ${hrInning}` : "?",
       seen: seenBeforeHr ? "YES" : alert || events.length ? "after-only" : "NO",
-      firstSeen: firstSeenEv?.detectedAt ? new Date(firstSeenEv.detectedAt).toISOString().slice(11, 19) + (firstSeenEv.inning ? ` (inn ${firstSeenEv.inning})` : "") : "—",
+      firstSeen: fmtTime(firstSeenMs),
+      promoted: fmtTime(promotedMs),
+      alertSent: fmtTime(alertSentMs),
+      leadSec: leadSec != null ? (leadSec >= 0 ? `+${leadSec}s` : `${leadSec}s LATE`) : "—",
       highestSection: peakStageEv?.signalState ?? alert?.signalState ?? "—",
       scoreBeforeHr: lastScoreEv?.score != null ? String(lastScoreEv.score) : alert?.currentReadinessScore != null ? `${alert.currentReadinessScore}(cur)` : "—",
-      rawPreCap: "n/a (not persisted)",
-      capReason: suppressEv ? `suppressed@inn${suppressEv.inning ?? "?"}` : alert?.gradingStatus === "uncalled_hr" ? "uncalled_hr" : "—",
+      rawPreCap: alert?.rawPreCapScore != null ? String(alert.rawPreCapScore) : "n/a",
+      capReason: alert?.suppressionReason ?? (suppressEv ? `suppressed@inn${suppressEv.inning ?? "?"}` : alert?.gradingStatus === "uncalled_hr" ? "uncalled_hr" : "—"),
       missingInputs: missing.length ? missing.join(",") : (snap || psnap ? "none" : "n/a (no snapshot)"),
       classification,
     });
   }
 
   // print table
-  const cols: (keyof Row)[] = ["player", "game", "hrInning", "seen", "firstSeen", "highestSection", "scoreBeforeHr", "rawPreCap", "capReason", "missingInputs", "classification"];
+  const cols: (keyof Row)[] = ["player", "game", "hrInning", "seen", "firstSeen", "promoted", "alertSent", "leadSec", "highestSection", "scoreBeforeHr", "rawPreCap", "capReason", "missingInputs", "classification"];
   console.log(cols.join(" | "));
   console.log(cols.map(() => "---").join(" | "));
   for (const r of rows) console.log(cols.map((c) => r[c]).join(" | "));
@@ -175,6 +196,16 @@ async function main() {
   console.log(`late positive         : ${tally.latePositive}`);
   console.log(`full miss (never seen): ${tally.fullMiss}`);
   console.log(`false negative        : ${tally.falseNegative}`);
+  // Alert-lead aggregate — the direct "are alerts late?" measure.
+  if (leads.length) {
+    const sorted = [...leads].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const lateCount = leads.filter((l) => l < 0).length;
+    console.log(`\nalert lead before HR  : median ${median >= 0 ? "+" : ""}${median}s over ${leads.length} alerted HRs ` +
+      `(${lateCount} fired AFTER the HR). A small/negative median = alerts arrive too late to bet.`);
+  } else {
+    console.log(`\nalert lead before HR  : no alerted HRs in sample (alert_sent_at null for every HR — promotion never reached dispatch).`);
+  }
   console.log(`\nHidden+late share of HRs: ${total ? Math.round((100 * (tally.hiddenTP + tally.latePositive)) / total) : 0}% ` +
     `(if high, the engine SAW them but caps/timing kept them from being actionable).`);
 
