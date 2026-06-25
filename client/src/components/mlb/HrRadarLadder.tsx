@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2, Target } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
-import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryHrChancePct, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
+import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
+import { deriveCalibratedHrChancePct, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
@@ -747,7 +748,11 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   const reasonsForRender = isPregameOnly ? reasons.slice(0, 1) : reasons;
   // ── HR Radar display contract (server-stamped, formatting-only). The card
   // leads with the TRUE HR chance %; action strength is the tier-banded bar.
-  const hrChancePct = hrEntryHrChancePct(entry);
+  // GATE the percent through the canonical calibrated check so a raw 0-100
+  // readiness/score value can never leak into the hero as a misleading "95%".
+  // When it is not a plausible calibrated probability, the card falls back to
+  // the tier-banded /10 strength below.
+  const hrChancePct = deriveCalibratedHrChancePct(entry as unknown as HrRadarRowInput);
   const actionPct = hrEntryActionPct(entry);
   const actionScore10 = hrEntryActionScore10(entry);
   const primaryReason = entry.displayPrimaryReason ?? entry.headlineReason ?? "HR setup is forming.";
@@ -1443,14 +1448,45 @@ interface LadderSectionProps {
   onAccept?: (entry: HrRadarLadderEntry) => void;
   acceptedKeys?: Set<string>;
   freshlyCashedKeys?: Set<string>;
+  // UI repair — canonical default-expand control. When provided, seeds the
+  // section's initial collapsed state (Fire/Ready expand when populated;
+  // Build/Track expand only when Fire AND Ready are empty). Falls back to
+  // SECTION_META when omitted.
+  defaultCollapsed?: boolean;
 }
 
-function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, onAccept, acceptedKeys, freshlyCashedKeys }: LadderSectionProps) {
+// UI repair — slim status row for an EMPTY live-decision section. Keeps the
+// section visible (so users know the radar is live) without giving an empty
+// tier a full accent card. Used for FIRE/READY/ALMOST/TRACK when count === 0.
+const EMPTY_SECTION_COPY: Partial<Record<SectionKey, string>> = {
+  attackNow: "No live HR calls right now.",
+  ready: "No ready setups yet.",
+  building: "Nothing developing yet.",
+  watch: "Nothing on track yet.",
+};
+
+function LadderSectionEmptyRow({ sectionKey }: { sectionKey: SectionKey }) {
   const meta = SECTION_META[sectionKey];
+  const Icon = meta.icon;
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border/30 bg-card/40"
+      data-testid={`section-empty-slim-${sectionKey}`}
+    >
+      <Icon className="w-3.5 h-3.5 text-muted-foreground/70 shrink-0" />
+      <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground/80">{meta.label}</span>
+      <span className="text-[11px] text-muted-foreground/60">{EMPTY_SECTION_COPY[sectionKey] ?? "No entries."}</span>
+    </div>
+  );
+}
+
+function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, onAccept, acceptedKeys, freshlyCashedKeys, defaultCollapsed: defaultCollapsedProp }: LadderSectionProps) {
+  const meta = SECTION_META[sectionKey];
+  const baseDefaultCollapsed = defaultCollapsedProp ?? meta.defaultCollapsed;
   // Batch A — Phase 1: WATCH defaults to collapsed when it's holding more
-  // than 8 entries (per spec). All other sections honor SECTION_META.
+  // than 8 entries (per spec). All other sections honor the canonical default.
   const dynamicDefaultCollapsed =
-    sectionKey === "watch" && entries.length > 8 ? true : meta.defaultCollapsed;
+    sectionKey === "watch" && entries.length > 8 ? true : baseDefaultCollapsed;
   const [collapsed, setCollapsed] = useState(dynamicDefaultCollapsed);
   // Batch A — Phase 1 (reactive): track whether the user has explicitly
   // toggled the section. If they have, auto-collapse never overrides their
@@ -1944,6 +1980,20 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
         // Batch A — Phase 5: same rule for admin Model Review — empty
         // section adds no signal, hide it.
         if (key === "modelReview" && (sections as any).modelReview?.length === 0) return null;
+        // UI repair — an EMPTY live-decision section must not consume a full
+        // accent card (esp. empty FIRE's prime red weight). Render a slim
+        // status row instead; the hierarchy stays scannable.
+        const isLiveDecision = key === "attackNow" || key === "ready" || key === "building" || key === "watch";
+        if (isLiveDecision && sections[key].length === 0) {
+          return <LadderSectionEmptyRow key={key} sectionKey={key} />;
+        }
+        // UI repair — canonical default-expand: Fire/Ready expand when they
+        // have entries; Build (ALMOST) + Track only expand when BOTH Fire and
+        // Ready are empty so a populated top of the ladder stays in focus.
+        const fireAndReadyEmpty = counts.attackNow === 0 && counts.ready === 0;
+        let sectionDefaultCollapsed: boolean | undefined;
+        if (key === "attackNow" || key === "ready") sectionDefaultCollapsed = false;
+        else if (key === "building" || key === "watch") sectionDefaultCollapsed = !fireAndReadyEmpty;
         return (
           <LadderSection
             key={key}
@@ -1955,6 +2005,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
             onAccept={handleAccept}
             acceptedKeys={accepted}
             freshlyCashedKeys={freshlyCashedKeys}
+            defaultCollapsed={sectionDefaultCollapsed}
           />
         );
       })}
