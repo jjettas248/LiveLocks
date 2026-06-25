@@ -1824,6 +1824,12 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
       if (windSpeed != null && (windDrift >= 5 || existing.windSpeed == null)) {
         existing.windSpeed = windSpeed;
         existing.windDirection = currentWindDir;
+        // Propagate the fresh Open-Meteo bearing and DROP the stale MLB-feed
+        // sector text. resolveWindVector prioritizes windString, so without this
+        // HR Radar would keep applying the old LF/RF sector after an Open-Meteo
+        // wind shift. Clearing it makes the fresh bearing (windDegrees) win.
+        existing.windDegrees = windDeg;
+        existing.windString = null;
         console.log(`[MLB_WEATHER_OPENMETEO_WIND_UPDATE] game=${gameId} mlbWind=${existingWs}mph → omWind=${windSpeed}mph ${windDirection} (drift=${windDrift.toFixed(0)}mph)`);
       }
       existing.hourlyForecast = hourlyForecast;
