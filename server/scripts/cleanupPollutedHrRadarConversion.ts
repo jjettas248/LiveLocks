@@ -20,8 +20,15 @@
  *     snapshot is on disk.
  *   • DRY-RUN BY DEFAULT: prints exactly what it would change. Pass `--apply` to
  *     write. Pass `--date=YYYY-MM-DD` to target a non-today session.
- *   • SCOPE: only the two conversion-probability fields are clamped to the ceiling;
- *     no other field, column, or table is modified.
+ *
+ *   • SCOPE: clamps the two conversion-probability fields in
+ *     `diagnosticsSnapshot.scoreContract`, and — because `/api/mlb/hr-radar`
+ *     reads and SORTS by them directly — also backs the same inflation out of the
+ *     `currentReadinessScore` / `peakReadinessScore` columns (the engine adds
+ *     `conversion × 60` to readiness, so a polluted row would otherwise keep
+ *     displaying/sorting at ~100 until the next engine write). Only the conversion
+ *     points are removed; the confidence component is preserved. NOTHING else is
+ *     touched — no status, gradingStatus, W/L, ROI, or any other column/table.
  *
  * Run (dry-run):  npx tsx server/scripts/cleanupPollutedHrRadarConversion.ts
  * Run (apply):    npx tsx server/scripts/cleanupPollutedHrRadarConversion.ts --apply
@@ -47,6 +54,24 @@ function parseArgs(argv: string[]): { apply: boolean; date: string } {
 /** Pull a finite number out of a loosely-typed jsonb field, else null. */
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+/** Parse a numeric (string|number|null) DB column into a finite number, else null. */
+function col(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+}
+
+// Engine readiness formula (hrAlertEngine): conversionPts = clamp(conv*60, 0, 60),
+// added on top of confidence points (which stay fully engaged for any conv above
+// the PREPARE threshold). Backing out exactly (oldConvPts - newConvPts) removes the
+// conversion-driven inflation while preserving the confidence component. Conservative
+// on rows that hit the 100 clamp (suppresses slightly more, never inflates).
+const convPts = (p: number): number => Math.max(0, Math.min(60, p * 60));
+function backOutReadiness(oldReadiness: number, oldConv: number, newConv: number): number {
+  const delta = convPts(oldConv) - convPts(newConv);
+  return Math.max(0, Math.round(oldReadiness - delta));
 }
 
 async function main() {
@@ -82,6 +107,10 @@ async function main() {
     oldPeakConversionProbability: number | null;
     newConversionProbability: number | null;
     newPeakConversionProbability: number | null;
+    oldCurrentReadinessScore: number | null;
+    oldPeakReadinessScore: number | null;
+    newCurrentReadinessScore: number | null;
+    newPeakReadinessScore: number | null;
     diagnosticsSnapshot: unknown; // full pre-change snapshot for restore
   };
 
@@ -101,6 +130,18 @@ async function main() {
     const newConv = convPolluted ? EMPIRICAL_CALIBRATION_CEILING : conv;
     const newPeak = peakPolluted ? EMPIRICAL_CALIBRATION_CEILING : peak;
 
+    // Back the conversion inflation out of the readiness columns the board sorts by.
+    const curRead = col(row.currentReadinessScore);
+    const peakRead = col(row.peakReadinessScore);
+    const newCurRead =
+      convPolluted && curRead != null && conv != null
+        ? backOutReadiness(curRead, conv, newConv as number)
+        : curRead;
+    const newPeakRead =
+      peakPolluted && peakRead != null && peak != null
+        ? backOutReadiness(peakRead, peak, newPeak as number)
+        : peakRead;
+
     affected.push({
       id: row.id,
       playerId: row.playerId,
@@ -110,14 +151,20 @@ async function main() {
       oldPeakConversionProbability: peak,
       newConversionProbability: newConv,
       newPeakConversionProbability: newPeak,
+      oldCurrentReadinessScore: curRead,
+      oldPeakReadinessScore: peakRead,
+      newCurrentReadinessScore: newCurRead,
+      newPeakReadinessScore: newPeakRead,
       diagnosticsSnapshot: row.diagnosticsSnapshot,
     });
 
     console.log(
-      `${TAG} ${convPolluted || peakPolluted ? "POLLUTED" : ""} ` +
+      `${TAG} POLLUTED ` +
       `player="${row.playerName}" (${row.playerId}) game=${row.gameId} ` +
       `conv ${conv ?? "—"} → ${newConv ?? "—"} | ` +
       `peak ${peak ?? "—"} → ${newPeak ?? "—"} | ` +
+      `readiness ${curRead ?? "—"} → ${newCurRead ?? "—"} | ` +
+      `peakReadiness ${peakRead ?? "—"} → ${newPeakRead ?? "—"} | ` +
       `action=${apply ? "clamp(suppress)" : "WOULD clamp(suppress) [dry-run]"}`,
     );
   }
@@ -157,12 +204,21 @@ async function main() {
       if (a.newPeakConversionProbability != null) sc.peakConversionProbability = a.newPeakConversionProbability;
       diag.scoreContract = sc;
 
-      // ONLY diagnosticsSnapshot is touched — no status / gradingStatus / W-L / ROI.
-      await db.update(hrRadarAlerts).set({ diagnosticsSnapshot: diag }).where(eq(hrRadarAlerts.id, a.id));
+      // ONLY diagnosticsSnapshot + the two readiness display/sort columns are
+      // touched — no status / gradingStatus / W-L / ROI. (numeric columns take strings)
+      const setObj: Record<string, unknown> = { diagnosticsSnapshot: diag };
+      if (a.newCurrentReadinessScore != null && a.newCurrentReadinessScore !== a.oldCurrentReadinessScore) {
+        setObj.currentReadinessScore = String(a.newCurrentReadinessScore);
+      }
+      if (a.newPeakReadinessScore != null && a.newPeakReadinessScore !== a.oldPeakReadinessScore) {
+        setObj.peakReadinessScore = String(a.newPeakReadinessScore);
+      }
+      await db.update(hrRadarAlerts).set(setObj).where(eq(hrRadarAlerts.id, a.id));
       updated++;
       console.log(
         `${TAG} APPLIED player="${a.playerName}" (${a.playerId}) game=${a.gameId} ` +
-        `conv→${a.newConversionProbability} peak→${a.newPeakConversionProbability}`,
+        `conv→${a.newConversionProbability} peak→${a.newPeakConversionProbability} ` +
+        `readiness→${a.newCurrentReadinessScore} peakReadiness→${a.newPeakReadinessScore}`,
       );
     } catch (err: any) {
       errored++;
