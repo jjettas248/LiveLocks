@@ -46,6 +46,19 @@ interface ParkContext {
   driverText?: string | null;
 }
 
+// Player-specific park/wind fit (PR2) — DISPLAY ONLY. Server-stamped by the
+// shared parkWindFit module; the card renders these fields verbatim and never
+// recomputes the fit. Carries no numeric model value.
+interface PlayerParkWindFit {
+  emoji: string;
+  label: string;
+  explanation: string;
+  windDirectionLabel: string | null;
+  windSpeedMph: number | null;
+  classification: "boost" | "suppress" | "neutral" | "unknown";
+  confidence: "high" | "medium" | "low" | "none";
+}
+
 interface PregameSignal {
   signalId: string;
   gameId: string;
@@ -61,6 +74,7 @@ interface PregameSignal {
   marketScores: Partial<Record<Market, number>>;
   marketSetups?: MarketSetup[];
   parkContext?: ParkContext | null;
+  playerParkWindFit?: PlayerParkWindFit | null;
   score10: number;
   tier: Tier;
   drivers: PowerDriver[];
@@ -297,6 +311,10 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
       {/* Park / weather context — secondary line, server-stamped, renders verbatim. */}
       <ParkConditionsRow park={s.parkContext} />
 
+      {/* Player-specific park/wind fit (PR2) — server-stamped display/explainability,
+          renders verbatim. Never a numeric score; score10 above stays the headline. */}
+      <PlayerParkWindFitRow fit={s.playerParkWindFit} batterName={s.batterName} />
+
       {/* Market chips — qualitative setup labels only. Numeric setup scores are
           intentionally NOT shown here (compact face OR tooltip); they live in the
           admin/debug diagnostics views. */}
@@ -399,6 +417,53 @@ function ParkConditionsRow({ park }: { park?: ParkContext | null }) {
           {seg}
         </span>
       ))}
+    </div>
+  );
+}
+
+// Player-specific park/wind fit line (PR2). Renders ONLY server-stamped fields
+// from the shared parkWindFit module — emoji + qualitative label + wind
+// direction/speed + a short explanation. No client-side fit math, no numeric
+// model value. Wraps cleanly on mobile (flex-wrap). When the fit is absent
+// (DB-fallback path), shows an honest "data unavailable" fallback.
+const FIT_COLOR: Record<NonNullable<PlayerParkWindFit["classification"]>, string> = {
+  boost: "text-emerald-300",
+  suppress: "text-rose-300",
+  neutral: "text-muted-foreground",
+  unknown: "text-muted-foreground/70",
+};
+
+function PlayerParkWindFitRow({ fit, batterName }: { fit?: PlayerParkWindFit | null; batterName: string }) {
+  const testid = `pregame-park-wind-fit-${batterName.replace(/\s+/g, "-").toLowerCase()}`;
+  if (!fit) {
+    return (
+      <div
+        className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground/70 italic flex-wrap"
+        data-testid={`${testid}-unavailable`}
+      >
+        <span>❔ Park/wind data unavailable</span>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="flex items-center gap-x-2 gap-y-1 mt-1.5 text-[11px] flex-wrap"
+      data-testid={testid}
+      title={fit.explanation}
+    >
+      <span className={`inline-flex items-center gap-1 font-semibold ${FIT_COLOR[fit.classification]}`}>
+        <span data-testid={`${testid}-emoji`}>{fit.emoji}</span>
+        <span>{fit.label}</span>
+      </span>
+      {(fit.windDirectionLabel || fit.windSpeedMph != null) && (
+        <span className="inline-flex items-center gap-1 text-muted-foreground">
+          <span className="opacity-40">·</span>
+          <Wind className="w-3 h-3" />
+          {fit.windDirectionLabel ?? "Wind"}
+          {fit.windSpeedMph != null ? ` ${Math.round(fit.windSpeedMph)} mph` : ""}
+        </span>
+      )}
     </div>
   );
 }

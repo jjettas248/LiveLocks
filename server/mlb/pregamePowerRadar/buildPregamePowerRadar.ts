@@ -41,6 +41,7 @@ import { computeBatterOrderSplit } from "./batterOrderSplit";
 import { computeMatchupFit } from "./matchupFit";
 import { round1 as round1Score } from "./scoreUtils";
 import { computeParkWeatherScore } from "./parkWeatherScore";
+import { hydratePregamePlayerParkWindFit } from "./playerParkWindFit";
 import { computeLineupOpportunity } from "./lineupOpportunity";
 import { computeMarketTags } from "./marketTagger";
 import { composePregameScore } from "./scoring";
@@ -455,6 +456,22 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           driverText: parkWeather.carryDriverText,
         };
 
+        // Player-specific park/wind fit — DISPLAY/EXPLAINABILITY ONLY (PR2).
+        // Hydrated from the shared parkWindFit module using the batter's hand +
+        // pull profile + the game's wind sector. It is computed AFTER scoring and
+        // is NEVER fed into score10 or any scoring component. Neutral/❔ fallback
+        // when venue, handedness, or wind data is missing.
+        const playerParkWindFit = hydratePregamePlayerParkWindFit({
+          venueName,
+          batterHand: player.bats,
+          pullRatePercent: savant?.pullRatePercent ?? null,
+          windString: weather?.windString ?? null,
+          windDegrees: weather?.windDegrees ?? null,
+          windDirectionCoarse: weather?.windDirection ?? null,
+          windSpeedMph: isIndoors ? null : weather?.windSpeed ?? null,
+          isIndoors,
+        });
+
         const signalId = `mlb-pregame:${sessionDate}:${game.gameId}:${player.playerId}`;
         const generatedAt = new Date().toISOString();
         const isLocked = !firstPitchLockEligible && (gameStatus === "live" || gameStatus === "final");
@@ -484,6 +501,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           marketScores: marketTags.marketScores,
           marketSetups: marketTags.marketSetups,
           parkContext,
+          playerParkWindFit,
           score10: scoring.score10,
           tier: scoring.tier,
           drivers,

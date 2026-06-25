@@ -84,6 +84,28 @@ export interface PregameParkContext {
   driverText?: string | null;
 }
 
+/**
+ * Player-specific park/wind fit display contract (PR2). DISPLAY ONLY — emitted by
+ * the shared `parkWindFit` module via the pregame hydrator. Carries no numeric
+ * model value (no fitMultiplier, no component scores): the card shows the wind
+ * direction/speed, the shared emoji + qualitative label, and a short explanation,
+ * and renders them verbatim. `score10` remains the only headline number.
+ */
+export interface PregamePlayerParkWindFit {
+  /** Leading glyph from the shared helper (🌬️ / 🏟️ / ↔️ / ⚠️ / ❔). */
+  emoji: string;
+  /** Qualitative line, e.g. "Out to LF · favors RHH pull power". */
+  label: string;
+  /** Short human explanation / driver text. */
+  explanation: string;
+  /** Sector-aware wind direction for display ("Out to LF" / "Crosswind" / …). */
+  windDirectionLabel: string | null;
+  windSpeedMph: number | null;
+  /** For styling/emoji selection only — never a numeric score. */
+  classification: "boost" | "suppress" | "neutral" | "unknown";
+  confidence: "high" | "medium" | "low" | "none";
+}
+
 /** Qualitative per-market setup for the compact card (numeric score is debug-only). */
 export interface PregameMarketSetup {
   market: PregamePowerMarket;
@@ -207,6 +229,16 @@ export interface PregamePowerSignal {
    * rather than fabricating neutral conditions.
    */
   parkContext: PregameParkContext | null;
+
+  /**
+   * Player-specific park/wind fit — DISPLAY/EXPLAINABILITY ONLY. Hydrated at
+   * build/API time from the shared `parkWindFit` module using the batter's hand +
+   * pull profile + the game's wind sector. It NEVER feeds `score10` or any scoring
+   * component; the UI renders these fields verbatim and must not recompute the
+   * fit. Optional: the DB-fallback (rehydrated) path omits it → the card falls
+   * back to a safe "park/wind unavailable" line rather than fabricating context.
+   */
+  playerParkWindFit?: PregamePlayerParkWindFit | null;
 
   score10: number;
   tier: PregamePowerTier;
