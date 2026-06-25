@@ -139,6 +139,12 @@ export interface WeatherCache {
   fetchedAt: number;
   venueName: string | null;
   isIndoors: boolean;
+  // Player-specific park/wind fit inputs (shared parkWindFit module). Optional /
+  // nullable — they only enrich the directional (LF/RF) fit; the engine stays
+  // neutral when both are absent. windString preserves the MLB feed's explicit
+  // sector text ("Out To LF"); windDegrees preserves the Open-Meteo bearing.
+  windString?: string | null;
+  windDegrees?: number | null;
   hourlyForecast?: HourlyWeatherEntry[];
   utcOffsetSeconds?: number;
   gameStartWindDirection?: "in" | "out" | "cross" | "calm" | null;
@@ -1214,9 +1220,12 @@ export async function syncWeather(statsPk: string, cacheKey?: string): Promise<v
     const venue = data.gameData?.venue ?? {};
 
     const temperature: number | null = safeNum(weather.temp);
+    // Preserve the raw MLB feed wind text (e.g. "12 mph, Out To LF") — it states
+    // the outfield sector explicitly, the high-confidence source for the shared
+    // park/wind fit's directional (LF/RF) mapping.
+    const windRaw: string | null = weather.wind ?? null;
     const windSpeed: number | null = (() => {
-      const raw: string = weather.wind ?? "";
-      const match = raw.match(/(\d+(?:\.\d+)?)/);
+      const match = (windRaw ?? "").match(/(\d+(?:\.\d+)?)/);
       return match ? parseFloat(match[1]) : null;
     })();
     const windDirection = normalizeWindDirection(weather.wind);
@@ -1239,6 +1248,8 @@ export async function syncWeather(statsPk: string, cacheKey?: string): Promise<v
       fetchedAt: Date.now(),
       venueName,
       isIndoors,
+      windString: windRaw,
+      windDegrees: existing?.windDegrees ?? null,
       hourlyForecast: existing?.hourlyForecast,
       gameStartWindDirection: gameStartWindDir,
       windShiftDetected,
@@ -1789,6 +1800,8 @@ export async function syncOpenMeteoWeather(gameId: string, venueName: string | n
       fetchedAt: Date.now(),
       venueName,
       isIndoors: false,
+      windString: null,
+      windDegrees: windDeg,
       hourlyForecast,
       utcOffsetSeconds,
       gameStartWindDirection: gameStartWindDir,

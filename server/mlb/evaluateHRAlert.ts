@@ -27,6 +27,11 @@ export interface HRAlertInput {
   parkFactor?: number;
   windDirection?: string | null;
   windSpeed?: number | null;
+  // Player-specific park/wind fit inputs (shared parkWindFit module). Optional —
+  // enrich the directional (LF/RF) hand+pull fit; neutral when absent.
+  venueName?: string | null;
+  windString?: string | null;       // MLB feed raw wind text, e.g. "Out To LF"
+  windDegrees?: number | null;      // meteorological wind bearing (Open-Meteo)
   temperature?: number | null;
   // Lane 3.1/3.2: weather density inputs (Open-Meteo). Optional — no-op when null.
   humidity?: number | null;
@@ -364,6 +369,12 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
     humidity: input.humidity ?? null,
     pressure: input.pressure ?? null,
     isIndoors: input.isIndoors ?? false,
+    // Player-specific park/wind fit inputs (shared parkWindFit module). No-op
+    // when absent → neutral fit, so older callers/fixtures are unaffected.
+    venueName: input.venueName ?? null,
+    windString: input.windString ?? null,
+    windDegrees: input.windDegrees ?? null,
+    batterArchetype: input.batterArchetype ?? null,
     batterHand: input.batterHand ?? null,
     pitcherThrows: input.pitcherThrows ?? null,
     seasonHRRate: input.seasonHRRate ?? null,

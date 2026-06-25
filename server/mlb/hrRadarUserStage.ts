@@ -477,7 +477,7 @@ const STRONG_HR_DRIVER_SIGNALS: ReadonlyArray<HrQualifyingSignalType> = [
 // a pick. Firing now requires a CONTACT driver — tangible HR-shaped evidence
 // from the bat. Pitcher collapse may still promote to *ready*, but cannot
 // *fire* on its own.
-const CONTACT_HR_DRIVER_SIGNALS: ReadonlyArray<HrQualifyingSignalType> = [
+export const CONTACT_HR_DRIVER_SIGNALS: ReadonlyArray<HrQualifyingSignalType> = [
   "elite_barrel",
   "two_hard_hit_balls",
   "massive_single_contact",

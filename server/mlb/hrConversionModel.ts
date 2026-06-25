@@ -5,6 +5,7 @@ import { getPitchFamily } from "./pitchTypeNormalizer";
 import { computeHROverlay } from "./hr/hrOverlay";
 import type { HROverlayResult, SeasonStatBundle, PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
 import { PREGAME_SEED_CAP } from "@shared/hrRadarConviction";
+import { computePlayerParkWindFit } from "./parkWindFit";
 
 export type { SeasonStatBundle, PitchTypeBatterSplit };
 
@@ -48,6 +49,15 @@ export interface HRConversionInput {
   // thinner air → more carry. Optional — no-op (1.0) when null.
   pressure?: number | null;
   isIndoors: boolean;
+  // Player-specific park/wind fit (shared parkWindFit module). All optional and
+  // no-op when absent → a missing venue / wind sector / spray profile collapses
+  // the fit to a neutral 1.0, so partial data never destabilizes runtime. These
+  // refine the generic environment term into a hand- and pull-aware modifier.
+  venueName?: string | null;        // canonical park name (registry + orientation)
+  windString?: string | null;       // MLB feed raw wind text, e.g. "12 mph, Out To LF"
+  windDegrees?: number | null;      // meteorological wind bearing (Open-Meteo)
+  fieldOrientation?: number | null; // home-plate→CF bearing override
+  batterArchetype?: string | null;  // spray fallback when pull% missing
   batterHand: string | null;
   pitcherThrows: string | null;
   seasonHRRate: number | null;
@@ -595,6 +605,28 @@ function computeEnvironmentMultiplier(input: HRConversionInput): number {
   } else if (input.batterHand && input.pitcherThrows && input.batterHand === input.pitcherThrows) {
     multiplier *= 0.94;
   }
+
+  // Player-specific park/wind fit (shared parkWindFit module). A BOUNDED
+  // supporting modifier on top of the generic wind/park terms above — it makes
+  // the env aware of whether the wind sector + park geometry actually fit THIS
+  // hitter's hand and pull profile, rather than treating "wind out" as equal for
+  // everyone. Neutral (1.0) when venue/wind/spray data is missing, so it never
+  // destabilizes runtime and leaves the goldmaster baseline untouched. It feeds
+  // PROBABILITY only — it is never a qualifying/contact HR driver, so it can
+  // never satisfy the FIRE gate on its own.
+  const parkWindFit = computePlayerParkWindFit({
+    venueName: input.venueName,
+    batterHand: input.batterHand,
+    pullRatePercent: input.pullRatePercent,
+    batterArchetype: input.batterArchetype,
+    windString: input.windString,
+    windDegrees: input.windDegrees,
+    windDirectionCoarse: input.windDirection as ("in" | "out" | "cross" | "calm" | null),
+    windSpeedMph: input.windSpeed,
+    fieldOrientation: input.fieldOrientation,
+    isIndoors: input.isIndoors,
+  });
+  multiplier *= parkWindFit.fitMultiplier;
 
   // Phase 4: tightened cap to reduce upstream probability inflation.
   return Math.min(1.35, multiplier);
