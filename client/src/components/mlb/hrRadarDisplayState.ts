@@ -47,6 +47,9 @@ export interface HrRadarRowInput {
   // Stage / lifecycle signals (server-stamped).
   userStage?: string | null;
   officialSignalStage?: string | null;
+  // Legacy canonical-entity stage ("watch"|"building"|"attack"|"cooling"|"closed").
+  // Older/cached rows may carry this without a `userStage`.
+  currentStage?: string | null;
   state?: string | null;
   stageLabel?: string | null;
   currentStatus?: string | null;
@@ -249,7 +252,16 @@ export function deriveUserStage(row: HrRadarRowInput): CanonicalUserStage {
   if (stage === "build" || stage === "building") return "build";
   if (stage === "track" || stage === "watch") return "track";
 
-  // Legacy rows with no userStage: fall back to lifecycle `state`.
+  // Legacy rows with no `userStage`: fall back to the canonical entity stage so
+  // an older/cached FIRE row (currentStage="attack") still lands in fire and
+  // keeps its Live Call / Take-Pass treatment instead of decaying to track.
+  const cs = lower(row.currentStage);
+  if (cs === "attack") return "fire";
+  if (cs === "building") return "build";
+  if (cs === "watch" || cs === "cooling") return "track";
+  if (cs === "closed") return "resolved";
+
+  // Last resort: legacy lifecycle `state`.
   const state = lower(row.state);
   if (state.includes("ready")) return "ready";
   if (state.includes("build")) return "build";

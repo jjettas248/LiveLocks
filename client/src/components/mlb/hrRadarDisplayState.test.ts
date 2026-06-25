@@ -76,6 +76,25 @@ const base: HrRadarRowInput = { playerId: "p1", playerName: "Test Player", team:
   eq(deriveUserStage({ ...base, state: "BET_NOW" }), "fire", "#5 BET_NOW → fire");
 }
 
+// ── Legacy currentStage fallback (Codex PR#42 review): an older/cached FIRE row
+// with no userStage/officialSignalStage must still map to fire (Live Call), not
+// decay to track and lose its Take/Pass treatment. ──────────────────────────
+{
+  const legacyFire = mapHrRadarRowToDisplayState({ ...base, currentStage: "attack" });
+  eq(legacyFire.userStage, "fire", "legacy currentStage=attack → fire stage");
+  eq(legacyFire.section, "fire", "legacy currentStage=attack → fire section (Live Call)");
+  // Mapping for the rest of the canonical entity stages.
+  eq(deriveUserStage({ ...base, currentStage: "building" }), "build", "legacy currentStage=building → build");
+  eq(deriveUserStage({ ...base, currentStage: "watch" }), "track", "legacy currentStage=watch → track");
+  eq(deriveUserStage({ ...base, currentStage: "cooling" }), "track", "legacy currentStage=cooling → track");
+  eq(deriveUserStage({ ...base, currentStage: "closed" }), "resolved", "legacy currentStage=closed → resolved");
+  // An explicit userStage still wins over the legacy currentStage.
+  eq(deriveUserStage({ ...base, userStage: "ready", currentStage: "attack" }), "ready",
+    "explicit userStage wins over legacy currentStage");
+  // A legacy FIRE row without official stamp is a Live Call but NOT record-eligible.
+  eq(legacyFire.recordEligible, false, "legacy attack (no official stamp) → not record eligible");
+}
+
 // ── Acceptance #6 / #7 — admin-only buckets flagged, not user sections. ─────
 {
   const uncalled = mapHrRadarRowToDisplayState({ ...base, outcomeStatus: "uncalled_hr" }, false);
