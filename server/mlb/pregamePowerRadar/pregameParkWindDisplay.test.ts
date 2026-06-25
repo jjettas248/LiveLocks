@@ -86,6 +86,22 @@ assert("4c. card renders explanation", clientSrc.includes("fit.explanation"));
   assert("5c. card has absent-fit fallback", clientSrc.includes("Park/wind data unavailable"));
 }
 
+// ── 5d. indoor games hide wind entirely (Codex PR #41 P2) ─────────────────────
+{
+  // As the build now feeds it for indoor venues: wind sources cleared.
+  const indoorClean = hydratePregamePlayerParkWindFit({ venueName: "Tropicana Field", batterHand: "R", pullRatePercent: 52, windString: null, windDegrees: null, windDirectionCoarse: null, windSpeedMph: null, isIndoors: true });
+  assert("5d. indoor fit → Roof closed, no wind direction", indoorClean.windDirectionLabel == null, `got ${indoorClean.windDirectionLabel}`);
+  assert("5d2. indoor fit → no wind speed", indoorClean.windSpeedMph == null, `got ${indoorClean.windSpeedMph}`);
+  assert("5d3. indoor fit → roof-closed label", /Roof closed/.test(indoorClean.label), indoorClean.label);
+  // Static guard: the build suppresses ALL wind sources when indoors, so a feed
+  // wind string can't leak "Out to LF 5 mph" beside "Roof closed".
+  const build = readFileSync("server/mlb/pregamePowerRadar/buildPregamePowerRadar.ts", "utf8");
+  const hydrationCall = build.slice(build.indexOf("hydratePregamePlayerParkWindFit({"), build.indexOf("isIndoors,\n        });") + 30);
+  for (const src of ["windString", "windDegrees", "windDirectionCoarse", "windSpeedMph"]) {
+    assert(`5d-build. ${src} cleared when isIndoors`, new RegExp(`${src}: isIndoors \\? null`).test(hydrationCall), "indoor wind not suppressed");
+  }
+}
+
 // ── 6. no numeric market setup score appears ──────────────────────────────────
 {
   const keys = Object.keys(lfFit);

@@ -461,13 +461,16 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         // pull profile + the game's wind sector. It is computed AFTER scoring and
         // is NEVER fed into score10 or any scoring component. Neutral/❔ fallback
         // when venue, handedness, or wind data is missing.
+        // Indoor / closed-roof games hide wind entirely (matching the park row).
+        // Clear ALL wind sources so the fit can't render a stale "Out to LF 5 mph"
+        // beside the "Roof closed · neutral carry" label.
         const playerParkWindFit = hydratePregamePlayerParkWindFit({
           venueName,
           batterHand: player.bats,
           pullRatePercent: savant?.pullRatePercent ?? null,
-          windString: weather?.windString ?? null,
-          windDegrees: weather?.windDegrees ?? null,
-          windDirectionCoarse: weather?.windDirection ?? null,
+          windString: isIndoors ? null : weather?.windString ?? null,
+          windDegrees: isIndoors ? null : weather?.windDegrees ?? null,
+          windDirectionCoarse: isIndoors ? null : weather?.windDirection ?? null,
           windSpeedMph: isIndoors ? null : weather?.windSpeed ?? null,
           isIndoors,
         });
