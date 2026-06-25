@@ -233,6 +233,12 @@ export async function registerRoutes(
   await registerAuthRoutes(app);
   await registerStripeRoutes(app);
 
+  // ── HR Board Studio (admin-only growth/conversion command center) ──────────
+  // Additive, read-only over the Pre-Game HR Power Board + HR Radar. Never
+  // mutates engine math, the bus, or any canonical field.
+  const { registerHrBoardStudioRoutes } = await import("./growth/hrBoardStudioRoutes");
+  registerHrBoardStudioRoutes(app);
+
   // ── Attribution: visit tracking + admin metrics ────────────────────────
   // Public POST: records a visit row (visitor cookie set by global middleware).
   app.post("/api/attribution/visit", async (req, res) => {

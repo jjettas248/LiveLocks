@@ -34,6 +34,7 @@ npx tsx server/mlb/hrRadarFireOnlyGrading.test.ts   # FIRE-only official grading
 npx tsx server/mlb/hrRadarFreshnessOverlay.test.ts  # canonical-store freshness overlay (re-bucket/surface/terminal-safety)
 npx tsx server/mlb/hrRadarRuntimeSmoke.test.ts      # read-only contract smoke (freshness + FIRE-only record)
 npx tsx server/analytics/hrRadarOfficialSplit.test.ts # analytics official(FIRE) vs shadow(watch) split
+npx tsx server/growth/hrBoardStudio.test.ts          # HR Board Studio: no-link copy, compliance, movement purity, recap, admin-auth gate
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
@@ -117,6 +118,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |
 | NBA playoff rotation truth | `server/services/nbaRotationHistoryService.ts` |
 | Analytics (read-only) | `server/analytics/` |
+| HR Board Studio (admin growth, read-only) | `server/growth/hrBoardStudioCore.ts` (pure builders), `server/growth/hrBoardStudioService.ts` (live gatherers), `server/growth/hrBoardStudioRoutes.ts`, `server/growth/hrBoardCompliance.ts`, `server/growth/hrBoardAnalytics.ts`, `shared/hrBoardStudio.ts`, `client/src/components/admin/HrBoard*.tsx`, `client/src/pages/admin/hr-board-studio.tsx` |
 | Alerts | `server/services/alertSubscriber.ts` |
 | Auth | `server/auth.ts` |
 | Storage interface | `server/storage.ts` |
@@ -158,8 +160,14 @@ All gated by `requireAdmin`. Distinct namespaces:
 | `GET /api/admin/mlb-qualification` | Rolling-window qualification audit |
 | `GET /api/admin/mlb-shadow-qualification` | Shadow outcome breakdown + ROI proxy |
 | `GET /api/admin/mlb-signal-intelligence` | Batch E unified dashboard payload |
+| `GET /api/admin/hr-board-studio/today` | Today's ranked Pre-Game HR board rows |
+| `POST /api/admin/hr-board-studio/generate-pack` | Generate no-link content pack (does not post anywhere) |
+| `GET /api/admin/hr-board-studio/movement-feed` | Pre-game board players who moved into live HR Radar stages |
+| `POST /api/admin/hr-board-studio/generate-recap` | Generate postgame recap/proof assets for a date |
+| `POST /api/admin/hr-board-studio/log-action` | Record admin copy/download/generate/view analytics |
+| `GET /api/admin/hr-board-studio/analytics` | Admin workflow summary rollup |
 
-Admin pages live under `/admin` and `/admin/mlb-signal-intelligence`.
+Admin pages live under `/admin`, `/admin/mlb-signal-intelligence`, `/admin/track-record`, and `/admin/hr-board-studio`.
 
 ---
 
