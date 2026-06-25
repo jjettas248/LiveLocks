@@ -1504,8 +1504,9 @@ function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass
   useEffect(() => {
     if (sectionKey !== "watch") return;
     if (userToggledRef.current) return;
-    const shouldCollapse = entries.length > 8;
-    setCollapsed((prev) => (prev === shouldCollapse ? prev : shouldCollapse));
+    // Only ever AUTO-COLLAPSE a large watch list — never auto-expand, so the
+    // canonical default (collapsed when Fire/Ready are populated) is respected.
+    if (entries.length > 8) setCollapsed((prev) => (prev ? prev : true));
   }, [sectionKey, entries.length]);
   // Batch A — Phase 1: per-section visible-by-default card caps. Anything
   // beyond the cap is hidden behind a "Show all (N)" expander so the user
