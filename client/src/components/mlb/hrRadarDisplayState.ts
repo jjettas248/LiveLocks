@@ -64,6 +64,8 @@ export interface HrRadarRowInput {
   peakSignalScore10?: number | null;
   peakReadinessScore?: number | null;
   peakScore?: number | null;
+  buildScore?: number | null;
+  pitcherHrVulnerability?: number | null;
   // Probability (true calibrated HR chance only).
   displayHrChancePct?: number | null;
   conversionProbability?: number | null;
@@ -138,6 +140,57 @@ export function deriveCalibratedHrChancePct(row: HrRadarRowInput): number | null
   else return null; // out of any sane range
   if (pct < 0 || pct > CALIBRATED_HR_PROB_CEILING_PCT) return null;
   return pct;
+}
+
+// ── HR breakdown bars (expanded panel) — gated, presentation-only. ──────────
+// The expanded Full Ladder breakdown used to render every metric on a raw
+// 0-100 scale, so a readiness/conviction value of 95 read as "95". This builder
+// is the single gated source: the HR-chance bar is the ONLY bar allowed to be a
+// percent and it MUST pass deriveCalibratedHrChancePct (a raw readiness/score
+// leak is rejected → the bar is omitted). Every other metric is emitted on the
+// /10 signal-score scale so no raw 0-100 value can surface as "95%".
+export type HrBreakdownUnit = "pct" | "score10";
+
+export interface HrRadarBreakdownBar {
+  key: string;
+  label: string;
+  short: string;
+  /** Display value in its unit: pct → 0-100, score10 → 0-10. */
+  value: number;
+  unit: HrBreakdownUnit;
+  /** 0-100 magnitude used for the bar fill width + color band. */
+  magnitude: number;
+  /** Only the calibrated HR-chance bar is the true HR probability. */
+  isHrProb: boolean;
+}
+
+export function buildHrRadarBreakdownBars(row: HrRadarRowInput): HrRadarBreakdownBar[] {
+  const bars: HrRadarBreakdownBar[] = [];
+  const form = toScore10(row.buildScore);
+  if (form != null) {
+    bars.push({ key: "form", label: "Formation", short: "FORM", value: form, unit: "score10", magnitude: Math.round(form * 10), isHrProb: false });
+  }
+  const rdy = toScore10(row.currentReadinessScore);
+  if (rdy != null) {
+    bars.push({ key: "rdy", label: "Readiness", short: "RDY", value: rdy, unit: "score10", magnitude: Math.round(rdy * 10), isHrProb: false });
+  }
+  // HR chance — the ONLY percent bar, and only when it is a calibrated
+  // probability. A leaked readiness/score (e.g. 95) fails the gate → omitted.
+  const hr = deriveCalibratedHrChancePct(row);
+  if (hr != null) {
+    bars.push({ key: "hr", label: "HR Chance", short: "HR%", value: hr, unit: "pct", magnitude: hr, isHrProb: true });
+  }
+  const pvul = toScore10(row.pitcherHrVulnerability);
+  if (pvul != null) {
+    bars.push({ key: "pvul", label: "Pitcher Vuln", short: "PVUL", value: pvul, unit: "score10", magnitude: Math.round(pvul * 10), isHrProb: false });
+  }
+  return bars;
+}
+
+/** Format a breakdown bar's value for display. ONLY the gated HR-chance bar
+ *  (unit "pct") may render a "%"; every other bar renders on the /10 scale. */
+export function formatBreakdownBarValue(bar: HrRadarBreakdownBar): string {
+  return bar.unit === "pct" ? `${bar.value}%` : bar.value.toFixed(1);
 }
 
 // ── Stage + section derivation (single source of truth). ────────────────────

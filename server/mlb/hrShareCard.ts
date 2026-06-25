@@ -63,19 +63,29 @@ function barColor(pct: number, isHrProb = false): string {
   return "#ef4444";
 }
 
-function renderBar(label: string, pct: number | null, y: number, isHrProb = false): string {
+// `unit` controls the value label only: "pct" renders "NN%" (reserved for the
+// calibrated HR-probability bar), "score10" renders "N.N" on the /10 scale so a
+// raw 0-100 readiness/score/index can never be shown as a percent.
+function renderBar(
+  label: string,
+  pct: number | null,
+  y: number,
+  isHrProb = false,
+  unit: "pct" | "score10" = "pct",
+): string {
   if (pct == null) return "";
   const clampedPct = Math.min(100, Math.max(0, Math.round(pct)));
   const color = barColor(clampedPct, isHrProb);
   const trackX = 190;
   const trackW = 500;
   const fillW = Math.round(trackW * clampedPct / 100);
+  const valueLabel = unit === "score10" ? (clampedPct / 10).toFixed(1) : `${clampedPct}%`;
   const font = "DejaVu Sans, Liberation Sans, Arial, sans-serif";
   return `
   <text x="28" y="${y + 10}" font-family="${font}" font-size="10" fill="#475569">${esc(label)}</text>
   <rect x="${trackX}" y="${y}" width="${trackW}" height="10" rx="5" fill="#1e293b"/>
   <rect x="${trackX}" y="${y}" width="${fillW}" height="10" rx="5" fill="${color}"/>
-  <text x="702" y="${y + 10}" font-family="${font}" font-size="10" fill="${color}" font-weight="bold" text-anchor="end">${clampedPct}%</text>`;
+  <text x="702" y="${y + 10}" font-family="${font}" font-size="10" fill="${color}" font-weight="bold" text-anchor="end">${valueLabel}</text>`;
 }
 
 export async function generateHrShareCardPng(data: HrShareCardData): Promise<Buffer> {
@@ -85,7 +95,9 @@ export async function generateHrShareCardPng(data: HrShareCardData): Promise<Buf
   const stageClr  = stageColor(stage);
   const scoreClr  = scoreColor(score10);
   const scoreStr  = score10 != null ? score10.toFixed(1) : "--";
-  const readStr   = readinessPct != null ? `${Math.round(readinessPct)}%` : "--";
+  // Readiness is a conviction score, NOT a calibrated HR probability — render it
+  // on the /10 scale, never as a "%". Only HR Probability earns a percent.
+  const readStr   = readinessPct != null ? (Math.min(100, Math.max(0, readinessPct)) / 10).toFixed(1) : "--";
   const probStr   = hrProbPct != null ? `${Math.round(hrProbPct)}%` : "--";
   const playerStr = esc(trunc(playerName, 26));
   const teamStr   = esc(trunc(team, 32));
@@ -94,10 +106,10 @@ export async function generateHrShareCardPng(data: HrShareCardData): Promise<Buf
   const formationPct = buildScore != null ? Math.min(100, Math.round(buildScore * 10)) : null;
 
   const breakdownBars = [
-    renderBar("Formation",    formationPct,                                    358),
-    renderBar("Readiness",    readinessPct,                                    382),
+    renderBar("Formation",    formationPct,                                    358, false, "score10"),
+    renderBar("Readiness",    readinessPct,                                    382, false, "score10"),
     renderBar("HR Probability", hrProbPct,                                     406, true),
-    renderBar("Pitcher Vuln", pitcherVuln != null ? Math.round(pitcherVuln) : null, 430),
+    renderBar("Pitcher Vuln", pitcherVuln != null ? Math.round(pitcherVuln) : null, 430, false, "score10"),
   ].join("");
 
   const font = "DejaVu Sans, Liberation Sans, Arial, sans-serif";
@@ -142,6 +154,7 @@ export async function generateHrShareCardPng(data: HrShareCardData): Promise<Buf
   <text x="100" y="248" font-family="${font}" font-size="44" fill="${scoreClr}" font-weight="bold" text-anchor="middle">${scoreStr}</text>
   <text x="100" y="268" font-family="${font}" font-size="12" fill="#334155" text-anchor="middle">/ 10</text>
   <text x="310" y="248" font-family="${font}" font-size="44" fill="#22c55e" font-weight="bold" text-anchor="middle">${readStr}</text>
+  <text x="310" y="268" font-family="${font}" font-size="12" fill="#334155" text-anchor="middle">/ 10</text>
   <text x="520" y="248" font-family="${font}" font-size="44" fill="#f59e0b" font-weight="bold" text-anchor="middle">${probStr}</text>
 
   <!-- Stat dividers -->

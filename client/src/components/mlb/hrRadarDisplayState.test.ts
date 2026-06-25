@@ -14,6 +14,8 @@ import {
   deriveDisplayScore10,
   formatScore10Label,
   deriveDrivers,
+  buildHrRadarBreakdownBars,
+  formatBreakdownBarValue,
   ADMIN_ONLY_SECTIONS,
   CALIBRATED_HR_PROB_CEILING_PCT,
   type HrRadarRowInput,
@@ -138,6 +140,51 @@ const base: HrRadarRowInput = { playerId: "p1", playerName: "Test Player", team:
   eq(formatScore10Label(deriveDisplayScore10({ ...base, displayCurrentScore10: 7.0 })), "7.0/10",
     "displayCurrentScore10 preferred → 7.0/10");
   eq(formatScore10Label(null), null, "null score → null label");
+}
+
+// ── Expanded breakdown panel — gated; raw readiness/score never a percent. ──
+{
+  // A row dripping with raw 0-100 readiness/score/conviction values, plus a
+  // conversionProbability that is actually a readiness leak (0.95 → would be 95).
+  const leaky = buildHrRadarBreakdownBars({
+    ...base,
+    buildScore: 9,
+    currentReadinessScore: 95, // raw conviction
+    pitcherHrVulnerability: 88,
+    conversionProbability: 0.95, // leak — NOT a calibrated HR probability
+  });
+  // The ONLY bar permitted to be a percent is the calibrated HR-chance bar.
+  for (const bar of leaky) {
+    if (bar.unit === "pct") {
+      assert(bar.isHrProb, "breakdown: only the HR-chance bar may be a percent");
+      assert(deriveCalibratedHrChancePct({ ...base, displayHrChancePct: bar.value }) === bar.value,
+        "breakdown: a percent bar must pass the calibrated validation helper");
+    }
+  }
+  // No bar renders the raw 95 as a percent.
+  const has95Pct = leaky.some((b) => b.unit === "pct" && Math.round(b.value) === 95);
+  assert(!has95Pct, "breakdown: raw 95 is never rendered as 95%");
+  // The HR-chance bar is omitted entirely when the probability fails the gate.
+  assert(!leaky.some((b) => b.key === "hr"), "breakdown: leaked HR prob (95) → HR bar hidden");
+  // Readiness 95 surfaces on the /10 scale, formatted without a percent.
+  const rdy = leaky.find((b) => b.key === "rdy");
+  assert(rdy != null && rdy.unit === "score10" && rdy.value === 9.5, "breakdown: readiness 95 → 9.5 on /10");
+  eq(formatBreakdownBarValue(rdy!), "9.5", "breakdown: readiness renders '9.5', not '95%'");
+  assert(!formatBreakdownBarValue(rdy!).includes("%"), "breakdown: readiness value has no percent sign");
+  // Pitcher vuln (raw 88) also normalized to /10, never a percent.
+  const pvul = leaky.find((b) => b.key === "pvul");
+  assert(pvul != null && pvul.unit === "score10" && !formatBreakdownBarValue(pvul!).includes("%"),
+    "breakdown: pitcher vuln rendered /10, never a percent");
+}
+
+// A genuinely calibrated probability DOES produce a single percent HR bar.
+{
+  const real = buildHrRadarBreakdownBars({ ...base, currentReadinessScore: 70, conversionProbability: 0.18 });
+  const hr = real.find((b) => b.key === "hr");
+  assert(hr != null && hr.unit === "pct" && hr.value === 18, "breakdown: calibrated 0.18 → 18% HR bar");
+  eq(formatBreakdownBarValue(hr!), "18%", "breakdown: calibrated HR bar renders '18%'");
+  // Exactly one percent bar across the whole breakdown.
+  eq(real.filter((b) => b.unit === "pct").length, 1, "breakdown: at most one percent bar (HR chance)");
 }
 
 console.log(`\nHR Radar display-state mapper: ${passed} passed, ${failed} failed`);
