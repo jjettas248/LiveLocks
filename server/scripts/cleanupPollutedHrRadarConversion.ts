@@ -69,9 +69,31 @@ function col(v: unknown): number | null {
 // conversion-driven inflation while preserving the confidence component. Conservative
 // on rows that hit the 100 clamp (suppresses slightly more, never inflates).
 const convPts = (p: number): number => Math.max(0, Math.min(60, p * 60));
+const round2 = (n: number): number => Math.round(n * 100) / 100;
 function backOutReadiness(oldReadiness: number, oldConv: number, newConv: number): number {
   const delta = convPts(oldConv) - convPts(newConv);
   return Math.max(0, Math.round(oldReadiness - delta));
+}
+
+/**
+ * Full readiness arithmetic for one column, so the dry-run proves it is
+ * SUBTRACTING the polluted conversion contribution — not blindly crushing the
+ * card. `preservedConfidenceComponent = oldReadiness − oldConversionPoints` is the
+ * part of readiness that is NOT conversion-driven and is carried through unchanged.
+ */
+function readinessBreakdown(oldReadiness: number, oldConv: number, newConv: number) {
+  const oldConversionPoints = convPts(oldConv);
+  const newConversionPoints = convPts(newConv);
+  const preservedConfidenceComponent = oldReadiness - oldConversionPoints;
+  return {
+    oldReadiness: round2(oldReadiness),
+    oldConversionProbability: oldConv,
+    oldConversionPoints: round2(oldConversionPoints),
+    newConversionProbability: newConv,
+    newConversionPoints: round2(newConversionPoints),
+    preservedConfidenceComponent: round2(preservedConfidenceComponent),
+    newReadiness: Math.max(0, Math.round(preservedConfidenceComponent + newConversionPoints)),
+  };
 }
 
 async function main() {
@@ -111,6 +133,10 @@ async function main() {
     oldPeakReadinessScore: number | null;
     newCurrentReadinessScore: number | null;
     newPeakReadinessScore: number | null;
+    readinessMath: {
+      current: ReturnType<typeof readinessBreakdown> | null;
+      peak: ReturnType<typeof readinessBreakdown> | null;
+    };
     diagnosticsSnapshot: unknown; // full pre-change snapshot for restore
   };
 
@@ -142,6 +168,17 @@ async function main() {
         ? backOutReadiness(peakRead, peak, newPeak as number)
         : peakRead;
 
+    const readinessMath = {
+      current:
+        convPolluted && curRead != null && conv != null
+          ? readinessBreakdown(curRead, conv, newConv as number)
+          : null,
+      peak:
+        peakPolluted && peakRead != null && peak != null
+          ? readinessBreakdown(peakRead, peak, newPeak as number)
+          : null,
+    };
+
     affected.push({
       id: row.id,
       playerId: row.playerId,
@@ -155,18 +192,30 @@ async function main() {
       oldPeakReadinessScore: peakRead,
       newCurrentReadinessScore: newCurRead,
       newPeakReadinessScore: newPeakRead,
+      readinessMath,
       diagnosticsSnapshot: row.diagnosticsSnapshot,
     });
 
     console.log(
-      `${TAG} POLLUTED ` +
-      `player="${row.playerName}" (${row.playerId}) game=${row.gameId} ` +
-      `conv ${conv ?? "—"} → ${newConv ?? "—"} | ` +
-      `peak ${peak ?? "—"} → ${newPeak ?? "—"} | ` +
-      `readiness ${curRead ?? "—"} → ${newCurRead ?? "—"} | ` +
-      `peakReadiness ${peakRead ?? "—"} → ${newPeakRead ?? "—"} | ` +
+      `${TAG} POLLUTED player="${row.playerName}" (${row.playerId}) game=${row.gameId} ` +
       `action=${apply ? "clamp(suppress)" : "WOULD clamp(suppress) [dry-run]"}`,
     );
+    console.log(
+      `${TAG}   conversion: ${conv ?? "—"} → ${newConv ?? "—"} | ` +
+      `peakConversion: ${peak ?? "—"} → ${newPeak ?? "—"}`,
+    );
+    // Readiness math — proves we subtract the polluted conversion contribution.
+    const logMath = (label: string, m: ReturnType<typeof readinessBreakdown> | null) => {
+      if (!m) return;
+      console.log(
+        `${TAG}   ${label}: old=${m.oldReadiness} ` +
+        `(oldConvProb=${m.oldConversionProbability} → oldConvPts=${m.oldConversionPoints}; ` +
+        `newConvProb=${m.newConversionProbability} → newConvPts=${m.newConversionPoints}; ` +
+        `preservedConfidence=${m.preservedConfidenceComponent}) → new=${m.newReadiness}`,
+      );
+    };
+    logMath("currentReadiness", readinessMath.current);
+    logMath("peakReadiness", readinessMath.peak);
   }
 
   console.log(`${TAG} polluted=${affected.length} of scanned=${rows.length}`);
