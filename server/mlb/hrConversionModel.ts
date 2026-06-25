@@ -212,13 +212,26 @@ const CALIBRATION_TABLE: Array<{ rawMin: number; rawMax: number; calibrated: num
   { rawMin: 0.40, rawMax: 1.00, calibrated: 0.46 },
 ];
 
+// Audit fix (2026-06-25) — hard ceiling on the *empirical* calibrated value.
+// A per-PA-window HR conversion probability is physically bounded well below 1:
+// even an elite slugger (~12% per-PA, the §7a #4 clamp) over ~3 remaining PA
+// tops out at 1-(0.88)^3 ≈ 0.32 raw, and the curated static table caps belief at
+// 0.46. Empirical buckets must only *refine within* that plausible band — never
+// invert the model. Without this guard a selection-biased, near-all-positive bin
+// (mostly `uncalled_hr`, almost no graded `called_miss` under FIRE-only grading)
+// drove Laplace `(cashed+1)/(n+2)` to ~0.95, which then pegged readiness to ~100
+// and tripped every FIRE/HR-max-window grading gate. 0.50 sits just above the
+// static max so genuine upward refinement is still allowed, impossible values are
+// not. The static table (≤0.46) already lives under this ceiling — untouched.
+export const EMPIRICAL_CALIBRATION_CEILING = 0.50;
+
 function calibrate(rawProb: number): { value: number; source: "static_table" | "empirical_buckets"; bucketLabel: string | null; samples: number } {
   // Phase 4: prefer empirical buckets when available; fall back to static table.
   if (EMPIRICAL_BUCKETS.length > 0) {
     const eb = EMPIRICAL_BUCKETS.find(b => rawProb >= b.min && rawProb < b.max);
     if (eb) {
       return {
-        value: eb.calibrated,
+        value: Math.min(EMPIRICAL_CALIBRATION_CEILING, eb.calibrated),
         source: "empirical_buckets",
         bucketLabel: eb.label ?? `${eb.min.toFixed(2)}-${eb.max.toFixed(2)}`,
         samples: eb.samples,
