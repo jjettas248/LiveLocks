@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2, Target } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
-import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryHrChancePct, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
+import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
+import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
@@ -587,44 +588,32 @@ function hrBreakdownBar(pct: number, isHrProb = false): string {
   return "#ef4444";
 }
 
-type HrBreakdownBarSpec = { label: string; short: string; pct: number | null; isHrProb?: boolean };
-
 /**
- * Build the 4-metric HR breakdown spec from an entry. Single source of truth so
- * the compact always-on strip and the expanded panel can never disagree.
- * Server-stamped values only — the UI just formats them (no re-derivation).
- */
-function buildHrBreakdownBars(entry: HrRadarLadderEntry): HrBreakdownBarSpec[] {
-  return [
-    { label: "Formation",    short: "FORM", pct: entry.buildScore != null ? Math.min(100, Math.round(entry.buildScore * 10)) : null },
-    { label: "Readiness",    short: "RDY",  pct: entry.currentReadinessScore != null ? Math.min(100, Math.round(entry.currentReadinessScore)) : null },
-    { label: "HR Prob",      short: "HR%",  pct: entry.conversionProbability != null ? Math.min(100, Math.round(entry.conversionProbability * 100)) : null, isHrProb: true },
-    { label: "Pitcher Vuln", short: "PVUL", pct: entry.pitcherHrVulnerability != null ? Math.min(100, Math.round(entry.pitcherHrVulnerability)) : null },
-  ];
-}
-
-/**
- * Compact always-visible HR breakdown strip — 4 tiny labelled bars in one row.
- * Renders nothing when fewer than 2 metrics are present.
+ * Compact always-visible HR breakdown strip — tiny labelled bars in one row.
+ * Reads the GATED canonical breakdown builder (hrRadarDisplayState): the
+ * HR-chance bar is the only percent and only when calibrated; every other
+ * metric renders on the /10 scale, so a raw readiness/score (e.g. 95) can never
+ * surface as "95%". Renders nothing when fewer than 2 metrics are present.
  */
 function HrBreakdownStrip({ entry }: { entry: HrRadarLadderEntry }) {
-  const bars = buildHrBreakdownBars(entry).filter(b => b.pct != null);
+  const bars = buildHrRadarBreakdownBars(entry as unknown as HrRadarRowInput);
   if (bars.length < 2) return null;
   return (
     <div
       className="mt-2 grid grid-cols-4 gap-1.5"
       data-testid={`strip-hr-breakdown-${entry.playerId}`}
     >
-      {bars.map(({ short, pct, isHrProb }) => {
-        const color = hrBreakdownBar(pct!, isHrProb);
+      {bars.map((bar) => {
+        const color = hrBreakdownBar(bar.magnitude, bar.isHrProb);
+        const valueText = formatBreakdownBarValue(bar);
         return (
-          <div key={short} className="flex flex-col gap-0.5 min-w-0" title={`${short} ${pct}`}>
+          <div key={bar.key} className="flex flex-col gap-0.5 min-w-0" title={`${bar.short} ${valueText}`}>
             <div className="flex items-center justify-between gap-1">
-              <span className="text-[8px] text-muted-foreground/80 tracking-wide">{short}</span>
-              <span className="text-[8px] font-bold tabular-nums" style={{ color }}>{pct}</span>
+              <span className="text-[8px] text-muted-foreground/80 tracking-wide">{bar.short}</span>
+              <span className="text-[8px] font-bold tabular-nums" style={{ color }}>{valueText}</span>
             </div>
             <div className="h-1 rounded-full bg-secondary/60 overflow-hidden">
-              <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
+              <div className="h-full rounded-full" style={{ width: `${bar.magnitude}%`, backgroundColor: color }} />
             </div>
           </div>
         );
@@ -747,7 +736,11 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   const reasonsForRender = isPregameOnly ? reasons.slice(0, 1) : reasons;
   // ── HR Radar display contract (server-stamped, formatting-only). The card
   // leads with the TRUE HR chance %; action strength is the tier-banded bar.
-  const hrChancePct = hrEntryHrChancePct(entry);
+  // GATE the percent through the canonical calibrated check so a raw 0-100
+  // readiness/score value can never leak into the hero as a misleading "95%".
+  // When it is not a plausible calibrated probability, the card falls back to
+  // the tier-banded /10 strength below.
+  const hrChancePct = deriveCalibratedHrChancePct(entry as unknown as HrRadarRowInput);
   const actionPct = hrEntryActionPct(entry);
   const actionScore10 = hrEntryActionScore10(entry);
   const primaryReason = entry.displayPrimaryReason ?? entry.headlineReason ?? "HR setup is forming.";
@@ -772,10 +765,15 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
       const stage = entry.userStage ?? entry.currentStage ?? "track";
       const stageEmoji: Record<string, string> = { fire: "🔥", ready: "⚡", build: "📈", track: "👀" };
       const emoji = stageEmoji[stage] ?? "🔥";
-      const hrProbPct = entry.conversionProbability != null ? Math.round(entry.conversionProbability * 100) : null;
+      // GATE the HR probability through the same calibrated check used
+      // everywhere else, so a raw readiness/score leak can never be shared as a
+      // "%". Conviction (raw readiness) is shared on the /10 scale, never as a
+      // percent — only a calibrated HR probability earns a "%".
+      const hrProbPct = deriveCalibratedHrChancePct(entry as unknown as HrRadarRowInput);
       const readPct   = entry.currentReadinessScore != null ? Math.round(entry.currentReadinessScore) : null;
+      const convict10 = readPct != null ? (readPct / 10).toFixed(1) : null;
       const scoreStr  = score10Val != null ? ` | Score: ${Number(score10Val).toFixed(1)}/10` : "";
-      const readStr   = readPct   != null ? ` | Conviction: ${readPct}%` : "";
+      const readStr   = convict10 != null ? ` | Conviction: ${convict10}/10` : "";
       const probStr   = hrProbPct != null ? ` | HR Prob: ${hrProbPct}%` : "";
       const hdLine    = entry.headlineReason ? `\n"${entry.headlineReason.slice(0, 80)}"` : "";
       const tweetText = `${emoji} HR Radar: ${entry.playerName} (${entry.team})${scoreStr}${readStr}${probStr}${hdLine}\n\n#MLB #HRRadar #LiveLocks`;
@@ -1074,7 +1072,11 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
         <div className="mt-2" data-testid={`window-strength-${entry.playerId}`}>
           <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
             <span>Window strength</span>
-            <span>{actionPct}%</span>
+            {/* Render the tier-banded strength on the /10 scale — NOT a "%".
+                Only a calibrated HR probability may render a percent. */}
+            <span data-testid={`text-window-strength-${entry.playerId}`}>
+              {(actionScore10 ?? actionPct / 10).toFixed(1)}/10
+            </span>
           </div>
           <div className="h-1.5 rounded-full bg-muted overflow-hidden">
             <div
@@ -1278,11 +1280,14 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
               </div>
             )}
 
-            {/* HR Breakdown — full labelled 4-bar panel (shares buildHrBreakdownBars
+            {/* HR Breakdown — full labelled 4-bar panel (shares buildHrRadarBreakdownBars
                 with the always-on compact strip so the two can't disagree). */}
             {(() => {
-              const bars = buildHrBreakdownBars(entry);
-              if (bars.filter(b => b.pct != null).length < 2) return null;
+              // GATED breakdown (hrRadarDisplayState): HR-chance is the only
+              // percent and only when calibrated; all other metrics render /10,
+              // so a raw readiness/score can never display as "95%".
+              const bars = buildHrRadarBreakdownBars(entry as unknown as HrRadarRowInput);
+              if (bars.length < 2) return null;
               return (
                 <div
                   className="rounded-lg p-2.5 bg-secondary/20 border border-border/20"
@@ -1292,24 +1297,27 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                     HR Breakdown
                   </div>
                   <div className="space-y-1">
-                    {bars.map(({ label, pct, isHrProb }) => {
-                      if (pct == null) return null;
-                      const color = hrBreakdownBar(pct, isHrProb);
+                    {bars.map((bar) => {
+                      const color = hrBreakdownBar(bar.magnitude, bar.isHrProb);
+                      const valueText = formatBreakdownBarValue(bar);
                       return (
-                        <div key={label} className="flex items-center justify-between gap-2">
-                          <span className="text-[9px] text-muted-foreground truncate">{label}</span>
+                        <div key={bar.key} className="flex items-center justify-between gap-2">
+                          <span className="text-[9px] text-muted-foreground truncate">
+                            {bar.label}{bar.unit === "score10" ? <span className="text-muted-foreground/50"> /10</span> : null}
+                          </span>
                           <div className="flex items-center gap-1.5">
                             <div className="w-16 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
                               <div
                                 className="h-full rounded-full transition-all"
-                                style={{ width: `${pct}%`, backgroundColor: color }}
+                                style={{ width: `${bar.magnitude}%`, backgroundColor: color }}
                               />
                             </div>
                             <span
-                              className="text-[8px] font-bold tabular-nums w-5 text-right"
+                              className="text-[8px] font-bold tabular-nums w-7 text-right"
                               style={{ color }}
+                              data-testid={`breakdown-value-${bar.key}-${entry.playerId}`}
                             >
-                              {pct}
+                              {valueText}
                             </span>
                           </div>
                         </div>
@@ -1443,14 +1451,45 @@ interface LadderSectionProps {
   onAccept?: (entry: HrRadarLadderEntry) => void;
   acceptedKeys?: Set<string>;
   freshlyCashedKeys?: Set<string>;
+  // UI repair — canonical default-expand control. When provided, seeds the
+  // section's initial collapsed state (Fire/Ready expand when populated;
+  // Build/Track expand only when Fire AND Ready are empty). Falls back to
+  // SECTION_META when omitted.
+  defaultCollapsed?: boolean;
 }
 
-function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, onAccept, acceptedKeys, freshlyCashedKeys }: LadderSectionProps) {
+// UI repair — slim status row for an EMPTY live-decision section. Keeps the
+// section visible (so users know the radar is live) without giving an empty
+// tier a full accent card. Used for FIRE/READY/ALMOST/TRACK when count === 0.
+const EMPTY_SECTION_COPY: Partial<Record<SectionKey, string>> = {
+  attackNow: "No live HR calls right now.",
+  ready: "No ready setups yet.",
+  building: "Nothing developing yet.",
+  watch: "Nothing on track yet.",
+};
+
+function LadderSectionEmptyRow({ sectionKey }: { sectionKey: SectionKey }) {
   const meta = SECTION_META[sectionKey];
+  const Icon = meta.icon;
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border/30 bg-card/40"
+      data-testid={`section-empty-slim-${sectionKey}`}
+    >
+      <Icon className="w-3.5 h-3.5 text-muted-foreground/70 shrink-0" />
+      <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground/80">{meta.label}</span>
+      <span className="text-[11px] text-muted-foreground/60">{EMPTY_SECTION_COPY[sectionKey] ?? "No entries."}</span>
+    </div>
+  );
+}
+
+function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, onAccept, acceptedKeys, freshlyCashedKeys, defaultCollapsed: defaultCollapsedProp }: LadderSectionProps) {
+  const meta = SECTION_META[sectionKey];
+  const baseDefaultCollapsed = defaultCollapsedProp ?? meta.defaultCollapsed;
   // Batch A — Phase 1: WATCH defaults to collapsed when it's holding more
-  // than 8 entries (per spec). All other sections honor SECTION_META.
+  // than 8 entries (per spec). All other sections honor the canonical default.
   const dynamicDefaultCollapsed =
-    sectionKey === "watch" && entries.length > 8 ? true : meta.defaultCollapsed;
+    sectionKey === "watch" && entries.length > 8 ? true : baseDefaultCollapsed;
   const [collapsed, setCollapsed] = useState(dynamicDefaultCollapsed);
   // Batch A — Phase 1 (reactive): track whether the user has explicitly
   // toggled the section. If they have, auto-collapse never overrides their
@@ -1465,8 +1504,9 @@ function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass
   useEffect(() => {
     if (sectionKey !== "watch") return;
     if (userToggledRef.current) return;
-    const shouldCollapse = entries.length > 8;
-    setCollapsed((prev) => (prev === shouldCollapse ? prev : shouldCollapse));
+    // Only ever AUTO-COLLAPSE a large watch list — never auto-expand, so the
+    // canonical default (collapsed when Fire/Ready are populated) is respected.
+    if (entries.length > 8) setCollapsed((prev) => (prev ? prev : true));
   }, [sectionKey, entries.length]);
   // Batch A — Phase 1: per-section visible-by-default card caps. Anything
   // beyond the cap is hidden behind a "Show all (N)" expander so the user
@@ -1944,6 +1984,20 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
         // Batch A — Phase 5: same rule for admin Model Review — empty
         // section adds no signal, hide it.
         if (key === "modelReview" && (sections as any).modelReview?.length === 0) return null;
+        // UI repair — an EMPTY live-decision section must not consume a full
+        // accent card (esp. empty FIRE's prime red weight). Render a slim
+        // status row instead; the hierarchy stays scannable.
+        const isLiveDecision = key === "attackNow" || key === "ready" || key === "building" || key === "watch";
+        if (isLiveDecision && sections[key].length === 0) {
+          return <LadderSectionEmptyRow key={key} sectionKey={key} />;
+        }
+        // UI repair — canonical default-expand: Fire/Ready expand when they
+        // have entries; Build (ALMOST) + Track only expand when BOTH Fire and
+        // Ready are empty so a populated top of the ladder stays in focus.
+        const fireAndReadyEmpty = counts.attackNow === 0 && counts.ready === 0;
+        let sectionDefaultCollapsed: boolean | undefined;
+        if (key === "attackNow" || key === "ready") sectionDefaultCollapsed = false;
+        else if (key === "building" || key === "watch") sectionDefaultCollapsed = !fireAndReadyEmpty;
         return (
           <LadderSection
             key={key}
@@ -1955,6 +2009,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
             onAccept={handleAccept}
             acceptedKeys={accepted}
             freshlyCashedKeys={freshlyCashedKeys}
+            defaultCollapsed={sectionDefaultCollapsed}
           />
         );
       })}
