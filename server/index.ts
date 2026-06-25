@@ -332,6 +332,34 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (password-reset):", err.message);
   }
 
+  // Schema migration: HR Radar Phase 0 diagnostic columns (2026-06).
+  // These columns were added to shared/schema.ts (commit 9d3c554) and are
+  // SELECTed by storage.getHrRadarLadder. If the live DB hasn't had
+  // `drizzle-kit push` run against it, every ladder query throws
+  // ("column does not exist") and the radar silently serves its empty error
+  // fallback — i.e. the radar goes dark even with live games. All columns are
+  // additive/nullable, so this IF NOT EXISTS block is a safe no-op once applied.
+  // Mirrors migrations/0004_hr_radar_phase0_diagnostics.sql.
+  try {
+    await pool.query(`
+      ALTER TABLE hr_radar_alerts
+        ADD COLUMN IF NOT EXISTS raw_pre_cap_score numeric,
+        ADD COLUMN IF NOT EXISTS final_score numeric,
+        ADD COLUMN IF NOT EXISTS cap_reason text,
+        ADD COLUMN IF NOT EXISTS suppression_reason text,
+        ADD COLUMN IF NOT EXISTS missing_inputs text[],
+        ADD COLUMN IF NOT EXISTS confidence numeric,
+        ADD COLUMN IF NOT EXISTS data_quality_flags text[],
+        ADD COLUMN IF NOT EXISTS first_seen_at timestamp,
+        ADD COLUMN IF NOT EXISTS promoted_at timestamp,
+        ADD COLUMN IF NOT EXISTS alert_sent_at timestamp,
+        ADD COLUMN IF NOT EXISTS analytics_persisted boolean NOT NULL DEFAULT false;
+    `);
+    console.log("[startup] Schema migration: hr_radar_alerts Phase 0 diagnostic columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (hr-radar-phase0):", err.message);
+  }
+
   // Schema migration: attribution / conversion tracking (Task #143).
   // Two strictly additive tables — does NOT modify the users table.
   // Idempotent CREATE IF NOT EXISTS; safe to re-run on every boot.
