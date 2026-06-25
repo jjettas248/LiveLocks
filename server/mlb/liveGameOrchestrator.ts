@@ -3090,6 +3090,13 @@ export class LiveGameOrchestrator {
       parkFactor: getMarketParkFactor(p.weatherCache?.venueName, "home_runs", p.resolvedBatterHand),
       windDirection: p.resolvedWindDir,
       windSpeed: p.resolvedWindSpeed,
+      // Player-specific park/wind fit inputs (shared parkWindFit module). venue +
+      // raw wind text/bearing let the engine map the wind sector (LF/RF/CF) to
+      // this hitter's hand and pull profile instead of treating wind as equal
+      // for everyone. No-op (neutral) when any piece is missing.
+      venueName: p.weatherCache?.venueName ?? null,
+      windString: p.weatherCache?.windString ?? null,
+      windDegrees: p.weatherCache?.windDegrees ?? null,
       temperature: p.resolvedTemp,
       isIndoors: p.weatherCache?.isIndoors ?? isVenueIndoors(p.weatherCache?.venueName),
       batterHand: p.resolvedBatterHand,

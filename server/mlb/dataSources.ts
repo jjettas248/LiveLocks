@@ -257,6 +257,14 @@ export function getVenueParkFactors(venueName: string | null | undefined): ParkF
   return resolveVenue(venueName);
 }
 
+// Canonical list of every MLB venue the engine ships a park profile for. Used by
+// the shared park/wind fit module (and its regression test) to guarantee full
+// venue coverage. Alternate/temporary venues resolve through VENUE_ALIASES /
+// resolveVenue() and so do not need their own entry here.
+export function getKnownVenueNames(): string[] {
+  return Object.keys(PARK_FACTORS);
+}
+
 export function isVenueIndoors(venueName: string | null | undefined): boolean {
   if (!venueName) return false;
   const factors = resolveVenue(venueName);
