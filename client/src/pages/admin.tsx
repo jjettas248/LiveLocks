@@ -76,6 +76,13 @@ function AdminLink() {
             Track Record
           </button>
           <button
+            data-testid="link-hr-board-studio"
+            onClick={() => navigate("/admin/hr-board-studio")}
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg border border-border hover:bg-muted"
+          >
+            HR Board Studio
+          </button>
+          <button
             data-testid="link-dashboard"
             onClick={() => navigate("/dashboard")}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-lg border border-border hover:bg-muted"
