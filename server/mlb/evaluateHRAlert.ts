@@ -1,6 +1,7 @@
 import type { HRBuildResult, ClassifiedContact } from "./HRSignalBuilder";
 import { classifyContactEvent } from "./HRSignalBuilder";
 import { computeHRConversionProbability, type HRConversionInput, type HRConversionResult, type PitcherDeteriorationContext } from "./hrConversionModel";
+import { runPowerPriorShadow } from "./powerPrior";
 import type { MLBBatterArchetype } from "./archetypes";
 import type { PitchMixEntry } from "./types";
 
@@ -443,6 +444,20 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
   }
 
   const convProb = hrConversion?.calibratedProbability ?? hrConversion?.hrConversionProbability ?? null;
+
+  // ── Phase 1 shadow (read-only) ─────────────────────────────────────────────
+  // Compare the canonical standalone Pre-Game Power prior against the live inline
+  // prior and log `[POWER_PRIOR_SHADOW]`. This is a pure side effect: it reads
+  // `hrConversion` without mutating it and never changes scoring/staging/grading.
+  // The inline prior remains the active prior for live HR probability.
+  runPowerPriorShadow({
+    gameId: input.gameId,
+    playerId: input.playerId,
+    playerName: input.playerName,
+    teamAbbr: input.teamAbbr,
+    inlineFormScore: hrConversion?.components?.pregameFormScore ?? null,
+    inlinePriorMult: hrConversion?.components?.pregamePriorMult ?? null,
+  });
 
   // ── Data-quality assessment (2026-06) — missing data must REDUCE CONFIDENCE,
   // not masquerade as weak contact. Collect which inputs were absent so a
