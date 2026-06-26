@@ -68,6 +68,21 @@ export function runPowerPriorShadow(input: PowerPriorShadowInput): void {
     const key = `${gameId}:${playerId}`;
     if (!shouldLog(key, nowMs)) return;
 
+    // Warm the in-memory pregame snapshot via the service accessor so a cold or
+    // stale store (e.g. after a server restart, or when a rebuild failed but a
+    // persisted build exists) kicks the same non-blocking background rebuild +
+    // DB-fallback path the public Pre-Game radar / live ladder bridge use. The
+    // service is loaded via a fire-and-forget dynamic import (matching routes.ts)
+    // so the always-loaded live HR module graph stays decoupled from the pregame
+    // build + storage layer. Never awaited, never blocks the live HR path; the
+    // store converges over subsequent ticks so `getPowerPrior` stops reporting a
+    // false `standaloneExists=false` once memory warms.
+    void import("../pregamePowerRadar/pregamePowerRadarService")
+      .then((m) => m.peekRadarSnapshot())
+      .catch(() => {
+        /* never throw into the live HR path */
+      });
+
     // Use the cached canonical ET date (no fallback logging); default to todayET()
     // silently when the game's official date hasn't been cached yet.
     const gameDateET = getCachedMlbGameSessionDate(gameId) ?? todayET();
