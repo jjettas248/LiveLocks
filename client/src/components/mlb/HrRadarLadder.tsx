@@ -291,7 +291,7 @@ const SECTION_META: Record<SectionKey, {
     icon: Zap,
     accent: "border-orange-500/40 bg-orange-500/5",
     badge: "bg-orange-500 text-white",
-    description: "Playable HR setup — contact quality and matchup are aligned.",
+    description: "Strong HR setup forming — high-conviction watch context, not an official call until it fires.",
     sublabel: "High conviction, waiting for final trigger",
     defaultCollapsed: false,
   },
@@ -683,9 +683,12 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
     : momentum === "cooling_off" ? { glyph: "↓", color: "text-orange-400" }
     : momentum === "holding_strong" ? { glyph: "→", color: "text-amber-400" }
     : null;
-  // Fire + Ready are the actionable, graded tier — the "HR Max Window". They
-  // are distinct ladder stages (Track → Build → Ready → Fire); "HR Max Window"
-  // is a contextual badge on these two, not a stage of its own.
+  // Fire and Ready share the high-conviction "HR Max Window" visual treatment,
+  // but ONLY Fire is an official, graded call (officialSignalStage="fire" /
+  // displayRecordEligible). Ready is high-conviction watch context and never
+  // counts toward the official record. They are distinct ladder stages
+  // (Track → Build → Ready → Fire); "HR Max Window" is a contextual badge on
+  // these two, not a stage of its own.
   const isAttack = section === "attackNow" || section === "ready";
   // Goldmaster Phase 5 — derive live vs resolved mode. Resolved cards must
   // never carry "next AB" copy or any live-only verbiage.
