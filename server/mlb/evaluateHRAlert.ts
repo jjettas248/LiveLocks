@@ -450,6 +450,7 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
   // prior and log `[POWER_PRIOR_SHADOW]`. This is a pure side effect: it reads
   // `hrConversion` without mutating it and never changes scoring/staging/grading.
   // The inline prior remains the active prior for live HR probability.
+  // Shadow-only PowerPrior comparison; return intentionally discarded; inline prior remains active.
   runPowerPriorShadow({
     gameId: input.gameId,
     playerId: input.playerId,

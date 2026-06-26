@@ -252,5 +252,48 @@ function priorWithScore(score10: number | null, source: PowerPrior["source"] = "
   _resetPowerPriorShadowForTests();
 }
 
+// ── 6) Rate-limit suppression (bounded [POWER_PRIOR_SHADOW] logging) ─────────
+{
+  _resetPowerPriorShadowForTests();
+  resetStore();
+  const origLog = console.log;
+  const captured: string[] = [];
+  let sameKeyCount = 0;
+  let totalCount = 0;
+  // Capture only shadow lines; swallow them so they don't clutter test output.
+  console.log = ((...args: any[]) => {
+    const line = args.map((a) => String(a)).join(" ");
+    if (line.startsWith("[POWER_PRIOR_SHADOW]")) captured.push(line);
+  }) as any;
+  try {
+    // Two calls for the same gameId:playerId within the rate-limit window.
+    runPowerPriorShadow({ gameId: "rl1", playerId: "p1", inlineFormScore: 55, inlinePriorMult: 1.0 });
+    runPowerPriorShadow({ gameId: "rl1", playerId: "p1", inlineFormScore: 55, inlinePriorMult: 1.0 });
+    sameKeyCount = captured.length;
+    // A different key must still emit.
+    runPowerPriorShadow({ gameId: "rl2", playerId: "p2", inlineFormScore: 55, inlinePriorMult: 1.0 });
+    totalCount = captured.length;
+  } finally {
+    console.log = origLog; // always restore, even if a call throws
+  }
+  assert("same key twice within window → exactly one log", sameKeyCount === 1, `got ${sameKeyCount}`);
+  assert("different key → second log emitted", totalCount === 2, `got ${totalCount}`);
+  assert("console.log restored", console.log === origLog);
+  _resetPowerPriorShadowForTests();
+}
+
+// ── 7) Suppressed signal maps end-to-end through getPowerPrior ───────────────
+{
+  resetStore();
+  setSnapshot(snapshotWith([
+    makeSignal({ tier: "elite", suppressed: true, suppressedReasons: ["matchup_downgrade"] }),
+  ]));
+  const prior = getPowerPrior({ gameDateET: "2026-06-25", gameId: "g1", playerId: "123" });
+  assert("suppressed signal → preGameTier suppressed", prior.preGameTier === "suppressed", String(prior.preGameTier));
+  assert("suppressed signal → source pregame_power_radar", prior.source === "pregame_power_radar", prior.source);
+  assert("suppressed signal → hasStandalonePregameSignal true", prior.diagnostics.hasStandalonePregameSignal === true);
+  resetStore();
+}
+
 console.log(`\n[Power Prior — Phase 1 shadow] ${passed} passed, ${failed} failed\n`);
 process.exit(failed > 0 ? 1 : 0);
