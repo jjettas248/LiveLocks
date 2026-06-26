@@ -112,6 +112,7 @@ import { classifyHrReview } from "./hrReviewClassifier";
 import { getPreHrContactEvents } from "./hrPreHrEventResolver";
 import { getPreHrHrRadarBusEvidence } from "./hrPreHrBusEvidence";
 import { getPregameSignalFor } from "./pregamePowerRadar/pregamePowerRadarStore";
+import { isHrRadarPregameSeedEnabled } from "./hrRadarLiveContract";
 import { resolveMlbGameSessionDate } from "../utils/mlbSessionDate";
 
 // Max of the finite numbers in a list, or null when none are finite.
@@ -3218,6 +3219,14 @@ export class LiveGameOrchestrator {
     // prior score and initialize the HR Radar to "watch" if strong enough.
     // This prevents first-AB HRs (T1 homers) from being completely invisible
     // pregame when favorable conditions exist (park + BVP + pitcher vulnerability).
+    //
+    // HR Radar Live is a LIVE event-based engine — it must surface batters from
+    // in-game evidence only, not from a pregame prior (park/wind/ERA/BvP/
+    // hot-streak). These no-AB seeds are therefore GATED OFF by default so the
+    // live ladder stays live-evidence-driven; flip HR_RADAR_PREGAME_SEED on to
+    // restore them. Seeded rows are always Track and were never graded
+    // (FIRE-only official record), so this gate never changes the W/L history.
+    if (!isHrRadarPregameSeedEnabled()) return;
     const weatherCache = mlbGameCache.weather[gameId];
     const pitcher = state.pitcherInGame;
     const pitcherCtxCache = mlbGameCache.pitcherContext?.[gameId];
