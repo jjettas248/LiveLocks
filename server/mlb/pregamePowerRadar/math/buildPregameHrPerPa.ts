@@ -102,21 +102,31 @@ export function buildPregameHrPerPa(inputs: PregameMathInputs): PregameHrPerPaRe
   const parkWeatherAdjustedHrPerPa = clampHrPerPa(sigmoid(L));
 
   L += lineup.logOdds + bullpen.logOdds + market.logOdds;
-  L -= suppressor.penaltyLogOdds;
-  const matchupAdjustedHrPerPa = clampHrPerPa(sigmoid(L));
+  const preSuppressorLogit = L;
+  const preSuppressorHrPerPa = clampHrPerPa(sigmoid(preSuppressorLogit));
+  // Reported full-matchup value INCLUDES the availability penalty.
+  const matchupAdjustedHrPerPa = clampHrPerPa(sigmoid(preSuppressorLogit - suppressor.penaltyLogOdds));
 
   // ── Model-stability shrinkage toward league prior ────────────────────────
   // Low data confidence (missing core families / thin samples) pulls the output
   // back toward league average. This is PRIOR shrinkage, NOT calibration against
   // realized outcomes.
+  //
+  // IMPORTANT: shrink the PRE-suppressor value, then RE-APPLY the suppressor
+  // penalty afterward. Shrinking the already-penalized value toward the league
+  // prior on a zero/low-coverage row could otherwise RAISE a suppressed rate back
+  // toward league — i.e. an availability suppressor would paradoxically increase
+  // the HR probability. Re-applying the penalty last keeps suppressors monotone:
+  // they can only ever lower the per-PA rate.
   const coreCoverage = computeCoreCoverage(batterPower.available, pitcher.available);
   const effectiveSample = inputs.batterPower?.paSample ?? 0;
-  const { value: shrunkHrPerPa } = shrinkRate(
-    matchupAdjustedHrPerPa,
+  const { value: shrunkPre } = shrinkRate(
+    preSuppressorHrPerPa,
     Math.max(1, effectiveSample) * coreCoverage,
     LEAGUE_HR_PER_PA,
     STABILIZATION_K.hrPerPa,
   );
+  const shrunkHrPerPa = clampHrPerPa(sigmoid(logit(shrunkPre) - suppressor.penaltyLogOdds));
 
   return {
     baselineHrPerPa,

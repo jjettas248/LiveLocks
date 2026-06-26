@@ -36,7 +36,8 @@ export function scoreBatTrackingPower(inp: BatTrackingInputs | null | undefined)
   }
 
   const w = inp.swingSample != null ? shrinkWeight(inp.swingSample, 40) : 0.6;
-  const logOdds = BAT_TRACKING_CAP * composite * w;
+  // Scale by feature coverage so a sparsely-populated swing row degrades to no-op.
+  const logOdds = BAT_TRACKING_CAP * composite * w * coverage;
 
   // 0–100 score: remap signed composite [-1,1] → [0,100] for display/diagnostics.
   const score100 = Math.round(norm01(composite, -1, 1) * 100);

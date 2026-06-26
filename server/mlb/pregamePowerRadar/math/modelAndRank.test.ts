@@ -128,6 +128,37 @@ const scratched = runPregameMathModel(makeInputs({
 ok(scratched.recommendedTier === "suppressed", "confirmed-not-active → suppressed tier");
 ok(scratched.suppressors.includes("not_confirmed_active"), "scratch suppressor surfaced");
 
+// ── Suppressor can never RAISE the rate via prior shrinkage (zero coverage) ───
+function zeroCoverageInputs(over: Partial<PregameMathInputs> = {}): PregameMathInputs {
+  return makeInputs({
+    batterPower: {
+      xISO: null, xSLG: null, xwOBAcon: null, barrelRatePct: null, hardHitRatePct: null,
+      exitVelocity: null, maxEV: null, flyBallPct: null, hrFBRatioPct: null, pullRatePct: null,
+      sweetSpotPct: null, hrPerPaSeason: null, paSample: null,
+    },
+    pitcherVulnerability: {
+      pitcherKnown: false, batterHand: "R", pitcherThrows: null, hrPer9VsHand: null,
+      hrPer9Overall: null, barrelAllowedPct: null, hardHitAllowedPct: null, flyBallAllowedPct: null, bfSample: null,
+    },
+    ...over,
+  });
+}
+const zcNoSup = runPregameMathModel(zeroCoverageInputs());
+const zcSup = runPregameMathModel(zeroCoverageInputs({
+  availability: { confirmedActive: false, lateScratchRisk: false, restDayRisk: false, platoonSubRisk: false },
+}));
+ok(zcSup.matchupAdjustedHrPerPa! < zcNoSup.matchupAdjustedHrPerPa!, "suppressor lowers per-PA (zero coverage)");
+ok(zcSup.calibratedGameHrProbability! < zcNoSup.calibratedGameHrProbability!,
+  "suppressor lowers game prob even after shrinkage (never raised back to league)");
+
+// ── Market alone must NOT mint a watch tier (no core data → low confidence) ────
+const marketOnly = runPregameMathModel(zeroCoverageInputs({
+  market: { hrOddsAvailable: true, impliedHrProbability: 0.18, noVigImpliedHrProbability: 0.16 },
+  availability: { confirmedActive: true, lateScratchRisk: false, restDayRisk: false, platoonSubRisk: false },
+}));
+ok(marketOnly.recommendedTier !== "watch", "market-only row is not 'watch'");
+ok(marketOnly.confidenceScore100 < 30, "market-only row has sub-floor confidence");
+
 // ── Calibration is the documented identity passthrough ────────────────────────
 ok((elite.calibrationDiagnostics as any).method === "identity_uncalibrated", "calibration reports identity_uncalibrated");
 
@@ -144,6 +175,8 @@ ok(confidenceScore(1, 300, 0.5) < confidenceScore(1, 300, 1), "suppressor confid
 ok(recommendTier({ calibratedGameHrProbability: 0.11, confidenceScore100: 75, rawSetupScore100: 80, hasMajorSuppressor: false }) === "elite", "tier elite gate");
 ok(recommendTier({ calibratedGameHrProbability: 0.08, confidenceScore100: 65, rawSetupScore100: 70, hasMajorSuppressor: false }) === "strong", "tier strong gate");
 ok(recommendTier({ calibratedGameHrProbability: 0.02, confidenceScore100: 80, rawSetupScore100: 80, hasMajorSuppressor: false }) === "suppressed", "very low prob → suppressed");
+ok(recommendTier({ calibratedGameHrProbability: 0.06, confidenceScore100: 45, rawSetupScore100: 60, hasMajorSuppressor: false }) === "watch", "data-backed setup → watch");
+ok(recommendTier({ calibratedGameHrProbability: 0.16, confidenceScore100: 0, rawSetupScore100: 60, hasMajorSuppressor: false }) === "neutral", "high setup but zero confidence → neutral, not watch");
 ok(recommendTier({ calibratedGameHrProbability: 0.11, confidenceScore100: 90, rawSetupScore100: 90, hasMajorSuppressor: true }) === "suppressed", "major suppressor overrides → suppressed");
 
 console.log(`\nmodelAndRank.test: ${passed} passed, ${failed} failed`);

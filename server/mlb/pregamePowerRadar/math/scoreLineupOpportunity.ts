@@ -27,7 +27,7 @@ export function scoreLineupOpportunity(
     return { key: "lineupOpportunity", logOdds: 0, available: false, shrinkWeight: 0 };
   }
 
-  const logOdds = LINEUP_OPPORTUNITY_CAP * composite;
+  const logOdds = LINEUP_OPPORTUNITY_CAP * composite * coverage;
   return {
     key: "lineupOpportunity",
     logOdds,

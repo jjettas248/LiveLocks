@@ -45,6 +45,17 @@ ok(bpWeak.logOdds < 0, "weak power → negative logOdds");
 ok(bpElite.logOdds > bpWeak.logOdds, "elite > weak power logOdds");
 ok(Math.abs(bpElite.logOdds) <= BATTER_POWER_CAP + 1e-9, "batter power respects cap");
 
+// Feature coverage: a 1-stat sparse row must NOT claim near-full cap (degrades
+// toward no-op instead of amplifying the lone present signal).
+const bpFull = scoreBatterTruePower({
+  ...emptyBatter, xISO: 0.28, barrelRatePct: 18, hrFBRatioPct: 28, maxEV: 117,
+  hardHitRatePct: 55, xSLG: 0.60, exitVelocity: 94, flyBallPct: 48, pullRatePct: 55,
+  sweetSpotPct: 42, xwOBAcon: 0.46, paSample: 600,
+});
+const bpOneStat = scoreBatterTruePower({ ...emptyBatter, xISO: 0.28, paSample: 600 });
+ok(bpOneStat.available && bpOneStat.logOdds > 0, "1-stat row still positive");
+ok(bpOneStat.logOdds < bpFull.logOdds * 0.5, "sparse 1-stat row degraded well below full-coverage row");
+
 // Shrinkage: tiny sample mutes the same elite line.
 const bpEliteSmall = scoreBatterTruePower({
   ...emptyBatter, xISO: 0.28, barrelRatePct: 18, hrFBRatioPct: 28, maxEV: 117,

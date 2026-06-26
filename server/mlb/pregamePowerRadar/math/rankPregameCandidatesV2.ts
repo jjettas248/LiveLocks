@@ -132,7 +132,11 @@ export function recommendTier(args: {
 
   if (p >= 0.1 && args.confidenceScore100 >= 70) return "elite";
   if (p >= 0.075 && args.confidenceScore100 >= 60) return "strong";
-  if (args.rawSetupScore100 >= 55) return "watch";
+  // Watch requires a real, data-backed setup — not market confirmation alone.
+  // The market term is documented as confirm/rank only and can lift rawSetupScore
+  // on its own; the confidence floor (driven by core batter/pitcher coverage +
+  // sample) ensures odds with no underlying core data cannot mint a watch tier.
+  if (args.rawSetupScore100 >= 55 && args.confidenceScore100 >= 30) return "watch";
   return "neutral";
 }
 

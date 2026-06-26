@@ -41,7 +41,9 @@ export function scoreBatterTruePower(inp: BatterTruePowerInputs | null | undefin
 
   // Shrink by the PA sample backing the season rates (power stabilizes by ~120 PA).
   const w = inp.paSample != null ? shrinkWeight(inp.paSample, 120) : 0.6; // default mid-trust when sample unknown
-  const logOdds = BATTER_POWER_CAP * composite * w;
+  // Scale by feature coverage so a row with only one populated stat (e.g. xISO)
+  // degrades toward no-op instead of letting that lone signal claim the full cap.
+  const logOdds = BATTER_POWER_CAP * composite * w * coverage;
 
   return {
     key: "batterPower",

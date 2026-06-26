@@ -134,7 +134,7 @@ warnings.
 - No leakage warnings on a clean pregame row; live-only feature names are rejected.
 
 **Test files:** `math/{leakageGuard, shrinkAndNormalize, paAndGameProbability,
-components, modelAndRank}.test.ts` — 160 assertions, all passing.
+components, modelAndRank}.test.ts` — 168 assertions, all passing.
 
 ## 9. Why this is stronger than the current weighted score (design rationale)
 1. **Probability, not a score** — outputs a per-PA and game HR probability the
