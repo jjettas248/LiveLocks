@@ -12,7 +12,7 @@
  * Run: npx tsx server/mlb/hrCalibration.test.ts
  */
 
-import { CALIBRATION_BIN_EDGES } from "./hrConversionModel";
+import { CALIBRATION_BIN_EDGES, EMPIRICAL_CALIBRATION_CEILING } from "./hrConversionModel";
 import { stampHrRadarOutcome, _resetHrRadarOutcomeStampsForTests } from "./hrRadarOutcomeStamp";
 import { computeCalibrationBuckets } from "../analytics/hrRadarIntelligence";
 import type { HrRadarOutcomeStatus } from "./hrRadarSection";
@@ -96,15 +96,39 @@ seed(8, "called_miss", 0.115, "floor_miss");
   if (b) assert("at-floor bucket samples=16", b.samples === 16, `samples=${b.samples}`);
 }
 
-// ── uncalled_hr counts as a cashed positive (C4) ───────────────────────────
+// ── uncalled_hr counts as a cashed positive (C4) — but an ALL-positive bin is
+//    selection-biased and must NOT override the static table (2026-06-25 audit).
+//    Previously 15 uncalled_hr → calibrated 16/17 ≈ 0.94, the exact inflation
+//    that pegged readiness/peak conversion and tripped every FIRE grading gate.
 _resetHrRadarOutcomeStampsForTests();
 seed(15, "uncalled_hr" as HrRadarOutcomeStatus, 0.04, "uncalled");
 {
   const buckets = computeCalibrationBuckets();
   const b = buckets.find(x => x.min === 0.03 && x.max === 0.05);
-  assert("uncalled_hr forms a 0.03–0.05 bucket (≥15)", !!b, `buckets=${JSON.stringify(buckets.map(x => [x.min, x.samples]))}`);
-  // All 15 are HR positives → Laplace (15+1)/(15+2) = 16/17.
-  if (b) assert("uncalled_hr counted as cashed → calibrated = 16/17", Math.abs(b.calibrated - 16 / 17) < 1e-9, `calibrated=${b.calibrated}`);
+  assert(
+    "all-positive bin (0 graded non-HR) forms NO bucket → static table rules",
+    !b,
+    `buckets=${JSON.stringify(buckets.map(x => [x.min, x.calibrated, x.samples]))}`,
+  );
+}
+
+// ── A balanced bin with enough negatives DOES override, and the calibrated
+//    value can never exceed EMPIRICAL_CALIBRATION_CEILING (impossible-value guard).
+_resetHrRadarOutcomeStampsForTests();
+seed(40, "uncalled_hr" as HrRadarOutcomeStatus, 0.22, "cap_hit");   // 40 positives
+seed(6, "called_miss", 0.225, "cap_miss");                          // 6 negatives (≥5 floor)
+{
+  const buckets = computeCalibrationBuckets();
+  const b = buckets.find(x => x.min === 0.20 && x.max === 0.25);
+  assert("balanced high-positive bin qualifies (≥12 samples, ≥5 non-HR)", !!b, `buckets=${buckets.length}`);
+  if (b) {
+    // Raw Laplace would be (40+1)/(46+2)=41/48≈0.854 — clamped to the ceiling.
+    assert(
+      "calibrated clamped to EMPIRICAL_CALIBRATION_CEILING (never ~0.95)",
+      Math.abs(b.calibrated - EMPIRICAL_CALIBRATION_CEILING) < 1e-9,
+      `calibrated=${b.calibrated}`,
+    );
+  }
 }
 
 _resetHrRadarOutcomeStampsForTests();

@@ -13,7 +13,12 @@
 
 import { getAnalyticsEvents } from "./analyticsEvent";
 import type { HrCalibrationBucket } from "../mlb/hrConversionModel";
-import { CALIBRATION_BIN_EDGES } from "../mlb/hrConversionModel";
+import { CALIBRATION_BIN_EDGES, EMPIRICAL_CALIBRATION_CEILING } from "../mlb/hrConversionModel";
+
+// Audit fix (2026-06-25) — minimum graded non-HR (negative) outcomes a bin must
+// carry before its empirical rate is trusted to override the static table. Guards
+// against the FIRE-only-grading selection bias that filled bins with positives.
+const MIN_NONHR_SAMPLES = 5;
 import { CALLED_HIT_OUTCOME_STATUSES } from "../mlb/hrRadarSection";
 // Lane 2 — static import. The previous inline `require(...)` threw
 // "require is not defined" under ESM (how the server runs via tsx), so the
@@ -455,17 +460,30 @@ export function computeCalibrationBuckets(): HrCalibrationBucket[] {
         return p >= min && p < max;
       });
       const cashed = inBin.filter(s => isCashed(s.outcomeStatus)).length;
+      const nonHr = inBin.length - cashed;
       // Per-bin minimum. Audit fix C4 — the old 30/20 floors were almost never
       // reached (a single process rarely settles 30 graded outcomes per bin in a
       // bin's lifetime before restart), so empirical buckets stayed empty and the
       // static table ruled forever. Lower to 15 (dense low bins) / 12 (sparse
       // high bins, min>=0.20). Laplace smoothing below keeps small-n bins honest.
       const minSamples = min >= 0.20 ? 12 : 15;
-      if (inBin.length >= minSamples) {
+      // Audit fix (2026-06-25) — REQUIRE a real negative (non-HR) sample before a
+      // bin may override the static table. Calibration estimates cashed/(cashed+
+      // missed); under FIRE-only grading the negatives (`called_miss`) are
+      // deliberately rare while `uncalled_hr` positives flood in, so bins were
+      // going near-100% cashed and Laplace drove `calibrated`→~0.95 off a sample
+      // that carried NO information about the false-positive rate. A bin with
+      // fewer than MIN_NONHR_SAMPLES negatives is selection-biased; skip it and
+      // let the curated static table rule that range. This is the structural fix;
+      // the EMPIRICAL_CALIBRATION_CEILING clamp below is belt-and-suspenders.
+      if (inBin.length >= minSamples && nonHr >= MIN_NONHR_SAMPLES) {
         // Lane 2.3 — Laplace smoothing: (cashed+1)/(n+2) so a bin that happens
         // to see all-misses (or all-hits) can't snap the calibrated value to a
         // hard 0 (or 1), which would over-correct off a finite sample.
-        const calibrated = (cashed + 1) / (inBin.length + 2);
+        const calibrated = Math.min(
+          EMPIRICAL_CALIBRATION_CEILING,
+          (cashed + 1) / (inBin.length + 2),
+        );
         buckets.push({ min, max, calibrated, samples: inBin.length });
       }
     }

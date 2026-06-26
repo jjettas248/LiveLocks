@@ -18,7 +18,7 @@ import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 // ── Locked baseline version ────────────────────────────────────────────────
 // Bump this string only when MLB engine behavior changes intentionally.
 // The boot log line carries this value so prod logs are self-describing.
-export const MLB_GOLDMASTER_VERSION = "mlb-goldmaster-v17-2026-06-26-hr-radar-live-only-pregame-seed-gated";
+export const MLB_GOLDMASTER_VERSION = "mlb-goldmaster-v18-2026-06-26-hr-radar-live-only-pregame-seed-gated";
 
 // Rolling drift snapshot ring buffer.
 const MAX_SNAPSHOTS = 50;
