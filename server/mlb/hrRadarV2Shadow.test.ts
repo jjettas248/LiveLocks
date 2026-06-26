@@ -195,6 +195,34 @@ assert("7.5 derivableStats includes near_hr_tier", adapted.derivableStats.includ
 assert("7.6 diagnosticsOnlyStats includes bvp_history", adapted.diagnosticsOnlyStats.includes("bvp_history"));
 assert("7.7 adapter never sets supplementalCore (stays honestly sparse)", adapted.supplementalCore == null);
 
+// PREGAME_SEED rows are ACTIVE but carry NO live contact evidence and a
+// pregame-only tag. They must NOT count as live evidence (PR #48 review).
+const pregameSeedState: CanonicalHrRadarState = {
+  ...state,
+  lifecycleState: "watch",
+  section: "WATCH",
+  userStage: "track",
+  active: true,
+  terminal: false,
+  triggerReasons: ["pregame_priors:pf1.10_era5.20"],
+  triggerTags: ["PREGAME_SEED"],
+  contactEvidence: [],
+};
+const adaptedPregame = buildHrRadarV2InputFromCanonicalState(pregameSeedState, { referenceTimeIso: REF });
+assert("7.10 pregame-seed active row → hasLiveEvidence false", adaptedPregame.hasLiveEvidence === false);
+const pregameShadow = computeHrRadarV2Shadow(adaptedPregame);
+assert("7.11 pregame-seed → suppressed (no suggested stage)", pregameShadow.v2SuggestedStage === null);
+
+// A live near-HR row whose contactEvidence bag is empty but carries a live
+// matched-path tag IS live evidence (sourceAbIndex-null case).
+const liveTagNoEvidence: CanonicalHrRadarState = {
+  ...state,
+  triggerTags: ["BARREL_OVERRIDE"],
+  contactEvidence: [],
+};
+const adaptedLiveTag = buildHrRadarV2InputFromCanonicalState(liveTagNoEvidence, { referenceTimeIso: REF });
+assert("7.12 live near-HR tag (no evidence bag) → hasLiveEvidence true", adaptedLiveTag.hasLiveEvidence === true);
+
 const terminalState: CanonicalHrRadarState = { ...state, active: false, terminal: true, lifecycleState: "cashed" };
 const adaptedTerminal = buildHrRadarV2InputFromCanonicalState(terminalState, { referenceTimeIso: REF });
 assert("7.8 terminal state → hasLiveEvidence false", adaptedTerminal.hasLiveEvidence === false);

@@ -57,6 +57,34 @@ const BUILD_SCORE_MIN = 55;
 const FIRE_MODEL_CONFIDENCE_MIN = 70;
 const FIRE_CORE_CONFIDENCE_MIN = 75;
 
+// Live near-HR matched-path tags the orchestrator stamps on real in-game
+// evidence rows (see nearHrContact.NearHrMatchedPath). Presence of one of
+// these is itself live evidence even if the contactEvidence bag is empty
+// (e.g. when sourceAbIndex was null).
+const LIVE_NEAR_HR_TAGS = new Set<string>([
+  "WATCH",
+  "LEAN",
+  "HIGH_XBA_DANGER",
+  "HIGH_XBA_DANGER_BARREL",
+  "BARREL_OVERRIDE",
+  "BARREL_OVERRIDE_LEAN",
+  "REPEATED_DANGER",
+  "DEEP_FLYOUT_LEAN",
+  "DEEP_FLYOUT_WATCH",
+  "POWER_DOUBLE",
+  "POWER_TRIPLE",
+  "XBA_MISMATCH_DANGER",
+]);
+
+// Tag markers for pregame / probability-only seed rows. The orchestrator's
+// PREGAME_SEED path (gated, off by default) upserts ACTIVE canonical rows
+// from pregame priors with NO live contact evidence. These must NEVER count
+// as live evidence for the v2 shadow model.
+function isPregameOnlyTag(tag: string): boolean {
+  const t = tag.toUpperCase();
+  return t.includes("PREGAME") || t.includes("SEED") || t.includes("PROB_ONLY") || t.includes("POWER_PRIOR");
+}
+
 // Historical / season context that is intentionally diagnostics-only (never
 // scored as live evidence, and not endpoint-accessible anyway).
 const DIAGNOSTICS_ONLY_STATS = [
@@ -82,10 +110,20 @@ export function buildHrRadarV2InputFromCanonicalState(
   options: BuildV2InputOptions = {},
 ): HRRadarV2Input {
   const contactEvidence = mapContactEvidence(state.contactEvidence);
+  const triggerTags = [...(state.triggerTags ?? [])];
 
-  // LIVE-ONLY: canonical active states are created only from live in-game
-  // evidence. Terminal / inactive rows carry no current live evidence.
-  const hasLiveEvidence = state.active === true && !state.terminal;
+  // LIVE-ONLY: `active` alone is NOT sufficient — the orchestrator's gated
+  // PREGAME_SEED path creates ACTIVE rows from pregame priors with no live
+  // contact. Require REAL live evidence: an actual batted-ball record OR a
+  // live near-HR matched-path tag, AND exclude pregame/prob-only seed rows.
+  const hasRealContact = contactEvidence.some(
+    (e) => e.ev != null || e.la != null || e.distance != null || e.xba != null || e.isBarrel,
+  );
+  const tagsUpper = triggerTags.map((t) => t.toUpperCase());
+  const isPregameOnly = tagsUpper.some(isPregameOnlyTag);
+  const hasLiveTriggerTag = tagsUpper.some((t) => LIVE_NEAR_HR_TAGS.has(t));
+  const hasLiveEvidence =
+    state.active === true && !state.terminal && !isPregameOnly && (hasRealContact || hasLiveTriggerTag);
 
   const availableStats = ["lifecycleState", "userStage", "displayScore10", "peakScore10"];
   if (state.detectedInning != null) availableStats.push("detectedInning");
@@ -127,7 +165,7 @@ export function buildHrRadarV2InputFromCanonicalState(
     hasLiveEvidence,
     contactEvidence,
     triggerReasons: [...(state.triggerReasons ?? [])],
-    triggerTags: [...(state.triggerTags ?? [])],
+    triggerTags,
 
     detectedInning: state.detectedInning,
     latestEvidenceInning: state.latestEvidenceInning,
