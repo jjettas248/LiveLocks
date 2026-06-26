@@ -55,6 +55,23 @@ UI to the already-enforced grading, and adds tests pinning the semantics.
 **Fix applied:** Added a dependency-free gate `isHrRadarPregameSeedEnabled()` (`server/mlb/hrRadarLiveContract.ts`), **default OFF**. The seeding block is skipped unless `HR_RADAR_PREGAME_SEED` is explicitly enabled, so the live ladder is live-evidence-driven by default. Reversible at runtime; no deletion of the logic.
 **Behavioral risk:** **Low.** Seeded rows were always Track and were never graded (FIRE-only record), so the official W/L history is unchanged. The only effect is that no-AB batters no longer pre-surface as Track until they produce live contact. Goldmaster version bumped to document the intentional change (`v16 → v17`). Reversible via env.
 
+> **PR #46 review addendum (approved scope expansion).** A Codex review found a
+> *second* zero-AB pregame surface: the Task #126 **HR Presence Floor pass**
+> (`liveGameOrchestrator.ts` ~4787–4872) writes `isPresenceOnly: true` WATCH/Track
+> rows for season-stats power threats (slot/seasonHR/L30/barrel/hot-streak) using
+> `computePregameSeed`, with `contactSnapshot: null` / `hasLiveABContext: false`.
+> With explicit owner approval, this presence-only write is now gated behind the
+> **same** `isHrRadarPregameSeedEnabled()` switch (default OFF), so no zero-AB
+> pregame-context row surfaces by default. **Deliberate grading-coverage change:**
+> presence-only rows are what make a *later* HR by these batters grade as
+> `called_miss (presence-only)`; with the gate off, that presence-only coverage
+> is reduced by design. The **FIRE-only official record** (`called_hit*` /
+> official `called_miss`) is **unaffected** — presence-only misses are a separate,
+> user-hidden grading bucket. **Not gated:** the "promote a live-contact row the
+> PATH gate left behind" path (it requires real in-game contact) and the per-card
+> pregame seed *floor* on engine-created PATH rows (the `HR_PREGAME_PRIOR` family,
+> left intact per scope).
+
 ### P2 — UI implied READY was actionable/graded (contract mismatch)
 **File/function:** `client/src/components/mlb/HrRadarLadder.tsx` — `SECTION_META.ready.description` (L294) and the `isAttack` comment (L686–688).
 **Current behavior (before):** READY described as *"Playable HR setup"* and a comment asserted *"Fire + Ready are the actionable, graded tier."* Grading is FIRE-only, so this implied a counted call that grading ignores — exactly the mismatch the task prohibits.
@@ -99,7 +116,7 @@ Read by `pregamePowerRadar/*` only; no live producer. It is **not** an HR Radar 
 | File | Change |
 | --- | --- |
 | `client/src/components/mlb/HrRadarLadder.tsx` | READY copy + `isAttack` comment aligned to FIRE-only (display/comment only) |
-| `server/mlb/liveGameOrchestrator.ts` | Gate no-AB `PREGAME_SEED` behind `isHrRadarPregameSeedEnabled()` (default OFF) |
+| `server/mlb/liveGameOrchestrator.ts` | Gate no-AB `PREGAME_SEED` **and** Task #126 presence-only WATCH-row pass behind `isHrRadarPregameSeedEnabled()` (default OFF) |
 | `server/mlb/hrRadarLiveContract.ts` | **New** — dependency-free live-only runtime gate (`isHrRadarPregameSeedEnabled`) |
 | `server/mlb/goldmasterGuard.ts` | `MLB_GOLDMASTER_VERSION` v16 → v17 (documents intentional behavior change) |
 | `server/mlb/hrRadarLiveOnly.test.ts` | **New** — 21-invariant suite: no Monte Carlo, seed gated off, FIRE-only, prior no-op |

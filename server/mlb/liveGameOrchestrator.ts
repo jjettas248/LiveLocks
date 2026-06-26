@@ -4784,6 +4784,21 @@ export class LiveGameOrchestrator {
           continue;
         }
 
+        // HR Radar Live = live-evidence only (default). The presence-only pass
+        // below surfaces a zero-AB WATCH/Track row from PREGAME context (season
+        // power profile via computePregameSeed + slot/season-HR/L30/barrel/
+        // hot-streak eligibility) for power threats who received no live PATH
+        // row this tick — i.e. NOT live in-game evidence. Gated OFF by default
+        // with the same HR_RADAR_PREGAME_SEED switch as the no-AB seed so the
+        // live ladder stays live-evidence-driven; flip it on to restore the
+        // presence-only coverage. NOTE: presence-only rows are the mechanism
+        // that grades a LATER HR by these batters as called_miss (presence-only),
+        // so disabling them reduces that grading coverage by design — the
+        // FIRE-only official record (called_hit/official called_miss) is
+        // unaffected. The live-contact promote above (real in-game contact) is
+        // intentionally NOT gated.
+        if (!isHrRadarPregameSeedEnabled()) continue;
+
         const eligibilityReasons: string[] = [];
         const lineupSlot = batter.slot ?? 9;
         // Lineup slots 1-5 get unconditional watch coverage — top-of-order bats

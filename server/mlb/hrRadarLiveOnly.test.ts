@@ -80,6 +80,16 @@ eq("2.3 explicit on → enabled (reversible)", isHrRadarPregameSeedEnabled({ HR_
 eq("2.4 '1' → enabled", isHrRadarPregameSeedEnabled({ HR_RADAR_PREGAME_SEED: "1" } as any), true);
 eq("2.5 garbage → disabled (fail-safe live-only)", isHrRadarPregameSeedEnabled({ HR_RADAR_PREGAME_SEED: "maybe" } as any), false);
 
+// Both zero-AB pregame surfaces in the orchestrator (the periodic no-AB
+// PREGAME_SEED block AND the Task #126 presence-only WATCH-row pass) must be
+// guarded by the same gate, so neither can re-surface pregame-context rows
+// while HR_RADAR_PREGAME_SEED is off. Source-scan guard against accidental
+// removal of either gate.
+const orch = readFileSync(join(HERE, "liveGameOrchestrator.ts"), "utf8");
+const gateCount = (orch.match(/isHrRadarPregameSeedEnabled\s*\(/g) ?? []).length;
+assert("2.6 both pregame surfaces gated (>=2 gate call-sites in orchestrator)", gateCount >= 2,
+  `found ${gateCount} call-site(s)`);
+
 // ── 3. FIRE-only official record — Ready/Track/Build are NOT official ───────
 console.log("\n3. enrichWithUserStage — FIRE-only officialSignalStage");
 
