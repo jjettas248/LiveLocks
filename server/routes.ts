@@ -458,6 +458,83 @@ export async function registerRoutes(
     }
   });
 
+  // HR Radar Live v2 SHADOW model — READ-ONLY admin/debug diagnostic. Computes
+  // the v2 shadow score on-demand from existing canonical HR Radar state. It
+  // changes NO production scoring, stage, alert, grading, or user-visible
+  // behavior — output is for admin visibility / backtest comparison only.
+  // Defaults to ACTIVE states, caps the row count, and omits heavy diagnostics
+  // unless ?includeDiagnostics=1. No writes, no orchestrator/bus/lifecycle.
+  app.get("/api/admin/mlb-hr-radar-v2-shadow", requireAdmin, async (req, res) => {
+    try {
+      const { buildHrRadarV2InputFromCanonicalState, computeHrRadarV2Shadow } = await import(
+        "./mlb/hrRadarV2Shadow"
+      );
+      const { V2_SHADOW_MODEL_VERSION } = await import("./mlb/hrRadarV2Types");
+      const { getActiveCanonicalHrRadarStates, getAllCanonicalHrRadarStates } = await import(
+        "./mlb/hrRadarCanonicalStore"
+      );
+
+      const gameId = req.query.gameId ? String(req.query.gameId) : undefined;
+      const includeAll = String(req.query.includeAll ?? "") === "1";
+      const includeDiagnostics = String(req.query.includeDiagnostics ?? "") === "1";
+      const HARD_CAP = 200;
+      const rawLimit = Number(req.query.limit);
+      const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(HARD_CAP, Math.floor(rawLimit))) : HARD_CAP;
+
+      // Default: active states only. ?includeAll=1 widens to all states.
+      const states = includeAll ? getAllCanonicalHrRadarStates(gameId) : getActiveCanonicalHrRadarStates(gameId);
+
+      // Deterministic reference time injected here (route I/O layer — pure
+      // scoring never reads wall-clock itself).
+      const referenceTimeIso = new Date().toISOString();
+
+      const shadows = states.slice(0, limit).map((s) => {
+        const input = buildHrRadarV2InputFromCanonicalState(s, { referenceTimeIso });
+        const shadow = computeHrRadarV2Shadow(input);
+        if (includeDiagnostics) return shadow;
+        // Summary-first: drop heavy diagnostics + per-component advanced map,
+        // keep the decision-relevant fields.
+        const { diagnostics, advancedContext, ...rest } = shadow;
+        return {
+          ...rest,
+          advancedContextCoverage: shadow.advancedContextCoverage,
+          availableAdvancedComponents: advancedContext.availableComponentCount,
+          totalAdvancedComponents: advancedContext.totalComponentCount,
+        };
+      });
+
+      const summary = { fire: 0, ready: 0, build: 0, track: 0, suppressed: 0 };
+      const missingStatCounts = new Map<string, number>();
+      for (const sh of shadows) {
+        const stage = sh.v2SuggestedStage;
+        if (stage === "fire") summary.fire += 1;
+        else if (stage === "ready") summary.ready += 1;
+        else if (stage === "build") summary.build += 1;
+        else if (stage === "track") summary.track += 1;
+        else summary.suppressed += 1;
+        for (const m of sh.missingStats ?? []) {
+          missingStatCounts.set(m, (missingStatCounts.get(m) ?? 0) + 1);
+        }
+      }
+      const missingStatsTop = Array.from(missingStatCounts.entries())
+        .map(([stat, count]) => ({ stat, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 15);
+
+      return res.json({
+        ok: true,
+        modelVersion: V2_SHADOW_MODEL_VERSION,
+        note: "Shadow model — admin/debug only. Does not affect production scoring, stages, alerts, or grading.",
+        count: shadows.length,
+        summary: { ...summary, missingStatsTop },
+        shadows,
+      });
+    } catch (err: any) {
+      console.error("[admin/mlb-hr-radar-v2-shadow]", err?.message ?? err);
+      return res.status(500).json({ ok: false, error: "Failed to compute HR Radar v2 shadow" });
+    }
+  });
+
   // MLB Shadow Qualification panel — passive parallel-runtime evaluation of a
   // candidate threshold (batter_over signalScore >= 43) vs the live floor (46).
   // Shadow signals are recorded for analytics ONLY and never surface to users,
