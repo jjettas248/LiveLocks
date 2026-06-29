@@ -2078,7 +2078,7 @@ export default function Dashboard() {
             <button
               data-testid="button-notifications"
               onClick={() => setShowHistorySheet(true)}
-              className="relative flex items-center justify-center w-9 h-9 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
+              className="relative flex items-center justify-center w-10 h-10 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
               title="Notifications & alert history"
             >
               <Bell ref={bellRef} className="w-4 h-4" />
@@ -2138,7 +2138,7 @@ export default function Dashboard() {
               <button
                 data-testid="button-logout"
                 onClick={() => { logout(); navigate("/auth"); }}
-                className="flex items-center justify-center gap-1.5 w-9 h-9 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors"
+                className="flex items-center justify-center gap-1.5 w-10 h-10 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors"
                 title={user.email}
                 aria-label="Sign out"
               >
@@ -2432,7 +2432,7 @@ export default function Dashboard() {
             </div>
             <div className="flex items-start justify-between gap-4">
               <div className="flex-1">
-                <div className="text-5xl font-black text-white leading-none" data-testid="text-auto-run-probability">
+                <div className="text-4xl sm:text-5xl font-black text-white leading-none" data-testid="text-auto-run-probability">
                   {autoRunResult.probability.toFixed(1)}%
                 </div>
                 <div className="mt-2 flex items-center gap-3">
@@ -4548,7 +4548,10 @@ export default function Dashboard() {
             className="fixed inset-0 bg-black/50 z-40"
             onClick={() => setShowParlay(false)}
           />
-          <div className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-card border-t border-border shadow-2xl flex flex-col max-h-[80vh]">
+          <div
+            className="fixed inset-x-0 bottom-0 z-50 rounded-t-2xl bg-card border-t border-border shadow-2xl flex flex-col max-h-[85dvh]"
+            style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
+          >
             <div className="flex items-center justify-center pt-3 pb-1 flex-shrink-0">
               <div className="w-10 h-1 rounded-full bg-border" />
             </div>
@@ -4889,7 +4892,7 @@ export default function Dashboard() {
         onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
         data-testid="button-float-scroll-top"
         aria-label="Scroll to top"
-        className={`fixed bottom-6 right-5 z-50 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 bg-primary text-primary-foreground hover:opacity-90 active:scale-95 ${showScrollTop ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
+        className={`fixed bottom-[calc(1.5rem_+_env(safe-area-inset-bottom,0px))] right-[calc(1.25rem_+_env(safe-area-inset-right,0px))] z-50 w-10 h-10 rounded-full flex items-center justify-center shadow-lg transition-all duration-300 bg-primary text-primary-foreground hover:opacity-90 active:scale-95 ${showScrollTop ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
       >
         <ChevronUp className="w-5 h-5" />
       </button>

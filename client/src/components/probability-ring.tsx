@@ -39,9 +39,17 @@ export function ProbabilityRing({
   }
 
   return (
-    <div className="relative flex items-center justify-center" style={{ width: size, height: size }}>
-      {/* Background Ring */}
-      <svg className="absolute inset-0 transform -rotate-90" width={size} height={size}>
+    <div
+      className="relative flex items-center justify-center w-full"
+      style={{ maxWidth: size, aspectRatio: "1 / 1" }}
+    >
+      {/* Background Ring — viewBox lets the SVG scale down fluidly on narrow
+          phones instead of forcing a fixed px box that overflows the card. */}
+      <svg
+        className="absolute inset-0 w-full h-full transform -rotate-90"
+        viewBox={`0 0 ${size} ${size}`}
+        preserveAspectRatio="xMidYMid meet"
+      >
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -70,7 +78,7 @@ export function ProbabilityRing({
           initial={{ opacity: 0, scale: 0.5 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.5, duration: 0.5 }}
-          className={`text-5xl font-display font-bold ${colorClass}`}
+          className={`text-3xl sm:text-4xl md:text-5xl font-display font-bold ${colorClass}`}
         >
           {probability.toFixed(1)}%
         </motion.span>

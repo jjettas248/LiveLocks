@@ -420,7 +420,7 @@ export default function NcaabLivePage() {
     refetchOnWindowFocus: true,
   });
 
-  if (authLoading) return <div className="flex items-center justify-center h-screen text-muted-foreground" data-testid="loading-auth">Loading...</div>;
+  if (authLoading) return <div className="flex items-center justify-center min-h-[100dvh] text-muted-foreground" data-testid="loading-auth">Loading...</div>;
   if (!user) return null;
 
   const cards = data?.cards ?? [];

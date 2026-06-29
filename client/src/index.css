@@ -126,6 +126,44 @@
     background-size: 40px 40px;
   }
 
+  /* Horizontal scroll strips (tab bars, signal rails, game chips) reference
+     these classes throughout the app, but no plugin defined them — so the
+     intended momentum scroll + hidden/thin scrollbar never applied. Define
+     them here. `-webkit-overflow-scrolling: touch` gives iOS momentum. */
+  .scrollbar-hide {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;        /* Firefox */
+    -ms-overflow-style: none;     /* IE/old Edge */
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;                /* WebKit */
+    width: 0;
+    height: 0;
+  }
+  .scrollbar-thin {
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 9999px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* Safe-area helpers for fixed bottom chrome (drawers, floating buttons).
+     Use alongside an explicit base spacing so non-notched devices still get
+     a sensible gap. */
+  .pb-safe {
+    padding-bottom: max(0px, env(safe-area-inset-bottom, 0px));
+  }
+
   .hover-elevate {
     transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   }
