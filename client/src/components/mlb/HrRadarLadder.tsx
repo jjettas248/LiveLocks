@@ -862,7 +862,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           onClick={() => onOpenDetails?.(entry)}
           data-testid={`button-open-ladder-details-${entry.playerId}`}
         >
-          <div className="flex items-center gap-2 mb-0.5 min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-0.5 min-w-0">
             <span className="font-bold text-sm truncate min-w-0" data-testid={`text-ladder-player-${entry.playerId}`}>
               {entry.playerName}
             </span>
@@ -1910,7 +1910,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
           data-testid="ladder-summary-bar-wrapper"
         >
         <div
-          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-card border border-border/40 overflow-x-auto"
+          className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 rounded-lg bg-card border border-border/40"
           data-testid="ladder-summary-bar"
         >
           {(counts.attackNow + counts.ready) > 0 && (
