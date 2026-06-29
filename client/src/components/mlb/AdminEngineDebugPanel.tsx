@@ -239,7 +239,7 @@ export function AdminEngineDebugPanel({ selectedGameId }: { selectedGameId: stri
           type="button"
           aria-label="Open MLB DevTools"
           data-testid="button-open-mlb-devtools"
-          className="fixed z-40 right-3 sm:right-4 bottom-[calc(env(safe-area-inset-bottom,0px)+12px)] sm:bottom-4 flex items-center gap-2 px-3 py-2 rounded-full border border-amber-500/40 bg-background/95 backdrop-blur shadow-lg hover:border-amber-500/70 transition-colors"
+          className="fixed z-40 right-3 sm:right-4 bottom-[calc(env(safe-area-inset-bottom,0px)_+_12px)] sm:bottom-4 flex items-center gap-2 px-3 py-2 rounded-full border border-amber-500/40 bg-background/95 backdrop-blur shadow-lg hover:border-amber-500/70 transition-colors"
         >
           <Settings2 className="w-3.5 h-3.5 text-amber-400" />
           <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">MLB DevTools</span>

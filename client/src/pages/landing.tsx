@@ -102,7 +102,7 @@ export default function LandingPage() {
             Detection engine is live — NBA + MLB season active
           </div>
 
-          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tighter mb-6 leading-none text-balance text-gray-950" data-testid="text-hero-heading">
+          <h1 className="text-4xl sm:text-5xl md:text-7xl font-extrabold tracking-tighter mb-6 leading-none text-balance text-gray-950" data-testid="text-hero-heading">
             NBA + MLB<br />Live Betting Signals
           </h1>
 
