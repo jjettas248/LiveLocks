@@ -3940,65 +3940,11 @@ export async function registerRoutes(
         (sections.dead?.length ?? 0);
       const liveGamesFound = countLiveMlbGames();
 
-      // ── Phase 2.5 HR Watch Bridge ───────────────────────────────────────
-      // Surface near-HR contact detections (signalType="hr_watch") into the
-      // ladder response as an additive `hrWatch` array so the UI can render
-      // them WITHOUT touching the canonical engine ladder buckets. Pure
-      // read of the in-memory cache; no engine recompute, no math change.
-      const hrWatchEntries: Array<{
-        playerId: string;
-        playerName: string;
-        team: string | null;
-        gameId: string;
-        market: string;
-        signalScore: number | null;
-        signalTier: string | null;
-        nearHrEv: number | null;
-        nearHrLa: number | null;
-        nearHrDistance: number | null;
-        nearHrXba: number | null;
-        engineGeneratedAt: number | null;
-      }> = [];
-      const hrWatchSeen = new Set<string>(); // dedupe key: playerId:gameId
-      try {
-        for (const [, entry] of Array.from(mlbEdgeCache.entries())) {
-          if (!isMLBEdgeEntryFresh(entry, 20 * 60 * 1000)) continue;
-          for (const sig of (entry.qualifiedSignals ?? []) as any[]) {
-            const isHrWatch = sig.signalType === "hr_watch" || sig.mode === "hr_watch" || sig.signalMode === "hr_watch";
-            if (!isHrWatch) continue;
-            const dedupeKey = `${sig.playerId}:${sig.gameId ?? entry.gameId}`;
-            if (hrWatchSeen.has(dedupeKey)) {
-              console.log(`[LL_HR_RADAR_DUPLICATE_BLOCKED] playerId=${sig.playerId} gameId=${sig.gameId ?? entry.gameId}`);
-              continue;
-            }
-            hrWatchSeen.add(dedupeKey);
-            const drv = (sig.drivers ?? {}) as Record<string, number>;
-            hrWatchEntries.push({
-              playerId: String(sig.playerId ?? ""),
-              playerName: String(sig.playerName ?? ""),
-              team: sig.team ?? null,
-              gameId: String(sig.gameId ?? entry.gameId),
-              market: String(sig.market ?? ""),
-              signalScore: typeof sig.signalScore === "number" ? sig.signalScore : null,
-              signalTier: sig.signalTier ?? sig.confidenceTier ?? null,
-              nearHrEv: typeof drv.nearHrEv === "number" ? drv.nearHrEv : null,
-              nearHrLa: typeof drv.nearHrLa === "number" ? drv.nearHrLa : null,
-              nearHrDistance: typeof drv.nearHrDistance === "number" ? drv.nearHrDistance : null,
-              nearHrXba: typeof drv.nearHrXba === "number" ? drv.nearHrXba : null,
-              engineGeneratedAt: typeof sig.engineGeneratedAt === "number" ? sig.engineGeneratedAt : null,
-            });
-          }
-        }
-      } catch (err) {
-        console.warn("[mlb/hr-radar/ladder] hrWatch bridge failed:", (err as any)?.message);
-      }
-      (ladder as any).hrWatch = hrWatchEntries;
-
       (ladder as any).diagnostics = {
         sessionDate: (ladder as any).sessionDate,
         rowsFound,
         liveGamesFound,
-        hrWatchCount: hrWatchEntries.length,
+        hrWatchCount: 0,
         pregamePowerTargets: pregamePowerMatches,
         fallbackRowsGenerated: 0,
         source: rowsFound > 0 ? "engine" : (liveGamesFound > 0 ? "engine_no_candidates" : "no_live_games"),

@@ -12,6 +12,27 @@ interface Props {
 
 const STAGE_FILTERS = ["all", "FIRE", "READY", "BUILD", "WATCH", "CASHED", "MISSED"];
 
+// Map the engine's raw stage tokens to the SAME user-facing vocabulary the HR
+// Radar ladder shows (see SECTION_META in HrRadarLadder.tsx): BUILD→ALMOST and
+// WATCH→TRACK so this admin feed never surfaces a stage name that disagrees
+// with — or looks more raw than — what users see on the live ladder. The raw
+// token is still used for filtering; only the displayed text is humanized.
+const STAGE_LABELS: Record<string, string> = {
+  FIRE: "FIRE",
+  READY: "READY",
+  BUILD: "ALMOST",
+  WATCH: "TRACK",
+  CASHED: "CASHED",
+  MISSED: "MISSED",
+  EXPIRED: "EXPIRED",
+  INACTIVE: "INACTIVE",
+};
+
+function stageLabel(stage: string): string {
+  if (!stage) return "—";
+  return STAGE_LABELS[stage] ?? stage.charAt(0).toUpperCase() + stage.slice(1).toLowerCase();
+}
+
 function stageColor(stage: string): string {
   switch (stage) {
     case "FIRE":
@@ -81,7 +102,7 @@ export function HrMovementFeed({
               }`}
               data-testid={`movement-stage-filter-${s}`}
             >
-              {s === "all" ? "All" : s}
+              {s === "all" ? "All" : stageLabel(s)}
             </button>
           ))}
         </div>
@@ -109,9 +130,9 @@ export function HrMovementFeed({
                     {m.player} <span className="text-muted-foreground">({m.team})</span>
                   </div>
                   <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <span>{m.previousStage}</span>
+                    <span>{stageLabel(m.previousStage)}</span>
                     <ArrowRight className="h-3 w-3" />
-                    <span className={stageColor(m.currentStage)}>{m.currentStage}</span>
+                    <span className={stageColor(m.currentStage)}>{stageLabel(m.currentStage)}</span>
                     {m.topDriver && <span className="truncate">· {m.topDriver}</span>}
                   </div>
                 </div>
