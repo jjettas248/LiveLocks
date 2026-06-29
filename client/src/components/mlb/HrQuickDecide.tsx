@@ -5,6 +5,7 @@ import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { type HrRadarLadderEntry, type HrRadarLadderResponse } from "@/components/mlb/HrRadarLadder";
 import {
   mapHrRadarRowToDisplayState,
+  isPregameOnlyRow,
   type HrRadarDisplayState,
   type HrRadarRowInput,
 } from "@/components/mlb/hrRadarDisplayState";
@@ -272,6 +273,7 @@ export function HrQuickDecide({ onAddToSlip, onSwitchToLadder }: HrQuickDecidePr
   for (const e of liveRows) {
     const d = toDisplay(e);
     if (d.isAdminOnly) continue; // noAbYet / modelReview never shown to users here
+    if (isPregameOnlyRow(e as unknown as HrRadarRowInput)) continue; // hide until live AB
     if (d.section === "fire") fire.push(e);
     else if (d.section === "ready") readyNow.push(e);
     else if (d.section === "watching" || d.section === "developing") watching.push(e);

@@ -6617,9 +6617,25 @@ export class DatabaseStorage implements IStorage {
     // sentences (e.g. "LEI ESCALATION:HrShaped1 Score9.99 Lei").
     const ENGINE_JARGON_PREFIX_RE = /^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|FORMATION|PRE[_ ]HR[_ ]DANGER|LEI[_ ]?[A-Z]+|LEI\b)/i;
     const ENGINE_JARGON_TOKEN_RE = /(HrShaped\d*|BsZ[-+]?\d|Danger\d|Profile\d|Score\d+(\.\d+)?|Conv\s+\d+%|PATH[_ ]?[A-Z0-9_]+|LEI ESCALATION)/i;
+    // Raw engine identifier codes (FSM / prob-rail promotion reasons) are bare
+    // lowercase snake_case / colon-joined tokens with no spaces — e.g.
+    // "prob_rail:bet_now_attack_sustained", "dynamic_bet_now_build",
+    // "pitcher_fade_vuln_30", "betnow_attack_sustained_contact_driver". They are
+    // observability codes, never user copy, so they must stay admin-only. The
+    // curated KNOWN_GOOD_TAGS (which humanizeHrRadarTag maps to real product
+    // language) are exempt.
+    const RAW_IDENTIFIER_RE = /^[a-z][a-z0-9]*([_:][a-z0-9]+)+$/;
+    const KNOWN_GOOD_TAGS = new Set([
+      "hot_hitter", "barrel_streak", "hard_contact", "pitcher_fade",
+      "pitcher_fatigue", "bvp_advantage", "park_boost", "wind_out",
+      "lineup_protection", "due_up_soon", "high_xba_zone", "ev_uptick",
+    ]);
     const looksLikeJargon = (s: string): boolean => {
       const t = s.trim();
-      return ENGINE_JARGON_PREFIX_RE.test(t) || ENGINE_JARGON_TOKEN_RE.test(t);
+      if (ENGINE_JARGON_PREFIX_RE.test(t) || ENGINE_JARGON_TOKEN_RE.test(t)) return true;
+      // Bare engine identifier code that isn't a curated good tag → jargon.
+      if (RAW_IDENTIFIER_RE.test(t) && !KNOWN_GOOD_TAGS.has(t)) return true;
+      return false;
     };
 
     const userReasons: string[] = [];
