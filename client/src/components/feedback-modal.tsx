@@ -35,7 +35,7 @@ export function FeedbackModal() {
         data-testid="button-open-feedback"
         onClick={() => setOpen(true)}
         title="Send feedback"
-        className={`fixed bottom-24 sm:bottom-6 right-4 sm:right-6 z-50 w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 flex items-center justify-center hover:bg-primary/90 transition-all hover:scale-105 active:scale-95 ${!everSubmitted ? "glow-breathe" : ""}`}
+        className={`fixed bottom-[calc(6rem_+_env(safe-area-inset-bottom,0px))] sm:bottom-[calc(1.5rem_+_env(safe-area-inset-bottom,0px))] right-[calc(1rem_+_env(safe-area-inset-right,0px))] sm:right-6 z-50 w-12 h-12 rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 flex items-center justify-center hover:bg-primary/90 transition-all hover:scale-105 active:scale-95 ${!everSubmitted ? "glow-breathe" : ""}`}
       >
         <MessageSquare className="w-5 h-5" />
       </button>
