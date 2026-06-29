@@ -159,7 +159,7 @@ function hasDriver(s: PregameSignal, predicate: (d: PowerDriver) => boolean): bo
   return s.drivers.some((d) => d.direction === "positive" && predicate(d));
 }
 
-export function PregamePowerRadar() {
+export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: string | null } = {}) {
   const [filter, setFilter] = useState<FilterKey>("all");
 
   const { data, isLoading } = useQuery<RadarResponse>({
@@ -171,6 +171,8 @@ export function PregamePowerRadar() {
   const signals = useMemo(() => {
     const all = data?.signals ?? [];
     return all.filter((s) => {
+      // Slate-ribbon deep-link filter — presentational only. No-op when null.
+      if (selectedGameId && s.gameId !== selectedGameId) return false;
       switch (filter) {
         case "hr": return s.marketTags.includes("home_runs");
         case "tb": return s.marketTags.includes("total_bases");
@@ -181,7 +183,7 @@ export function PregamePowerRadar() {
         default: return true;
       }
     });
-  }, [data, filter]);
+  }, [data, filter, selectedGameId]);
 
   return (
     <div className="space-y-3" data-testid="section-pregame-power-radar">
