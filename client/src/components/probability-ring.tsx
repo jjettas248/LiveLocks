@@ -40,8 +40,8 @@ export function ProbabilityRing({
 
   return (
     <div
-      className="relative flex items-center justify-center w-full"
-      style={{ maxWidth: size, aspectRatio: "1 / 1" }}
+      className="relative flex items-center justify-center"
+      style={{ width: size, maxWidth: "100%", aspectRatio: "1 / 1" }}
     >
       {/* Background Ring — viewBox lets the SVG scale down fluidly on narrow
           phones instead of forcing a fixed px box that overflows the card. */}
