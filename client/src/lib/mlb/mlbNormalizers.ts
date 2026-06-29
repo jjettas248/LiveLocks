@@ -15,7 +15,7 @@ export type MlbGameChipViewModel = {
   isPregame: boolean;
 };
 
-type GameLike = {
+export type GameLike = {
   gameId: string;
   awayTeam?: string | null;
   homeTeam?: string | null;
@@ -95,6 +95,12 @@ type SignalLike = {
   signalScore?: number | null;
   market?: string;
   bookLine?: number | null;
+  // Additive server-stamped fields used by the slate-ribbon aggregation. All
+  // optional / no-op when absent so partial cache rows never destabilize the UI.
+  signalTier?: string | null;
+  edge?: number | null;
+  displayGrade?: string | null;
+  gameId?: string | null;
 };
 
 export function deriveMlbQuickViewColorTier(signals: SignalLike[], playerId: string): MlbQuickViewColorTier {
@@ -159,6 +165,87 @@ export const COLOR_TIER_STYLES: Record<MlbQuickViewColorTier, { border: string; 
   blue: { border: "#3b82f6", bg: "rgba(59,130,246,0.12)", dot: "#3b82f6" },
   neutral: { border: "transparent", bg: "transparent", dot: "transparent" },
 };
+
+// ── Slate-ribbon per-game signal grade ────────────────────────────────────────
+// Read-only aggregation over server-stamped signals for one game. Mirrors the
+// legitimacy of the NCAAB chip (Math.max over server markets) and the old
+// gameLeanBadge: it ONLY reads server fields (signalTier / signalScore / edge /
+// displayGrade) and picks a best — it never re-derives displaySide / probability
+// / grade / isBettable. Honors the display contract (CLAUDE.md §3.3, Hard Rule #4).
+
+export type MlbRibbonTier = "watch" | "lean" | "strong" | "elite";
+export type MlbRibbonTone = "fire" | "warn" | "info" | "good";
+
+export type MlbRibbonChipSignal = {
+  colorTier: MlbQuickViewColorTier;
+  badge: { label: string; tone: MlbRibbonTone } | null;
+  bestTier: MlbRibbonTier | null;
+  signalCount: number;
+};
+
+const RIBBON_TIER_RANK: Record<MlbRibbonTier, number> = { watch: 1, lean: 2, strong: 3, elite: 4 };
+
+function normalizeRibbonTier(raw: string | null | undefined): MlbRibbonTier | null {
+  if (!raw) return null;
+  const t = String(raw).toLowerCase().trim();
+  if (t === "watch" || t === "lean" || t === "strong" || t === "elite") return t;
+  return null;
+}
+
+const NEUTRAL_RIBBON_CHIP: MlbRibbonChipSignal = { colorTier: "neutral", badge: null, bestTier: null, signalCount: 0 };
+
+export function deriveMlbRibbonChipSignal(signals: SignalLike[], gameId: string): MlbRibbonChipSignal {
+  let pool = signals.filter(s => s.gameId === gameId && !s.alreadyHit);
+  if (pool.length === 0) pool = signals.filter(s => s.gameId === gameId);
+  if (pool.length === 0) return NEUTRAL_RIBBON_CHIP;
+
+  let best: SignalLike | null = null;
+  let bestRank = -1;
+  let bestScore = -Infinity;
+  for (const s of pool) {
+    const tier = normalizeRibbonTier(s.signalTier);
+    const rank = tier ? RIBBON_TIER_RANK[tier] : 0;
+    const score = s.signalScore ?? 0;
+    if (rank > bestRank || (rank === bestRank && score > bestScore)) {
+      bestRank = rank;
+      bestScore = score;
+      best = s;
+    }
+  }
+
+  const bestTier = best ? normalizeRibbonTier(best.signalTier) : null;
+  if (!bestTier) {
+    // Signals exist but none carry a canonical tier (cache rollover) — show a
+    // neutral chip but report the count so the strip can still flag activity.
+    return { colorTier: "neutral", badge: null, bestTier: null, signalCount: pool.length };
+  }
+
+  const TIER_TO_COLOR: Record<MlbRibbonTier, MlbQuickViewColorTier> = {
+    elite: "green",
+    strong: "yellow",
+    lean: "blue",
+    watch: "neutral",
+  };
+  const TIER_TO_TONE: Record<MlbRibbonTier, MlbRibbonTone> = {
+    elite: "good",
+    strong: "warn",
+    lean: "info",
+    watch: "info",
+  };
+
+  const gradeLabel = best?.displayGrade && String(best.displayGrade).trim().length > 0
+    ? String(best.displayGrade).trim()
+    : bestTier.toUpperCase();
+  const edge = typeof best?.edge === "number" ? best.edge : null;
+  const label = edge != null && edge > 0 ? `${gradeLabel} +${edge.toFixed(0)}%` : gradeLabel;
+
+  return {
+    colorTier: TIER_TO_COLOR[bestTier],
+    badge: bestTier === "watch" ? null : { label, tone: TIER_TO_TONE[bestTier] },
+    bestTier,
+    signalCount: pool.length,
+  };
+}
 
 export function deriveAllPlayerPlays(signals: SignalLike[], playerId: string): BestPlayInfo[] {
   let pool = signals.filter(s => s.playerId === playerId && !s.alreadyHit && (s.enginePct ?? 0) > 0);

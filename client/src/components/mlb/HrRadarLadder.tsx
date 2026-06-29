@@ -1629,9 +1629,13 @@ interface HrRadarLadderProps {
   // (uncalled_hr, early_hr_insufficient_sample) in the dead section so
   // regular users don't see admin diagnostics. Defaults to false.
   isAdmin?: boolean;
+  // Slate ribbon deep-link. When set, the ladder shows only rows for this
+  // gameId — a pure presentational filter (no engine/scoring change). Null /
+  // undefined = show all games (no-op).
+  selectedGameId?: string | null;
 }
 
-export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: HrRadarLadderProps) {
+export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, selectedGameId = null }: HrRadarLadderProps) {
   // ── HOOKS — all hook calls live above ANY early return so the call
   // count is identical between renders (React invariant; violating it
   // throws "Rendered more hooks than during the previous render").
@@ -1696,8 +1700,11 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
   }
 
   const sections = useMemo(() => {
+    // Slate-ribbon deep-link filter — presentational only. No-op when null.
+    const filterByGame = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
+      selectedGameId ? list.filter(e => e.gameId === selectedGameId) : list;
     const filterDismissed = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
-      list.filter(e => !dismissed.has(entryDismissKey(e.playerId, e.gameId)));
+      filterByGame(list).filter(e => !dismissed.has(entryDismissKey(e.playerId, e.gameId)));
     // Phase 6 — predicate for "live game, no AB tracked yet". Engine score
     // is necessarily 0.0/10 for these rows, so they pollute the live decision
     // sections. We only re-shelve when the game is KNOWN to be live
@@ -1735,7 +1742,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
     // early_hr_insufficient_sample) into a separate Model Review bucket
     // so they don't pollute the user-facing MISSED column. Non-admins
     // never see Model Review at all (controlled by `order` array below).
-    const allDead = rawSections.dead ?? [];
+    const allDead = filterByGame(rawSections.dead ?? []);
     const userMissed = allDead.filter(
       (e) => !ADMIN_ONLY_DEAD_STATUSES.has((e.outcomeStatus ?? "") as string),
     );
@@ -1758,12 +1765,12 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
         ...buildingP.parked,
         ...watchP.parked,
       ],
-      cashed: rawSections.cashed ?? [],
+      cashed: filterByGame(rawSections.cashed ?? []),
       dead: userMissed,
       modelReview: adminModelReview,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawSections, dismissed, isAdmin]);
+  }, [rawSections, dismissed, isAdmin, selectedGameId]);
 
   useEffect(() => {
     if (!sessionDate) return;
