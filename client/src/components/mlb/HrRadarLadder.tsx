@@ -7,7 +7,7 @@ import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, Aler
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
 import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
-import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
+import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
@@ -382,10 +382,13 @@ function humanizeReason(s: string): string {
       return replacement;
     }
   }
-  // Convert snake_case / SCREAMING_CASE leftovers to "Sentence case".
-  if (/^[A-Z0-9_]+$/.test(trimmed) || /_/.test(trimmed)) {
+  // Convert a space-free snake_case / SCREAMING_CASE / colon token to
+  // "Sentence case" (e.g. "near_hr_contact" → "Near hr contact"). Only single
+  // tokens are transformed — real multi-word copy (has spaces) is left as-is so
+  // a legitimate sentence containing a colon is never lowercased/mangled.
+  if (!/\s/.test(trimmed) && (/^[A-Z0-9_]+$/.test(trimmed) || /[_:]/.test(trimmed))) {
     const sentence = trimmed
-      .replace(/_/g, " ")
+      .replace(/[_:]/g, " ")
       .toLowerCase()
       .replace(/^\w/, (c) => c.toUpperCase());
     return sentence;
@@ -457,7 +460,27 @@ const ADMIN_ONLY_DEAD_STATUSES: ReadonlySet<string> = new Set([
  * starts with engine debug prefixes.
  */
 function isUserSafeReason(s: string): boolean {
-  return !/^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Score\d|Conv\s+\d+%|Profile\d|Danger\d)/i.test(s.trim());
+  const t = s.trim();
+  // Engine debug prefixes / inline tokens.
+  if (/^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Score\d|Conv\s+\d+%|Profile\d|Danger\d)/i.test(t)) return false;
+  // FSM / prob-rail promotion reason codes that leak as a "reason".
+  if (/(prob[_ ]?rail|bet[_ ]?now|dynamic_|pitcher_fade|attack_sustained|_sustained|_awaiting)/i.test(t)) return false;
+  // Bare engine identifier code: lowercase snake_case / colon-joined, no spaces
+  // (e.g. "prob_rail:bet_now_attack_sustained"). Real user copy has spaces.
+  if (/^[a-z][a-z0-9]*([_:][a-z0-9]+)+$/.test(t)) return false;
+  return true;
+}
+
+/**
+ * Run a server-stamped reason string through the same user-safety gate the
+ * bullet list uses, then humanize. Returns null when the value is unsafe (a raw
+ * engine/FSM code) or empty — callers fall back to clean copy or render nothing.
+ */
+function cleanReason(s: string | null | undefined): string | null {
+  const t = (s ?? "").trim();
+  if (!t || !isUserSafeReason(t)) return null;
+  const human = humanizeReason(t);
+  return human.length > 0 ? human : null;
 }
 
 interface CardProps {
@@ -726,8 +749,22 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   const hrChancePct = deriveCalibratedHrChancePct(entry as unknown as HrRadarRowInput);
   const actionPct = hrEntryActionPct(entry);
   const actionScore10 = hrEntryActionScore10(entry);
-  const primaryReason = entry.displayPrimaryReason ?? entry.headlineReason ?? "HR setup is forming.";
-  const whyNotTopWindow = entry.displayWhyNotTopWindow ?? null;
+  // Sanitize every server-stamped reason string through the same user-safety
+  // gate the bullet list uses, so a raw engine/FSM code (e.g.
+  // "prob_rail:bet_now_attack_sustained") can never reach the headline/summary.
+  const cleanStageExplanation = cleanReason(entry.stageExplanation);
+  const primaryReason =
+    cleanReason(entry.displayPrimaryReason) ??
+    cleanReason(entry.headlineReason) ??
+    cleanStageExplanation ??
+    "HR setup is forming.";
+  const whyNotTopWindow = cleanReason(entry.displayWhyNotTopWindow);
+  const cleanSummary = cleanReason(entry.summary);
+  // Only FIRE leads with the calibrated HR-chance %. READY/ALMOST/TRACK lead
+  // with the /10 strength so the Full Ladder and Quick Decide agree (Quick
+  // Decide already shows % only on the FIRE Live Call card).
+  const showHrChanceHero = hrChancePct != null && section === "attackNow";
+  const heroScore10 = actionScore10 ?? score10;
   const recordEligible = entry.displayRecordEligible === true;
   // Big stage icon — reuse the section's SECTION_META icon (Flame/Zap/Eye).
   const StageIcon = SECTION_META[section]?.icon ?? null;
@@ -935,12 +972,12 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           </div>
         </button>
         <div className="flex flex-col items-end gap-1 shrink-0 max-w-[45%]">
-          {!isResolved && (hrChancePct != null || actionScore10 != null) && (
+          {!isResolved && (showHrChanceHero || heroScore10 != null) && (
             <div className="flex items-center gap-1.5">
               <div className="flex flex-col items-end">
-                {/* HERO = true HR chance %. Falls back to tier-banded strength
-                    only when probability is missing (older cached rows). */}
-                {hrChancePct != null ? (
+                {/* HERO = calibrated HR chance % for FIRE only; every other tier
+                    leads with the /10 strength so the two surfaces agree. */}
+                {showHrChanceHero ? (
                   <div className="flex items-baseline gap-1">
                     <span
                       className={`text-2xl font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
@@ -964,7 +1001,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                       className={`text-2xl font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
                       data-testid={`text-action-strength-${entry.playerId}`}
                     >
-                      {actionScore10!.toFixed(1)}
+                      {heroScore10!.toFixed(1)}
                     </span>
                     {!isPregameOnly && momentumArrow && (
                       <span
@@ -978,7 +1015,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                   </div>
                 )}
                 <span className="text-[9px] uppercase tracking-wide text-muted-foreground leading-none mt-0.5">
-                  {hrChancePct != null ? "HR chance" : "strength"}
+                  {showHrChanceHero ? "HR chance" : "strength"}
                 </span>
                 {/* Mark a pre-contact PRIOR so a seed is never mistaken for a
                     live-earned read. Suppressed once live contact arrives. */}
@@ -1148,12 +1185,12 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
 
       {/* Goldmaster Phase 5 + 6 — prefer canonical summary on resolved rows;
           show plain-English reasons (jargon stripped) on live rows. */}
-      {isResolved && entry.summary && (
+      {isResolved && cleanSummary && (
         <p
           className="mt-2 text-[11px] text-foreground/70 leading-snug"
           data-testid={`text-resolved-summary-${entry.playerId}`}
         >
-          {entry.summary}
+          {cleanSummary}
         </p>
       )}
       {/* Goldmaster Phase 4-7 — for live rows, render the canonical
@@ -1161,12 +1198,12 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
           truth). Then list the deduplicated headline + supporting reasons.
           Pregame zero-AB rows show the pregame headline only — no contact
           bullets. */}
-      {!isResolved && entry.stageExplanation && (
+      {!isResolved && cleanStageExplanation && cleanStageExplanation !== primaryReason && (
         <p
           className="mt-2 text-[11px] text-foreground/70 leading-snug"
           data-testid={`text-stage-explanation-${entry.playerId}`}
         >
-          {entry.stageExplanation}
+          {cleanStageExplanation}
         </p>
       )}
       {!isResolved && reasonsForRender.length > 0 && (
@@ -1685,10 +1722,15 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false }: H
     // by filtering out final-game rows from active sections.
     const filterActiveLive = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
       list.filter((e) => e.isGameFinal !== true);
-    const attackP = partitionLive(filterActiveLive(filterDismissed(rawSections.attackNow ?? [])));
-    const readyP = partitionLive(filterActiveLive(filterDismissed((rawSections as any).ready ?? [])));
-    const buildingP = partitionLive(filterActiveLive(filterDismissed(rawSections.building ?? [])));
-    const watchP = partitionLive(filterActiveLive(filterDismissed(rawSections.watch ?? [])));
+    // Hide pregame-only rows (no live at-bat yet) from the live decision
+    // sections — they carry a generic pregame seed score and flood READY with
+    // near-identical rows. They reappear automatically once the player bats.
+    const filterPregame = (list: HrRadarLadderEntry[]): HrRadarLadderEntry[] =>
+      list.filter((e) => !isPregameOnlyRow(e as unknown as HrRadarRowInput));
+    const attackP = partitionLive(filterPregame(filterActiveLive(filterDismissed(rawSections.attackNow ?? []))));
+    const readyP = partitionLive(filterPregame(filterActiveLive(filterDismissed((rawSections as any).ready ?? []))));
+    const buildingP = partitionLive(filterPregame(filterActiveLive(filterDismissed(rawSections.building ?? []))));
+    const watchP = partitionLive(filterPregame(filterActiveLive(filterDismissed(rawSections.watch ?? []))));
     // Batch A — Phase 5: split admin-only outcomes (uncalled_hr,
     // early_hr_insufficient_sample) into a separate Model Review bucket
     // so they don't pollute the user-facing MISSED column. Non-admins

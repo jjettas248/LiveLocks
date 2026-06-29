@@ -1412,7 +1412,7 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
       signalState: "FORMATION",
       decision: "MONITOR",
       confidenceScore: cappedConf,
-      formattedReason: `Power profile detected (${convPct} HR likelihood, build score ${hrBuildScore}). Below alert threshold — tracking for confirmation.`,
+      formattedReason: `Power profile is forming — not yet at alert strength.`,
       detectedInning: inning,
       alertTier: "watch",
       diagnostics: { ...baseDiagnostics, alertPath: "PATH_F_BLOCKED_BRIDGE", positiveFactors },

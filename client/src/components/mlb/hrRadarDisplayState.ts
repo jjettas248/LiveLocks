@@ -284,22 +284,40 @@ export function userSectionForStage(stage: CanonicalUserStage): HrRadarUserSecti
   }
 }
 
+/**
+ * A row with no live at-bat yet — a pregame "power profile" seed or a live game
+ * where the player hasn't batted. The engine necessarily scores these 0/pregame,
+ * so they flood the live decision sections with near-identical generic rows.
+ * Both the Full Ladder and Quick Decide hide them until the player actually bats
+ * (resolved rows are never pregame). Single source of truth so the two surfaces
+ * can't drift.
+ */
+export function isPregameOnlyRow(row: HrRadarRowInput): boolean {
+  if (deriveUserStage(row) === "resolved") return false;
+  return (row.plateAppearancesTracked ?? 0) === 0;
+}
+
 // ── Reason / driver formatting. ─────────────────────────────────────────────
 // The server already strips most engine jargon; this is a final, light polish
 // so a stale SCREAMING_CASE / snake_case token still reads as plain English.
 // It NEVER invents a driver — it only formats existing evidence strings.
 function isUserSafeReason(s: string): boolean {
-  return !/^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Score\d|Conv\s+\d+%|Profile\d|Danger\d)/i.test(
-    s.trim(),
-  );
+  const t = s.trim();
+  if (/^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Score\d|Conv\s+\d+%|Profile\d|Danger\d)/i.test(t)) return false;
+  // FSM / prob-rail promotion reason codes that leak as a "reason".
+  if (/(prob[_ ]?rail|bet[_ ]?now|dynamic_|pitcher_fade|attack_sustained|_sustained|_awaiting)/i.test(t)) return false;
+  // Bare engine identifier code: lowercase snake_case / colon-joined, no spaces.
+  if (/^[a-z][a-z0-9]*([_:][a-z0-9]+)+$/.test(t)) return false;
+  return true;
 }
 
 function humanizeReason(s: string): string {
   const trimmed = (s ?? "").trim();
   if (!trimmed) return trimmed;
-  if (/^[A-Z0-9_]+$/.test(trimmed) || /_/.test(trimmed)) {
+  // Only transform space-free single tokens; real multi-word copy is left as-is.
+  if (!/\s/.test(trimmed) && (/^[A-Z0-9_]+$/.test(trimmed) || /[_:]/.test(trimmed))) {
     return trimmed
-      .replace(/_/g, " ")
+      .replace(/[_:]/g, " ")
       .toLowerCase()
       .replace(/^\w/, (c) => c.toUpperCase());
   }
