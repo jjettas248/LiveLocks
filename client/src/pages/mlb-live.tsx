@@ -12,7 +12,6 @@ import { PregamePowerRadar } from "@/components/mlb/PregamePowerRadar";
 import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
 import { MlbBoxScore, type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
-import { AdminEngineDebugPanel } from "@/components/mlb/AdminEngineDebugPanel";
 import type { MLBSignal } from "@shared/mlbSignal";
 import { applyConvictionCap10, convictionDisplayBadge, pregameSeedTierLabel } from "@shared/hrRadarConviction";
 import { ProbabilityRing } from "@/components/probability-ring";
@@ -1855,9 +1854,6 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
           <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-500/10 text-green-400 font-semibold border border-green-500/20">LIVE</span>
         </div>
       </div>
-      {user?.isAdmin && (
-        <AdminEngineDebugPanel selectedGameId={selectedGameId} />
-      )}
       {(activeSubTab as string) === "games" && (
         <>
           {games.length === 0 ? (
