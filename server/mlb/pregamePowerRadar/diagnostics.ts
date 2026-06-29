@@ -13,10 +13,14 @@ export function batterPowerAvailable(signal: PregamePowerSignal): boolean {
 }
 
 /**
- * Final public-visibility predicate. Public surfaces only confirmed-lineup,
- * non-suppressed, strong+ targets. Live games show only locked rows.
+ * Intrinsic public-quality gates, independent of live/final game status.
+ *
+ * Answers "was this a publicly-surfaced pre-game target, flagged before first
+ * pitch?" — the question Win Attribution must ask at grading time, when the
+ * game is already `final` (so the live-status gates in `isPublicPregameSignal`
+ * no longer apply). A pregame win is only `userVisible` when this is true.
  */
-export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
+export function wasPubliclyFlaggedPregame(signal: PregamePowerSignal): boolean {
   // Tier gate: surface only strong+ setups and `power_watch` (Batter Power Only)
   // candidates — never bare `watch`/`track`.
   const tierEligible =
@@ -25,21 +29,27 @@ export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
     signal.tier === "elite" ||
     signal.tier === "nuclear";
 
-  const base =
+  return (
     signal.lineupStatus === "confirmed" &&
-    (signal.status === "active" || signal.status === "locked") &&
     tierEligible &&
     signal.score10 >= 6.0 &&
     positiveDrivers(signal).length >= 2 &&
     signal.diagnostics.dataCoverageScore >= 0.6 &&
     signal.diagnostics.rawInputsAvailable.batterPower === true &&
-    signal.gameStatus !== "final" &&
-    signal.gameStatus !== "postponed" &&
     signal.isOfficialPlay === false &&
     signal.isPregameTarget === true &&
-    !signal.suppressed;
+    !signal.suppressed
+  );
+}
 
-  if (!base) return false;
+/**
+ * Final public-visibility predicate. Public surfaces only confirmed-lineup,
+ * non-suppressed, strong+ targets. Live games show only locked rows.
+ */
+export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
+  if (!wasPubliclyFlaggedPregame(signal)) return false;
+  if (signal.status !== "active" && signal.status !== "locked") return false;
+  if (signal.gameStatus === "final" || signal.gameStatus === "postponed") return false;
   if (signal.gameStatus === "live") return signal.status === "locked";
   return true;
 }

@@ -77,6 +77,7 @@ import { normalizeMLBSignal } from "./mlb/normalizeSignal";
 import { resolveMlbPlayerMarketSignal } from "./mlb/resolveCanonicalSignal";
 import { CALCULATOR_SOURCE_LABEL } from "../shared/mlbCanonicalSignal";
 import { normalizeMlbMarket } from "../shared/normalizeMlbMarket";
+import type { CashLogItem, DailyCashedLogResponse } from "../shared/pregameRadarWin";
 
 // ── NCAAB live signal cache (populated by /api/ncaab/plays, read by /api/top-plays) ──
 const ncaabLiveSignals: { signals: any[]; updatedAt: number } = { signals: [], updatedAt: 0 };
@@ -652,6 +653,66 @@ export async function registerRoutes(
     } catch (err) {
       console.error("[mlb/pregame-power-radar/:gameId]", err);
       return res.status(500).json({ error: "Failed to fetch pre-game power radar for game" });
+    }
+  });
+
+  // Daily cashed log — grouped Engine Cashes. Combines official live HR Radar
+  // cashes (FIRE-only, user-visible) with public Pregame Radar Wins. Pregame
+  // misses are calibration-only and never appear here (no public losses).
+  app.get("/api/mlb/daily-cashed-log", requireAuth, async (req, res) => {
+    try {
+      const { todayET } = await import("./utils/dateUtils");
+      const sessionDate = String(req.query.date ?? todayET());
+      const isToday = sessionDate === todayET();
+
+      // Official live HR Radar cashes — already filtered to called_hit +
+      // userVisible inside getCanonicalHrRadarOutcomes.
+      const canonical = await storage.getCanonicalHrRadarOutcomes(sessionDate);
+      const officialLiveCashes: CashLogItem[] = canonical.hits.map((h) => ({
+        source: "live_hr_radar",
+        playerId: h.playerId,
+        playerName: h.playerName,
+        team: h.team,
+        gameId: h.gameId,
+        market: "home_runs",
+        side: "OVER",
+        hitInning: h.hitInning ?? null,
+        hitHalf: h.hitHalf ?? null,
+        hitLabel: h.hitLabel ?? null,
+        gradingStatus: (h as any).gradingStatus ?? null,
+        resolvedAt: h.resolvedAt ? new Date(h.resolvedAt).toISOString() : null,
+      }));
+
+      // Pregame Radar Wins live in the in-memory snapshot (today only). For a
+      // historical date we surface official cashes alone rather than mis-dating
+      // today's wins.
+      let pregameRadarWins: DailyCashedLogResponse["pregameRadarWins"] = [];
+      let firstAbPregameWins: DailyCashedLogResponse["firstAbPregameWins"] = [];
+      if (isToday) {
+        const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
+        const { getPregameRadarWins } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
+        await getRadarSnapshot().catch(() => null);
+        const wins = getPregameRadarWins();
+        pregameRadarWins = wins.pregameRadarWins;
+        firstAbPregameWins = wins.firstAbPregameWins;
+      }
+
+      const response: DailyCashedLogResponse = {
+        officialLiveCashes,
+        pregameRadarWins,
+        firstAbPregameWins,
+        engineCashesTotal: officialLiveCashes.length + pregameRadarWins.length,
+      };
+      return res.json(response);
+    } catch (e: any) {
+      console.error("[mlb/daily-cashed-log]", e?.message);
+      const empty: DailyCashedLogResponse = {
+        officialLiveCashes: [],
+        pregameRadarWins: [],
+        firstAbPregameWins: [],
+        engineCashesTotal: 0,
+      };
+      return res.json(empty);
     }
   });
 
