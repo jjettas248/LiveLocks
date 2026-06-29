@@ -85,6 +85,30 @@ export function HrBoardAssetCard({ asset, onCopy, onDownloadImage }: Props) {
           )}
         </div>
 
+        {/* Traction tags — already folded into the copy body; shown as chips. */}
+        {(asset.cashtags.length > 0 || asset.hashtags.length > 0) && (
+          <div className="flex items-center gap-1 flex-wrap" data-testid={`asset-tags-${asset.assetType}`}>
+            {asset.cashtags.map((c) => (
+              <span
+                key={c}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-500 font-medium"
+                data-testid={`asset-cashtag-${asset.assetType}-${c}`}
+              >
+                {c}
+              </span>
+            ))}
+            {asset.hashtags.map((h) => (
+              <span
+                key={h}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-500 font-medium"
+                data-testid={`asset-hashtag-${asset.assetType}-${h}`}
+              >
+                {h}
+              </span>
+            ))}
+          </div>
+        )}
+
         {/* Structured image payload preview (styled card, screenshot-ready). */}
         <ImagePayloadPreview asset={asset} />
 
@@ -124,7 +148,9 @@ function ImagePayloadPreview({ asset }: { asset: HrBoardAsset }) {
     >
       <div className="flex items-baseline justify-between">
         <div className="text-sm font-semibold">{p.title}</div>
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{p.template}</div>
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          {p.accent ?? p.template}
+        </div>
       </div>
       {p.subtitle && <div className="text-[11px] text-muted-foreground">{p.subtitle}</div>}
       {p.rows && p.rows.length > 0 && (
@@ -144,6 +170,12 @@ function ImagePayloadPreview({ asset }: { asset: HrBoardAsset }) {
         <span>{p.footer}</span>
         <span className="font-semibold">{p.brand}</span>
       </div>
+      {(p.handle || p.site) && (
+        <div className="mt-1 flex items-center justify-between text-[10px] text-primary/80">
+          {p.handle && <span className="font-medium">{p.handle}</span>}
+          {p.site && <span className="font-medium">{p.site}</span>}
+        </div>
+      )}
     </div>
   );
 }

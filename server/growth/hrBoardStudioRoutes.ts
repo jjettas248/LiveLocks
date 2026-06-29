@@ -23,6 +23,9 @@ import {
   type HrBoardAnalyticsEventType,
 } from "../../shared/hrBoardStudio";
 
+/** Default CTA link when the admin enables links but doesn't supply a URL. */
+const DEFAULT_BOARD_LINK = "https://www.livelocksai.app";
+
 export function registerHrBoardStudioRoutes(app: Express): void {
   // GET today's pre-game HR board rows.
   app.get("/api/admin/hr-board-studio/today", requireAdmin, async (req, res) => {
@@ -41,8 +44,11 @@ export function registerHrBoardStudioRoutes(app: Express): void {
     try {
       const body = (req.body ?? {}) as { includeLink?: unknown; link?: unknown };
       const includeLink = body.includeLink === true;
-      const link = typeof body.link === "string" && body.link.trim() ? body.link.trim() : null;
-      const pack = await generateContentPack({ includeLink, link: includeLink ? link : null });
+      const suppliedLink =
+        typeof body.link === "string" && body.link.trim() ? body.link.trim() : null;
+      // When links are enabled but none is supplied, default to the brand site.
+      const link = includeLink ? suppliedLink ?? DEFAULT_BOARD_LINK : null;
+      const pack = await generateContentPack({ includeLink, link });
       recordHrBoardEvent({
         eventType: "hr_board_pack_generated",
         date: pack.date,
