@@ -48,10 +48,14 @@ const VIEW_MODE_KEY = "ll_admin_view_mode_v1";
 export type AdminViewMode = "real" | "free" | "pro_mlb" | "all_sports" | "admin";
 
 const viewModeListeners = new Set<() => void>();
-let _viewMode: AdminViewMode = (() => {
+let _viewMode: AdminViewMode = ((): AdminViewMode => {
   if (typeof window === "undefined") return "real";
-  const v = localStorage.getItem(VIEW_MODE_KEY) as AdminViewMode | null;
-  return v && ["real", "free", "pro_mlb", "all_sports", "admin"].includes(v) ? v : "real";
+  // The admin "View as" switcher lived in the removed MLB DevTools panel, which
+  // was the only in-app control that wrote this key. Clear any stale persisted
+  // override on load so an admin can never get stranded in a downgraded view
+  // (which would also hide every admin-gated surface) with no way to reset it.
+  if (localStorage.getItem(VIEW_MODE_KEY)) localStorage.removeItem(VIEW_MODE_KEY);
+  return "real";
 })();
 
 export function getAdminViewMode(): AdminViewMode {
