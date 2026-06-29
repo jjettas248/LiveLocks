@@ -15,6 +15,9 @@ import type { CanonicalHrRadarState } from "../mlb/hrRadarCanonicalStore";
 import type { PregamePowerSignal, PregamePowerTier } from "../mlb/pregamePowerRadar/types";
 import { applyCompliance } from "./hrBoardCompliance";
 import {
+  HR_BOARD_BRAND_HANDLE,
+  HR_BOARD_BRAND_HASHTAG,
+  HR_BOARD_BRAND_SITE,
   HR_BOARD_CTA_TEXT,
   type CtaVariant,
   type HrBoardAsset,
@@ -61,6 +64,76 @@ const SECTION_RANK: Record<string, number> = {
 };
 
 const BRAND = "LiveLocks HR Power Board" as const;
+
+// ── Brand + traction tags ──────────────────────────────────────────────────────
+//
+// X (Twitter) reach for an MLB HR/props account is driven by a small set of
+// evergreen, high-volume hashtags plus per-asset niche tags and team cashtags.
+// Tags are curated to be compliance-clean (no "lock"/"guaranteed"/etc.) and are
+// folded into the copy body so the admin can paste a post that already carries
+// the brand handle and tags. The brand SITE (a URL) is intentionally NOT placed
+// in copy — it lives only on the image watermark + the opt-in link field.
+
+/** Curated high-traction X hashtags per asset type (most general first). */
+const HASHTAG_BANK: Record<HrBoardAssetType, string[]> = {
+  daily_board: ["#MLB", "#HomeRunProps", "#MLBPicks", "#PropBets", "#GamblingTwitter"],
+  top_player_spotlight: ["#MLB", "#HomeRun", "#PlayerProps", "#MLBTwitter", "#Dinger"],
+  top3_watchlist: ["#MLB", "#PropBets", "#MLBPicks", "#Watchlist", "#HomeRunProps"],
+  movement_alert: ["#MLB", "#HRRadar", "#LiveBaseball", "#PropBets", "#InGameBets"],
+  ready_fire_alert: ["#MLB", "#HRRadar", "#Dinger", "#LiveBaseball", "#GamblingTwitter"],
+  cashed_proof: ["#MLB", "#Receipts", "#TrackRecord", "#HomeRun", "#HRRadar"],
+  near_miss_transparency: ["#MLB", "#Transparency", "#HRRadar", "#MLBTwitter"],
+  postgame_recap: ["#MLB", "#Recap", "#TrackRecord", "#Receipts", "#HomeRun"],
+};
+
+/** Always-on platform cashtags appended after any team cashtags. */
+const PLATFORM_CASHTAGS = ["$MLB"] as const;
+
+/** Build the hashtag set for an asset: up to 5 niche tags + the brand tag. */
+function buildHashtags(assetType: HrBoardAssetType): string[] {
+  const bank = HASHTAG_BANK[assetType] ?? ["#MLB", "#HomeRun"];
+  const out = bank.slice(0, 5);
+  if (!out.includes(HR_BOARD_BRAND_HASHTAG)) out.push(HR_BOARD_BRAND_HASHTAG);
+  return out;
+}
+
+/** Normalize a team string into a 2–4 char cashtag ticker, or null if unusable. */
+function teamTicker(team: unknown): string | null {
+  const tk = String(team ?? "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  return tk.length >= 2 && tk.length <= 4 ? tk : null;
+}
+
+/** Derive cashtags from the featured teams (deduped, max 3) + platform cashtags. */
+function buildCashtags(teams: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of teams) {
+    const tk = teamTicker(t);
+    if (tk && !seen.has(tk)) {
+      seen.add(tk);
+      out.push(`$${tk}`);
+    }
+    if (out.length >= 3) break;
+  }
+  for (const c of PLATFORM_CASHTAGS) if (!out.includes(c)) out.push(c);
+  return out;
+}
+
+/** FNV-1a hash → deterministic variant selection (keeps copy diverse per day, stable per test). */
+function hashStr(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h | 0);
+}
+
+function pick<T>(arr: T[], seed: string): T {
+  return arr[hashStr(seed) % arr.length];
+}
 
 function normName(v: unknown): string {
   return String(v ?? "")
@@ -263,21 +336,35 @@ interface MakeAssetInput {
   sourcePlayerIds: string[];
   sourceSignalIds: string[];
   ctaVariant: CtaVariant;
+  /** Teams featured in this asset — drive the cashtags. */
+  teams: Array<string | null | undefined>;
   includeLink: boolean;
   link: string | null;
 }
 
 function makeAsset(input: MakeAssetInput): HrBoardAsset {
   const cta = HR_BOARD_CTA_TEXT[input.ctaVariant];
-  // CTA is native text (never a URL) — fold it into the body so compliance
-  // covers it too.
-  const composed = cta ? `${input.rawBody}\n\n${cta}` : input.rawBody;
+  const hashtags = buildHashtags(input.assetType);
+  const cashtags = buildCashtags(input.teams);
+
+  // Brand sign-off + tag line. The handle is native text (never a URL) so it is
+  // safe in copy; cashtags/hashtags are compliance-clean by construction. The
+  // brand SITE is a URL → it stays out of copy and lives only on the image card.
+  const tagLine = [...cashtags, ...hashtags].join(" ");
+  const brandLine = `${HR_BOARD_BRAND_HANDLE}${tagLine ? `\n${tagLine}` : ""}`;
+
+  // Fold CTA + brand/tag line into the body so compliance covers everything.
+  const composed = [input.rawBody, cta, brandLine].filter(Boolean).join("\n\n");
   const compliance = applyCompliance(composed);
   return {
     assetType: input.assetType,
     title: input.title,
     body: compliance.safeCopy,
-    imagePayload: input.imagePayload,
+    imagePayload: {
+      ...input.imagePayload,
+      handle: input.imagePayload.handle ?? HR_BOARD_BRAND_HANDLE,
+      site: input.imagePayload.site ?? HR_BOARD_BRAND_SITE,
+    },
     recommendedTiming: input.recommendedTiming,
     sourcePlayerIds: input.sourcePlayerIds,
     sourceSignalIds: input.sourceSignalIds,
@@ -286,6 +373,8 @@ function makeAsset(input: MakeAssetInput): HrBoardAsset {
     safeCopy: compliance.safeCopy,
     ctaVariant: input.ctaVariant,
     cta,
+    hashtags,
+    cashtags,
     includeLink: input.includeLink,
     // Links never appear in copy — only here, and only when toggled on.
     link: input.includeLink ? input.link : null,
@@ -317,6 +406,15 @@ export function buildContentPack(
 
   // 1. Daily Board Post
   {
+    const header = pick(
+      [
+        "Today's HR Power Board is live 💣",
+        "HR Power Board — who's got pop today 🎯",
+        "Loading today's HR Power Board 🧨",
+        "The HR Power Board dropped 💥",
+      ],
+      `daily_board:${date}`,
+    );
     const lines =
       top.length > 0
         ? top
@@ -327,7 +425,7 @@ export function buildContentPack(
       makeAsset({
         assetType: "daily_board",
         title: `HR Power Board — ${date}`,
-        rawBody: `Today's HR Power Board signals 🎯\n\n${lines}`,
+        rawBody: `${header}\n\n${lines}`,
         imagePayload: {
           template: "daily_board",
           title: "HR Power Board",
@@ -335,11 +433,13 @@ export function buildContentPack(
           rows: toImageRows(top),
           footer: "Setup scores, not picks · 0–10 scale",
           brand: BRAND,
+          accent: "Daily Slate",
         },
         recommendedTiming: "Morning slate drop (10–11am ET)",
         sourcePlayerIds: top.map((r) => r.playerId),
         sourceSignalIds: top.map((r) => r.signalId),
         ctaVariant: "board_in_bio",
+        teams: top.map((r) => r.team),
         includeLink,
         link,
       }),
@@ -348,10 +448,24 @@ export function buildContentPack(
 
   // 2. Top Player Spotlight
   {
+    const hook = lead
+      ? pick(
+          [
+            `Top of the board: ${lead.player} (${lead.team}) vs ${lead.opponent}. 🔦`,
+            `Spotlight 🔦 — ${lead.player} (${lead.team}) headlines the HR Power Board vs ${lead.opponent}.`,
+            `${lead.player} is our #1 power profile today (${lead.team} vs ${lead.opponent}). 💪`,
+          ],
+          `spotlight:${date}:${lead.playerId}`,
+        )
+      : "";
     const body = lead
-      ? `Top of the board: ${lead.player} (${lead.team}) vs ${lead.opponent}.\n\nProfile: ${lead.stage} · ${lead.score.toFixed(1)}/10${
+      ? `${hook}\n\nProfile: ${lead.stage} · ${lead.score.toFixed(1)}/10${
           lead.drivers.length ? `\nWhy: ${lead.drivers.join(" · ")}` : ""
-        }${lead.parkTags.length ? `\nPark: ${lead.parkTags.join(" · ")}` : ""}`
+        }${lead.parkTags.length ? `\nPark: ${lead.parkTags.join(" · ")}` : ""}${
+          lead.pitcherVulnerabilityTags.length
+            ? `\nMatchup: ${lead.pitcherVulnerabilityTags.join(" · ")}`
+            : ""
+        }`
       : "No spotlight yet — board fills in as lineups confirm.";
     assets.push(
       makeAsset({
@@ -365,11 +479,13 @@ export function buildContentPack(
           rows: lead ? toImageRows([lead]) : [],
           footer: "Top setup on today's board",
           brand: BRAND,
+          accent: "Player Spotlight",
         },
         recommendedTiming: "Late morning (11am–12pm ET)",
         sourcePlayerIds: lead ? [lead.playerId] : [],
         sourceSignalIds: lead ? [lead.signalId] : [],
         ctaVariant: "follow_for_movement",
+        teams: lead ? [lead.team] : [],
         includeLink,
         link,
       }),
@@ -378,6 +494,14 @@ export function buildContentPack(
 
   // 3. Top 3 Watchlist
   {
+    const header = pick(
+      [
+        "Today's top 3 HR setups 👀",
+        "My 3 favorite power spots on the board 👀",
+        "Top 3 dingers I'm watching today 💣",
+      ],
+      `top3:${date}`,
+    );
     const lines =
       top3.length > 0
         ? top3.map((r) => `${r.rank}. ${r.player} (${r.team}) — ${r.stage}`).join("\n")
@@ -386,7 +510,7 @@ export function buildContentPack(
       makeAsset({
         assetType: "top3_watchlist",
         title: "Top 3 Watchlist",
-        rawBody: `Today's top 3 HR setups 👀\n\n${lines}`,
+        rawBody: `${header}\n\n${lines}`,
         imagePayload: {
           template: "daily_board",
           title: "Top 3 Watchlist",
@@ -394,11 +518,13 @@ export function buildContentPack(
           rows: toImageRows(top3),
           footer: "Watchlist · not betting advice",
           brand: BRAND,
+          accent: "Top 3",
         },
         recommendedTiming: "Midday (12–2pm ET)",
         sourcePlayerIds: top3.map((r) => r.playerId),
         sourceSignalIds: top3.map((r) => r.signalId),
         ctaVariant: "movement_on_jump",
+        teams: top3.map((r) => r.team),
         includeLink,
         link,
       }),
@@ -408,9 +534,13 @@ export function buildContentPack(
   // 4. Movement Alert
   {
     const movers = movements.slice(0, 5);
+    const header = pick(
+      ["Board movement 🚨", "Live board movement 🚨", "Players climbing the board 📈"],
+      `movement:${date}`,
+    );
     const body =
       movers.length > 0
-        ? `Board movement 🚨\n\n${movers
+        ? `${header}\n\n${movers
             .map(
               (m) =>
                 `${m.player} (${m.team}): ${m.previousStage} → ${m.currentStage}${
@@ -436,11 +566,13 @@ export function buildContentPack(
           })),
           footer: "Live movement from the pre-game board",
           brand: BRAND,
+          accent: "Live Movement",
         },
         recommendedTiming: "Live — when a player jumps a stage",
         sourcePlayerIds: movers.map((m) => m.playerId),
         sourceSignalIds: movers.map((m) => m.signalId),
         ctaVariant: "movement_on_jump",
+        teams: movers.map((m) => m.team),
         includeLink,
         link,
       }),
@@ -473,11 +605,13 @@ export function buildContentPack(
           })),
           footer: "Live READY/FIRE movement",
           brand: BRAND,
+          accent: "Ready / Fire",
         },
         recommendedTiming: "Live — the moment a player reaches READY/FIRE",
         sourcePlayerIds: hot.map((m) => m.playerId),
         sourceSignalIds: hot.map((m) => m.signalId),
         ctaVariant: "follow_for_movement",
+        teams: hot.map((m) => m.team),
         includeLink,
         link,
       }),
@@ -557,11 +691,13 @@ export function buildRecap(
           })),
           footer: "Pre-game board → live cash · receipts only",
           brand: BRAND,
+          accent: "Receipts",
         },
         recommendedTiming: "Postgame (within ~1h of final)",
         sourcePlayerIds: cashed.map((m) => m.playerId),
         sourceSignalIds: cashed.map((m) => m.signalId),
         ctaVariant: "not_a_pick",
+        teams: cashed.map((m) => m.team),
         includeLink: false,
         link: null,
       }),
@@ -599,11 +735,13 @@ export function buildRecap(
           })),
           footer: "Transparency · not betting advice",
           brand: BRAND,
+          accent: "Transparency",
         },
         recommendedTiming: "Postgame (same evening)",
         sourcePlayerIds: nearMiss.map((m) => m.playerId),
         sourceSignalIds: nearMiss.map((m) => m.signalId),
         ctaVariant: "not_a_pick",
+        teams: nearMiss.map((m) => m.team),
         includeLink: false,
         link: null,
       }),
@@ -632,11 +770,13 @@ export function buildRecap(
           ],
           footer: `Cashed ${cashed.length} · Near ${nearMiss.length} · Missed ${missed.length}`,
           brand: BRAND,
+          accent: "Daily Recap",
         },
         recommendedTiming: "Postgame wrap or next-morning recap",
         sourcePlayerIds: [...cashed, ...nearMiss].map((m) => m.playerId),
         sourceSignalIds: [...cashed, ...nearMiss].map((m) => m.signalId),
         ctaVariant: "not_a_pick",
+        teams: [...cashed, ...nearMiss].map((m) => m.team),
         includeLink: false,
         link: null,
       }),

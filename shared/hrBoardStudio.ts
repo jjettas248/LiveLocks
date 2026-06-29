@@ -53,6 +53,11 @@ export interface HrBoardImageRow {
   drivers?: string[];
 }
 
+/** Brand identity used across every studio asset (handle + site watermark). */
+export const HR_BOARD_BRAND_HANDLE = "@LiveLocksAI" as const;
+export const HR_BOARD_BRAND_SITE = "www.livelocksai.app" as const;
+export const HR_BOARD_BRAND_HASHTAG = "#LiveLocks" as const;
+
 /**
  * Structured image payload — no external image service required. The UI renders
  * this as a styled card; screenshot/export tooling can consume it later.
@@ -64,6 +69,12 @@ export interface HrBoardImagePayload {
   rows?: HrBoardImageRow[];
   footer: string;
   brand: "LiveLocks HR Power Board";
+  /** Brand handle watermark for the rendered card (e.g. "@LiveLocksAI"). */
+  handle?: string;
+  /** Brand site watermark for the rendered card (e.g. "www.livelocksai.app"). */
+  site?: string;
+  /** Optional accent label for diverse template styling. */
+  accent?: string;
 }
 
 export type ComplianceStatus = "clean" | "flagged";
@@ -105,6 +116,16 @@ export interface HrBoardAsset {
   safeCopy: string;
   ctaVariant: CtaVariant;
   cta: string;
+  /**
+   * High-traction X hashtags curated per asset type (always brand-tagged).
+   * Folded into the copy body and surfaced as chips on the admin card.
+   */
+  hashtags: string[];
+  /**
+   * Cashtags ($TEAM / $MLB) derived from the players featured in the asset.
+   * Folded into the copy body and surfaced as chips on the admin card.
+   */
+  cashtags: string[];
   /** No-link native posts by default. */
   includeLink: boolean;
   /** Only populated when an admin explicitly toggles links on. */

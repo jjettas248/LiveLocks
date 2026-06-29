@@ -16,6 +16,11 @@ import {
 } from "./hrBoardStudioCore";
 import { applyCompliance, scanForBlockedTerms } from "./hrBoardCompliance";
 import {
+  HR_BOARD_BRAND_HANDLE,
+  HR_BOARD_BRAND_HASHTAG,
+  HR_BOARD_BRAND_SITE,
+} from "../../shared/hrBoardStudio";
+import {
   recordHrBoardEvent,
   getHrBoardSummary,
   _resetHrBoardAnalyticsForTests,
@@ -315,6 +320,73 @@ const FULL_BOARD: PregamePowerSignal[] = [
   check("summary most-copied player", summary.mostCopiedPlayer === "Player 1");
   check("summary recap status generated", summary.recapStatus === "generated");
   check("summary movement assets available", summary.movementAssetsAvailable === 2);
+}
+
+// ── 8b. Hashtags / cashtags / brand identity ──────────────────────────────────
+{
+  const rows = buildBoardRows(FULL_BOARD);
+  const movements = buildMovementFeed(rows, [
+    mkState({ playerId: "1", lifecycleState: "cashed", section: "CASHED", active: false, terminal: true }),
+    mkState({ playerId: "2", lifecycleState: "ready", section: "READY" }),
+  ]);
+  const pack = buildContentPack("2026-06-25", rows, movements);
+  const recap = buildRecap("2026-06-25", rows, movements);
+  const allAssets = [...pack.assets, ...recap.assets];
+
+  check(
+    "every asset carries hashtags",
+    allAssets.every((a) => Array.isArray(a.hashtags) && a.hashtags.length > 0),
+  );
+  check(
+    "every hashtag starts with #",
+    allAssets.every((a) => a.hashtags.every((h) => h.startsWith("#"))),
+  );
+  check(
+    "every asset is brand-hashtagged",
+    allAssets.every((a) => a.hashtags.includes(HR_BOARD_BRAND_HASHTAG)),
+  );
+  check(
+    "every asset carries cashtags incl. $MLB",
+    allAssets.every((a) => a.cashtags.length > 0 && a.cashtags.includes("$MLB")),
+  );
+  check(
+    "every cashtag starts with $",
+    allAssets.every((a) => a.cashtags.every((c) => c.startsWith("$"))),
+  );
+  check(
+    "team cashtag derived from featured team ($AAA)",
+    pack.assets[0].cashtags.includes("$AAA"),
+    pack.assets[0].cashtags.join(","),
+  );
+  check(
+    "brand handle folded into every copy body",
+    allAssets.every((a) => a.body.includes(HR_BOARD_BRAND_HANDLE)),
+  );
+  check(
+    "tags folded into copy body",
+    allAssets.every((a) => a.hashtags.every((h) => a.body.includes(h))),
+  );
+  check(
+    "tags never introduce blocked terms (all clean)",
+    allAssets.every((a) => a.complianceStatus === "clean"),
+  );
+  check(
+    "no blocked term hides in any hashtag/cashtag",
+    allAssets.every(
+      (a) => scanForBlockedTerms([...a.hashtags, ...a.cashtags].join(" ")).length === 0,
+    ),
+  );
+  // Brand site is a URL → must stay OUT of copy, but appear on the image card.
+  check(
+    "brand site never leaks into copy",
+    allAssets.every((a) => !a.body.includes(HR_BOARD_BRAND_SITE)),
+  );
+  check(
+    "image payload carries brand handle + site watermark",
+    allAssets.every(
+      (a) => a.imagePayload.handle === HR_BOARD_BRAND_HANDLE && a.imagePayload.site === HR_BOARD_BRAND_SITE,
+    ),
+  );
 }
 
 // ── 9. Admin auth blocks non-admin users ──────────────────────────────────────
