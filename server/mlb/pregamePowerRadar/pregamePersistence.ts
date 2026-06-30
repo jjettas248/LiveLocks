@@ -16,7 +16,7 @@ import { setPregameBuildSink } from "./buildPregamePowerRadar";
 import { setDbFallback } from "./pregamePowerRadarService";
 import type { PregamePowerSnapshot } from "./pregamePowerRadarStore";
 
-function signalToRow(s: PregamePowerSignal): InsertPregamePowerRadarSignal {
+export function signalToRow(s: PregamePowerSignal): InsertPregamePowerRadarSignal {
   return {
     signalId: s.signalId,
     buildId: s.buildId,
@@ -58,7 +58,7 @@ function signalToRow(s: PregamePowerSignal): InsertPregamePowerRadarSignal {
   };
 }
 
-function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
+export function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
   // marketSetups are reconstructed from the *persisted* marketScores — honest,
   // not fabricated. Park/weather context is NOT persisted, so parkContext is null
   // here (the UI shows "Park context unavailable" rather than faking neutral).
@@ -114,24 +114,6 @@ function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
     convertedLiveAt: r.convertedLiveAt ? new Date(r.convertedLiveAt).toISOString() : null,
     diagnostics: r.diagnostics as PregamePowerSignal["diagnostics"],
   };
-}
-
-/**
- * Reconstruct persisted pre-game signals for an ET date from the DB (latest
- * build for that date). Used by the stats endpoints for historical dates where
- * the in-memory snapshot only holds today. Best-effort: returns [] on any miss.
- * Park/weather context is not persisted (rowToSignal stamps null) — fine for
- * stats, which read only outcomes / tier / score / drivers / live-bridge flags.
- */
-export async function loadPregameSignalsForDate(
-  sessionDate: string,
-): Promise<PregamePowerSignal[]> {
-  try {
-    const rows = await storage.getPregamePowerRadarSignalsByDate(sessionDate);
-    return rows.map(rowToSignal);
-  } catch {
-    return [];
-  }
 }
 
 let installed = false;
