@@ -88,7 +88,7 @@ States: `inactive → watch → build → ready → fire → cashed|missed|model
 Terminal states (`cashed`, `missed`, `model_review`, `expired`) are sticky.
 Illegal transitions return `ok=false` (logged, never thrown).
 In-memory persistence: `hrRadarCanonicalStore.ts`.
-API-layer helpers: `hrRadarSection.ts`, `hrRadarState.ts`, `hrRadarOutcomeStamp.ts`.
+API-layer helpers: `hrRadarSection.ts`, `hrRadarOutcomeStamp.ts`.
 
 ### Non-HR Signal State Engine (`nonHrSignalState.ts`)
 

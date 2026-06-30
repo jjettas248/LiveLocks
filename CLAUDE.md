@@ -109,7 +109,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | MLB normalizer + display contract | `server/mlb/normalizeSignal.ts` |
 | MLB signal bus + lifecycle | `server/services/liveSignalBus.ts`, `server/services/lifecycleStore.ts`, `server/services/lifecycleEngine.ts` |
 | MLB HR Radar engine | `server/mlb/hrAlertEngine.ts`, `server/mlb/hrRadarUserStage.ts`, `server/mlb/hrConversionModel.ts` |
-| MLB HR Radar state machine | `server/mlb/hrRadarStateMachine.ts`, `server/mlb/hrRadarCanonicalStore.ts`, `server/mlb/hrRadarSection.ts`, `server/mlb/hrRadarState.ts`, `server/mlb/hrRadarOutcomeStamp.ts` |
+| MLB HR Radar state machine | `server/mlb/hrRadarStateMachine.ts`, `server/mlb/hrRadarCanonicalStore.ts`, `server/mlb/hrRadarSection.ts`, `server/mlb/hrRadarOutcomeStamp.ts` |
 | MLB near-HR contact detector | `server/mlb/nearHrContact.ts` (Phase 2.5, pure function — no I/O) |
 | MLB non-HR signal state engine | `server/mlb/nonHrSignalState.ts` (BUILDING→ACTIVE→COOLING→CLOSED) |
 | MLB live event interpretation | `server/mlb/liveEventInterpretation.ts` |
