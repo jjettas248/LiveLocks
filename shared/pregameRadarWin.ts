@@ -90,3 +90,39 @@ export interface PregameCalibrationRecord {
   /** Public win rate over graded public targets, or null below sample. */
   winRate: number | null;
 }
+
+export interface PregameRadarPublicStats {
+  dateET: string;
+  pregameWinsToday: number;
+  firstAbPregameWinsToday: number;
+  pregameWinsLast7Days: number;
+  firstAbPregameWinsLast7Days: number;
+  flaggedBeforeFirstPitchToday: number;
+  topPregameWinPlayers: PregameRadarWinItem[];
+}
+
+export interface PregameCalibrationBucket {
+  targets: number;
+  wins: number;
+  misses: number;
+  hitRate: number;
+}
+
+export interface PregameRadarCalibrationStats {
+  dateRange: {
+    startET: string;
+    endET: string;
+  };
+  targets: number;
+  wins: number;
+  calibrationMisses: number;
+  hitRate: number;
+  firstAbWins: number;
+  firstAbWinRate: number;
+  byTier: Record<string, PregameCalibrationBucket>;
+  byScoreBand: Record<string, PregameCalibrationBucket>;
+  byDriver: Record<string, PregameCalibrationBucket>;
+  targetToLiveReadyRate: number;
+  targetToLiveFireRate: number;
+  targetToHrRate: number;
+}
