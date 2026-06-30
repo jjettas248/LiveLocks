@@ -47,7 +47,6 @@ server/              Express backend
     hrRadarStateMachine.ts      Canonical HR Radar lifecycle state machine (pure transitions)
     hrRadarCanonicalStore.ts    In-memory persistence for HR Radar lifecycle state
     hrRadarSection.ts           Section/outcome helpers for HR Radar API layer
-    hrRadarState.ts             HR Radar state helpers and constants
     hrRadarOutcomeStamp.ts      Outcome stamping for HR Radar records
     nearHrContact.ts            Phase 2.5 near-HR contact detector (pure function)
     nonHrSignalState.ts         BUILDING→ACTIVE→COOLING→CLOSED state engine for non-HR markets
