@@ -4,7 +4,7 @@ import { useLocation, useSearch } from "wouter";
 const STORAGE_KEY = "lv_attribution_v1";
 const FIELD_MAX = 120;
 
-export type AttributionPayload = {
+type AttributionPayload = {
   utmSource: string | null;
   utmMedium: string | null;
   utmCampaign: string | null;

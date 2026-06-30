@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-export type LiveSignalCounts = {
+type LiveSignalCounts = {
   nbaElite: number;
   ncaabElite: number;
   mlbElite: number;

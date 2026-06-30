@@ -469,5 +469,3 @@ function PlayerParkWindFitRow({ fit, batterName }: { fit?: PlayerParkWindFit | n
     </div>
   );
 }
-
-export default PregamePowerRadar;

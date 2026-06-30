@@ -1,6 +1,6 @@
 import { apiRequest } from "./queryClient";
 
-export type RailEventType =
+type RailEventType =
   | "impression"
   | "primary_cta_click"
   | "alerts_cta_click"

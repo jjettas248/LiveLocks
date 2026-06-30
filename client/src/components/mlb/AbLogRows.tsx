@@ -20,7 +20,7 @@ export interface AbRow {
 // Drop placeholder/padded rows the server appends when the boxscore PA count
 // exceeds tracked contact data. Those rows carry outcome "unknown" and no
 // EV/LA/distance, and would render as bare "PA" lines with no detail.
-export function renderableAbRows(abs: AbRow[]): AbRow[] {
+function renderableAbRows(abs: AbRow[]): AbRow[] {
   return abs.filter(
     (ab) =>
       (ab.outcome && ab.outcome !== "unknown") ||

@@ -48,7 +48,7 @@ export class PlayLimitError extends Error {
   }
 }
 
-export class UnauthenticatedError extends Error {
+class UnauthenticatedError extends Error {
   constructor() {
     super("Not authenticated");
     this.name = "UnauthenticatedError";
@@ -181,17 +181,3 @@ export function useGameLines(
   });
 }
 
-export function useCalculateParlay() {
-  return useMutation({
-    mutationFn: async (picks: ParlayPickInput[]): Promise<ParlayResult> => {
-      const res = await fetch("/api/parlay/calculate", {
-        method: "POST",
-        headers: authFetchHeaders({ "Content-Type": "application/json" }),
-        credentials: "include",
-        body: JSON.stringify({ picks }),
-      });
-      if (!res.ok) throw new Error("Failed to calculate parlay");
-      return res.json();
-    },
-  });
-}

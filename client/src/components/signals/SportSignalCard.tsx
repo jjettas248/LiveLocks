@@ -17,7 +17,7 @@ const EDGE_COLOR = (edge: number): string => {
   return "text-red-400";
 };
 
-export type SportSignalCardProps = {
+type SportSignalCardProps = {
   sport: "NBA" | "NCAAB" | "MLB";
   playerOrTeam: string;
   marketLabel: string;
