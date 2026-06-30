@@ -5,6 +5,7 @@ import { useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Activity, AlertCircle, BarChart3, Target, Zap, Bell, Layers } from "lucide-react";
+import { PregameRadarCalibrationCard } from "@/components/admin/PregameRadarCalibrationCard";
 
 interface RoiBucket {
   cashed: number;
@@ -461,6 +462,9 @@ export default function MlbSignalIntelligencePage() {
           <StatCard label="Window" value={dur(lc.windowMs)} />
         </CardContent>
       </Card>
+
+      {/* 8. Pregame Radar Calibration (Win Attribution — full denominator) */}
+      <PregameRadarCalibrationCard />
     </div>
   );
 }
