@@ -277,6 +277,19 @@ export interface PregameOutcome {
   hitRecorded?: boolean;
   rbiRecorded?: number | null;
   resolvedAt?: string;
+  // ── Win Attribution (Pregame Radar Win Attribution) ────────────────────────
+  // A target who homers is a `pregame_win`; one who does not is a
+  // `calibration_miss` (stored internally only, never a public loss).
+  outcome?: import("../../../shared/pregameRadarWin").PregameOutcomeType;
+  // True only for a publicly-flagged win — gates the public daily cashed log.
+  userVisible?: boolean;
+  // HR event detail (best-effort; null when the source feed lacked it).
+  hrInning?: number | null;
+  hrHalf?: "top" | "bottom" | null;
+  // 1-based plate-appearance number of the HR within the player's game ABs.
+  plateAppearanceNumber?: number | null;
+  // True when the HR came in the player's first plate appearance.
+  firstAbPregameWin?: boolean;
 }
 
 /** Per-component scorer result. All scores are on a 0–10 scale. */
