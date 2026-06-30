@@ -716,6 +716,45 @@ export async function registerRoutes(
     }
   });
 
+  // Public: Pregame Radar Record — wins-only. A pregame target that homers is a
+  // public win; one that misses is calibration-only and never appears here.
+  app.get("/api/mlb/pregame-radar/record", requireMLBAccess, async (_req, res) => {
+    try {
+      const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
+      const { getPregameRadarPublicStats } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
+      await getRadarSnapshot().catch(() => null);
+      return res.json(await getPregameRadarPublicStats());
+    } catch (e: any) {
+      console.error("[mlb/pregame-radar/record]", e?.message);
+      const { todayET } = await import("./utils/dateUtils");
+      return res.json({
+        dateET: todayET(),
+        pregameWinsToday: 0,
+        firstAbPregameWinsToday: 0,
+        pregameWinsLast7Days: 0,
+        firstAbPregameWinsLast7Days: 0,
+        flaggedBeforeFirstPitchToday: 0,
+        topPregameWinPlayers: [],
+      });
+    }
+  });
+
+  // Admin: Pregame Radar calibration breakdown — FULL denominator (wins AND
+  // calibration misses) so true target→HR conversion is visible internally.
+  // Proxy metrics only; never official ROI / W-L. ?days=N (default 7).
+  app.get("/api/admin/mlb/pregame-radar/calibration", requireAdmin, async (req, res) => {
+    try {
+      const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
+      const { getPregameRadarCalibrationStats } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
+      await getRadarSnapshot().catch(() => null);
+      const days = req.query.days ? Number(req.query.days) : 7;
+      return res.json(await getPregameRadarCalibrationStats(Number.isFinite(days) ? days : 7));
+    } catch (e: any) {
+      console.error("[admin/mlb/pregame-radar/calibration]", e?.message);
+      return res.status(500).json({ error: "Failed to fetch pregame radar calibration" });
+    }
+  });
+
   // HR Radar precision/recall instrumentation (Recommendation #4). Read-only.
   // ?windowMs=N to change the lookback; ?includeRecords=1 for per-signal rows.
   app.get("/api/admin/mlb-hr-radar-shadow", requireAdmin, async (req, res) => {

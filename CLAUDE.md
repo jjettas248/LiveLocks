@@ -36,6 +36,7 @@ npx tsx server/mlb/hrRadarRuntimeSmoke.test.ts      # read-only contract smoke (
 npx tsx server/analytics/hrRadarOfficialSplit.test.ts # analytics official(FIRE) vs shadow(watch) split
 npx tsx server/growth/hrBoardStudio.test.ts          # HR Board Studio: no-link copy, compliance, movement purity, recap, admin-auth gate
 npx tsx server/mlb/pregamePowerRadar/winAttribution.test.ts  # Pregame Radar Win Attribution (pregame_win public vs calibration_miss internal; first-AB label; daily-log grouping)
+npx tsx server/mlb/pregamePowerRadar/calibrationStats.test.ts # Pregame Radar public stats (wins-only) vs admin calibration (full denominator: byTier/byScoreBand/byDriver + conversion rates)
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
@@ -115,7 +116,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | MLB live event interpretation | `server/mlb/liveEventInterpretation.ts` |
 | MLB integrity firewall | `server/mlb/integrityFirewall.ts` |
 | MLB shadow qualification | `server/mlb/shadowQualification.ts` |
-| MLB Pre-Game Power Radar + Win Attribution | `server/mlb/pregamePowerRadar/` — `shadowOutcomes.ts` (grading + `pregame_win`/`calibration_miss` attribution), `winAttribution.ts` (pure attribution + daily-log builders), `shared/pregameRadarWin.ts` (transport contracts: `DailyCashedLogResponse`) |
+| MLB Pre-Game Power Radar + Win Attribution | `server/mlb/pregamePowerRadar/` — `shadowOutcomes.ts` (grading + `pregame_win`/`calibration_miss` attribution + public/admin stat getters), `winAttribution.ts` (pure attribution + daily-log builders), `calibrationStats.ts` (pure public/admin stat builders), `shared/pregameRadarWin.ts` (transport contracts: `DailyCashedLogResponse`, `PregameRadarPublicStats`, `PregameRadarCalibrationStats`); client `PregameWinCard.tsx` (public record + wins) + `components/admin/PregameRadarCalibrationCard.tsx` (admin calibration) |
 | MLB orchestrator (per-tick driver) | `server/mlb/liveGameOrchestrator.ts` |
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |
 | NBA playoff rotation truth | `server/services/nbaRotationHistoryService.ts` |
@@ -168,6 +169,7 @@ All gated by `requireAdmin`. Distinct namespaces:
 | `POST /api/admin/hr-board-studio/generate-recap` | Generate postgame recap/proof assets for a date |
 | `POST /api/admin/hr-board-studio/log-action` | Record admin copy/download/generate/view analytics |
 | `GET /api/admin/hr-board-studio/analytics` | Admin workflow summary rollup |
+| `GET /api/admin/mlb/pregame-radar/calibration` | Pregame Radar calibration breakdown (`?days=N`) — full denominator (wins + calibration misses), byTier/byScoreBand/byDriver + conversion rates |
 
 Admin pages live under `/admin`, `/admin/mlb-signal-intelligence`, `/admin/track-record`, and `/admin/hr-board-studio`.
 

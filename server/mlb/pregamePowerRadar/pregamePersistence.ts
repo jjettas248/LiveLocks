@@ -116,6 +116,24 @@ function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
   };
 }
 
+/**
+ * Reconstruct persisted pre-game signals for an ET date from the DB (latest
+ * build for that date). Used by the stats endpoints for historical dates where
+ * the in-memory snapshot only holds today. Best-effort: returns [] on any miss.
+ * Park/weather context is not persisted (rowToSignal stamps null) — fine for
+ * stats, which read only outcomes / tier / score / drivers / live-bridge flags.
+ */
+export async function loadPregameSignalsForDate(
+  sessionDate: string,
+): Promise<PregamePowerSignal[]> {
+  try {
+    const rows = await storage.getPregamePowerRadarSignalsByDate(sessionDate);
+    return rows.map(rowToSignal);
+  } catch {
+    return [];
+  }
+}
+
 let installed = false;
 
 /** Wire the build sink + DB fallback. Idempotent. */

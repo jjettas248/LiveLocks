@@ -10,6 +10,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Flame, Zap, Target, Wind, ShieldAlert, Lock } from "lucide-react";
+import { PregameRadarRecord, PregameWinsSection } from "./PregameWinCard";
 
 type Tier = "track" | "watch" | "power_watch" | "strong" | "elite" | "nuclear";
 type Market = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
@@ -204,6 +205,10 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
           </div>
         )}
       </div>
+
+      {/* Win Attribution — public Pregame Radar Record + today's wins (wins-only). */}
+      <PregameRadarRecord />
+      <PregameWinsSection />
 
       <div className="flex gap-1.5 flex-wrap">
         {FILTERS.map((f) => (
