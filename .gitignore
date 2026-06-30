@@ -6,3 +6,6 @@ vite.config.ts.*
 *.tar.gz
 # Auto-saved prompt/instruction files
 attached_assets/Pasted-*.txt
+
+# Claude Code personal overrides
+.claude/settings.local.json
