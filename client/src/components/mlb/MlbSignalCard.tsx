@@ -263,7 +263,7 @@ export function MlbSignalCard({
   return (
     <div
       data-testid={`mlb-signal-${sig.playerId}-${sig.market}`}
-      className={`rounded-xl border border-border/40 bg-card transition-all ${(isHRMarket && hrIntensity === "imminent") || sig.mode === "hr_elite" ? "animate-pulse" : ""}`}
+      className={`rounded-2xl border border-surface-border bg-surface-1 shadow-surface-md transition-all ${(isHRMarket && hrIntensity === "imminent") || sig.mode === "hr_elite" ? "hr-fire-pulse" : ""}`}
       style={{
         opacity: cardOpacity,
         borderLeft: `3px solid ${cardBorder}`,
@@ -346,10 +346,10 @@ export function MlbSignalCard({
             {/* [MLB Canonical Probability v1] sig.enginePct is the recommended-
                 side calibrated probability emitted by the MLB engine. The UI
                 does no math on it — pure renderer. */}
-            <span className="text-xl font-black tabular-nums leading-none" style={{ color: side.accent }}>
+            <span className="text-hero-num text-2xl leading-none" style={{ color: side.accent }}>
               {normalizePct(sig.enginePct).toFixed(0)}%
             </span>
-            <span className="text-[9px] text-muted-foreground mt-0.5 uppercase tracking-wide font-semibold">
+            <span className="text-label mt-0.5">
               win prob
             </span>
             {matchup && <span className="text-[9px] text-muted-foreground/80">{matchup}</span>}

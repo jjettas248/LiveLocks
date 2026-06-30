@@ -13,6 +13,9 @@ import { ParlaySlip } from "@/components/parlay-slip";
 import { UpgradeModal } from "@/components/upgrade-modal";
 import { FeedbackModal } from "@/components/feedback-modal";
 import { ManageSubscriptionModal } from "@/components/manage-subscription-modal";
+import { AppHeader } from "@/components/layout/AppHeader";
+import { SportTabs } from "@/components/layout/SportTabs";
+import { GamesStrip } from "@/components/mlb/GamesStrip";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
 import MlbLivePage from "@/pages/mlb-live";
 import { WelcomeBanner } from "@/components/welcome-banner";
@@ -1972,183 +1975,26 @@ export default function Dashboard() {
         />
       )}
       {/* Header */}
-      <header
-        className="border-b border-border/40 bg-background/80 backdrop-blur-xl sticky top-0 z-50"
-        style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}
-      >
-        <div className="max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <button
-            onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-            className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity active:opacity-60"
-            aria-label="Scroll to top"
-            data-testid="button-scroll-to-top"
-          >
-            <img
-              src={propPulseLogo}
-              alt="PropPulse"
-              className="w-9 h-9 rounded-xl object-cover shadow-lg shadow-primary/20 flex-shrink-0 ring-1 ring-primary/20"
-            />
-            <div className="flex flex-col leading-none min-w-0">
-              <h1 className="text-lg sm:text-xl font-bold tracking-tight text-foreground">LiveLocks</h1>
-              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-widest mt-0.5 whitespace-nowrap">
-                by PropPulse · {activeTab === "ncaab" ? "NCAAB" : activeTab === "mlb" ? "MLB" : "NBA"}
-              </span>
-            </div>
-          </button>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground">
-              <Radio className="w-3 h-3 text-green-500 animate-pulse" />
-              <span>
-                {isGamesLoading
-                  ? "Fetching..."
-                  : `${activeGames.length} live game${activeGames.length !== 1 ? "s" : ""}`}
-              </span>
-            </div>
-            {user && !user.isAdmin && !user.subscriptionTier && (
-              <button
-                data-testid="button-plays-remaining"
-                onClick={() => { setUpgradeModalState({ playsUsed: user.playsUsedToday ?? 0, limit: 3 }); setShowUpgradeModal(true); }}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-500 text-xs font-medium hover:bg-amber-500/20 transition-colors"
-              >
-                <Zap className="w-3 h-3" />
-                {user.playsUsedToday ?? 0} / 3 today · Resets tomorrow
-              </button>
-            )}
-            {user && user.subscriptionTier && (
-              <div className="flex items-center gap-1.5">
-                <span data-testid="text-subscription-tier" className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-xs font-medium">
-                  <Star className="w-3 h-3" />
-                  {user.subscriptionTier === "elite" ? "All Sports" : user.subscriptionTier === "all" ? "Pro" : user.subscriptionTier}
-                </span>
-                <button
-                  data-testid="button-manage-subscription"
-                  onClick={() => setShowManageModal(true)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary transition-colors"
-                  title="Manage, cancel, or downgrade your subscription"
-                  aria-label="Manage subscription — cancel, downgrade, or update payment"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Manage Plan</span>
-                </button>
-              </div>
-            )}
-            {user?.isAdmin && (
-              <>
-                <button
-                  onClick={() => syncRostersMutation.mutate()}
-                  disabled={syncRostersMutation.isPending}
-                  data-testid="button-sync-rosters"
-                  title="Pull latest rosters from ESPN to update player team assignments"
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors disabled:opacity-50"
-                >
-                  {syncRostersMutation.isPending ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  )}
-                  Sync Rosters
-                </button>
-                {dataHealth && (
-                  <div
-                    data-testid="text-data-health"
-                    className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border ${
-                      dataHealth.oddsApi.status === "healthy"
-                        ? "bg-green-500/10 border-green-500/30 text-green-500"
-                        : dataHealth.oddsApi.status === "degraded"
-                        ? "bg-amber-500/10 border-amber-500/30 text-amber-500"
-                        : "bg-red-500/10 border-red-500/30 text-red-500"
-                    }`}
-                    title={`Odds API: ${dataHealth.oddsApi.status}${dataHealth.oddsApi.requestsRemaining !== null ? ` — ${dataHealth.oddsApi.requestsRemaining.toLocaleString()} credits left` : ''}${dataHealth.oddsKeyStatus ? ` — ${dataHealth.oddsKeyStatus.totalKeys} keys, ${dataHealth.oddsKeyStatus.exhaustedKeys.length} exhausted` : ''}`}
-                  >
-                    <div className={`w-2 h-2 rounded-full ${
-                      dataHealth.oddsApi.status === "healthy"
-                        ? "bg-green-500"
-                        : dataHealth.oddsApi.status === "degraded"
-                        ? "bg-amber-500"
-                        : "bg-red-500"
-                    }`} />
-                    {dataHealth.oddsKeyStatus && dataHealth.oddsKeyStatus.exhaustedKeys.length === dataHealth.oddsKeyStatus.totalKeys
-                      ? "quota reached"
-                      : dataHealth.oddsApi.status}
-                  </div>
-                )}
-              </>
-            )}
-            {/* Unified notification bell — opens alert history + push/SMS settings */}
-            <button
-              data-testid="button-notifications"
-              onClick={() => setShowHistorySheet(true)}
-              className="relative flex items-center justify-center w-10 h-10 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors"
-              title="Notifications & alert history"
-            >
-              <Bell ref={bellRef} className="w-4 h-4" />
-              {/* Red dot — unread alert history (highest priority) */}
-              {notificationLog.length > 0 && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border border-background" />
-              )}
-              {/* Amber pulsing dot — SMS not yet configured */}
-              {notificationLog.length === 0 && smsStatus === "unprompted" && (
-                <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" style={{ animationDuration: "2s" }} />
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500" />
-                </span>
-              )}
-              {/* Green dot — SMS opted-in, no new alerts */}
-              {notificationLog.length === 0 && smsStatus === "opted-in" && (
-                <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-green-400" />
-              )}
-            </button>
-            <button
-              onClick={() => setShowParlay(!showParlay)}
-              data-testid="button-toggle-parlay"
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary text-sm font-semibold hover:bg-primary/20 transition-colors"
-              title="Parlay Slip"
-            >
-              <Trophy className="w-4 h-4" />
-              <span className="hidden sm:inline">Parlay Slip</span>
-              {parlayPicks.length > 0 && (
-                <span className="bg-primary text-primary-foreground text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                  {parlayPicks.length}
-                </span>
-              )}
-            </button>
-            {user?.isAdmin && (
-              <button
-                data-testid="link-performance"
-                onClick={() => navigate("/admin")}
-                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/30 text-blue-400 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
-                title="Model Performance"
-              >
-                <BarChart3 className="w-3.5 h-3.5" />
-                Analytics
-              </button>
-            )}
-            {user?.isAdmin && (
-              <button
-                data-testid="link-admin"
-                onClick={() => navigate("/admin")}
-                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-500 text-xs font-semibold hover:bg-amber-500/20 transition-colors"
-                title="Admin panel"
-              >
-                <Settings className="w-3.5 h-3.5" />
-                Admin
-              </button>
-            )}
-            {user && (
-              <button
-                data-testid="button-logout"
-                onClick={() => { logout(); navigate("/auth"); }}
-                className="flex items-center justify-center gap-1.5 w-10 h-10 sm:w-auto sm:h-auto sm:px-3 sm:py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground text-xs hover:text-foreground hover:bg-secondary/80 transition-colors"
-                title={user.email}
-                aria-label="Sign out"
-              >
-                <Users className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Sign Out</span>
-              </button>
-            )}
-          </div>
-        </div>
-      </header>
+      <AppHeader
+        sportLabel={activeTab === "ncaab" ? "NCAAB" : activeTab === "mlb" ? "MLB" : "NBA"}
+        isGamesLoading={isGamesLoading}
+        liveGamesCount={activeGames.length}
+        user={user}
+        dataHealth={dataHealth}
+        isSyncingRosters={syncRostersMutation.isPending}
+        onSyncRosters={() => syncRostersMutation.mutate()}
+        notificationCount={notificationLog.length}
+        smsStatus={smsStatus}
+        bellRef={bellRef}
+        onOpenNotifications={() => setShowHistorySheet(true)}
+        parlayCount={parlayPicks.length}
+        onToggleParlay={() => setShowParlay(!showParlay)}
+        onPlaysRemainingClick={() => { setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 }); setShowUpgradeModal(true); }}
+        onManageSubscription={() => setShowManageModal(true)}
+        onOpenAnalytics={() => navigate("/admin")}
+        onOpenAdmin={() => navigate("/admin")}
+        onLogout={() => { logout(); navigate("/auth"); }}
+      />
 
 
       {/* PWA Install Banner */}
@@ -2470,7 +2316,7 @@ export default function Dashboard() {
         {autoRunFallback && !autoRunResult && (
           <div
             data-testid="auto-run-fallback"
-            className="rounded-xl border border-[#27272a] bg-[#0a0a0a] p-4 text-center"
+            className="rounded-xl border border-border bg-background p-4 text-center"
           >
             {/*
               Free users get a conversion-oriented fallback message instead of
@@ -2480,7 +2326,7 @@ export default function Dashboard() {
               rather than a future paying customer with a clear next step).
               Paid / trial / admin users keep the informational copy.
             */}
-            <p className="text-sm text-[#71717a]">
+            <p className="text-sm text-muted-foreground">
               {isFreeUser
                 ? "No free play available right now — upgrade to unlock unlimited signals as soon as they hit."
                 : "Monitoring opportunities — signals appear as games go live."}
@@ -2524,153 +2370,35 @@ export default function Dashboard() {
 
         {/* Tab Navigation */}
         <div className="relative flex flex-col gap-0 w-full overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
-          <div className="flex gap-1 bg-secondary/40 border border-border/60 rounded-xl p-1 w-fit">
-            <button
-              onClick={() => { setActiveTab("calculator"); }}
-              data-testid="tab-calculator"
-              className={`px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors relative whitespace-nowrap ${
-                activeTab === "calculator"
-                  ? "bg-primary text-primary-foreground border-glow"
-                  : "text-muted-foreground hover:text-foreground"
-              } ${hasLiveNba && activeTab !== "calculator" ? "shadow-[0_0_12px_rgba(34,197,94,0.3)]" : ""}`}
-            >
-              {hasLiveNba && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
-              🏀 NBA Live
-            </button>
-            <button
-              data-testid="tab-mlb"
-              onClick={() => {
-                setActiveTab("mlb");
-                if (!user?.isAdmin && !user?.hasMLB) {
-                  setShowMlbUpgradeModal(true);
-                }
-              }}
-              className={`px-3 sm:px-4 py-1.5 rounded-lg text-sm font-semibold flex items-center gap-1.5 transition-colors relative whitespace-nowrap ${
-                activeTab === "mlb"
-                  ? "bg-primary text-primary-foreground border-glow"
-                  : "text-muted-foreground hover:text-foreground"
-              } ${hasLiveMlb && activeTab !== "mlb" ? "shadow-[0_0_12px_rgba(34,197,94,0.3)]" : ""}`}
-            >
-              {hasLiveMlb && <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-green-500 animate-pulse" />}
-              <span role="img" aria-label="baseball">⚾</span>
-              MLB Live
-              {!user?.isAdmin && !user?.hasMLB && (
-                <Lock className="w-3 h-3 opacity-50" />
-              )}
-            </button>
-            <button
-              data-testid="tab-ncaab"
-              onClick={() => {
-                if (!hasNcaabAccess) {
-                  setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
-                  setShowUpgradeModal(true);
-                  return;
-                }
-                navigate("/ncaab");
-              }}
-              className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
-                activeTab === "ncaab"
-                  ? "bg-primary text-primary-foreground border-glow"
-                  : "text-muted-foreground hover:text-foreground"
-              } ${!hasNcaabAccess ? "opacity-60" : ""}`}
-            >
-              <div style={{ position: "relative", display: "inline-flex", alignItems: "center", overflow: "visible" }}>
-                🎓 NCAAB Live
-                {hasNcaabAccess && showNewBadge && (
-                  <span
-                    data-testid="ncaab-new-badge"
-                    style={{
-                      position: "absolute",
-                      top: -8,
-                      right: -20,
-                      background: "hsl(var(--brand-accent))",
-                      color: "#000000",
-                      fontSize: 9,
-                      fontWeight: 700,
-                      lineHeight: 1,
-                      padding: "2px 5px",
-                      borderRadius: 4,
-                      letterSpacing: "0.05em",
-                      textTransform: "uppercase",
-                      pointerEvents: "none",
-                      animation: "newBadgeScale 300ms cubic-bezier(0.34,1.56,0.64,1) both",
-                    }}
-                  >
-                    NEW
-                  </span>
-                )}
-              </div>
-              {!hasNcaabAccess && <Lock className="w-3 h-3 ml-0.5 shrink-0" />}
-            </button>
-            {user?.isAdmin && (
-              <button
-                data-testid="tab-analytics"
-                onClick={() => setActiveTab("analytics")}
-                className={`px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === "analytics"
-                    ? "bg-primary text-primary-foreground border-glow"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                📊 Analytics
-              </button>
-            )}
-          </div>
-
-          {activeTab === "calculator" && (
-            <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
-              <button
-                data-testid="tab-nba-live"
-                onClick={() => setNbaSubTab("live")}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                  nbaSubTab === "live"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                Live Props
-              </button>
-              <button
-                data-testid="tab-nba-halftime"
-                onClick={() => setNbaSubTab("halftime")}
-                className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                  nbaSubTab === "halftime"
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                ⏱ 2H Plays
-              </button>
-            </div>
-          )}
-
-          {activeTab === "mlb" && (
-            <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
-              {([
-                { key: "hr_radar", label: "HR Radar" },
-                { key: "pregame_power", label: "Pre-Game Power" },
-                // Action Feed (live_feed) hidden for now — re-add this entry to restore.
-                // { key: "live_feed", label: "Action Feed" },
-              ] as const).map(tab => (
-                <button
-                  key={tab.key}
-                  data-testid={`tab-mlb-${tab.key}`}
-                  onClick={() => setMlbSubTab(tab.key)}
-                  className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                    mlbSubTab === tab.key
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  } ${tab.key === "hr_radar" && mlbSubTab !== "hr_radar" ? "relative" : ""}`}
-                  style={tab.key === "hr_radar" && mlbSubTab === "hr_radar" ? { boxShadow: "0 0 12px rgba(239,68,68,0.3)", borderColor: "rgba(239,68,68,0.3)" } : undefined}
-                >
-                  {tab.key === "hr_radar" && (
-                    <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                  )}
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-          )}
+          <SportTabs
+            activeTab={activeTab}
+            isAdmin={!!user?.isAdmin}
+            hasMLB={!!user?.hasMLB}
+            hasNcaabAccess={hasNcaabAccess}
+            hasLiveNba={hasLiveNba}
+            hasLiveMlb={hasLiveMlb}
+            showNewBadge={!!showNewBadge}
+            onSelectNba={() => setActiveTab("calculator")}
+            onSelectMlb={() => {
+              setActiveTab("mlb");
+              if (!user?.isAdmin && !user?.hasMLB) {
+                setShowMlbUpgradeModal(true);
+              }
+            }}
+            onSelectNcaab={() => {
+              if (!hasNcaabAccess) {
+                setUpgradeModalState({ playsUsed: user?.playsUsedToday ?? 0, limit: 3 });
+                setShowUpgradeModal(true);
+                return;
+              }
+              navigate("/ncaab");
+            }}
+            onSelectAnalytics={() => setActiveTab("analytics")}
+            nbaSubTab={nbaSubTab}
+            onSelectNbaSubTab={setNbaSubTab}
+            mlbSubTab={mlbSubTab}
+            onSelectMlbSubTab={setMlbSubTab}
+          />
 
 
           {/* MLB Upgrade Modal */}
@@ -2733,86 +2461,33 @@ export default function Dashboard() {
 
         {/* Live Games Strip — NBA Live tab only (hidden on NCAAB and Analytics) */}
         {activeTab === "calculator" && allGames.length > 0 && (
-          <div className="bg-card border border-border rounded-xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
-                <Radio className="w-3.5 h-3.5 text-green-500" /> Today's Games
-              </h2>
-              <button
-                onClick={() => refetchGames()}
-                className="text-muted-foreground flex items-center gap-1 text-xs hover:text-foreground"
-                data-testid="button-refresh-games"
-              >
-                <RefreshCw className="w-3 h-3" /> Refresh
-              </button>
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              {allGames.map((game) => {
-                const isLive = game.status !== "Scheduled" && game.status !== "Pre-Game" && game.status !== "Final";
-                const isFinal = game.status === "Final";
-                const isScheduled = game.status === "Scheduled" || game.status === "Pre-Game";
-                const isSelected = game.id === selectedGameId;
-                const scoreStr = `${game.awayScore}-${game.homeScore}`;
-                const tipoffTime = game.startTime
-                  ? new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true })
-                  : null;
-
-                return (
-                  <button
-                    key={game.id}
-                    data-testid={`button-game-${game.id}`}
-                    onClick={() => {
-                      if (isSelected) {
-                        setSelectedGameId(undefined);
-                        setSelectedGameTeams(undefined);
-                        form.setValue("halftimeScore", "");
-                        form.setValue("gameId", "");
-                        form.setValue("playerId" as any, "");
-                      } else {
-                        setSelectedGameId(game.id);
-                        setSelectedGameTeams({
-                          home: game.homeTeam,
-                          away: game.awayTeam,
-                          homeAbbr: game.homeTeamAbbr,
-                          awayAbbr: game.awayTeamAbbr,
-                        });
-                        form.setValue("gameId", game.id);
-                        form.setValue("playerId" as any, "");
-                        if (game.period >= 2) {
-                          form.setValue("halftimeScore", scoreStr);
-                        }
-                      }
-                    }}
-                    className={`flex flex-col items-center px-3 py-2 rounded-lg border text-xs min-w-[130px] transition-all ${
-                      isSelected
-                        ? "border-primary bg-primary/10 ring-1 ring-primary shadow-[0_0_16px_-3px_hsl(var(--primary)/0.4)]"
-                        : "border-border/60 bg-secondary/40 hover:bg-secondary/70 hover:shadow-[0_0_14px_-3px_hsl(var(--primary)/0.25)]"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between w-full gap-2">
-                      <span className="font-semibold text-foreground">{game.awayTeamAbbr}</span>
-                      <span className="font-mono text-primary font-bold">
-                        {game.awayScore} – {game.homeScore}
-                      </span>
-                      <span className="font-semibold text-foreground">{game.homeTeamAbbr}</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-muted-foreground mt-0.5">
-                      {isLive && <LiveIndicator />}
-                      {isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
-                      <span className={isLive ? "text-green-400" : isFinal ? "text-muted-foreground/60" : ""}>
-                        {isLive
-                          ? `Q${game.period} ${game.clock}`
-                          : isScheduled && tipoffTime
-                          ? tipoffTime
-                          : game.status}
-                      </span>
-                      {isSelected && <span className="text-primary font-medium ml-1">●</span>}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <GamesStrip
+            games={allGames}
+            selectedGameId={selectedGameId}
+            onRefresh={() => refetchGames()}
+            onToggleGame={(game) => {
+              if (game.id === selectedGameId) {
+                setSelectedGameId(undefined);
+                setSelectedGameTeams(undefined);
+                form.setValue("halftimeScore", "");
+                form.setValue("gameId", "");
+                form.setValue("playerId" as any, "");
+              } else {
+                setSelectedGameId(game.id);
+                setSelectedGameTeams({
+                  home: game.homeTeam,
+                  away: game.awayTeam,
+                  homeAbbr: game.homeTeamAbbr,
+                  awayAbbr: game.awayTeamAbbr,
+                });
+                form.setValue("gameId", game.id);
+                form.setValue("playerId" as any, "");
+                if (game.period >= 2) {
+                  form.setValue("halftimeScore", `${game.awayScore}-${game.homeScore}`);
+                }
+              }
+            }}
+          />
         )}
 
 

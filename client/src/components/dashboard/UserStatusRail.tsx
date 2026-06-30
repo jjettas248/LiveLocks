@@ -1,5 +1,9 @@
+import { Crown, Star, Zap, type LucideIcon } from "lucide-react";
 import { usePublicAnalytics } from "@/hooks/usePublicAnalytics";
 import { useLiveSignalCounts } from "@/hooks/useLiveSignalCounts";
+import { SurfaceCard } from "@/components/ui/SurfaceCard";
+import { StatBlock } from "@/components/ui/StatBlock";
+import { Pill } from "@/components/ui/Pill";
 
 type UserStatusRailProps = {
   tier: string;
@@ -9,10 +13,12 @@ type UserStatusRailProps = {
   onUpgradeClick?: () => void;
 };
 
-const TIER_LABELS: Record<string, { label: string; color: string }> = {
-  free: { label: "Free", color: "bg-muted text-muted-foreground" },
-  all: { label: "Pro", color: "bg-blue-500/15 text-blue-400" },
-  elite: { label: "All Sports", color: "bg-primary/15 text-primary" },
+type TierInfo = { label: string; icon: LucideIcon; tone: "muted" | "info" | "premium" };
+
+const TIER_LABELS: Record<string, TierInfo> = {
+  free: { label: "Free", icon: Zap, tone: "muted" },
+  all: { label: "Pro", icon: Star, tone: "info" },
+  elite: { label: "All Sports", icon: Crown, tone: "premium" },
 };
 
 export function UserStatusRail({ tier, playsUsed, playsLimit, isAdmin, onUpgradeClick }: UserStatusRailProps) {
@@ -20,47 +26,47 @@ export function UserStatusRail({ tier, playsUsed, playsLimit, isAdmin, onUpgrade
   const { data: counts } = useLiveSignalCounts();
 
   const tierInfo = TIER_LABELS[tier] ?? TIER_LABELS.free;
+  const TierIcon = tierInfo.icon;
   const totalLive = counts?.totalLive ?? 0;
   const winRate = analytics?.last7Days?.winRate ?? 0;
 
   return (
-    <div className="rounded-xl border border-border/40 bg-card p-3 space-y-2" data-testid="panel-user-status">
+    <SurfaceCard variant="elevated" className="p-3.5 space-y-3" data-testid="panel-user-status">
       <div className="flex items-center justify-between">
-        <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${tierInfo.color}`}>
+        <Pill tone={tierInfo.tone} icon={<TierIcon />}>
           {tierInfo.label}
-        </span>
+        </Pill>
         {tier === "free" && onUpgradeClick && (
           <button
             data-testid="button-status-upgrade"
             onClick={onUpgradeClick}
-            className="text-[10px] font-semibold text-primary hover:text-primary/80 transition-colors"
+            className="text-micro font-semibold text-primary hover:text-primary/80 transition-colors"
           >
             Upgrade →
           </button>
         )}
       </div>
 
-      <div className={`grid ${isAdmin ? "grid-cols-3" : "grid-cols-2"} gap-2 text-center`}>
-        <div>
-          <div className="text-[9px] text-muted-foreground">Plays</div>
-          <div className="text-xs font-bold text-foreground">
-            {tier === "free" ? `${playsUsed}/${playsLimit}` : "∞"}
-          </div>
-        </div>
-        <div>
-          <div className="text-[9px] text-muted-foreground">Live Signals</div>
-          <div className="text-xs font-bold text-foreground">{totalLive}</div>
-        </div>
+      <div className={`grid ${isAdmin ? "grid-cols-3" : "grid-cols-2"} gap-3`}>
+        <StatBlock
+          align="center"
+          label="Plays"
+          value={tier === "free" ? `${playsUsed}/${playsLimit}` : "∞"}
+          valueClassName="text-base"
+        />
+        <StatBlock align="center" label="Live Signals" value={totalLive} valueClassName="text-base" />
         {isAdmin && (
-          <div
+          <StatBlock
+            align="center"
+            label="7d Win"
+            value={`${winRate}%`}
+            tone={winRate >= 55 ? "success" : "default"}
+            valueClassName="text-base"
             title="Core Engine 7d Win Rate — excludes home_runs and batter_strikeouts (see HR Radar for those)."
             data-testid="tile-status-winrate"
-          >
-            <div className="text-[9px] text-muted-foreground">7d Win</div>
-            <div className={`text-xs font-bold ${winRate >= 55 ? "text-green-400" : "text-foreground"}`}>{winRate}%</div>
-          </div>
+          />
         )}
       </div>
-    </div>
+    </SurfaceCard>
   );
 }

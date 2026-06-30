@@ -1,8 +1,14 @@
 import { type ReactNode } from "react";
+import { motion } from "framer-motion";
 import { Check, Plus } from "lucide-react";
 import { ConfidenceBadge, type ConfidenceTier } from "./ConfidenceBadge";
 import { ShareSignalButton } from "@/components/common/ShareSignalButton";
 import { CopyBetButton } from "@/components/common/CopyBetButton";
+import { cn } from "@/lib/utils";
+import { SurfaceCard } from "@/components/ui/SurfaceCard";
+import { Pill } from "@/components/ui/Pill";
+import { sportAccentClasses } from "@/lib/uiTokens";
+import { numberReveal, useMotionSafe } from "@/lib/motionPresets";
 
 const SPORT_BADGE: Record<string, { label: string; color: string }> = {
   NBA: { label: "NBA", color: "bg-orange-500/15 text-orange-400 border-orange-500/30" },
@@ -103,49 +109,52 @@ export function SportSignalCard({
   const probWhole = Math.round(probability);
   const edgeStr = edge > 0 ? `+${edge.toFixed(1)}%` : `${edge.toFixed(1)}%`;
   const rankStyle = rank != null ? RANK_STYLES[rank] : undefined;
+  const motionSafe = useMotionSafe();
 
   return (
-    <div
+    <SurfaceCard
+      variant={rankStyle || isBestBet ? "elevated" : "default"}
       data-testid={`card-signal-${sport.toLowerCase()}-${playerOrTeam.replace(/\s+/g, "-").toLowerCase()}`}
-      className={`rounded-xl border bg-card overflow-hidden transition-all ${
+      className={cn(
+        "overflow-hidden",
+        !locked && "hover-elevate",
         rankStyle
           ? `${rankStyle.border} shadow-[0_0_20px_rgba(234,179,8,0.08)]`
           : isBestBet
             ? "border-primary/40 ring-1 ring-primary/20 shadow-[0_0_16px_rgba(34,197,94,0.1)]"
-            : "border-border/40 hover:border-border/60"
-      } ${locked ? "opacity-60" : ""}`}
+            : "hover:border-border/60",
+        locked && "opacity-60",
+      )}
     >
       <div className="p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0 flex-wrap">
+          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
             {rankStyle && (
-              <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded ${rankStyle.bg} ${rankStyle.text} border ${rankStyle.border.split(" ")[0]} shrink-0`} data-testid={`badge-rank-${rank}`}>
+              <Pill tone="custom" className={cn(rankStyle.bg, rankStyle.text, rankStyle.border.split(" ")[0])} data-testid={`badge-rank-${rank}`}>
                 {rankStyle.label}
-              </span>
+              </Pill>
             )}
-            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border shrink-0 ${sportBadge.color}`}>
+            <Pill tone="custom" className={sportAccentClasses(sport.toLowerCase())}>
               {sportBadge.label}
-            </span>
+            </Pill>
             <ConfidenceBadge tier={badgeTier} />
             {isFlagship && (
-              <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0" data-testid="badge-flagship">
+              <Pill tone="custom" className="bg-purple-500/15 text-purple-400 border-purple-500/30" data-testid="badge-flagship">
                 Flagship
-              </span>
+              </Pill>
             )}
             {isBestBet && !rankStyle && (
-              <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-primary/15 text-primary border border-primary/30 shrink-0">
-                Best Bet
-              </span>
+              <Pill tone="premium">Best Bet</Pill>
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {signalScore != null && (
-              <span className={`text-[10px] font-bold tabular-nums ${SIGNAL_SCORE_COLOR(signalScore)}`} data-testid="text-signal-score">
+              <span className={`text-micro font-bold tabular-nums ${SIGNAL_SCORE_COLOR(signalScore)}`} data-testid="text-signal-score">
                 SS {Math.round(signalScore)}
               </span>
             )}
             {timestampLabel && (
-              <span className="text-[10px] text-muted-foreground/60">{timestampLabel}</span>
+              <span className="text-micro text-muted-foreground/60">{timestampLabel}</span>
             )}
           </div>
         </div>
@@ -171,19 +180,27 @@ export function SportSignalCard({
 
         <div className="flex items-end gap-5">
           <div>
-            <div className={`text-2xl font-bold tabular-nums ${EDGE_COLOR(edge)}`}>{probWhole}%</div>
-            <div className="text-[10px] text-muted-foreground">Probability</div>
+            <motion.div
+              key={probWhole}
+              variants={motionSafe ? numberReveal : undefined}
+              initial={motionSafe ? "hidden" : false}
+              animate={motionSafe ? "visible" : false}
+              className={`text-hero-num text-3xl ${EDGE_COLOR(edge)}`}
+            >
+              {probWhole}%
+            </motion.div>
+            <div className="text-label mt-0.5">Probability</div>
           </div>
           {projection != null && sport !== "MLB" && (
             <div>
               <div className="text-sm font-semibold tabular-nums text-foreground">{typeof projection === "number" ? projection.toFixed(1) : projection}</div>
-              <div className="text-[10px] text-muted-foreground">Proj</div>
+              <div className="text-label mt-0.5">Proj</div>
             </div>
           )}
           {line != null && (
             <div>
               <div className="text-sm font-semibold tabular-nums text-foreground">{line}</div>
-              <div className="text-[10px] text-muted-foreground">Line</div>
+              <div className="text-label mt-0.5">Line</div>
             </div>
           )}
         </div>
@@ -359,6 +376,6 @@ export function SportSignalCard({
           )}
         </div>
       </div>
-    </div>
+    </SurfaceCard>
   );
 }
