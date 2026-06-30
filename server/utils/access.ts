@@ -1,4 +1,4 @@
-export interface AccessFlags {
+interface AccessFlags {
   hasNBA: boolean;
   hasNCAAB: boolean;
   hasMLB: boolean;

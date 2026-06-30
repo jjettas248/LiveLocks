@@ -6,7 +6,7 @@ const MLB_SEASON = 2026;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export interface MLBPlayer {
+interface MLBPlayer {
   playerId: string;
   playerName: string;
   team: string;
@@ -17,7 +17,7 @@ export interface MLBPlayer {
   savantId?: string;
 }
 
-export interface MLBStartingLineup {
+interface MLBStartingLineup {
   gameId: string;
   team: string;
   battingOrderSlot: number;
@@ -25,7 +25,7 @@ export interface MLBStartingLineup {
   position: string;
 }
 
-export interface MLBPitcher {
+interface MLBPitcher {
   pitcherId: string;
   pitcherName: string;
   team: string;
@@ -51,10 +51,6 @@ export function getPlayer(playerId: string): MLBPlayer | undefined {
 export function getPlayerByName(playerName: string): MLBPlayer | undefined {
   const normalized = playerName.toLowerCase().trim();
   return playerPool.find((p) => p.playerName.toLowerCase().trim() === normalized);
-}
-
-export function getTeamRoster(team: string): MLBPlayer[] {
-  return teamRosters[team.toUpperCase()] ?? [];
 }
 
 export function getStartingLineup(gameId: string): MLBStartingLineup[] {

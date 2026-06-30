@@ -6,15 +6,6 @@ import { getPitchFamily } from "./pitchTypeNormalizer";
 import type { PitchMixEntry } from "./types";
 import type { PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
 
-export interface BallparkPalData {
-  parkFactor: number;
-  temperature: number | null;
-  windSpeed: number | null;
-  windDirection: "in" | "out" | "cross" | "calm" | null;
-  humidity: number | null;
-  isIndoors: boolean;
-}
-
 export interface BaseballSavantData {
   exitVelocity: number | null;
   launchAngle: number | null;
@@ -64,7 +55,7 @@ function safeNum(v: unknown): number | null {
 
 // Phase 2 overlay aggregates derived from the per-pitch Statcast CSV
 // (`type=details`). Pure over already-fetched rows (no I/O) — unit-testable.
-export interface SavantPitchContactAgg {
+interface SavantPitchContactAgg {
   batterPitchSplits: PitchTypeBatterSplit[] | null; // xSLG + Whiff% by family
   toppedPct: number | null;
   maxEV: number | null;
@@ -269,22 +260,6 @@ export function isVenueIndoors(venueName: string | null | undefined): boolean {
   if (!venueName) return false;
   const factors = resolveVenue(venueName);
   return factors?.isIndoors ?? false;
-}
-
-export async function fetchBallparkPalData(
-  _gameId: string,
-  venueName?: string | null
-): Promise<BallparkPalData> {
-  const pf = venueName ? getMarketParkFactor(venueName) : 1.0;
-  const indoor = isVenueIndoors(venueName);
-  return {
-    parkFactor: pf,
-    temperature: null,
-    windSpeed: null,
-    windDirection: null,
-    humidity: null,
-    isIndoors: indoor,
-  };
 }
 
 // ── Baseball Savant Statcast Data ─────────────────────────────────────────────
@@ -699,7 +674,7 @@ export function getStadiumCoords(venueName: string | null | undefined): { lat: n
 const SAVANT_GAME_CACHE = new Map<string, { fetchedAt: number; data: SavantGamePitchData[] }>();
 const SAVANT_GAME_TTL = 90_000;
 
-export interface SavantGamePitchData {
+interface SavantGamePitchData {
   batterId: string;
   pitcherId: string;
   batterName: string;

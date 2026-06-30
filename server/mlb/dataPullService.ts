@@ -89,12 +89,12 @@ export interface PlayerContactData {
   }>;
 }
 
-export interface ContactDataCache {
+interface ContactDataCache {
   byPlayerId: Record<string, PlayerContactData>;
   fetchedAt: number;
 }
 
-export interface PitcherContextEntry {
+interface PitcherContextEntry {
   pitchMix: PitchMixEntry[];
   avgVelocity: number | null;
   pitchCount: number;
@@ -111,7 +111,7 @@ export interface PitcherContextEntry {
   last3StartERA: number | null;
 }
 
-export interface PitcherContextCache {
+interface PitcherContextCache {
   byPitcherId: Record<string, PitcherContextEntry>;
   fetchedAt: number;
 }
@@ -151,7 +151,7 @@ export interface WeatherCache {
   windShiftDetected?: boolean;
 }
 
-export interface BullpenCache {
+interface BullpenCache {
   bullpenEra: number | null;
   bullpenUsageLastThreeDays: number | null;
   isTopRelieverAvailable: boolean;
@@ -159,7 +159,7 @@ export interface BullpenCache {
   fetchedAt: number;
 }
 
-export interface PitcherSeasonStats {
+interface PitcherSeasonStats {
   era: number | null;
   whip: number | null;
   kPer9: number | null;
@@ -170,7 +170,7 @@ export interface PitcherSeasonStats {
   fetchedAt: number;
 }
 
-export interface BatterRollingStats {
+interface BatterRollingStats {
   last7: { avg: number | null; ops: number | null; slg: number | null; games: number };
   last15: { avg: number | null; ops: number | null; slg: number | null; games: number };
   last30: { avg: number | null; ops: number | null; slg: number | null; games: number };
@@ -192,7 +192,7 @@ export interface BatterRollingStats {
   fetchedAt: number;
 }
 
-export interface BvPMatchupStats {
+interface BvPMatchupStats {
   atBats: number;
   hits: number;
   homeRuns: number;
@@ -204,7 +204,7 @@ export interface BvPMatchupStats {
 
 // ── In-memory cache ───────────────────────────────────────────────────────────
 
-export interface GameBoxScorePlayer {
+interface GameBoxScorePlayer {
   playerId: string;
   playerName: string;
   team: string;
@@ -218,7 +218,7 @@ export interface GameBoxScorePlayer {
   runs: number;
 }
 
-export interface GameBoxScoreCache {
+interface GameBoxScoreCache {
   byPlayerId: Record<string, GameBoxScorePlayer>;
   fetchedAt: number;
 }
@@ -235,7 +235,7 @@ export interface HRPlayMeta {
   isComplete: boolean;
 }
 
-export interface HRPlaysCache {
+interface HRPlaysCache {
   plays: HRPlayMeta[];
   fetchedAt: number;
 }
@@ -277,7 +277,7 @@ export const mlbPlayerCache: {
   pitcherOrderSplits: {},
 };
 
-export interface PitcherOrderSplitRow {
+interface PitcherOrderSplitRow {
   ab: number | null; r: number | null; h: number | null;
   doubles: number | null; triples: number | null; hr: number | null;
   rbi: number | null; bb: number | null; hbp: number | null; so: number | null;
@@ -285,13 +285,13 @@ export interface PitcherOrderSplitRow {
   avg: number | null; obp: number | null; slg: number | null; ops: number | null;
 }
 
-export interface PitcherOrderSplitsData {
+interface PitcherOrderSplitsData {
   /** Allowed line per opposing lineup slot (1–9). */
   slots: Record<number, PitcherOrderSplitRow>;
   fetchedAt: number;
 }
 
-export interface BatterOrderSplitsData {
+interface BatterOrderSplitsData {
   splits: Array<{ slot: number; slg: number | null; ops: number | null; pa: number }>;
   overallSlg: number | null;
   fetchedAt: number;

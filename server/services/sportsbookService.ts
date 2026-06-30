@@ -3,7 +3,7 @@
 // Returns [] gracefully when ODDS_API_KEY is not configured.
 // Supports: FanDuel, DraftKings, Bet365, Caesars, Hard Rock, Fanatics, PrizePicks, Underdog
 
-export interface NormalizedOddsLine {
+interface NormalizedOddsLine {
   marketType: "spread" | "total" | "prop";
   line: number;
   overOdds: number;
@@ -12,7 +12,7 @@ export interface NormalizedOddsLine {
   timestamp: number;
 }
 
-export const SUPPORTED_BOOKS = [
+const SUPPORTED_BOOKS = [
   "fanduel",
   "draftkings",
   "bet365",
@@ -22,19 +22,7 @@ export const SUPPORTED_BOOKS = [
   "prizepicks",
   "underdogfantasy",
 ] as const;
-export type SupportedBook = typeof SUPPORTED_BOOKS[number];
-
-// Human-readable labels for each sportsbook key
-export const SPORTSBOOK_DISPLAY: Record<string, string> = {
-  fanduel: "FanDuel",
-  draftkings: "DraftKings",
-  bet365: "Bet365",
-  caesars: "Caesars",
-  hardrockbet: "Hard Rock",
-  fanatics: "Fanatics",
-  prizepicks: "PrizePicks",
-  underdogfantasy: "Underdog",
-};
+type SupportedBook = typeof SUPPORTED_BOOKS[number];
 
 const SPORT_ENDPOINTS: Record<string, string> = {
   nba: "basketball_nba",
@@ -146,11 +134,6 @@ export async function fetchNormalizedOdds(params: {
   });
 }
 
-// Whether the sportsbook service is active (API key configured)
-export function isSportsbookServiceActive(): boolean {
-  return !!(process.env.ODDS_API_KEY || process.env.ODDS_API_KEY_2);
-}
-
 // ── Phase 12: Odds Freshness Guard ────────────────────────────────────────────
 // Live odds expire after 15s; pre-game odds expire after 60s.
 
@@ -181,7 +164,7 @@ export function filterFreshLines(
 
 // Returns a bestBet object from an array of fresh lines:
 // picks the sportsbook with the best over-odds as the recommended execution path.
-export interface BestBet {
+interface BestBet {
   sportsbook: string;
   line: number;
   overOdds: number;
