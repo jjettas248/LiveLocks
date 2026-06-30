@@ -116,6 +116,17 @@ export function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
   };
 }
 
+/** Best-effort historical loader used by pregame attribution stats. */
+export async function loadPregameSignalsForDate(sessionDate: string): Promise<PregamePowerSignal[]> {
+  try {
+    const rows = await storage.getPregamePowerRadarSignalsByDate(sessionDate);
+    return rows.map(rowToSignal);
+  } catch (err: any) {
+    console.warn(`[PREGAME_POWER_RADAR_DB_LOAD] failed date=${sessionDate}:`, err?.message ?? err);
+    return [];
+  }
+}
+
 let installed = false;
 
 /** Wire the build sink + DB fallback. Idempotent. */
