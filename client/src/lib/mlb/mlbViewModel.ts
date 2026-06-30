@@ -195,7 +195,7 @@ export type AtBatViewModel = {
   pitchChipColor: string;
 };
 
-export type HrRadarViewModel = {
+type HrRadarViewModel = {
   playerId: string;
   playerName: string;
   team: string;
@@ -227,7 +227,7 @@ export type HrRadarViewModel = {
   wasAddedToSlip: boolean;
 };
 
-export type GameViewModel = {
+type GameViewModel = {
   gameId: string;
   homeTeam: string;
   awayTeam: string;
@@ -256,7 +256,7 @@ export type GameViewModel = {
   gameCardTags: string[];
 };
 
-export type PitchMatchupViewModel = {
+type PitchMatchupViewModel = {
   pitchType: string;
   pitchLabel: string;
   usage: string;
@@ -623,7 +623,7 @@ export function buildTopOpportunitiesViewModel(signals: SignalViewModel[]): Sign
     .slice(0, 5);
 }
 
-export function resolveTeamSide(
+function resolveTeamSide(
   teamAbbr: string,
   gameId: string,
   games: Array<{ gameId: string; homeAbbr: string | null }>

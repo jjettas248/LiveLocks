@@ -1,6 +1,6 @@
 import type { MLBSignal } from "@shared/mlbSignal";
 
-export type MlbSignalUi = MLBSignal & {
+type MlbSignalUi = MLBSignal & {
   displayConfidence: string;
   displayLiveGrade: string | null;
   displayOppGrade: string | null;
@@ -100,42 +100,6 @@ export function getCashedFromTierLabel(
   }
 }
 
-export type HrRadarAnalyzeViewModel = {
-  alert: {
-    id: string;
-    playerName: string;
-    team: string;
-    gameId: string;
-    detectedLabel: string | null;
-    initialScore: number | null;
-    currentScore: number | null;
-    peakScore: number | null;
-    scoreIncreased: boolean;
-    scoreIncreaseLabel: string | null;
-    confidenceTier: string;
-    signalState: string;
-    triggerTags: string[];
-    summaryText: string | null;
-    status: string;
-    hitLabel: string | null;
-    contactSnapshot: any;
-  };
-  priorABs: Array<{
-    abNumber: number;
-    exitVelocity: number | null;
-    launchAngle: number | null;
-    distance: number | null;
-    outcome: string;
-    isBarrel: boolean;
-    isHardHit: boolean;
-  }>;
-  hrFactors: any;
-  hrBuildScore: number | null;
-  hrIntensity: string | null;
-  explanationBullets: string[];
-  currentInning: number | null;
-};
-
 /**
  * UI contract for HR Radar detection labels (HR Radar inning-drift fix).
  *
@@ -151,11 +115,11 @@ export type HrRadarAnalyzeViewModel = {
  * inning and `formatScoreIncreaseLabel(scoreIncreaseLabel)` for the score
  * climb. The two MUST NOT be conflated in display.
  */
-export function formatDetectedLabel(detectedLabel: string | null | undefined): string | null {
+function formatDetectedLabel(detectedLabel: string | null | undefined): string | null {
   return detectedLabel ?? null;
 }
 
-export function formatScoreIncreaseLabel(scoreIncreaseLabel: string | null | undefined): string | null {
+function formatScoreIncreaseLabel(scoreIncreaseLabel: string | null | undefined): string | null {
   if (!scoreIncreaseLabel) return null;
   return `Score climbed ${scoreIncreaseLabel}`;
 }

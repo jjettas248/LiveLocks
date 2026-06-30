@@ -26,7 +26,7 @@ const RIBBON_TONE_CLASS: Record<MlbRibbonTone, string> = {
   good: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
 };
 
-export interface MlbSlateRibbonProps {
+interface MlbSlateRibbonProps {
   games: GameLike[];
   signals: MlbSignalData[];
   selectedGameId: string | null;
@@ -147,5 +147,3 @@ export function MlbSlateRibbon({ games, signals, selectedGameId, onSelectGame }:
     </div>
   );
 }
-
-export default MlbSlateRibbon;

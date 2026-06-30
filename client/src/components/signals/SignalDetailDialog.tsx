@@ -23,7 +23,7 @@ type RelatedPlay = Pick<
   "id" | "marketLabel" | "side" | "line" | "projection" | "probability" | "edge" | "confidenceTier" | "market"
 >;
 
-export type SignalDetailDialogProps = {
+type SignalDetailDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   play: UnifiedTopPlay | null;
