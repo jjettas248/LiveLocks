@@ -13,7 +13,7 @@ import {
 import type { NBAArchetype } from "../../nba/archetypes";
 import { NBA_FIXTURES, type NBAFixture } from "./fixtures";
 
-export type DriftType =
+type DriftType =
   | "ARCHETYPE_DRIFT"
   | "BLENDED_RATE_DRIFT"
   | "CALIBRATION_DRIFT"
@@ -26,7 +26,7 @@ export type DriftType =
   | "HALFTIME_PIPELINE_DRIFT"
   | "CONSTANT_DRIFT";
 
-export interface DriftReport {
+interface DriftReport {
   type: DriftType;
   severity: "critical" | "warning" | "info";
   expected: string;
@@ -34,7 +34,7 @@ export interface DriftReport {
   location: string;
 }
 
-export interface ValidationResult {
+interface ValidationResult {
   passed: boolean;
   totalAssertions: number;
   passedAssertions: number;
@@ -45,7 +45,7 @@ export interface ValidationResult {
   timestamp: string;
 }
 
-export interface FixtureResult {
+interface FixtureResult {
   name: string;
   description: string;
   passed: boolean;
@@ -53,7 +53,7 @@ export interface FixtureResult {
   output?: any;
 }
 
-export interface ConstantCheck {
+interface ConstantCheck {
   name: string;
   expected: any;
   actual: any;

@@ -29,10 +29,6 @@ export function getCachedMlbGameSessionDate(gameId: string): string | undefined 
   return sessionDateByGameId.get(gameId);
 }
 
-export function clearMlbGameSessionDate(gameId: string): void {
-  sessionDateByGameId.delete(gameId);
-}
-
 // Daily slate-reset helper. Drops every cached (gameId -> sessionDate) entry
 // whose sessionDate is older than the most recent two ET dates we still care
 // about (today + yesterday — yesterday covers cross-coast late games whose

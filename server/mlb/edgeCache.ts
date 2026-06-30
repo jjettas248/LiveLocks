@@ -7,7 +7,7 @@ import type { MLBPropOutput, MLBQualifiedSignal } from "./types";
 import { getActiveGames } from "./liveGameRegistry";
 
 export const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-export const MAX_CACHE_GAMES = 50;
+const MAX_CACHE_GAMES = 50;
 
 // Engine-liveness window. The orchestrator's 25s heartbeat (P5) writes
 // either a fresh qualifying cycle (updatedAt = now) or a blank-cycle
@@ -15,9 +15,9 @@ export const MAX_CACHE_GAMES = 50;
 // last ACTIVE_FRESHNESS_MS, the engine is effectively dead — every
 // consumer route must drop the entry, regardless of how recent the last
 // preservation was. Shared so all MLB-surface routes agree on liveness.
-export const MLB_ACTIVE_FRESHNESS_MS = 4 * 60 * 1000;
+const MLB_ACTIVE_FRESHNESS_MS = 4 * 60 * 1000;
 
-export interface EdgeCacheEntry {
+interface EdgeCacheEntry {
   gameId: string;
   outputs: MLBPropOutput[];
   qualifiedSignals: MLBQualifiedSignal[];
@@ -52,7 +52,7 @@ export function cleanupExpiredEntries(): void {
 }
 
 // ── TTL-aware get ─────────────────────────────────────────────────────────────
-export function edgeCacheGet(key: string): EdgeCacheEntry | undefined {
+function edgeCacheGet(key: string): EdgeCacheEntry | undefined {
   const entry = _cache.get(key);
   if (!entry) return undefined;
   if (Date.now() - entry.createdAt > CACHE_TTL_MS) {
@@ -63,7 +63,7 @@ export function edgeCacheGet(key: string): EdgeCacheEntry | undefined {
 }
 
 // ── Size-capped set with passive cleanup ──────────────────────────────────────
-export function edgeCacheSet(key: string, entry: EdgeCacheEntry): void {
+function edgeCacheSet(key: string, entry: EdgeCacheEntry): void {
   cleanupExpiredEntries();
 
   _cache.set(key, entry);
