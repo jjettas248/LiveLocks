@@ -1,4 +1,4 @@
-export const MLB_MARKET_LABELS: Record<string, string> = {
+const MLB_MARKET_LABELS: Record<string, string> = {
   hits: "Hits",
   total_bases: "Total Bases",
   hrr: "H+R+RBI",
@@ -50,27 +50,6 @@ export function getMlbLiveStatValue(sig: {
     case "hr_allowed": return { label: "HRA", value: cs.hr ?? 0 };
     default: return { label: "H", value: cs.h ?? 0 };
   }
-}
-
-export function getSignalStateMeta(sig: {
-  alreadyHit?: boolean;
-  stale?: boolean;
-  watchlist?: boolean;
-}): { label: string; color: string; bg: string } | null {
-  if (sig.alreadyHit) return { label: "HIT \u2713", color: "#22c55e", bg: "rgba(34,197,94,0.15)" };
-  if (sig.stale) return { label: "STALE", color: "#71717a", bg: "rgba(113,113,122,0.15)" };
-  if (sig.watchlist) return { label: "WATCH", color: "#71717a", bg: "rgba(113,113,122,0.1)" };
-  return null;
-}
-
-export function formBadge(form: string | null | undefined): { label: string; color: string } | null {
-  if (!form) return null;
-  const f = form.toUpperCase();
-  if (f === "HOT") return { label: "\uD83D\uDD25 HOT", color: "#f97316" };
-  if (f === "WARM") return { label: "\uD83D\uDFE1 WARM", color: "#eab308" };
-  if (f === "COLD") return { label: "\u2744\uFE0F COLD", color: "#60a5fa" };
-  if (f === "EXTREME_COLD") return { label: "\uD83E\uDDCA ICE COLD", color: "#818cf8" };
-  return null;
 }
 
 export const TIER_COLORS: Record<string, { bg: string; border: string; text: string; badge: string }> = {

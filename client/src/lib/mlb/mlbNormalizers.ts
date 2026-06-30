@@ -1,6 +1,6 @@
 export type MlbQuickViewColorTier = "neutral" | "blue" | "yellow" | "green" | "red";
 
-export type MlbGameChipViewModel = {
+type MlbGameChipViewModel = {
   gameId: string;
   awayTeam: string;
   homeTeam: string;
@@ -173,10 +173,10 @@ export const COLOR_TIER_STYLES: Record<MlbQuickViewColorTier, { border: string; 
 // displayGrade) and picks a best — it never re-derives displaySide / probability
 // / grade / isBettable. Honors the display contract (CLAUDE.md §3.3, Hard Rule #4).
 
-export type MlbRibbonTier = "watch" | "lean" | "strong" | "elite";
+type MlbRibbonTier = "watch" | "lean" | "strong" | "elite";
 export type MlbRibbonTone = "fire" | "warn" | "info" | "good";
 
-export type MlbRibbonChipSignal = {
+type MlbRibbonChipSignal = {
   colorTier: MlbQuickViewColorTier;
   badge: { label: string; tone: MlbRibbonTone } | null;
   bestTier: MlbRibbonTier | null;

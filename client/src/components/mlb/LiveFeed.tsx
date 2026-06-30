@@ -58,7 +58,7 @@ const GROUPS: Array<{
 /** Optional live-context counts surfaced inside the narrative empty state
  *  so the engine reads as "active" rather than "dead" when no signals
  *  are currently actionable. Pure display — no engine math. */
-export interface NarrativeStats {
+interface NarrativeStats {
   /** Total live/upcoming MLB games being polled by the engine. */
   gamesMonitored?: number;
   /** Distinct active batter profiles across all monitored games. */
@@ -69,7 +69,7 @@ export interface NarrativeStats {
   lateWindowsForming?: number;
 }
 
-export interface LiveFeedProps {
+interface LiveFeedProps {
   rows: MarketSignalViewModelClient[];
   /** Find the underlying MLBSignal so the existing card renders unchanged. */
   resolveSignal: (vm: MarketSignalViewModelClient) => MlbSignalData | null;

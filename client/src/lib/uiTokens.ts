@@ -38,30 +38,3 @@ const TIER_BADGE_CLASSES: Record<SignalTier, string> = {
 export function tierBadgeClasses(tier: string | null | undefined): string {
   return TIER_BADGE_CLASSES[normalizeTier(tier)];
 }
-
-// Inline-style values for components that still build style objects. Each
-// references the CSS var so theme changes propagate automatically.
-export function tierColors(tier: string | null | undefined): {
-  color: string;
-  background: string;
-  border: string;
-} {
-  const t = normalizeTier(tier);
-  return {
-    color: `hsl(var(--tier-${t}))`,
-    background: `hsl(var(--tier-${t}) / 0.13)`,
-    border: `hsl(var(--tier-${t}) / 0.45)`,
-  };
-}
-
-// Per-sport text-accent class. One map, imported everywhere a sport is tagged.
-const SPORT_ACCENT_TEXT: Record<Sport, string> = {
-  mlb: "text-sport-mlb",
-  nba: "text-sport-nba",
-  ncaab: "text-sport-ncaab",
-};
-
-export function sportAccentText(sport: string | null | undefined): string {
-  const s = (sport ?? "").toLowerCase() as Sport;
-  return SPORT_ACCENT_TEXT[s] ?? "text-muted-foreground";
-}

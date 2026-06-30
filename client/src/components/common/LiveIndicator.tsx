@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
  * pattern that was copy-pasted ~15 times across dashboard/mlb-live/ncaab and the
  * feed components. Keep all live-dot styling here so a tweak lands once.
  */
-export type LiveIndicatorColor = "green" | "red" | "orange" | "amber" | "blue";
+type LiveIndicatorColor = "green" | "red" | "orange" | "amber" | "blue";
 
 const COLOR_CLASS: Record<LiveIndicatorColor, string> = {
   green: "bg-green-500",
