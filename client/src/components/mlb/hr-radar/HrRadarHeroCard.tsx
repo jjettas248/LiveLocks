@@ -103,6 +103,14 @@ export function HrRadarHeroCard({
               )}
             </div>
             <div className="text-[9px] uppercase tracking-widest text-muted-foreground mt-1">/ 10 strength</div>
+            {/* Calibrated HR chance — the closest thing HR Radar has to "the
+                edge": only populated on official FIRE calls (gated upstream),
+                pure renderer of vm.hrChancePct. */}
+            {vm.hrChancePct != null && (
+              <div className={`text-xs font-bold tabular-nums mt-0.5 ${t.text}`} data-testid="text-hero-hr-chance">
+                {Math.round(vm.hrChancePct)}% HR chance
+              </div>
+            )}
           </div>
         </div>
 

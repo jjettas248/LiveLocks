@@ -18,6 +18,9 @@ import { readCanonicalLifecycle, LIFECYCLE_BADGE, readSurfacedAgoMs, formatSurfa
 import type { MLBSignal } from "@shared/mlbSignal";
 import type { MlbInningWindow } from "@shared/mlbInningWindow";
 import { getMlbInningWindow, getMlbInningWindowLabel } from "@shared/mlbInningWindow";
+import { EdgeMeter } from "@/components/signals/card/EdgeMeter";
+import { WhyNowDrivers } from "@/components/signals/card/WhyNowDrivers";
+import { type DriverItem } from "@/components/signals/card/types";
 
 export type MlbSignalData = MLBSignal;
 
@@ -338,23 +341,28 @@ export function MlbSignalCard({
               </p>
             </div>
           </div>
-          <div
-            className="flex flex-col items-end shrink-0"
-            title={`Engine win probability — model's estimated chance ${sig.recommendedSide} ${sig.bookLine ?? ""} ${marketLabel} hits. Higher = stronger conviction.`}
-            data-testid={`engine-prob-${sig.playerId}-${sig.market}`}
-          >
-            {/* [MLB Canonical Probability v1] sig.enginePct is the recommended-
-                side calibrated probability emitted by the MLB engine. The UI
-                does no math on it — pure renderer. */}
-            <span className="text-hero-num text-2xl leading-none" style={{ color: side.accent }}>
-              {normalizePct(sig.enginePct).toFixed(0)}%
-            </span>
-            <span className="text-label mt-0.5">
-              win prob
-            </span>
+          <div className="flex flex-col items-end shrink-0 gap-1">
+            {sig.displayGrade && (
+              <span
+                className="text-[10px] font-black px-2 py-0.5 rounded-full border"
+                style={{ color: side.accent, borderColor: `${side.accent}66`, background: `${side.accent}15` }}
+                data-testid={`text-display-grade-${sig.playerId}-${sig.market}`}
+                title="Server-derived grade (signalTier × signalScore) — the headline verdict."
+              >
+                {sig.displayGrade}
+              </span>
+            )}
             {matchup && <span className="text-[9px] text-muted-foreground/80">{matchup}</span>}
           </div>
         </div>
+
+        {/* The mispricing argument: model probability + server-computed edge,
+            pure renderer (CLAUDE.md §3.3) — no math performed here. */}
+        <EdgeMeter
+          modelPct={normalizePct(sig.enginePct)}
+          edgePct={sig.edge}
+          oddsLabel={sideOdds != null ? formatAmericanOdds(sideOdds) : null}
+        />
 
         {/* Row 2: Smart Tags + HR Intensity Badge + Pitcher Signals */}
         {(smartTags.length > 0 || hrStyle || (sig.pitcherSignals && sig.pitcherSignals.length > 0) || (sig.liveScore ?? 0) > 0 || actionabilityPill || effectiveInningWindow !== "all") && (
@@ -517,25 +525,24 @@ export function MlbSignalCard({
           </div>
         )}
 
-        {/* Row 3: Why now — readable drivers (Phase D) when present, else
-             fall back to the engine-generated primary reason. */}
-        {sig.diagnostics?.readableDrivers && sig.diagnostics.readableDrivers.length > 0 ? (
-          <ul
-            className="text-[10px] text-muted-foreground leading-snug list-none space-y-0.5"
-            data-testid={`readable-drivers-${sig.playerId}-${sig.market}`}
-          >
-            {sig.diagnostics.readableDrivers.slice(0, 3).map((line, i) => (
-              <li key={i} className="flex items-start gap-1">
-                <span className="text-primary/60 shrink-0">•</span>
-                <span>{line}</span>
-              </li>
-            ))}
-          </ul>
-        ) : primaryReason ? (
-          <p className="text-[10px] text-muted-foreground leading-snug italic">
-            {primaryReason}
-          </p>
-        ) : null}
+        {/* Row 3: Why now — prefer the canonical weighted driver envelope,
+             then readable drivers (Phase D), then the legacy primary reason.
+             Pure renderer — never fabricates or reorders evidence. */}
+        {(() => {
+          const canonicalDriverItems: DriverItem[] | undefined = sig.canonicalDrivers?.length
+            ? sig.canonicalDrivers.map((d) => ({ label: d.label, weight: d.weight, detail: d.detail }))
+            : undefined;
+          const readableDriverItems: DriverItem[] | undefined = !canonicalDriverItems && sig.diagnostics?.readableDrivers?.length
+            ? sig.diagnostics.readableDrivers.slice(0, 3).map((line) => ({ label: line }))
+            : undefined;
+          const headline = sig.triggerSummary ?? (!canonicalDriverItems && !readableDriverItems ? primaryReason || undefined : undefined);
+          return (
+            <WhyNowDrivers
+              headline={headline}
+              drivers={canonicalDriverItems ?? readableDriverItems}
+            />
+          );
+        })()}
 
         {/* Row 4: Compact status pills */}
         <div className="flex items-center gap-2 text-[9px]">

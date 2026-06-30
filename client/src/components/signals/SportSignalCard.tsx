@@ -1,14 +1,18 @@
 import { type ReactNode } from "react";
-import { motion } from "framer-motion";
 import { Check, Plus } from "lucide-react";
-import { ConfidenceBadge, type ConfidenceTier } from "./ConfidenceBadge";
+import { type ConfidenceTier } from "./ConfidenceBadge";
 import { ShareSignalButton } from "@/components/common/ShareSignalButton";
 import { CopyBetButton } from "@/components/common/CopyBetButton";
 import { cn } from "@/lib/utils";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { Pill } from "@/components/ui/Pill";
-import { sportAccentClasses } from "@/lib/uiTokens";
-import { numberReveal, useMotionSafe } from "@/lib/motionPresets";
+import { sportAccentClasses, tierBadgeClasses } from "@/lib/uiTokens";
+import { VerdictHeader } from "./card/VerdictHeader";
+import { EdgeMeter } from "./card/EdgeMeter";
+import { WhyNowDrivers } from "./card/WhyNowDrivers";
+import { LiveContextStrip } from "./card/LiveContextStrip";
+import { CardActions } from "./card/CardActions";
+import { type LiveContextItem } from "./card/types";
 
 const SPORT_BADGE: Record<string, { label: string; color: string }> = {
   NBA: { label: "NBA", color: "bg-orange-500/15 text-orange-400 border-orange-500/30" },
@@ -16,11 +20,14 @@ const SPORT_BADGE: Record<string, { label: string; color: string }> = {
   MLB: { label: "MLB", color: "bg-green-500/15 text-green-400 border-green-500/30" },
 };
 
-const EDGE_COLOR = (edge: number): string => {
-  if (edge >= 8) return "text-green-400";
-  if (edge >= 5) return "text-yellow-400";
-  if (edge >= 0) return "text-muted-foreground";
-  return "text-red-400";
+// ConfidenceTier ("ELITE"|"STRONG"|"VALUE"|"NO_EDGE") → the lowercase tier
+// vocabulary tierBadgeClasses() expects, and the display label shown in the
+// verdict chip (this IS the grade — the most important pixel on the card).
+const TIER_GRADE: Record<ConfidenceTier, { label: string; tone: string }> = {
+  ELITE: { label: "ELITE", tone: tierBadgeClasses("elite") },
+  STRONG: { label: "STRONG", tone: tierBadgeClasses("strong") },
+  VALUE: { label: "VALUE", tone: tierBadgeClasses("value") },
+  NO_EDGE: { label: "NO EDGE", tone: tierBadgeClasses("watch") },
 };
 
 type SportSignalCardProps = {
@@ -77,6 +84,47 @@ const SIGNAL_SCORE_COLOR = (score: number): string => {
   return "text-muted-foreground";
 };
 
+// Today's-stat-line → a single LiveContextStrip item ("Today 3-5, 1 HR").
+function buildStatsContext(
+  cs: NonNullable<SportSignalCardProps["currentStats"]>,
+  side: string,
+  line: number | string | undefined,
+  marketKey: string | undefined,
+  marketLabel: string,
+): LiveContextItem | null {
+  if (cs.ab <= 0 && cs.h <= 0) return null;
+  const lineNum = typeof line === "number" ? line : 0;
+  const mk = marketKey?.toLowerCase() ?? marketLabel.toLowerCase();
+  const currentVal = mk === "hits" || mk.includes("hit") ? cs.h
+    : mk === "home_runs" || mk === "hr" ? cs.hr
+    : mk === "total_bases" || mk.includes("total base") ? cs.tb
+    : cs.h;
+  const alreadyOver = currentVal >= lineNum && lineNum > 0;
+  const edgeHit = (side === "OVER" || side === "YES") && alreadyOver;
+  const extras = [
+    cs.hr > 0 ? `${cs.hr} HR` : null,
+    cs.rbi > 0 ? `${cs.rbi} RBI` : null,
+    cs.k > 0 ? `${cs.k} K` : null,
+  ].filter(Boolean).join(" · ");
+  return {
+    label: edgeHit ? "HIT" : "Today",
+    value: `${cs.h}-${cs.ab}${extras ? ` · ${extras}` : ""}`,
+    tone: edgeHit ? "good" : alreadyOver ? "default" : "default",
+  };
+}
+
+function buildContactContext(
+  c: NonNullable<SportSignalCardProps["lastABContact"]>,
+): LiveContextItem | null {
+  const parts: string[] = [];
+  if (c.exitVelo != null) parts.push(`${c.exitVelo.toFixed(0)} mph`);
+  if (c.launchAngle != null) parts.push(`${c.launchAngle.toFixed(0)}° LA`);
+  if (c.barrelPct != null && c.barrelPct > 0) parts.push(`${c.barrelPct.toFixed(0)}% Barrel`);
+  if (parts.length === 0) return null;
+  const hot = (c.exitVelo ?? 0) >= 95 || (c.barrelPct ?? 0) >= 10;
+  return { label: "Last AB", value: parts.join(" · "), tone: hot ? "good" : "default" };
+}
+
 export function SportSignalCard({
   sport,
   playerOrTeam,
@@ -106,10 +154,24 @@ export function SportSignalCard({
   matchup,
 }: SportSignalCardProps) {
   const sportBadge = SPORT_BADGE[sport] ?? SPORT_BADGE.NBA;
-  const probWhole = Math.round(probability);
-  const edgeStr = edge > 0 ? `+${edge.toFixed(1)}%` : `${edge.toFixed(1)}%`;
+  const grade = TIER_GRADE[badgeTier];
   const rankStyle = rank != null ? RANK_STYLES[rank] : undefined;
-  const motionSafe = useMotionSafe();
+
+  const contextItems: LiveContextItem[] = [];
+  if (currentStats) {
+    const item = buildStatsContext(currentStats, side, line, marketKey, marketLabel);
+    if (item) contextItems.push(item);
+  }
+  if (lastABContact && sport === "MLB") {
+    const item = buildContactContext(lastABContact);
+    if (item) contextItems.push(item);
+  }
+  if (projection != null && sport !== "MLB") {
+    contextItems.push({
+      label: "Proj",
+      value: typeof projection === "number" ? projection.toFixed(1) : String(projection),
+    });
+  }
 
   return (
     <SurfaceCard
@@ -127,160 +189,40 @@ export function SportSignalCard({
       )}
     >
       <div className="p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-            {rankStyle && (
-              <Pill tone="custom" className={cn(rankStyle.bg, rankStyle.text, rankStyle.border.split(" ")[0])} data-testid={`badge-rank-${rank}`}>
-                {rankStyle.label}
-              </Pill>
-            )}
-            <Pill tone="custom" className={sportAccentClasses(sport.toLowerCase())}>
-              {sportBadge.label}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {rankStyle && (
+            <Pill tone="custom" className={cn(rankStyle.bg, rankStyle.text, rankStyle.border.split(" ")[0])} data-testid={`badge-rank-${rank}`}>
+              {rankStyle.label}
             </Pill>
-            <ConfidenceBadge tier={badgeTier} />
-            {isFlagship && (
-              <Pill tone="custom" className="bg-purple-500/15 text-purple-400 border-purple-500/30" data-testid="badge-flagship">
-                Flagship
-              </Pill>
-            )}
-            {isBestBet && !rankStyle && (
-              <Pill tone="premium">Best Bet</Pill>
-            )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {signalScore != null && (
-              <span className={`text-micro font-bold tabular-nums ${SIGNAL_SCORE_COLOR(signalScore)}`} data-testid="text-signal-score">
-                SS {Math.round(signalScore)}
-              </span>
-            )}
-            {timestampLabel && (
-              <span className="text-micro text-muted-foreground/60">{timestampLabel}</span>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-foreground leading-tight">{playerOrTeam}</span>
-            {matchup && (
-              <span className="text-[10px] text-muted-foreground/60">{matchup}</span>
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 mt-0.5">
-            <span className={`text-xs font-bold ${edge >= 5 ? EDGE_COLOR(edge) : "text-foreground"}`}>{side}</span>
-            <span className="text-xs text-muted-foreground">{marketLabel}</span>
-            {line != null && <span className="text-xs font-semibold text-foreground">{line}</span>}
-            {timingContext && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-semibold" data-testid="badge-timing">
-                {timingContext}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-end gap-5">
-          <div>
-            <motion.div
-              key={probWhole}
-              variants={motionSafe ? numberReveal : undefined}
-              initial={motionSafe ? "hidden" : false}
-              animate={motionSafe ? "visible" : false}
-              className={`text-hero-num text-3xl ${EDGE_COLOR(edge)}`}
-            >
-              {probWhole}%
-            </motion.div>
-            <div className="text-label mt-0.5">Probability</div>
-          </div>
-          {projection != null && sport !== "MLB" && (
-            <div>
-              <div className="text-sm font-semibold tabular-nums text-foreground">{typeof projection === "number" ? projection.toFixed(1) : projection}</div>
-              <div className="text-label mt-0.5">Proj</div>
-            </div>
           )}
-          {line != null && (
-            <div>
-              <div className="text-sm font-semibold tabular-nums text-foreground">{line}</div>
-              <div className="text-label mt-0.5">Line</div>
-            </div>
+          {isFlagship && (
+            <Pill tone="custom" className="bg-purple-500/15 text-purple-400 border-purple-500/30" data-testid="badge-flagship">
+              Flagship
+            </Pill>
+          )}
+          {isBestBet && !rankStyle && <Pill tone="premium">Best Bet</Pill>}
+          {signalScore != null && (
+            <span className={`text-micro font-bold tabular-nums ml-auto ${SIGNAL_SCORE_COLOR(signalScore)}`} data-testid="text-signal-score">
+              SS {Math.round(signalScore)}
+            </span>
           )}
         </div>
 
-        <div className="flex items-center gap-3 text-[11px]">
-          <span className={`font-medium ${EDGE_COLOR(edge)}`}>EV: {edgeStr}</span>
-        </div>
+        <VerdictHeader
+          subject={playerOrTeam}
+          betLine={`${side} ${marketLabel}${line != null ? ` ${line}` : ""}`}
+          grade={grade.label}
+          gradeToneClass={grade.tone}
+          sportBadge={{ label: sportBadge.label, className: sportAccentClasses(sport.toLowerCase()) }}
+          urgencyLabel={timingContext ?? null}
+          freshnessLabel={matchup ?? timestampLabel ?? null}
+        />
 
-        {currentStats && (() => {
-          const cs = currentStats;
-          const lineNum = typeof line === "number" ? line : 0;
-          const mk = marketKey?.toLowerCase() ?? marketLabel.toLowerCase();
-          const currentVal = mk === "hits" || mk.includes("hit") ? cs.h
-            : mk === "home_runs" || mk === "hr" ? cs.hr
-            : mk === "total_bases" || mk.includes("total base") ? cs.tb
-            : mk === "hrr" ? (cs.h + (cs as any).r + cs.rbi)
-            : cs.h;
-          const alreadyOver = currentVal >= lineNum && lineNum > 0;
-          const edgeHit = (side === "OVER" || side === "YES") && alreadyOver;
-          return (
-            <div className={`flex items-center gap-3 py-1.5 px-2 rounded-lg border ${
-              edgeHit
-                ? "bg-green-500/10 border-green-500/30"
-                : alreadyOver
-                  ? "bg-yellow-500/10 border-yellow-500/30"
-                  : "bg-secondary/40 border-border/30"
-            }`}>
-              <span className={`text-[10px] font-semibold uppercase tracking-wider shrink-0 ${
-                edgeHit ? "text-green-400" : "text-muted-foreground"
-              }`}>{edgeHit ? "HIT" : "Today"}</span>
-              <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                <span className={`font-semibold ${alreadyOver ? "text-green-400" : "text-foreground"}`}>
-                  {cs.ab > 0 ? `${cs.h}-${cs.ab}` : "0 AB"}
-                </span>
-                {cs.hr > 0 && <span className="text-orange-400 font-bold">{cs.hr} HR</span>}
-                {cs.rbi > 0 && <span className="text-muted-foreground">{cs.rbi} RBI</span>}
-                {cs.bb > 0 && <span className="text-muted-foreground">{cs.bb} BB</span>}
-                {cs.k > 0 && <span className="text-red-400">{cs.k} K</span>}
-                {cs.tb > 0 && <span className="text-muted-foreground">{cs.tb} TB</span>}
-              </div>
-            </div>
-          );
-        })()}
+        <EdgeMeter modelPct={probability} edgePct={edge} />
 
-        {lastABContact && sport === "MLB" && (lastABContact.exitVelo || lastABContact.launchAngle || lastABContact.barrelPct) && (
-          <div className="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-secondary/30 border border-border/20">
-            <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider shrink-0">Last AB</span>
-            <div className="flex items-center gap-2 flex-wrap text-[11px]">
-              {lastABContact.exitVelo != null && (
-                <span className={lastABContact.exitVelo >= 95 ? "text-green-400 font-bold" : lastABContact.exitVelo >= 88 ? "text-yellow-400" : "text-muted-foreground"}>
-                  {lastABContact.exitVelo.toFixed(0)} mph
-                </span>
-              )}
-              {lastABContact.launchAngle != null && (
-                <span className={lastABContact.launchAngle >= 10 && lastABContact.launchAngle <= 30 ? "text-green-400" : "text-muted-foreground"}>
-                  {lastABContact.launchAngle.toFixed(0)}° LA
-                </span>
-              )}
-              {lastABContact.barrelPct != null && lastABContact.barrelPct > 0 && (
-                <span className={lastABContact.barrelPct >= 10 ? "text-green-400" : "text-muted-foreground"}>
-                  {lastABContact.barrelPct.toFixed(0)}% Barrel
-                </span>
-              )}
-              {lastABContact.hardHitPct != null && lastABContact.hardHitPct > 0 && (
-                <span className={lastABContact.hardHitPct >= 40 ? "text-green-400" : "text-muted-foreground"}>
-                  {lastABContact.hardHitPct.toFixed(0)}% HH
-                </span>
-              )}
-              {lastABContact.outcome && (
-                <span className={lastABContact.outcome === "hit" ? "text-green-400 font-bold" : lastABContact.outcome === "strikeout" ? "text-red-400" : "text-muted-foreground"}>
-                  {lastABContact.outcome === "hit" ? "HIT" : lastABContact.outcome === "strikeout" ? "K" : lastABContact.outcome.toUpperCase()}
-                </span>
-              )}
-            </div>
-          </div>
-        )}
+        <WhyNowDrivers headline={summary} />
 
-        {summary && (
-          <p className="text-[11px] text-muted-foreground leading-snug">{summary}</p>
-        )}
+        <LiveContextStrip items={contextItems} />
 
         {detailSlot}
 
@@ -291,8 +233,13 @@ export function SportSignalCard({
         )}
       </div>
 
-      <div className="px-4 py-2.5 border-t border-border/30 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
+      <div className="px-4 py-2.5 border-t border-border/30">
+        <CardActions
+          primaryLabel={locked ? "Upgrade" : "View Details"}
+          onPrimary={locked ? () => { window.location.href = "/upgrade"; } : onPrimaryAction}
+          isUrgent={isBestBet}
+          trailingSlot={footerSlot}
+        >
           {!locked && onAddToSlip && (
             <button
               data-testid={`button-add-slip-${sport.toLowerCase()}-${playerOrTeam.replace(/\s+/g, "-").toLowerCase()}`}
@@ -353,28 +300,7 @@ export function SportSignalCard({
               </button>
             </>
           )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          {footerSlot}
-          {onPrimaryAction && !locked && (
-            <button
-              data-testid="button-view-details"
-              onClick={onPrimaryAction}
-              className="text-[11px] font-medium px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
-              View Details
-            </button>
-          )}
-          {locked && (
-            <a
-              href="/upgrade"
-              data-testid="link-upgrade-signal"
-              className="text-[11px] font-medium px-3 py-1.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-            >
-              Upgrade
-            </a>
-          )}
-        </div>
+        </CardActions>
       </div>
     </SurfaceCard>
   );

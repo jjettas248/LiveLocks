@@ -143,6 +143,11 @@ export function HrRadarFullLadderTable({
                 </td>
                 <td className="px-2 py-2.5 text-right">
                   <span className={`text-sm font-black tabular-nums ${t.text}`}>{vm.scoreLabel}</span>
+                  {vm.hrChancePct != null && (
+                    <div className="text-[9px] font-semibold text-muted-foreground tabular-nums" data-testid={`ladder-table-hrchance-${vm.playerId}`}>
+                      {Math.round(vm.hrChancePct)}% HR
+                    </div>
+                  )}
                 </td>
                 <td className="px-2 py-2.5 text-right hidden sm:table-cell">
                   <span className="text-xs tabular-nums text-muted-foreground">{nextPa}</span>
