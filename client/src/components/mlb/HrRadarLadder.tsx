@@ -11,6 +11,8 @@ import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdown
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
+import { buildHrRadarCardViewModel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
+import { HrRadarFullLadderTable } from "@/components/mlb/hr-radar/HrRadarFullLadderTable";
 
 // Tailwind classes per badge tone — UI styling only; labels/semantics come
 // from the shared HR_RADAR_BADGE_META (single source of truth).
@@ -331,16 +333,6 @@ const SECTION_META: Record<SectionKey, {
   },
 };
 
-// Batch A — Phase 1: per-section visible-by-default card caps. When the
-// section has more entries than the cap, the rest are collapsed behind a
-// "Show all (N)" button so users see the most important rows first.
-// FIRE has no cap (highest conviction — never truncate). READY 8 / BUILD 5 / WATCH 8.
-// Cashed/missed/modelReview/noAbYet don't need card-cap (already collapsed sections).
-const SECTION_CARD_CAPS: Partial<Record<SectionKey, number>> = {
-  ready: 8,
-  building: 5,
-  watch: 8,
-};
 
 // Batch A — Phase 2: client-side jargon→plain-English mapper. The server
 // strips most engine debug tokens via buildHrRadarReasonSets, but legacy
@@ -1462,163 +1454,106 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   );
 }
 
-interface LadderSectionProps {
-  sectionKey: SectionKey;
-  entries: HrRadarLadderEntry[];
-  onAddToSlip?: (sig: MlbSignalData) => void;
-  onOpenDetails?: (entry: HrRadarLadderEntry) => void;
-  onPass?: (entry: HrRadarLadderEntry) => void;
-  onAccept?: (entry: HrRadarLadderEntry) => void;
-  acceptedKeys?: Set<string>;
-  freshlyCashedKeys?: Set<string>;
-  // UI repair — canonical default-expand control. When provided, seeds the
-  // section's initial collapsed state (Fire/Ready expand when populated;
-  // Build/Track expand only when Fire AND Ready are empty). Falls back to
-  // SECTION_META when omitted.
-  defaultCollapsed?: boolean;
+function stageToSectionKey(stage: HrRadarCardViewModel["stage"]): SectionKey {
+  switch (stage) {
+    case "fire": return "attackNow";
+    case "ready": return "ready";
+    case "build": return "building";
+    case "track": return "watch";
+    case "cashed": return "cashed";
+    case "missed": return "dead";
+  }
 }
 
-// UI repair — slim status row for an EMPTY live-decision section. Keeps the
-// section visible (so users know the radar is live) without giving an empty
-// tier a full accent card. Used for FIRE/READY/ALMOST/TRACK when count === 0.
-const EMPTY_SECTION_COPY: Partial<Record<SectionKey, string>> = {
-  attackNow: "No live HR calls right now.",
-  ready: "No ready setups yet.",
-  building: "Nothing developing yet.",
-  watch: "Nothing on track yet.",
-};
-
-function LadderSectionEmptyRow({ sectionKey }: { sectionKey: SectionKey }) {
-  const meta = SECTION_META[sectionKey];
-  const Icon = meta.icon;
+// Admin-only raw diagnostics — the RDY / HR% / PVUL / peak / engine-path values
+// that used to clutter every card now live ONLY here, behind the drawer and the
+// admin gate (spec: raw labels hidden unless admin/debug).
+function DrawerAdminDiagnostics({ entry }: { entry: HrRadarLadderEntry }) {
+  const rows: Array<[string, string]> = [];
+  const num = (v: number | null | undefined, d = 1) => (v == null ? null : Number(v).toFixed(d));
+  const rdy = num(entry.currentReadinessScore, 0);
+  const bld = num(entry.buildScore, 0);
+  const conv = num(entry.conversionProbability != null && entry.conversionProbability <= 1 ? entry.conversionProbability * 100 : entry.conversionProbability, 0);
+  const pvul = num(entry.pitcherHrVulnerability, 0);
+  const peak = num(entry.peakSignalScore10 ?? entry.peakScore, 1);
+  if (rdy != null) rows.push(["RDY", rdy]);
+  if (bld != null) rows.push(["BUILD", bld]);
+  if (conv != null) rows.push(["HR%", `${conv}%`]);
+  if (pvul != null) rows.push(["PVUL", pvul]);
+  if (peak != null) rows.push(["PEAK", `${peak}/10`]);
+  if (entry.enginePath) rows.push(["PATH", entry.enginePath]);
+  if (rows.length === 0 && !(entry.debugReasons && entry.debugReasons.length)) return null;
   return (
-    <div
-      className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border/30 bg-card/40"
-      data-testid={`section-empty-slim-${sectionKey}`}
-    >
-      <Icon className="w-3.5 h-3.5 text-muted-foreground/70 shrink-0" />
-      <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground/80">{meta.label}</span>
-      <span className="text-[11px] text-muted-foreground/60">{EMPTY_SECTION_COPY[sectionKey] ?? "No entries."}</span>
+    <div className="mt-3 rounded-lg border border-purple-500/30 bg-purple-500/5 p-2.5" data-testid="drawer-admin-diagnostics">
+      <div className="text-[9px] font-bold uppercase tracking-wider text-purple-300 mb-1.5">Admin · raw diagnostics</div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex items-center justify-between gap-1 rounded bg-background/40 px-1.5 py-1">
+            <span className="text-[9px] text-muted-foreground">{k}</span>
+            <span className="text-[10px] font-mono font-semibold text-foreground">{v}</span>
+          </div>
+        ))}
+      </div>
+      {entry.debugReasons && entry.debugReasons.length > 0 && (
+        <ul className="mt-2 space-y-0.5">
+          {entry.debugReasons.slice(0, 6).map((r, i) => (
+            <li key={i} className="text-[9px] font-mono text-muted-foreground/80 truncate">• {r}</li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
 
-function LadderSection({ sectionKey, entries, onAddToSlip, onOpenDetails, onPass, onAccept, acceptedKeys, freshlyCashedKeys, defaultCollapsed: defaultCollapsedProp }: LadderSectionProps) {
-  const meta = SECTION_META[sectionKey];
-  const baseDefaultCollapsed = defaultCollapsedProp ?? meta.defaultCollapsed;
-  // Batch A — Phase 1: WATCH defaults to collapsed when it's holding more
-  // than 8 entries (per spec). All other sections honor the canonical default.
-  const dynamicDefaultCollapsed =
-    sectionKey === "watch" && entries.length > 8 ? true : baseDefaultCollapsed;
-  const [collapsed, setCollapsed] = useState(dynamicDefaultCollapsed);
-  // Batch A — Phase 1 (reactive): track whether the user has explicitly
-  // toggled the section. If they have, auto-collapse never overrides their
-  // choice. If they haven't, WATCH re-evaluates the threshold whenever the
-  // entry count crosses 8 (in either direction) so a slowly-growing
-  // WATCH list will auto-collapse the moment it exceeds the cap.
-  const userToggledRef = useRef(false);
-  const handleToggle = () => {
-    userToggledRef.current = true;
-    setCollapsed((c) => !c);
-  };
-  useEffect(() => {
-    if (sectionKey !== "watch") return;
-    if (userToggledRef.current) return;
-    // Only ever AUTO-COLLAPSE a large watch list — never auto-expand, so the
-    // canonical default (collapsed when Fire/Ready are populated) is respected.
-    if (entries.length > 8) setCollapsed((prev) => (prev ? prev : true));
-  }, [sectionKey, entries.length]);
-  // Batch A — Phase 1: per-section visible-by-default card caps. Anything
-  // beyond the cap is hidden behind a "Show all (N)" expander so the user
-  // sees the most important rows first without flooding the screen.
-  const cap = SECTION_CARD_CAPS[sectionKey] ?? null;
-  const [showAll, setShowAll] = useState(false);
-  const visibleEntries = cap != null && !showAll && entries.length > cap
-    ? entries.slice(0, cap)
-    : entries;
-  const hiddenCount = entries.length - visibleEntries.length;
-  const Icon = meta.icon;
-
+// ── Signal drawer — the deep diagnostic card. Opens on a table-row click and
+// reuses the full LadderCard (drivers, distance-to-fire, breakdown, AB log,
+// trajectory) so power users keep every detail, scoped to one player. ────────
+function HrRadarSignalDrawer({
+  row,
+  isAdmin,
+  onClose,
+  onAddToSlip,
+  onOpenDetails,
+  onPass,
+  onAccept,
+  isAccepted,
+}: {
+  row: HrRadarCardViewModel | null;
+  isAdmin: boolean;
+  onClose: () => void;
+  onAddToSlip?: (sig: MlbSignalData) => void;
+  onOpenDetails?: (entry: HrRadarLadderEntry) => void;
+  onPass: (entry: HrRadarLadderEntry) => void;
+  onAccept: (entry: HrRadarLadderEntry) => void;
+  isAccepted: boolean;
+}) {
+  if (!row) return null;
+  const section = stageToSectionKey(row.stage);
   return (
-    <Card className={`${meta.accent} border-2`} data-testid={`section-ladder-${sectionKey}`}>
-      <button
-        className="w-full flex items-center justify-between gap-2 p-3 text-left min-w-0"
-        onClick={handleToggle}
-        data-testid={`button-toggle-section-${sectionKey}`}
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" data-testid="hr-signal-drawer">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} data-testid="drawer-backdrop" />
+      <div
+        className="relative w-full sm:max-w-lg max-h-[85vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-border bg-background p-4 shadow-2xl animate-fade-in-up"
+        style={{ paddingBottom: "max(16px, env(safe-area-inset-bottom, 16px))" }}
       >
-        <div className="flex items-center gap-2 min-w-0 shrink-0">
-          {collapsed ? <ChevronRight className="w-4 h-4 shrink-0" /> : <ChevronDown className="w-4 h-4 shrink-0" />}
-          <Icon className="w-4 h-4 shrink-0" />
-          <div className="flex flex-col items-start">
-            <span className="font-bold text-sm tracking-wide whitespace-nowrap leading-tight">{meta.label}</span>
-            <span className="text-[9px] text-muted-foreground whitespace-nowrap leading-tight">{meta.sublabel}</span>
-          </div>
-          <Badge className={`${meta.badge} text-[10px] px-1.5 py-0 shrink-0`} data-testid={`badge-count-${sectionKey}`}>
-            {entries.length}
-          </Badge>
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs font-bold uppercase tracking-wide text-muted-foreground">Signal detail</span>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-muted/50 text-muted-foreground hover:text-foreground" data-testid="button-drawer-close" aria-label="Close">
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <span className="text-[10px] text-muted-foreground hidden lg:block truncate min-w-0">
-          {meta.description}
-        </span>
-      </button>
-      {!collapsed && (
-        <div className="px-3 pb-3 space-y-2">
-          {entries.length === 0 ? (
-            <div className="text-[11px] text-muted-foreground italic p-2" data-testid={`text-empty-${sectionKey}`}>
-              No entries.
-            </div>
-          ) : (
-            <>
-              {visibleEntries.map(e => {
-                const dismissKey = entryDismissKey(e.playerId, e.gameId);
-                const justCashed = sectionKey === "cashed" && (freshlyCashedKeys?.has(dismissKey) ?? false);
-                return (
-                  <div
-                    key={`${sectionKey}-${e.playerId}-${e.gameId}`}
-                    className={justCashed ? "animate-pulse-once" : undefined}
-                    data-testid={justCashed ? `wrap-cashed-pulse-${e.playerId}` : undefined}
-                  >
-                    <LadderCard
-                      entry={e}
-                      section={sectionKey}
-                      onAddToSlip={onAddToSlip}
-                      onOpenDetails={onOpenDetails}
-                      onPass={onPass}
-                      onAccept={onAccept}
-                      isAccepted={acceptedKeys?.has(dismissKey) ?? false}
-                    />
-                  </div>
-                );
-              })}
-              {hiddenCount > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full h-7 text-[11px] text-muted-foreground hover:text-foreground"
-                  onClick={() => setShowAll(true)}
-                  data-testid={`button-show-all-${sectionKey}`}
-                >
-                  <ChevronDown className="w-3 h-3 mr-1" />
-                  Show all ({hiddenCount} more)
-                </Button>
-              )}
-              {showAll && cap != null && entries.length > cap && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full h-7 text-[11px] text-muted-foreground hover:text-foreground"
-                  onClick={() => setShowAll(false)}
-                  data-testid={`button-show-less-${sectionKey}`}
-                >
-                  <ChevronRight className="w-3 h-3 mr-1 rotate-90" />
-                  Show less
-                </Button>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </Card>
+        <LadderCard
+          entry={row.entry}
+          section={section}
+          onAddToSlip={onAddToSlip}
+          onOpenDetails={onOpenDetails}
+          onPass={onPass}
+          onAccept={onAccept}
+          isAccepted={isAccepted}
+        />
+        {isAdmin && <DrawerAdminDiagnostics entry={row.entry} />}
+      </div>
+    </div>
   );
 }
 
@@ -1642,6 +1577,9 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
   const queryClient = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [hideFinished, setHideFinished] = useState(false);
+  // Open diagnostic drawer (compact-table row click). Must sit with the other
+  // hooks, above any early return, to keep the hook order stable.
+  const [drawerRow, setDrawerRow] = useState<HrRadarCardViewModel | null>(null);
   const { data, isLoading, isFetching, error, dataUpdatedAt } = useQuery<HrRadarLadderResponse>({
     queryKey: ["/api/mlb/hr-radar/ladder"],
     // Master Fix Step 15 — short poll for live decision-engine cadence,
@@ -1885,6 +1823,23 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
   const finishedCount = counts.cashed + counts.dead;
   const refreshSpinning = isRefreshing || isFetching;
 
+  // Flatten the (already-filtered) sections into one compact-table row set,
+  // sorted in-table by stage→score. `noAbYet` parking-lot rows stay out of the
+  // table (pregame 0-AB noise); resolved rows carry their authoritative
+  // cashed/missed section hint so the public stage is engine truth.
+  const sectionHintFor = (k: SectionKey): "cashed" | "missed" | undefined =>
+    k === "cashed" ? "cashed" : k === "dead" || k === "modelReview" ? "missed" : undefined;
+  const tableRows: HrRadarCardViewModel[] = [];
+  for (const k of order) {
+    if (k === "noAbYet") continue;
+    for (const e of (sections as Record<SectionKey, HrRadarLadderEntry[]>)[k] ?? []) {
+      tableRows.push(buildHrRadarCardViewModel(e, { sectionHint: sectionHintFor(k) }));
+    }
+  }
+  const drawerAccepted = drawerRow
+    ? accepted.has(entryDismissKey(drawerRow.playerId, drawerRow.gameId))
+    : false;
+
   return (
     <div className="space-y-3" data-testid="hr-radar-ladder">
       <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground px-1">
@@ -1899,9 +1854,9 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span data-testid="text-ladder-total" title="Fire + Ready (HR Max Window) signals are graded to the record; Build/Track are non-graded context.">
-            {counts.attackNow + counts.ready} graded
-            <span className="text-muted-foreground/60"> · {counts.building + counts.watch} context</span>
+          <span data-testid="text-ladder-total" title="Live HR Radar signals this session.">
+            {counts.attackNow + counts.ready + counts.building + counts.watch} live
+            {counts.cashed > 0 && <span className="text-emerald-400/80"> · {counts.cashed} cashed</span>}
           </span>
           <Button
             variant="ghost"
@@ -1942,18 +1897,24 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 rounded-lg bg-card border border-border/40"
           data-testid="ladder-summary-bar"
         >
-          {(counts.attackNow + counts.ready) > 0 && (
-            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-top-window">
-              <Flame className="w-3 h-3" /> TOP WINDOW {counts.attackNow + counts.ready}
+          {/* Unified public ladder vocabulary — FIRE · READY · BUILD · TRACK. */}
+          {counts.attackNow > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-fire">
+              <Flame className="w-3 h-3" /> FIRE {counts.attackNow}
+            </span>
+          )}
+          {counts.ready > 0 && (
+            <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-orange-400" data-testid="summary-ready">
+              <Zap className="w-3 h-3" /> READY {counts.ready}
             </span>
           )}
           {counts.building > 0 && (
-            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-amber-400" data-testid="summary-almost">
-              <Zap className="w-3 h-3" /> ALMOST {counts.building}
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-build">
+              <Zap className="w-3 h-3" /> BUILD {counts.building}
             </span>
           )}
           {counts.watch > 0 && (
-            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-watch">
+            <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-slate-400" data-testid="summary-track">
               <Eye className="w-3 h-3" /> TRACK {counts.watch}
             </span>
           )}
@@ -1973,43 +1934,12 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
         </div>
         </div>
       )}
-      {order.map(key => {
-        // Phase 6 — never render the parking lot section when empty;
-        // its only value is grouping, so an empty "NO AB YET" header
-        // would just be noise in its own right.
-        if (key === "noAbYet" && sections.noAbYet.length === 0) return null;
-        // Batch A — Phase 5: same rule for admin Model Review — empty
-        // section adds no signal, hide it.
-        if (key === "modelReview" && (sections as any).modelReview?.length === 0) return null;
-        // UI repair — an EMPTY live-decision section must not consume a full
-        // accent card (esp. empty FIRE's prime red weight). Render a slim
-        // status row instead; the hierarchy stays scannable.
-        const isLiveDecision = key === "attackNow" || key === "ready" || key === "building" || key === "watch";
-        if (isLiveDecision && sections[key].length === 0) {
-          return <LadderSectionEmptyRow key={key} sectionKey={key} />;
-        }
-        // UI repair — canonical default-expand: Fire/Ready expand when they
-        // have entries; Build (ALMOST) + Track only expand when BOTH Fire and
-        // Ready are empty so a populated top of the ladder stays in focus.
-        const fireAndReadyEmpty = counts.attackNow === 0 && counts.ready === 0;
-        let sectionDefaultCollapsed: boolean | undefined;
-        if (key === "attackNow" || key === "ready") sectionDefaultCollapsed = false;
-        else if (key === "building" || key === "watch") sectionDefaultCollapsed = !fireAndReadyEmpty;
-        return (
-          <LadderSection
-            key={key}
-            sectionKey={key}
-            entries={sections[key]}
-            onAddToSlip={onAddToSlip}
-            onOpenDetails={onOpenDetails}
-            onPass={handlePass}
-            onAccept={handleAccept}
-            acceptedKeys={accepted}
-            freshlyCashedKeys={freshlyCashedKeys}
-            defaultCollapsed={sectionDefaultCollapsed}
-          />
-        );
-      })}
+      {/* Compact command table — sortable rows, click to open the deep
+          diagnostic drawer. Replaces the stack of giant expanded section
+          cards. */}
+      {tableRows.length > 0 && (
+        <HrRadarFullLadderTable rows={tableRows} onRowClick={setDrawerRow} />
+      )}
       {counts.total === 0 && (
         <Card className="p-6 text-center" data-testid="ladder-empty-state">
           <div className="text-sm text-muted-foreground">
@@ -2020,6 +1950,17 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           </div>
         </Card>
       )}
+
+      <HrRadarSignalDrawer
+        row={drawerRow}
+        isAdmin={isAdmin}
+        onClose={() => setDrawerRow(null)}
+        onAddToSlip={onAddToSlip}
+        onOpenDetails={onOpenDetails}
+        onPass={(entry) => { handlePass(entry); setDrawerRow(null); }}
+        onAccept={handleAccept}
+        isAccepted={drawerAccepted}
+      />
     </div>
   );
 }

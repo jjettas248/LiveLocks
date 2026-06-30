@@ -254,6 +254,68 @@
     animation: hrCashedPulse 2.2s ease-in-out 1;
     border-radius: 0.5rem;
   }
+
+  /* HR Radar overhaul — anticipation-meter tip spark. A soft pulsing glow at
+     the leading edge of a hot (READY/FIRE) Distance-to-Fire meter so a near-full
+     bar pulls the eye ("almost there"). Used by the shared HeatMeter. */
+  @keyframes hrHeatSpark {
+    0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(0.85); }
+    50%      { opacity: 1;    transform: translate(-50%, -50%) scale(1.15); }
+  }
+  .hr-heat-spark {
+    animation: hrHeatSpark 1.4s ease-in-out infinite;
+  }
+
+  /* HR Radar overhaul — win-celebration sheen. One diagonal shine sweeps a
+     freshly resolved CASHED card, then settles. Rewards the dopamine loop
+     without lingering motion. */
+  @keyframes hrCashSheen {
+    0%   { transform: translateX(-130%) skewX(-18deg); opacity: 0; }
+    18%  { opacity: 0.9; }
+    60%  { opacity: 0; }
+    100% { transform: translateX(230%) skewX(-18deg); opacity: 0; }
+  }
+  .hr-cash-sheen::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 45%;
+    height: 100%;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, hsl(160 84% 60% / 0.22), transparent);
+    animation: hrCashSheen 1.9s ease-out 1;
+  }
+
+  /* HR Radar overhaul — Fire pulse. The ONLY always-on attention pulse, reserved
+     for official live calls (Fire). A slow red breathing ring; everything cooler
+     stays calm so Fire visually owns "act now". */
+  @keyframes hrFirePulse {
+    0%, 100% { box-shadow: 0 0 0 0 hsl(0 84% 60% / 0.0), 0 0 10px 0 hsl(0 84% 60% / 0.25); }
+    50%      { box-shadow: 0 0 0 3px hsl(0 84% 60% / 0.18), 0 0 22px 3px hsl(0 84% 60% / 0.45); }
+  }
+  .hr-fire-pulse {
+    animation: hrFirePulse 2.2s ease-in-out infinite;
+  }
+
+  /* HR Radar overhaul — stage-movement toast slide-in (Build→Ready, →Fire). */
+  @keyframes hrStageToastIn {
+    0%   { opacity: 0; transform: translateY(-8px) scale(0.97); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .hr-stage-toast {
+    animation: hrStageToastIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /* HR Radar overhaul — score count-up: brief emphasis as a hero number
+     settles on first render (pairs with the JS count-up). */
+  @keyframes hrScoreSettle {
+    0%   { transform: scale(1.18); opacity: 0.6; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .hr-score-settle {
+    animation: hrScoreSettle 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
 }
 
 /* Respect the OS "reduce motion" setting for users with vestibular/motion
