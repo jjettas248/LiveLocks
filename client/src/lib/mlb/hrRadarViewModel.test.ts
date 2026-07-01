@@ -97,9 +97,14 @@ console.log("\nno client score calc / no raw leak");
 console.log("\ntrigger chips");
 {
   const v = buildHrRadarCardViewModel(entry({ userStage: "ready", badges: ["hr_max_window", "near_hr_contact"] as any, displayCurrentScore10: 8 }));
-  assert("chips include HR MAX WINDOW", v.driverChips.includes("HR MAX WINDOW"));
-  assert("chips include NEAR HR", v.driverChips.includes("NEAR HR"));
+  const labels = v.driverChips.map((c) => c.label);
+  assert("chips include HR MAX WINDOW", labels.includes("HR MAX WINDOW"));
+  assert("chips include NEAR HR", labels.includes("NEAR HR"));
   assert("chips capped at 3", v.driverChips.length <= 3);
+  const hrMaxWindowChip = v.driverChips.find((c) => c.label === "HR MAX WINDOW");
+  assert("HR MAX WINDOW carries its own tone (fire)", hrMaxWindowChip?.tone === "fire");
+  const nearHrChip = v.driverChips.find((c) => c.label === "NEAR HR");
+  assert("NEAR HR carries its own tone (warn), distinct from HR MAX WINDOW", nearHrChip?.tone === "warn");
 }
 
 // ── 4. Importance ordering ─────────────────────────────────────────────────

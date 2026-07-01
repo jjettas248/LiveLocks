@@ -13,6 +13,7 @@ import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } fro
 import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
 import { buildHrRadarCardViewModel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
 import { HrRadarFullLadderTable } from "@/components/mlb/hr-radar/HrRadarFullLadderTable";
+import { hrTierTheme, TierRail, tierFromLadderSection } from "@/components/mlb/hrRadarVisuals";
 
 // Tailwind classes per badge tone — UI styling only; labels/semantics come
 // from the shared HR_RADAR_BADGE_META (single source of truth).
@@ -240,7 +241,7 @@ export interface HrRadarLadderResponse {
 // sections (FIRE/READY/BUILD/WATCH) stop showing 0.0/10 pregame noise.
 // Batch A — `modelReview` is an admin-only bucket that holds uncalled_hr /
 // early_hr_insufficient_sample rows so they don't pollute MISSED.
-type SectionKey =
+export type SectionKey =
   | "attackNow"
   | "building"
   | "ready"
@@ -250,7 +251,7 @@ type SectionKey =
   | "dead"
   | "modelReview";
 
-const SECTION_META: Record<SectionKey, {
+export const SECTION_META: Record<SectionKey, {
   label: string;
   icon: typeof Flame;
   accent: string;
@@ -475,7 +476,7 @@ function cleanReason(s: string | null | undefined): string | null {
   return human.length > 0 ? human : null;
 }
 
-interface CardProps {
+export interface CardProps {
   entry: HrRadarLadderEntry;
   section: SectionKey;
   onAddToSlip?: (sig: MlbSignalData) => void;
@@ -483,6 +484,9 @@ interface CardProps {
   onPass?: (entry: HrRadarLadderEntry) => void;
   onAccept?: (entry: HrRadarLadderEntry) => void;
   isAccepted?: boolean;
+  /** List-only affordance — opens the full-screen drawer (adds admin diagnostics
+   * on top of this same card). Omitted when LadderCard already IS the drawer. */
+  onOpenDrawer?: () => void;
 }
 
 /**
@@ -639,7 +643,7 @@ function PregameDriverChips({ entry }: { entry: HrRadarLadderEntry }) {
   );
 }
 
-function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted }: CardProps) {
+export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted, onOpenDrawer }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
   // the (inning, half) pair for legacy rows that pre-date the label fields.
@@ -758,6 +762,10 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   const showHrChanceHero = hrChancePct != null && section === "attackNow";
   const heroScore10 = actionScore10 ?? score10;
   const recordEligible = entry.displayRecordEligible === true;
+  // Premium shell — tier-driven glow/tint/border (Pre-Game Power treatment),
+  // keyed off the same tier theme used everywhere else in HR Radar so a card
+  // opened from the list and a card opened from the drawer are identical.
+  const t = hrTierTheme(tierFromLadderSection(section));
   // Big stage icon — reuse the section's SECTION_META icon (Flame/Zap/Eye).
   const StageIcon = SECTION_META[section]?.icon ?? null;
   // Outcome label for resolved rows uses the canonical outcome when present.
@@ -852,20 +860,15 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
 
   return (
     <div
-      className="rounded-xl border border-border/60 bg-background/50 p-3 hover:bg-background/80 transition-colors"
+      className={`flex gap-3 rounded-2xl border ${t.cardTint} bg-card p-3.5 transition-all hover:brightness-110 ${t.tier === "fire" && !isResolved ? "hr-fire-pulse" : ""}`}
+      style={{ boxShadow: `0 0 14px ${t.hex}${t.hot ? "59" : "26"}`, borderColor: `${t.hex}55` }}
       data-testid={`ladder-card-${section}-${entry.playerId}`}
     >
-      <div className="flex items-start justify-between gap-2 min-w-0">
-        {/* Big stage icon — instant visual tier recognition. */}
-        {StageIcon && !isResolved && (
-          <div
-            className={`shrink-0 mt-0.5 ${isAttack ? "text-red-400" : section === "building" ? "text-amber-400" : "text-blue-400"}`}
-            data-testid={`icon-stage-${section}-${entry.playerId}`}
-            aria-hidden="true"
-          >
-            <StageIcon className="w-7 h-7" />
-          </div>
-        )}
+      <TierRail tier={t.tier} />
+      <div className="flex items-start justify-between gap-2 min-w-0 flex-1">
+        {/* Small stage icon — instant visual tier recognition, paired with the
+            hero number below (Pre-Game Power treatment: icon + label under the
+            score, not a large floating icon competing with the header row). */}
         <button
           className="text-left min-w-0 flex-1 overflow-hidden"
           onClick={() => onOpenDetails?.(entry)}
@@ -972,7 +975,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                 {showHrChanceHero ? (
                   <div className="flex items-baseline gap-1">
                     <span
-                      className={`text-2xl font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
+                      className={`text-xl font-extrabold leading-none ${t.text}`}
                       data-testid={`text-hr-chance-${entry.playerId}`}
                     >
                       {hrChancePct}%
@@ -990,7 +993,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                 ) : (
                   <div className="flex items-baseline gap-1">
                     <span
-                      className={`text-2xl font-bold leading-none ${isAttack ? "text-red-400" : "text-foreground/90"}`}
+                      className={`text-xl font-extrabold leading-none ${t.text}`}
                       data-testid={`text-action-strength-${entry.playerId}`}
                     >
                       {heroScore10!.toFixed(1)}
@@ -1006,9 +1009,20 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
                     )}
                   </div>
                 )}
-                <span className="text-[9px] uppercase tracking-wide text-muted-foreground leading-none mt-0.5">
+                <span className={`inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wide leading-none mt-0.5 ${t.text}`}>
+                  {StageIcon && <StageIcon className="w-2.5 h-2.5" />}
                   {showHrChanceHero ? "HR chance" : "strength"}
                 </span>
+                {onOpenDrawer && (
+                  <button
+                    onClick={onOpenDrawer}
+                    className="mt-1 text-muted-foreground/50 hover:text-foreground transition-colors"
+                    aria-label="Open full signal detail"
+                    data-testid={`button-open-drawer-${entry.playerId}`}
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
                 {/* Mark a pre-contact PRIOR so a seed is never mistaken for a
                     live-earned read. Suppressed once live contact arrives. */}
                 {!isResolved && isPregameOnly && (
@@ -1454,7 +1468,7 @@ function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAcce
   );
 }
 
-function stageToSectionKey(stage: HrRadarCardViewModel["stage"]): SectionKey {
+export function stageToSectionKey(stage: HrRadarCardViewModel["stage"]): SectionKey {
   switch (stage) {
     case "fire": return "attackNow";
     case "ready": return "ready";
@@ -1938,7 +1952,15 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           diagnostic drawer. Replaces the stack of giant expanded section
           cards. */}
       {tableRows.length > 0 && (
-        <HrRadarFullLadderTable rows={tableRows} onRowClick={setDrawerRow} />
+        <HrRadarFullLadderTable
+          rows={tableRows}
+          onRowClick={setDrawerRow}
+          onAddToSlip={onAddToSlip}
+          onOpenDetails={onOpenDetails}
+          onPass={handlePass}
+          onAccept={handleAccept}
+          isAccepted={(entry) => accepted.has(entryDismissKey(entry.playerId, entry.gameId))}
+        />
       )}
       {counts.total === 0 && (
         <Card className="p-6 text-center" data-testid="ladder-empty-state">
