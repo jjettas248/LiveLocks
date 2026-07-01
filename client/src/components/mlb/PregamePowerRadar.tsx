@@ -246,10 +246,6 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
         )}
       </div>
 
-      {/* Win Attribution — public Pregame Radar Record + today's wins (wins-only). */}
-      <PregameRadarRecord />
-      <PregameWinsSection />
-
       <div className="flex gap-1.5 flex-wrap">
         {FILTERS.map((f) => (
           <button
@@ -286,6 +282,10 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
           <PregameCard key={s.signalId} signal={s} />
         ))}
       </div>
+
+      {/* Win Attribution — public Pregame Radar Record + today's wins (wins-only). */}
+      <PregameRadarRecord />
+      <PregameWinsSection />
     </div>
   );
 }
