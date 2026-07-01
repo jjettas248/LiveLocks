@@ -7,11 +7,11 @@ import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, Aler
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
 import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
-import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
+import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, mapHrRadarRowToDisplayState, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
-import { HR_RADAR_BADGE_META, type HrRadarBadge } from "@shared/hrRadarStage";
-import { buildHrRadarCardViewModel, selectTopPriority, topPriorityReasonLabel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
+import { type HrRadarBadge } from "@shared/hrRadarStage";
+import { buildHrRadarCardViewModel, buildDriverChips, selectTopPriority, topPriorityReasonLabel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
 import { HrRadarFullLadderTable } from "@/components/mlb/hr-radar/HrRadarFullLadderTable";
 import { hrTierTheme, TierRail, tierFromLadderSection, badgeToneClasses } from "@/components/mlb/hrRadarVisuals";
 
@@ -113,6 +113,9 @@ export interface HrRadarLadderEntry {
   displayInitialScore10?: number | null;
   displayCurrentScore10?: number | null;
   displayPeakScore10?: number | null;
+  // Server-computed letter grade (stage x displayCurrentScore10). Read
+  // verbatim — never re-derive a grade from stage alone on the client.
+  displayGrade?: "A+" | "A" | "B+" | "B" | "B-" | "Watch" | null;
   displayCap10?: number | null;
   displayCapBadgeLabel?: string | null;
   displayCapReason?: string | null;
@@ -591,25 +594,27 @@ function HrBreakdownStrip({ entry }: { entry: HrRadarLadderEntry }) {
   const bars = buildHrRadarBreakdownBars(entry as unknown as HrRadarRowInput);
   if (bars.length < 2) return null;
   return (
-    <div
-      className="mt-2 grid grid-cols-4 gap-1.5"
-      data-testid={`strip-hr-breakdown-${entry.playerId}`}
-    >
-      {bars.map((bar) => {
-        const color = hrBreakdownBar(bar.magnitude, bar.isHrProb);
-        const valueText = formatBreakdownBarValue(bar);
-        return (
-          <div key={bar.key} className="flex flex-col gap-0.5 min-w-0" title={`${bar.short} ${valueText}`}>
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[8px] text-muted-foreground/80 tracking-wide">{bar.short}</span>
-              <span className="text-[8px] font-bold tabular-nums" style={{ color }}>{valueText}</span>
+    <div className="mt-2" data-testid={`strip-hr-breakdown-${entry.playerId}`}>
+      <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70 mb-1">
+        Signal breakdown
+      </div>
+      <div className="grid grid-cols-4 gap-2">
+        {bars.map((bar) => {
+          const color = hrBreakdownBar(bar.magnitude, bar.isHrProb);
+          const valueText = formatBreakdownBarValue(bar);
+          return (
+            <div key={bar.key} className="flex flex-col gap-0.5 min-w-0" title={`${bar.label} ${valueText}`}>
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[9px] text-muted-foreground tracking-wide">{bar.short}</span>
+                <span className="text-[9px] font-bold tabular-nums" style={{ color }}>{valueText}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${bar.magnitude}%`, backgroundColor: color }} />
+              </div>
             </div>
-            <div className="h-1 rounded-full bg-secondary/60 overflow-hidden">
-              <div className="h-full rounded-full" style={{ width: `${bar.magnitude}%`, backgroundColor: color }} />
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -759,6 +764,13 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
   // keyed off the same tier theme used everywhere else in HR Radar so a card
   // opened from the list and a card opened from the drawer are identical.
   const t = hrTierTheme(tierFromLadderSection(section));
+  // Driver chips (Pre-Game Power treatment) — the same badge+reformat chip
+  // builder Quick Decide's Hero Card already uses, so this card and that one
+  // never show different evidence for the same signal. Each chip carries its
+  // own tone (fire/warn/info/good); pure display formatting of server data.
+  const driverChips = isResolved
+    ? []
+    : buildDriverChips(entry, mapHrRadarRowToDisplayState(entry as unknown as HrRadarRowInput).drivers);
   // Big stage icon — reuse the section's SECTION_META icon (Flame/Zap/Eye).
   const StageIcon = SECTION_META[section]?.icon ?? null;
   // Outcome label for resolved rows uses the canonical outcome when present.
@@ -881,6 +893,19 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
+            {/* Letter grade — server-computed from stage x conviction score
+                (shared/hrRadarStage.ts deriveHrRadarDisplayGrade). Rendered
+                verbatim; never re-derived on the client. */}
+            {!isResolved && entry.displayGrade && (
+              <span
+                className={`text-[10px] font-black px-1.5 py-0.5 rounded-md border shrink-0 ${t.text}`}
+                style={{ borderColor: `${t.hex}55`, background: `${t.hex}1a` }}
+                data-testid={`badge-grade-${entry.playerId}`}
+                title="Grade reflects the signal's current stage and conviction score"
+              >
+                {entry.displayGrade}
+              </span>
+            )}
             {/* Phase 2 — cross-tier board priority pick (client-computed
                 display rank, never an engine/tier value). Leads the badge row
                 so the single best play across the whole board — not just its
@@ -894,25 +919,8 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
                 ⭐ TOP PRIORITY
               </span>
             )}
-            {/* Step 5 — canonical badge set, server-derived and rendered
-                verbatim from shared/hrRadarStage.ts. "HR Max Window" is one of
-                these badges, not a ladder stage of its own. */}
-            {!isResolved && (entry.badges ?? []).map((b: HrRadarBadge) => {
-              const meta = HR_RADAR_BADGE_META[b];
-              if (!meta) return null;
-              return (
-                <span
-                  key={b}
-                  className={`text-[8px] font-black px-1.5 py-0.5 rounded-full border shrink-0 whitespace-nowrap ${badgeToneClasses(meta.tone)}`}
-                  data-testid={`badge-${b.replace(/_/g, "-")}-${entry.playerId}`}
-                  title={meta.title}
-                >
-                  {meta.label}
-                </span>
-              );
-            })}
-            {/* Record-eligibility tag (v14) — orthogonal to the canonical badge
-                set above; marks signals that count toward the official record. */}
+            {/* Record-eligibility tag (v14) — orthogonal to the driver chips
+                below; marks signals that count toward the official record. */}
             {recordEligible && (
               <span
                 className="text-[8px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-300 border border-red-500/30 shrink-0"
@@ -923,6 +931,24 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
               </span>
             )}
           </div>
+          {/* Driver chips — Pre-Game Power treatment: a dedicated, legible row
+              (not crammed inline with the player name) so "why this matters"
+              reads as evidence, not a footnote. Step 5 canonical badges +
+              reformat-only chips (shared/hrRadarStage.ts), each in its own
+              tone (fire/warn/info/good) via buildDriverChips(). */}
+          {driverChips.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-1" data-testid={`driver-chips-${entry.playerId}`}>
+              {driverChips.map((c) => (
+                <span
+                  key={c.label}
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-md border shrink-0 whitespace-nowrap ${badgeToneClasses(c.tone)}`}
+                  data-testid={`chip-driver-${entry.playerId}-${c.label}`}
+                >
+                  {c.label}
+                </span>
+              ))}
+            </div>
+          )}
           {/* Plain-English reason — why this card matters now. */}
           {!isResolved && (
             <p
