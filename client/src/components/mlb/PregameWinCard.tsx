@@ -16,13 +16,25 @@ import type {
 } from "@shared/pregameRadarWin";
 
 /**
- * Today's ET date, e.g. "2026-07-01" — mirrors the server's todayET() format.
- * Included in query keys below so a day rollover always produces a fresh
- * cache entry instead of showing yesterday's placeholder data (the endpoints
- * themselves already scope their response to todayET() server-side).
+ * Current ET slate day, e.g. "2026-07-01" — mirrors the server's slateDateET()
+ * (day rolls over at 6am ET, not midnight, so late games stay on the slate
+ * that started the evening before). Included in query keys below so a slate
+ * rollover always produces a fresh cache entry instead of showing yesterday's
+ * placeholder data (the endpoints themselves already scope their response to
+ * the slate day server-side).
  */
-function todayET(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+function slateDateET(): string {
+  const now = new Date();
+  const hourET = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      hour12: false,
+    }).format(now),
+  ) % 24;
+  const d = new Date(now);
+  if (hourET < 6) d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
 }
 
 /**
@@ -32,7 +44,7 @@ function todayET(): string {
  */
 export function PregameRadarRecord() {
   const { data } = useQuery<PregameRadarPublicStats>({
-    queryKey: ["/api/mlb/pregame-radar/record", todayET()],
+    queryKey: ["/api/mlb/pregame-radar/record", slateDateET()],
     queryFn: () => apiRequest("GET", "/api/mlb/pregame-radar/record").then((r) => r.json()),
     refetchInterval: 60_000,
     placeholderData: (prev) => prev,
@@ -99,7 +111,7 @@ function Stat({
  */
 export function PregameWinsSection() {
   const { data } = useQuery<DailyCashedLogResponse>({
-    queryKey: ["/api/mlb/daily-cashed-log", todayET()],
+    queryKey: ["/api/mlb/daily-cashed-log", slateDateET()],
     queryFn: () => apiRequest("GET", "/api/mlb/daily-cashed-log").then((r) => r.json()),
     refetchInterval: 60_000,
     placeholderData: (prev) => prev,

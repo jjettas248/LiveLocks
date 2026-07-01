@@ -668,8 +668,12 @@ export async function registerRoutes(
   // misses are calibration-only and never appear here (no public losses).
   app.get("/api/mlb/daily-cashed-log", requireAuth, async (req, res) => {
     try {
-      const { todayET } = await import("./utils/dateUtils");
-      const sessionDate = String(req.query.date ?? todayET());
+      const { slateDateET } = await import("./utils/dateUtils");
+      // Slate day (6am-ET rollover), not calendar day: pregame signals and HR
+      // Radar alerts are both stamped with the game's slate/official date, so a
+      // midnight todayET() default blanked the evening's cashes while late
+      // games were still grading.
+      const sessionDate = String(req.query.date ?? slateDateET());
 
       // Official live HR Radar cashes — already filtered to called_hit +
       // userVisible inside getCanonicalHrRadarOutcomes.

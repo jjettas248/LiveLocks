@@ -3186,6 +3186,14 @@ export class DatabaseStorage implements IStorage {
   async upsertPregamePowerRadarSignal(row: InsertPregamePowerRadarSignal): Promise<void> {
     // Conflict on signalId (PK) — deterministic from sessionDate/gameId/batterId,
     // so this is idempotent across repeated builds.
+    //
+    // Graded truth is written ONCE by the shadow grader and must never be
+    // clobbered by a later ungraded copy of the same signal: every snapshot
+    // rebuild re-persists the full slate with outcomes=null / gradedAt=null /
+    // status="active"|"locked", which used to wipe the day's pregame wins from
+    // the DB (empty daily cashed log / record). Outcome-bearing fields therefore
+    // merge instead of overwrite: a non-null incoming value wins, a null
+    // incoming value preserves what the grader already stamped.
     await db
       .insert(pregamePowerRadarSignals)
       .values(row)
@@ -3208,15 +3216,17 @@ export class DatabaseStorage implements IStorage {
           diagnostics: row.diagnostics,
           lineupStatus: row.lineupStatus,
           weatherStatus: row.weatherStatus,
-          status: row.status,
+          // "graded" is terminal — a rebuild's "active"/"locked" never demotes it.
+          status: sql`CASE WHEN ${pregamePowerRadarSignals.status} = 'graded' THEN ${pregamePowerRadarSignals.status} ELSE excluded.status END`,
           suppressed: row.suppressed,
           suppressedReasons: row.suppressedReasons,
-          outcomes: row.outcomes ?? null,
-          becameLiveReady: row.becameLiveReady,
-          becameLiveFire: row.becameLiveFire,
-          convertedLiveAt: row.convertedLiveAt ?? null,
-          lockedAt: row.lockedAt ?? null,
-          gradedAt: row.gradedAt ?? null,
+          outcomes: sql`COALESCE(excluded.outcomes, ${pregamePowerRadarSignals.outcomes})`,
+          becameLiveReady: sql`${pregamePowerRadarSignals.becameLiveReady} OR excluded.became_live_ready`,
+          becameLiveFire: sql`${pregamePowerRadarSignals.becameLiveFire} OR excluded.became_live_fire`,
+          convertedLiveAt: sql`COALESCE(excluded.converted_live_at, ${pregamePowerRadarSignals.convertedLiveAt})`,
+          // First lock time sticks — later rebuilds of a live game re-stamp it.
+          lockedAt: sql`COALESCE(${pregamePowerRadarSignals.lockedAt}, excluded.locked_at)`,
+          gradedAt: sql`COALESCE(excluded.graded_at, ${pregamePowerRadarSignals.gradedAt})`,
           updatedAt: new Date(),
         },
       });

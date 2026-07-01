@@ -5,7 +5,7 @@
 // empty slice so stats can never break runtime or settlement.
 
 import { storage } from "../../storage";
-import { todayET, daysAgoET } from "../../utils/dateUtils";
+import { slateDateET, daysAgoET } from "../../utils/dateUtils";
 import { getSnapshot } from "./pregamePowerRadarStore";
 import { rowToSignal } from "./pregamePersistence";
 import { getRadarSnapshot } from "./pregamePowerRadarService";
@@ -65,8 +65,11 @@ function currentSnapshotSignalsForDate(dateET: string): PregamePowerSignal[] {
   return Array.from(snapshot.signals.values());
 }
 
-export async function getPregameRadarPublicStats(dateET: string = todayET()): Promise<PregameRadarPublicStats> {
-  if (dateET === todayET()) await getRadarSnapshot().catch(() => null);
+export async function getPregameRadarPublicStats(dateET: string = slateDateET()): Promise<PregameRadarPublicStats> {
+  // "Current slate" comparisons use slateDateET() (6am-ET rollover), matching
+  // the sessionDate every snapshot/build is stamped with — todayET() here made
+  // the in-memory merge miss the live slate between midnight and 6am ET.
+  if (dateET === slateDateET()) await getRadarSnapshot().catch(() => null);
 
   const todaySignals = uniqueBySignalId([
     ...await loadPregamePowerSignalsByDate(dateET),
@@ -76,7 +79,7 @@ export async function getPregameRadarPublicStats(dateET: string = todayET()): Pr
   const last7Dates = datesBack(7);
   const last7Signals = uniqueBySignalId([
     ...await loadPregamePowerSignalsByDates(last7Dates),
-    ...currentSnapshotSignalsForDate(todayET()),
+    ...currentSnapshotSignalsForDate(slateDateET()),
   ]);
 
   return buildPublicStats(todaySignals, last7Signals, dateET);
@@ -87,12 +90,12 @@ export async function getPregameRadarCalibrationStats(days: number = 7): Promise
 
   const clampedDays = Math.max(1, Math.min(60, Math.floor(days)));
   const dates = datesBack(clampedDays);
-  const endET = dates[0] ?? todayET();
+  const endET = dates[0] ?? slateDateET();
   const startET = dates[dates.length - 1] ?? endET;
 
   const signals = uniqueBySignalId([
     ...await loadPregamePowerSignalsByDates(dates),
-    ...currentSnapshotSignalsForDate(todayET()),
+    ...currentSnapshotSignalsForDate(slateDateET()),
   ]);
 
   return buildCalibrationStats(signals, { startET, endET });
@@ -103,11 +106,11 @@ export async function getPregameRadarCalibrationStats(days: number = 7): Promise
  * pattern as getPregameRadarPublicStats). Powers the daily cashed log for both
  * today and historical dates.
  */
-export async function getPregameRadarWinsForDate(dateET: string = todayET()): Promise<{
+export async function getPregameRadarWinsForDate(dateET: string = slateDateET()): Promise<{
   pregameRadarWins: PregameRadarWinItem[];
   firstAbPregameWins: PregameRadarWinItem[];
 }> {
-  if (dateET === todayET()) await getRadarSnapshot().catch(() => null);
+  if (dateET === slateDateET()) await getRadarSnapshot().catch(() => null);
 
   const signals = uniqueBySignalId([
     ...await loadPregamePowerSignalsByDate(dateET),

@@ -45,7 +45,9 @@ import { hydratePregamePlayerParkWindFit } from "./playerParkWindFit";
 import { computeLineupOpportunity } from "./lineupOpportunity";
 import { computeMarketTags } from "./marketTagger";
 import { composePregameScore } from "./scoring";
+import { carryForwardGradedState } from "./gradedStateCarry";
 import {
+  getSnapshot,
   setSnapshot,
   type PregamePowerSnapshot,
 } from "./pregamePowerRadarStore";
@@ -132,6 +134,12 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   // instead of minting "today"-tagged wins for a slate that already finished.
   const sessionDate = slateDateET();
   console.log(`[PREGAME_POWER_RADAR_BUILD_START] buildId=${buildId} date=${sessionDate}`);
+
+  // Previous same-slate snapshot — source of already-stamped grading/bridge
+  // state that must survive this rebuild (see carryForwardGradedState).
+  const prevSnapshot = getSnapshot();
+  const prevSignals =
+    prevSnapshot && prevSnapshot.sessionDate === sessionDate ? prevSnapshot.signals : null;
 
   const signals = new Map<string, PregamePowerSignal>();
   let gamesScanned = 0;
@@ -579,6 +587,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           },
         };
 
+        carryForwardGradedState(signal, prevSignals?.get(signalId));
         signals.set(signalId, signal);
         if (scoring.suppressed) {
           suppressedCount++;

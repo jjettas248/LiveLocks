@@ -74,7 +74,12 @@ export async function getRadarSnapshot(): Promise<ResolvedSnapshot> {
       /* never throw into runtime */
     }
   }
-  return { snapshot, source: "memory" };
+  // Never fall back to a previous slate's snapshot: serving yesterday's board
+  // (complete with its graded "HOMERED" winners) as if it were today's is worse
+  // than an honest empty "waiting for lineups" state. This happens while the
+  // first build of a new slate day is still in flight (the concurrency guard
+  // makes concurrent build calls return null) or after it fails.
+  return { snapshot: null, source: "memory" };
 }
 
 let backgroundRefreshInFlight = false;
