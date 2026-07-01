@@ -66,7 +66,7 @@ export interface HrRadarCardViewModel {
   recordEligible: boolean;
   inningLabel: string | null;
   nextPaLabel: string | null;
-  /** Higher = more important. Stage dominates, then score. */
+  /** Higher = more important. Stage dominates, then score, then momentum/urgency. */
   sortRank: number;
   /** Raw entry passed through for the diagnostic drawer (admin/debug detail). */
   entry: HrRadarLadderEntry;
@@ -179,6 +179,48 @@ function formatNextPa(entry: HrRadarLadderEntry): string | null {
   return null;
 }
 
+// ── Cross-tier priority fine-tuning. Stage dominates sortRank by a full 100
+// points (see STAGE_WEIGHT), so these bonuses — capped well under that gap —
+// can only ever break ties WITHIN a stage or across near-identical stages;
+// they can never lift a TRACK row above a BUILD row's worst case, let alone
+// above READY/FIRE. Presentation-only re-ranking of server-stamped fields —
+// no engine/probability recompute (CLAUDE.md §3.3 Hard Rule 5).
+function momentumBonus(entry: HrRadarLadderEntry): number {
+  switch (entry.momentumLabel) {
+    case "heating_up": return 1.5;
+    case "holding_strong": return 0.3;
+    case "cooling_off": return -1;
+    default: return 0;
+  }
+}
+
+function urgencyBonus(entry: HrRadarLadderEntry): number {
+  let bonus = 0;
+  const pa = entry.remainingPAExpectation;
+  if (pa != null) {
+    if (pa <= 1) bonus += 1;
+    else if (pa <= 2) bonus += 0.5;
+  }
+  const inn = entry.currentInning ?? entry.detectedInning ?? null;
+  if (inn != null) {
+    if (inn >= 8) bonus += 0.5;
+    else if (inn >= 7) bonus += 0.25;
+  }
+  return bonus;
+}
+
+/** Short, human "why it's ranked here" line for the top-priority callout. */
+function priorityReasonFor(entry: HrRadarLadderEntry): string | null {
+  const parts: string[] = [];
+  if (entry.momentumLabel === "heating_up") parts.push("heating up");
+  else if (entry.momentumLabel === "holding_strong") parts.push("holding strong");
+  const pa = entry.remainingPAExpectation;
+  const inn = entry.currentInning ?? entry.detectedInning ?? null;
+  if (pa != null && pa <= 1) parts.push("~1 PA left");
+  else if (inn != null && inn >= 8) parts.push("late innings");
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
 /**
  * Map one server HR Radar row → display view model. `sectionHint` lets a caller
  * pass the authoritative server grouping for resolved rows (sections.cashed vs
@@ -219,7 +261,12 @@ export function buildHrRadarCardViewModel(
     recordEligible: d.recordEligible,
     inningLabel: d.inningLabel,
     nextPaLabel: formatNextPa(entry),
-    sortRank: STAGE_WEIGHT[stage] * 100 + score10,
+    // Stage bucket (×100) dominates; score is the primary in-tier ranking;
+    // momentum/urgency are small tie-breakers so a heating-up, almost-out-of-
+    // PAs signal edges out a flatter same-tier peer with an identical score.
+    // Skipped for resolved (cashed/missed) rows — they no longer have a "live"
+    // trajectory to break ties on.
+    sortRank: STAGE_WEIGHT[stage] * 100 + score10 + (isResolved ? 0 : momentumBonus(entry) + urgencyBonus(entry)),
     entry,
   };
 }
@@ -256,4 +303,29 @@ export function selectQuickDecide(vms: HrRadarCardViewModel[]): {
   const hasHigherThanTrack = sorted.some((v) => v.stage !== "track");
   const queue = rest.filter((v) => v.stage !== "track" || !hasHigherThanTrack).slice(0, 5);
   return { hero, queue };
+}
+
+/**
+ * Full Ladder — cross-tier priority pick. Unlike `selectQuickDecide`'s hero
+ * (FIRE/READY only), this blends EVERY live tier (FIRE/READY/BUILD/TRACK)
+ * into one ranked feed via `sortRank` (stage → score → momentum/urgency), so
+ * on a slate with no FIRE yet the single best BUILD/TRACK play is still
+ * unmistakably called out as the board's #1 — not just #1 inside its own
+ * section. The Full Ladder stays grouped by section visually; this only
+ * identifies which one card earns the "top priority" callout/ribbon.
+ */
+export function selectTopPriority(vms: HrRadarCardViewModel[]): HrRadarCardViewModel | null {
+  const live = vms.filter((v) => !v.isResolved);
+  if (live.length === 0) return null;
+  return [...live].sort(compareByImportance)[0];
+}
+
+/** Short "why it's #1" line for the top-priority callout — verbatim from
+ * already-derived server fields (momentum, remaining PAs, inning); never
+ * invents a reason. Falls back to the stage label alone when neither signal
+ * is present. */
+export function topPriorityReasonLabel(vm: HrRadarCardViewModel): string {
+  const reason = priorityReasonFor(vm.entry);
+  const stageLabel = HR_PUBLIC_STAGE_LABEL[vm.stage];
+  return reason ? `${stageLabel} · ${reason}` : stageLabel;
 }

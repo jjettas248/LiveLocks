@@ -7,7 +7,7 @@
 // probability logic.
 
 import { LadderCard, SECTION_META, stageToSectionKey, type SectionKey } from "@/components/mlb/HrRadarLadder";
-import type { HrRadarCardViewModel, HrPublicStage } from "@/lib/mlb/hrRadarViewModel";
+import { compareByImportance, type HrRadarCardViewModel, type HrPublicStage } from "@/lib/mlb/hrRadarViewModel";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import type { HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
 import { hrTierTheme } from "@/components/mlb/hrRadarVisuals";
@@ -24,6 +24,9 @@ export interface HrRadarFullLadderTableProps {
   onPass?: (entry: HrRadarLadderEntry) => void;
   onAccept?: (entry: HrRadarLadderEntry) => void;
   isAccepted?: (entry: HrRadarLadderEntry) => boolean;
+  /** Cross-tier board priority pick (`selectTopPriority`) — the one row that
+   * earns the "top priority" ribbon regardless of which section it lands in. */
+  topPriorityId?: string | null;
 }
 
 export function HrRadarFullLadderTable({
@@ -34,6 +37,7 @@ export function HrRadarFullLadderTable({
   onPass,
   onAccept,
   isAccepted,
+  topPriorityId = null,
 }: HrRadarFullLadderTableProps) {
   if (rows.length === 0) {
     return (
@@ -46,9 +50,13 @@ export function HrRadarFullLadderTable({
   return (
     <div className="space-y-4" data-testid="hr-ladder-table">
       {STAGE_ORDER.map((stage) => {
+        // Intelligent in-section order: stage-weighted sortRank (score, then
+        // momentum/urgency tie-breakers) rather than a flat score-only sort —
+        // see hrRadarViewModel's compareByImportance for the single formula
+        // both this table and the Quick Decide Hot Seat read.
         const groupRows = rows
           .filter((vm) => vm.stage === stage)
-          .sort((a, b) => b.score10 - a.score10);
+          .sort(compareByImportance);
         if (groupRows.length === 0) return null;
 
         const section: SectionKey = stageToSectionKey(stage);
@@ -81,6 +89,7 @@ export function HrRadarFullLadderTable({
                   onAccept={onAccept}
                   isAccepted={isAccepted ? isAccepted(vm.entry) : false}
                   onOpenDrawer={() => onRowClick(vm)}
+                  isTopPriority={topPriorityId != null && vm.id === topPriorityId}
                 />
               ))}
             </div>

@@ -306,8 +306,6 @@ function isUserSafeReason(s: string): boolean {
   if (/^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Score\d|Conv\s+\d+%|Profile\d|Danger\d)/i.test(t)) return false;
   // FSM / prob-rail promotion reason codes that leak as a "reason".
   if (/(prob[_ ]?rail|bet[_ ]?now|dynamic_|pitcher_fade|attack_sustained|_sustained|_awaiting)/i.test(t)) return false;
-  // Bare engine identifier code: lowercase snake_case / colon-joined, no spaces.
-  if (/^[a-z][a-z0-9]*([_:][a-z0-9]+)+$/.test(t)) return false;
   return true;
 }
 

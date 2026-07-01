@@ -10,19 +10,10 @@ import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEnt
 import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
-import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
-import { buildHrRadarCardViewModel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
+import { HR_RADAR_BADGE_META, type HrRadarBadge } from "@shared/hrRadarStage";
+import { buildHrRadarCardViewModel, selectTopPriority, topPriorityReasonLabel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
 import { HrRadarFullLadderTable } from "@/components/mlb/hr-radar/HrRadarFullLadderTable";
-import { hrTierTheme, TierRail, tierFromLadderSection } from "@/components/mlb/hrRadarVisuals";
-
-// Tailwind classes per badge tone — UI styling only; labels/semantics come
-// from the shared HR_RADAR_BADGE_META (single source of truth).
-const HR_BADGE_TONE_CLASS: Record<HrRadarBadgeTone, string> = {
-  fire: "bg-red-500/15 text-red-400 border-red-500/30",
-  warn: "bg-orange-500/15 text-orange-300 border-orange-500/30",
-  info: "bg-blue-500/15 text-blue-300 border-blue-500/30",
-  good: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-};
+import { hrTierTheme, TierRail, tierFromLadderSection, badgeToneClasses } from "@/components/mlb/hrRadarVisuals";
 
 // ── Signal-first inning pill (LiveLocks MLB UX Phase 1) ───────────────
 // Pure read of the row's currentInning (preferred) or detectedInning.
@@ -458,9 +449,6 @@ function isUserSafeReason(s: string): boolean {
   if (/^(PATH[_ ]?[A-Z0-9_]+|WATCH:|BUILD:|FORM:|PRE[_ ]HR[_ ]DANGER|HrShaped|BsZ|Score\d|Conv\s+\d+%|Profile\d|Danger\d)/i.test(t)) return false;
   // FSM / prob-rail promotion reason codes that leak as a "reason".
   if (/(prob[_ ]?rail|bet[_ ]?now|dynamic_|pitcher_fade|attack_sustained|_sustained|_awaiting)/i.test(t)) return false;
-  // Bare engine identifier code: lowercase snake_case / colon-joined, no spaces
-  // (e.g. "prob_rail:bet_now_attack_sustained"). Real user copy has spaces.
-  if (/^[a-z][a-z0-9]*([_:][a-z0-9]+)+$/.test(t)) return false;
   return true;
 }
 
@@ -487,6 +475,11 @@ export interface CardProps {
   /** List-only affordance — opens the full-screen drawer (adds admin diagnostics
    * on top of this same card). Omitted when LadderCard already IS the drawer. */
   onOpenDrawer?: () => void;
+  /** Cross-tier board priority pick (see `selectTopPriority`) — this ONE live
+   * card, out of every section, is the board's single highest-conviction +
+   * most-urgent play right now. Renders a small ribbon; never changes
+   * section/tier placement. */
+  isTopPriority?: boolean;
 }
 
 /**
@@ -643,7 +636,7 @@ function PregameDriverChips({ entry }: { entry: HrRadarLadderEntry }) {
   );
 }
 
-export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted, onOpenDrawer }: CardProps) {
+export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted, onOpenDrawer, isTopPriority = false }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
   // the (inning, half) pair for legacy rows that pre-date the label fields.
@@ -860,11 +853,18 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
 
   return (
     <div
-      className={`flex gap-3 rounded-2xl border ${t.cardTint} bg-card p-3.5 transition-all hover:brightness-110 ${t.tier === "fire" && !isResolved ? "hr-fire-pulse" : ""}`}
+      className={`flex gap-3 rounded-2xl border ${t.cardTint} bg-card p-3.5 transition-all hover:brightness-110 ${t.tier === "fire" && !isResolved ? "hr-fire-pulse" : ""} ${!isResolved && isTopPriority ? "ring-1 ring-yellow-400/50" : ""}`}
       style={{ boxShadow: `0 0 14px ${t.hex}${t.hot ? "59" : "26"}`, borderColor: `${t.hex}55` }}
       data-testid={`ladder-card-${section}-${entry.playerId}`}
     >
       <TierRail tier={t.tier} />
+      {/* Content column — everything except the tier rail stacks vertically
+          here. The outer card shell is a horizontal flex row (rail + this
+          column); without this wrapper every block below the header (window
+          strength, reasons, breakdown, trajectory, actions, ...) becomes a
+          sibling flex ITEM of the rail and lays out as new columns instead
+          of stacking, blowing card content out past the viewport width. */}
+      <div className="flex flex-col min-w-0 flex-1 gap-0">
       <div className="flex items-start justify-between gap-2 min-w-0 flex-1">
         {/* Small stage icon — instant visual tier recognition, paired with the
             hero number below (Pre-Game Power treatment: icon + label under the
@@ -881,6 +881,19 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
+            {/* Phase 2 — cross-tier board priority pick (client-computed
+                display rank, never an engine/tier value). Leads the badge row
+                so the single best play across the whole board — not just its
+                own section — is unmistakable at a glance. */}
+            {!isResolved && isTopPriority && (
+              <span
+                className="text-[8px] font-black px-1.5 py-0.5 rounded-full border shrink-0 whitespace-nowrap bg-yellow-400/15 text-yellow-300 border-yellow-400/40"
+                data-testid={`badge-top-priority-${entry.playerId}`}
+                title="Highest board priority right now — combines tier, score, momentum, and time remaining"
+              >
+                ⭐ TOP PRIORITY
+              </span>
+            )}
             {/* Step 5 — canonical badge set, server-derived and rendered
                 verbatim from shared/hrRadarStage.ts. "HR Max Window" is one of
                 these badges, not a ladder stage of its own. */}
@@ -890,7 +903,7 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
               return (
                 <span
                   key={b}
-                  className={`text-[8px] font-black px-1.5 py-0.5 rounded-full border shrink-0 whitespace-nowrap ${HR_BADGE_TONE_CLASS[meta.tone]}`}
+                  className={`text-[8px] font-black px-1.5 py-0.5 rounded-full border shrink-0 whitespace-nowrap ${badgeToneClasses(meta.tone)}`}
                   data-testid={`badge-${b.replace(/_/g, "-")}-${entry.playerId}`}
                   title={meta.title}
                 >
@@ -1464,6 +1477,7 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
           </Button>
         </div>
       )}
+      </div>{/* /content column */}
     </div>
   );
 }
@@ -1853,6 +1867,11 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
   const drawerAccepted = drawerRow
     ? accepted.has(entryDismissKey(drawerRow.playerId, drawerRow.gameId))
     : false;
+  // Phase 2 — cross-tier board priority: the single live card (any of
+  // FIRE/READY/BUILD/TRACK) with the highest sortRank across the WHOLE
+  // ladder, not just its own section. Purely a display pick — never touches
+  // engine tier/score, never reorders sections.
+  const topPriority = selectTopPriority(tableRows);
 
   return (
     <div className="space-y-3" data-testid="hr-radar-ladder">
@@ -1948,6 +1967,25 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
         </div>
         </div>
       )}
+      {/* Phase 2 — cross-tier board priority callout. Names the single
+          highest-conviction + most-urgent live play across every section by
+          name, so it's unmistakable even before scrolling to find its
+          "⭐ TOP PRIORITY" ribbon inside its own section below. */}
+      {topPriority && (
+        <button
+          type="button"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-yellow-400/30 bg-yellow-400/[0.06] text-left hover:bg-yellow-400/[0.1] transition-colors"
+          onClick={() => setDrawerRow(topPriority)}
+          data-testid="ladder-top-priority-banner"
+        >
+          <span className="text-sm shrink-0" aria-hidden="true">⭐</span>
+          <span className="text-[11px] text-yellow-200/90 truncate">
+            <span className="font-bold uppercase tracking-wide">Top priority: </span>
+            <span className="font-semibold text-foreground" data-testid="text-top-priority-name">{topPriority.playerName}</span>
+            <span className="text-muted-foreground"> — {topPriorityReasonLabel(topPriority)}</span>
+          </span>
+        </button>
+      )}
       {/* Compact command table — sortable rows, click to open the deep
           diagnostic drawer. Replaces the stack of giant expanded section
           cards. */}
@@ -1960,6 +1998,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           onPass={handlePass}
           onAccept={handleAccept}
           isAccepted={(entry) => accepted.has(entryDismissKey(entry.playerId, entry.gameId))}
+          topPriorityId={topPriority?.id ?? null}
         />
       )}
       {counts.total === 0 && (

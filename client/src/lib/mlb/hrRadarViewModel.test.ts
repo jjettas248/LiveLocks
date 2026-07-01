@@ -9,6 +9,8 @@
 import {
   buildHrRadarCardViewModel,
   selectQuickDecide,
+  selectTopPriority,
+  topPriorityReasonLabel,
   compareByImportance,
   HR_PUBLIC_STAGE_LABEL,
 } from "@/lib/mlb/hrRadarViewModel";
@@ -150,6 +152,50 @@ console.log("\nhot seat selection");
   ];
   const onlyTrackSel = selectQuickDecide(onlyTrack);
   assert("track shown when nothing higher (no hero, queue has track)", onlyTrackSel.hero == null && onlyTrackSel.queue.length === 2);
+}
+
+// ── 5b. Momentum/urgency tie-breaking within a stage ───────────────────────
+console.log("\nmomentum/urgency tie-breaking");
+{
+  const cooling = buildHrRadarCardViewModel(entry({ playerId: "cool", userStage: "ready", displayCurrentScore10: 7.0, momentumLabel: "cooling_off" }));
+  const heating = buildHrRadarCardViewModel(entry({ playerId: "hot", userStage: "ready", displayCurrentScore10: 7.0, momentumLabel: "heating_up" }));
+  assert("same score, heating up outranks cooling off", compareByImportance(heating, cooling) < 0);
+
+  const flatFar = buildHrRadarCardViewModel(entry({ playerId: "far", userStage: "build", displayCurrentScore10: 5.0, remainingPAExpectation: 4 }));
+  const flatUrgent = buildHrRadarCardViewModel(entry({ playerId: "urgent", userStage: "build", displayCurrentScore10: 5.0, remainingPAExpectation: 0.5 }));
+  assert("same score, ~1 PA left outranks plenty of PAs left", compareByImportance(flatUrgent, flatFar) < 0);
+
+  // Bonuses can never cross a stage boundary — a red-hot TRACK row still
+  // never outranks the flattest BUILD row.
+  const hottestTrack = buildHrRadarCardViewModel(entry({ playerId: "hottrack", userStage: "track", displayCurrentScore10: 10, momentumLabel: "heating_up", remainingPAExpectation: 0.5 }));
+  const flattestBuild = buildHrRadarCardViewModel(entry({ playerId: "flatbuild", userStage: "build", displayCurrentScore10: 0 }));
+  assert("momentum/urgency never crosses a stage boundary", compareByImportance(flattestBuild, hottestTrack) < 0);
+}
+
+// ── 5c. Cross-tier board priority pick (Full Ladder, not just Hot Seat) ────
+console.log("\ncross-tier board priority");
+{
+  // With no FIRE/READY on the board, the best BUILD row is still #1 overall —
+  // not just #1 inside its own section.
+  const noFireBoard = [
+    buildHrRadarCardViewModel(entry({ playerId: "t1", userStage: "track", displayCurrentScore10: 9 })),
+    buildHrRadarCardViewModel(entry({ playerId: "b1", userStage: "build", displayCurrentScore10: 3 })),
+  ];
+  const pick = selectTopPriority(noFireBoard);
+  assert("best BUILD beats best TRACK even with a lower score", pick?.playerId === "b1");
+
+  // Resolved rows (cashed/missed) never win the live priority pick.
+  const withResolved = [
+    buildHrRadarCardViewModel(entry({ playerId: "cashed1", userStage: "resolved", outcome: "called_hit", displayCurrentScore10: 10 }), { sectionHint: "cashed" }),
+    buildHrRadarCardViewModel(entry({ playerId: "t2", userStage: "track", displayCurrentScore10: 1 })),
+  ];
+  assert("resolved rows never win the live priority pick", selectTopPriority(withResolved)?.playerId === "t2");
+
+  // Empty / all-resolved board → no pick, not a crash.
+  assert("no live rows → no top priority", selectTopPriority([withResolved[0]]) == null);
+
+  const labeled = buildHrRadarCardViewModel(entry({ playerId: "l1", userStage: "ready", displayCurrentScore10: 8, momentumLabel: "heating_up" }));
+  assert("reason label includes stage and momentum", topPriorityReasonLabel(labeled) === "Ready · heating up");
 }
 
 // ── 6. Stage-movement detection (dopamine layer) ───────────────────────────
