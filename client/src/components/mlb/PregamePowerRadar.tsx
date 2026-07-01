@@ -9,8 +9,9 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Flame, Zap, Target, Wind, ShieldAlert, Lock } from "lucide-react";
+import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, Landmark } from "lucide-react";
 import { PregameRadarRecord, PregameWinsSection } from "./PregameWinCard";
+import { PregameHistoryDrawer } from "./PregameHistoryDrawer";
 
 type Tier = "track" | "watch" | "power_watch" | "strong" | "elite" | "nuclear";
 type Market = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
@@ -60,6 +61,27 @@ interface PlayerParkWindFit {
   confidence: "high" | "medium" | "low" | "none";
 }
 
+// Best-odds display contract (PregameMarketEdgeContext on the server). Read-only,
+// cache-sourced — never blends into score10. Renders verbatim when present.
+interface MarketEdgeContext {
+  line?: number | null;
+  odds?: number | null;
+  impliedProbability?: number | null;
+  sportsbook?: string | null;
+  oddsUpdatedAt?: string | null;
+}
+
+// Outcome/live-bridge fields — server-stamped, wins-only semantics mirrored
+// from the Pregame Radar Win Attribution module. `hitHr` flips the card to a
+// cashed visual treatment in real time as the 30s poll picks up the grade.
+interface PregameOutcome {
+  hitHr?: boolean;
+  outcome?: "pregame_win" | "calibration_miss";
+  userVisible?: boolean;
+  hrInning?: number | null;
+  hrHalf?: "top" | "bottom" | null;
+}
+
 interface PregameSignal {
   signalId: string;
   gameId: string;
@@ -76,6 +98,7 @@ interface PregameSignal {
   marketSetups?: MarketSetup[];
   parkContext?: ParkContext | null;
   playerParkWindFit?: PlayerParkWindFit | null;
+  marketEdgeContext?: MarketEdgeContext | null;
   score10: number;
   tier: Tier;
   drivers: PowerDriver[];
@@ -84,6 +107,22 @@ interface PregameSignal {
   lineupStatus: string;
   becameLiveReady?: boolean;
   becameLiveFire?: boolean;
+  outcomes?: PregameOutcome | null;
+}
+
+const SPORTSBOOK_LABELS: Record<string, string> = {
+  draftkings: "DraftKings",
+  fanduel: "FanDuel",
+  betmgm: "BetMGM",
+  caesars: "Caesars",
+  pointsbetus: "PointsBet",
+  hardrockbet: "Hard Rock",
+  fanatics: "Fanatics",
+  espnbet: "ESPN BET",
+};
+
+function formatAmericanOdds(odds: number): string {
+  return odds > 0 ? `+${odds}` : `${odds}`;
 }
 
 interface RadarResponse {
@@ -188,6 +227,7 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
 
   return (
     <div className="space-y-3" data-testid="section-pregame-power-radar">
+      <PregameHistoryDrawer />
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-lg font-bold flex items-center gap-2">
@@ -257,6 +297,14 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
 
+  // Cashed HR — purely visual flip to a green "win" treatment. Server-stamped
+  // outcome only (outcomes.hitHr); the card never derives win/loss itself.
+  const hitHr = s.outcomes?.hitHr === true;
+  const cashedColor = "#10b981";
+
+  const edge = s.marketEdgeContext;
+  const hasOdds = edge != null && edge.odds != null && edge.sportsbook;
+
   // Prefer server-stamped qualitative setups. Fall back to bare market tags (no
   // qualitative label, no raw score) for older payloads — never compute a tier here.
   const marketSetups: MarketSetup[] =
@@ -271,8 +319,11 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
 
   return (
     <Card
-      className="p-3.5"
-      style={{ boxShadow: `0 0 14px ${style.glow}`, borderColor: style.color + "55" }}
+      className={`p-3.5 transition-colors duration-500 ${hitHr ? "bg-emerald-500/10" : ""}`}
+      style={{
+        boxShadow: hitHr ? `0 0 22px rgba(16,185,129,0.45)` : `0 0 14px ${style.glow}`,
+        borderColor: hitHr ? cashedColor + "99" : style.color + "55",
+      }}
       data-testid={`card-pregame-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}
     >
       <div className="flex items-start justify-between gap-3">
@@ -285,7 +336,18 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
             {s.battingOrderSlot != null && (
               <Badge variant="outline" className="text-[10px] px-1.5 py-0">#{s.battingOrderSlot}</Badge>
             )}
-            {isLocked && (
+            {hitHr && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-300 animate-pulse"
+                data-testid={`pregame-cashed-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}
+              >
+                <PartyPopper className="w-3 h-3" /> HOMERED
+                {s.outcomes?.hrInning != null
+                  ? ` · ${s.outcomes.hrHalf === "top" ? "Top" : "Bot"} ${s.outcomes.hrInning}`
+                  : ""}
+              </span>
+            )}
+            {isLocked && !hitHr && (
               <span className="inline-flex items-center gap-1 text-[10px] text-amber-300/90">
                 <Lock className="w-3 h-3" /> Locked at first pitch
               </span>
@@ -306,12 +368,27 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
           </div>
         </div>
         <div className="text-right shrink-0">
-          <div className="text-xl font-extrabold tabular-nums" style={{ color: style.color }}>
+          <div className="text-xl font-extrabold tabular-nums" style={{ color: hitHr ? cashedColor : style.color }}>
             {s.score10.toFixed(1)}
           </div>
-          <div className="inline-flex items-center gap-1 text-[10px] font-semibold" style={{ color: style.color }}>
-            <TierIcon className="w-3 h-3" /> {style.label}
+          <div
+            className="inline-flex items-center gap-1 text-[10px] font-semibold"
+            style={{ color: hitHr ? cashedColor : style.color }}
+          >
+            {hitHr ? <PartyPopper className="w-3 h-3" /> : <TierIcon className="w-3 h-3" />}
+            {hitHr ? "Cashed" : style.label}
           </div>
+          {hasOdds && (
+            <div
+              className="inline-flex items-center gap-1 text-[10px] text-muted-foreground mt-1"
+              title={edge.line != null ? `Line ${edge.line}` : undefined}
+              data-testid={`pregame-best-odds-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}
+            >
+              <Landmark className="w-3 h-3" />
+              {SPORTSBOOK_LABELS[edge!.sportsbook!.toLowerCase()] ?? edge!.sportsbook}
+              <span className="font-semibold">{formatAmericanOdds(edge!.odds!)}</span>
+            </div>
+          )}
         </div>
       </div>
 

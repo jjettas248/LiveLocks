@@ -1263,37 +1263,62 @@ async function getMLBEvents(): Promise<any[]> {
   throw new Error(`MLB events fetch failed: all ${ODDS_API_KEYS.length} keys returned errors (${lastErr})`);
 }
 
+function matchMLBEventId(events: any[], playerTeamInput: string, opponentTeamInput: string): string | null {
+  const playerTeam = MLB_TEAM_FULL_NAMES[playerTeamInput.toUpperCase()] ?? playerTeamInput;
+  const opponentTeam = MLB_TEAM_FULL_NAMES[opponentTeamInput.toUpperCase()] ?? opponentTeamInput;
+
+  for (const ev of events) {
+    const evHome: string = ev.home_team ?? "";
+    const evAway: string = ev.away_team ?? "";
+    const playerIsHome = teamsMatch(playerTeam, evHome) && teamsMatch(opponentTeam, evAway);
+    const playerIsAway = teamsMatch(playerTeam, evAway) && teamsMatch(opponentTeam, evHome);
+    if (playerIsHome || playerIsAway) return ev.id as string;
+  }
+
+  for (const ev of events) {
+    if (teamsMatch(playerTeam, ev.home_team ?? "") || teamsMatch(playerTeam, ev.away_team ?? "")) {
+      return ev.id as string;
+    }
+  }
+
+  return null;
+}
+
 export async function resolveMLBOddsEventId(
   playerTeamInput: string,
   opponentTeamInput: string
 ): Promise<string | null> {
   try {
     const events = await getMLBEvents();
-    const playerTeam = MLB_TEAM_FULL_NAMES[playerTeamInput.toUpperCase()] ?? playerTeamInput;
-    const opponentTeam = MLB_TEAM_FULL_NAMES[opponentTeamInput.toUpperCase()] ?? opponentTeamInput;
-
-    for (const ev of events) {
-      const evHome: string = ev.home_team ?? "";
-      const evAway: string = ev.away_team ?? "";
-      const playerIsHome = teamsMatch(playerTeam, evHome) && teamsMatch(opponentTeam, evAway);
-      const playerIsAway = teamsMatch(playerTeam, evAway) && teamsMatch(opponentTeam, evHome);
-      if (playerIsHome || playerIsAway) {
-        console.log(`[Odds MLB] Matched event: ${ev.away_team} @ ${ev.home_team} → ${ev.id}`);
-        return ev.id as string;
-      }
+    const id = matchMLBEventId(events, playerTeamInput, opponentTeamInput);
+    if (id) {
+      console.log(`[Odds MLB] Matched event: ${playerTeamInput} vs ${opponentTeamInput} → ${id}`);
+    } else {
+      console.warn(`[Odds MLB] No event found for ${playerTeamInput} vs ${opponentTeamInput}`);
     }
-
-    for (const ev of events) {
-      if (teamsMatch(playerTeam, ev.home_team ?? "") || teamsMatch(playerTeam, ev.away_team ?? "")) {
-        console.log(`[Odds MLB] Fuzzy team match: ${ev.away_team} @ ${ev.home_team} → ${ev.id}`);
-        return ev.id as string;
-      }
-    }
-
-    console.warn(`[Odds MLB] No event found for ${playerTeam} vs ${opponentTeam}`);
-    return null;
+    return id;
   } catch (err) {
     console.error("[Odds MLB] resolveMLBOddsEventId error:", err);
+    return null;
+  }
+}
+
+/**
+ * Cache-only variant — resolves an odds-provider event id from the already-fetched
+ * MLB events list WITHOUT ever triggering a live API call. Returns null (rather
+ * than fetching) when the events cache is empty or stale. For presentation-only
+ * read paths (e.g. Pre-Game Power Radar odds display) that must never add API
+ * latency/quota cost to a request.
+ */
+export function resolveMLBOddsEventIdFromCache(
+  playerTeamInput: string,
+  opponentTeamInput: string
+): string | null {
+  const cached = cache.get("mlb_events_list");
+  if (!isFresh(cached, EVENTS_TTL)) return null;
+  try {
+    return matchMLBEventId(cached!.data, playerTeamInput, opponentTeamInput);
+  } catch {
     return null;
   }
 }

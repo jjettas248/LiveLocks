@@ -622,10 +622,14 @@ export async function registerRoutes(
         });
       }
       const signals = Array.from(snapshot.signals.values());
-      return res.json(buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+      const resp = buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
         gamesScanned: snapshot.gamesScanned, battersEvaluated: snapshot.battersEvaluated,
         ...snapshot.coverage,
-      }, false));
+      }, false);
+      // Display-only best-odds enrichment (cache-read, never mutates the snapshot or score10/tier).
+      const { attachBestOddsDisplay } = await import("./mlb/pregamePowerRadar/oddsDisplay");
+      resp.signals = await attachBestOddsDisplay(resp.signals).catch(() => resp.signals);
+      return res.json(resp);
     } catch (err) {
       console.error("[mlb/pregame-power-radar]", err);
       return res.status(500).json({ error: "Failed to fetch pre-game power radar" });
@@ -647,9 +651,12 @@ export async function registerRoutes(
         });
       }
       const signals = Array.from(snapshot.signals.values()).filter((s) => s.gameId === gameId);
-      return res.json(buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+      const resp = buildResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
         gamesScanned: 1, battersEvaluated: signals.length, ...snapshot.coverage,
-      }, false));
+      }, false);
+      const { attachBestOddsDisplay } = await import("./mlb/pregamePowerRadar/oddsDisplay");
+      resp.signals = await attachBestOddsDisplay(resp.signals).catch(() => resp.signals);
+      return res.json(resp);
     } catch (err) {
       console.error("[mlb/pregame-power-radar/:gameId]", err);
       return res.status(500).json({ error: "Failed to fetch pre-game power radar for game" });
@@ -718,17 +725,20 @@ export async function registerRoutes(
 
   // Public: Pregame Radar Record — wins-only. A pregame target that homers is a
   // public win; one that misses is calibration-only and never appears here.
-  app.get("/api/mlb/pregame-radar/record", requireMLBAccess, async (_req, res) => {
+  // Honors ?date=YYYY-MM-DD (ET) so the win-history drawer can look back at
+  // prior slates; defaults to today when omitted.
+  app.get("/api/mlb/pregame-radar/record", requireMLBAccess, async (req, res) => {
+    const { todayET } = await import("./utils/dateUtils");
+    const dateET = String(req.query.date ?? todayET());
     try {
       const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
-      const { getPregameRadarPublicStats } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
+      const { getPregameRadarPublicStats } = await import("./mlb/pregamePowerRadar/statsService");
       await getRadarSnapshot().catch(() => null);
-      return res.json(await getPregameRadarPublicStats());
+      return res.json(await getPregameRadarPublicStats(dateET));
     } catch (e: any) {
       console.error("[mlb/pregame-radar/record]", e?.message);
-      const { todayET } = await import("./utils/dateUtils");
       return res.json({
-        dateET: todayET(),
+        dateET,
         pregameWinsToday: 0,
         firstAbPregameWinsToday: 0,
         pregameWinsLast7Days: 0,
