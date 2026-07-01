@@ -22,6 +22,7 @@
 
 import type { CanonicalHrRadarState } from "./hrRadarCanonicalStore";
 import { buildHrRadarDisplayContract } from "./hrRadarDisplayContract";
+import { deriveHrRadarDisplayGrade } from "@shared/hrRadarStage";
 
 type LadderEntry = Record<string, any> & { playerId: string; gameId: string };
 
@@ -92,6 +93,8 @@ function synthesizeEntry(s: CanonicalHrRadarState, nowMs: number): LadderEntry {
     currentStatus: "live",
     userStage: s.userStage,
     currentSignalScore10: s.displayScore10 ?? null,
+    displayCurrentScore10: s.displayScore10 ?? null,
+    displayGrade: deriveHrRadarDisplayGrade(s.userStage, s.displayScore10 ?? null),
     conversionProbability: null,
     detectedInning: s.detectedInning ?? null,
     currentInning: s.latestEvidenceInning ?? s.detectedInning ?? null,
@@ -165,6 +168,13 @@ export function applyCanonicalFreshnessOverlay(
           e.displayCurrentScore10 = canon.displayScore10;
           diagnostics.scoreRefreshed++;
         }
+        // Re-derive the letter grade from the (possibly refreshed) stage +
+        // score — otherwise a just-promoted row would carry the stale grade
+        // computed at the last DB reconcile, contradicting its new stage.
+        e.displayGrade = deriveHrRadarDisplayGrade(
+          canon.userStage,
+          e.displayCurrentScore10 ?? null,
+        );
         const age = ageMsOf(canon.updatedAt, nowMs);
         const evidenceAge = ageMsOf(canon.latestEvidenceAt, nowMs);
         e.freshSource = "canonical";

@@ -18,7 +18,7 @@ import {
   type HrQualifyingSignalType,
 } from "./mlb/hrRadarUserStage";
 import { calculateRemainingMinutes } from "./minutesModel";
-import type { HrRadarBadge } from "@shared/hrRadarStage";
+import type { HrRadarBadge, HrRadarDisplayGrade } from "@shared/hrRadarStage";
 import { getPlayerUsage, getTeamDefenseMatchup, computeUsageAdjustment, computeDefenseMultiplier } from "./services/nbaStatsService";
 import { getPlayoffRotationProfile, type PlayoffRotationProfile } from "./services/nbaRotationHistoryService";
 import { classifyArchetype as classifyNBAArchetype, type NBAArchetype, VARIANCE_MULTIPLIERS, MINUTES_FRAGILITY_MULTIPLIERS, CORRELATION_DEFAULTS, COMBO_VARIANCE_EXTRA, isVolatileArchetype, isImpactedArchetype, isStableArchetype, getSafetyCeiling, getPlayoffSafetyCeiling, getPlayoffFragilityMultiplier } from "./nba/archetypes";
@@ -6466,6 +6466,7 @@ export class DatabaseStorage implements IStorage {
         displayInitialScore10: enrichment.displayInitialScore10,
         displayCurrentScore10: enrichment.displayCurrentScore10,
         displayPeakScore10: enrichment.displayPeakScore10,
+        displayGrade: enrichment.displayGrade,
         displayCap10: enrichment.displayCap10,
         displayCapBadgeLabel: enrichment.displayCapBadgeLabel,
         displayCapReason: enrichment.displayCapReason,
@@ -6871,6 +6872,12 @@ export interface HrRadarLadderEntry {
   displayInitialScore10: number | null;
   displayCurrentScore10: number | null;
   displayPeakScore10: number | null;
+  /**
+   * Server-computed letter grade (stage × displayCurrentScore10) — mirrors
+   * MLB props' `displayGrade`. Null for resolved rows. Read verbatim on the
+   * client; never re-derived from stage alone.
+   */
+  displayGrade: HrRadarDisplayGrade | null;
   /** /10 ceiling applied (null when no cap was applied). */
   displayCap10: number | null;
   /** Pill label for capped rows (null when uncapped). */

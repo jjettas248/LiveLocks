@@ -46,6 +46,8 @@ export interface HrRadarCardViewModel {
   /** Server-stamped /10 score (read, never computed). */
   score10: number;
   scoreLabel: string;
+  /** Server-computed letter grade (stage x score10), read verbatim. */
+  displayGrade: string | null;
   /** One-line "why now" — verbatim top server driver. */
   headline: string;
   /** Secondary context line (inning / next-PA), or "". */
@@ -129,7 +131,7 @@ function publicStage(
 // reformat-only chips for pregame power and live contact. Never invents a tag.
 // Formal badges keep their own tone (HR_RADAR_BADGE_META); the reformat-only
 // chips aren't part of that taxonomy so they get a neutral "info" tone.
-function buildDriverChips(entry: HrRadarLadderEntry, drivers: string[]): HrDriverChip[] {
+export function buildDriverChips(entry: HrRadarLadderEntry, drivers: string[]): HrDriverChip[] {
   const chips: HrDriverChip[] = [];
   const seen = new Set<string>();
   const push = (label: string, tone: HrRadarBadgeTone) => {
@@ -248,6 +250,7 @@ export function buildHrRadarCardViewModel(
     stage,
     score10,
     scoreLabel: score10.toFixed(1),
+    displayGrade: d.displayGrade,
     headline,
     subhead,
     nextEventLabel: nextEventFor(stage, d.nextEscalation),

@@ -43,7 +43,12 @@ export const HR_RADAR_GOLDMASTER_V1: boolean = (() => {
 // alias so existing importers keep working while there is exactly ONE canonical
 // stage definition across server + client (Step 5 consolidation).
 import type { CanonicalHrRadarStage } from "@shared/hrRadarStage";
-import { deriveHrRadarBadges, type HrRadarBadge } from "@shared/hrRadarStage";
+import {
+  deriveHrRadarBadges,
+  deriveHrRadarDisplayGrade,
+  type HrRadarBadge,
+  type HrRadarDisplayGrade,
+} from "@shared/hrRadarStage";
 export type HrRadarUserStage = CanonicalHrRadarStage;
 
 // ── Path-based promotion table ─────────────────────────────────────────────
@@ -683,6 +688,13 @@ export interface UserStageEnrichment {
   displayInitialScore10: number | null;
   displayCurrentScore10: number | null;
   displayPeakScore10: number | null;
+  /**
+   * Server-computed letter grade — combines `userStage` with
+   * `displayCurrentScore10` (shared/hrRadarStage.ts deriveHrRadarDisplayGrade),
+   * mirroring MLB props' `displayGrade`. Null for resolved rows. The client
+   * reads this verbatim and must never re-derive a grade from stage alone.
+   */
+  displayGrade: HrRadarDisplayGrade | null;
   /** /10 ceiling applied (null when no cap was applied). */
   displayCap10: number | null;
   /** Pill label for capped rows (null when uncapped). */
@@ -977,6 +989,7 @@ export function enrichWithUserStage(input: {
     alertPath: input.alertPath ?? null,
     parkBoost,
   });
+  const displayGrade = deriveHrRadarDisplayGrade(userStage, displayCurrentScore10);
 
   return {
     userStage,
@@ -991,6 +1004,7 @@ export function enrichWithUserStage(input: {
     displayInitialScore10,
     displayCurrentScore10,
     displayPeakScore10,
+    displayGrade,
     displayCap10,
     displayCapBadgeLabel,
     displayCapReason,

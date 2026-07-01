@@ -58,6 +58,9 @@ export interface HrRadarRowInput {
   isGameFinal?: boolean | null;
   hasLiveABContext?: boolean | null;
   plateAppearancesTracked?: number | null;
+  // Server-computed letter grade (stage x displayCurrentScore10). Passed
+  // through verbatim — this module never derives a grade from stage/score.
+  displayGrade?: string | null;
   // Score fields (0-10 preferred, 0-100 readiness fallback).
   displayCurrentScore10?: number | null;
   currentSignalScore10?: number | null;
@@ -389,6 +392,11 @@ export interface HrRadarDisplayState {
   displayScore10: number | null;
   /** "9.5/10" or null. */
   scoreLabel: string | null;
+  /**
+   * Server-computed letter grade, read verbatim (never re-derived here).
+   * Null for resolved rows or when the server hasn't stamped one yet.
+   */
+  displayGrade: string | null;
   /** Human action-strength label ("Strong setup", "Live call", …). */
   actionStrengthLabel: string;
   /**
@@ -448,6 +456,7 @@ export function mapHrRadarRowToDisplayState(
     recordEligible: lower(row.officialSignalStage) === "fire",
     displayScore10,
     scoreLabel: formatScore10Label(displayScore10),
+    displayGrade: row.displayGrade ?? null,
     actionStrengthLabel: ACTION_STRENGTH_LABEL[stage],
     hrChancePct,
     drivers: deriveDrivers(row),
