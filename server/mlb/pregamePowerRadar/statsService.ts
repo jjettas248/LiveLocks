@@ -6,6 +6,7 @@
 
 import { storage } from "../../storage";
 import { todayET, daysAgoET } from "../../utils/dateUtils";
+import { getMlbSlateDateET } from "../gameDiscoveryService";
 import { getSnapshot } from "./pregamePowerRadarStore";
 import { rowToSignal } from "./pregamePersistence";
 import { getRadarSnapshot } from "./pregamePowerRadarService";
@@ -65,8 +66,8 @@ function currentSnapshotSignalsForDate(dateET: string): PregamePowerSignal[] {
   return Array.from(snapshot.signals.values());
 }
 
-export async function getPregameRadarPublicStats(dateET: string = todayET()): Promise<PregameRadarPublicStats> {
-  if (dateET === todayET()) await getRadarSnapshot().catch(() => null);
+export async function getPregameRadarPublicStats(dateET: string = getMlbSlateDateET()): Promise<PregameRadarPublicStats> {
+  if (dateET === getMlbSlateDateET()) await getRadarSnapshot().catch(() => null);
 
   const todaySignals = uniqueBySignalId([
     ...await loadPregamePowerSignalsByDate(dateET),
@@ -76,7 +77,7 @@ export async function getPregameRadarPublicStats(dateET: string = todayET()): Pr
   const last7Dates = datesBack(7);
   const last7Signals = uniqueBySignalId([
     ...await loadPregamePowerSignalsByDates(last7Dates),
-    ...currentSnapshotSignalsForDate(todayET()),
+    ...currentSnapshotSignalsForDate(getMlbSlateDateET()),
   ]);
 
   return buildPublicStats(todaySignals, last7Signals, dateET);
@@ -92,7 +93,7 @@ export async function getPregameRadarCalibrationStats(days: number = 7): Promise
 
   const signals = uniqueBySignalId([
     ...await loadPregamePowerSignalsByDates(dates),
-    ...currentSnapshotSignalsForDate(todayET()),
+    ...currentSnapshotSignalsForDate(getMlbSlateDateET()),
   ]);
 
   return buildCalibrationStats(signals, { startET, endET });
@@ -103,11 +104,11 @@ export async function getPregameRadarCalibrationStats(days: number = 7): Promise
  * pattern as getPregameRadarPublicStats). Powers the daily cashed log for both
  * today and historical dates.
  */
-export async function getPregameRadarWinsForDate(dateET: string = todayET()): Promise<{
+export async function getPregameRadarWinsForDate(dateET: string = getMlbSlateDateET()): Promise<{
   pregameRadarWins: PregameRadarWinItem[];
   firstAbPregameWins: PregameRadarWinItem[];
 }> {
-  if (dateET === todayET()) await getRadarSnapshot().catch(() => null);
+  if (dateET === getMlbSlateDateET()) await getRadarSnapshot().catch(() => null);
 
   const signals = uniqueBySignalId([
     ...await loadPregamePowerSignalsByDate(dateET),

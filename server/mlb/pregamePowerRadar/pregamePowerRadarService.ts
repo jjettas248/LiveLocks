@@ -4,7 +4,7 @@
 // request when stale (TTL 10 min normally; 2 min within 2h of first pitch).
 // The DB fallback path is wired in Phase 2 via `setDbFallback`.
 
-import { todayET } from "../../utils/dateUtils";
+import { getMlbSlateDateET } from "../gameDiscoveryService";
 import { buildPregamePowerRadar } from "./buildPregamePowerRadar";
 import {
   getSnapshot,
@@ -46,7 +46,7 @@ export interface ResolvedSnapshot {
  * Never throws — on rebuild failure returns the stale snapshot (or DB fallback).
  */
 export async function getRadarSnapshot(): Promise<ResolvedSnapshot> {
-  const sessionDate = todayET();
+  const sessionDate = getMlbSlateDateET();
   let snapshot = getSnapshot();
 
   const wrongDate = !!snapshot && snapshot.sessionDate !== sessionDate;
@@ -92,7 +92,7 @@ let backgroundRefreshInFlight = false;
  * network-heavy rebuild cost inline.
  */
 export function peekRadarSnapshot(): PregamePowerSnapshot | null {
-  const sessionDate = todayET();
+  const sessionDate = getMlbSlateDateET();
   const snapshot = getSnapshot();
   const wrongDate = !!snapshot && snapshot.sessionDate !== sessionDate;
   const ttl = nearFirstPitch(snapshot) ? TTL_NEAR_FIRST_PITCH_MS : TTL_NORMAL_MS;

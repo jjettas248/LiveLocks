@@ -14,31 +14,53 @@ export interface MLBGame {
   espnStatus?: string;
 }
 
-function getESTSlateDate(): Date {
-  const now = new Date();
-  const estOffset = -5 * 60;
-  const estMs = now.getTime() + (now.getTimezoneOffset() + estOffset) * 60 * 1000;
-  const est = new Date(estMs);
-  if (est.getHours() < 6) {
-    est.setDate(est.getDate() - 1);
+/** ET wall-clock parts for a given instant (DST-correct, via Intl — not a hardcoded offset). */
+function getETParts(now: Date): { year: number; month: number; day: number; hour: number } {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  });
+  const parts: Record<string, string> = {};
+  for (const p of fmt.formatToParts(now)) {
+    if (p.type !== "literal") parts[p.type] = p.value;
   }
-  return est;
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: parts.hour === "24" ? 0 : Number(parts.hour), // Intl can emit "24" for midnight
+  };
+}
+
+/**
+ * Resolves the MLB "slate date" in ET: the calendar date games on the current
+ * scoreboard belong to. Rolls over at 6am ET (not midnight) so games that
+ * finish after midnight stay attributed to the previous night's slate while
+ * still finishing / being graded. DST-correct (Intl-based, not a hardcoded
+ * EST offset). `now` is injectable for tests; defaults to the real clock.
+ */
+export function getMlbSlateDateET(now: Date = new Date()): string {
+  const { year, month, day, hour } = getETParts(now);
+  // Anchor at noon UTC on the ET calendar date so the day-rollback below is
+  // DST-safe (no local-offset edge case near midnight).
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  if (hour < 6) d.setUTCDate(d.getUTCDate() - 1);
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 }
 
 function todayDateStrEspn(): string {
-  const d = getESTSlateDate();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}${mm}${dd}`;
+  return getMlbSlateDateET().replace(/-/g, "");
 }
 
 function todayDateStrMlb(): string {
-  const d = getESTSlateDate();
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  return getMlbSlateDateET();
 }
 
 function resolveTeamName(team: {
