@@ -59,7 +59,7 @@ function MlbSlateRibbonChip({
       type="button"
       data-testid={`mlb-ribbon-chip-${chip.gameId}`}
       onClick={onSelect}
-      className={`relative shrink-0 flex flex-col gap-1 px-3 py-2 rounded-lg border text-xs min-w-[160px] max-w-[200px] transition-all text-left ${
+      className={`relative shrink-0 flex flex-col gap-0.5 px-2.5 py-1.5 rounded-lg border text-xs min-w-[128px] max-w-[152px] transition-all text-left ${
         isSelected
           ? "border-primary bg-primary/10 ring-1 ring-primary shadow-[0_0_16px_-3px_hsl(var(--primary)/0.4)]"
           : "bg-secondary/40 hover:bg-secondary/70 hover:shadow-[0_0_14px_-3px_hsl(var(--primary)/0.25)]"
@@ -79,22 +79,22 @@ function MlbSlateRibbonChip({
         </span>
       )}
 
-      <div className="flex items-center justify-between w-full gap-2">
+      <div className="flex items-center justify-between w-full gap-1.5">
         <span className="font-semibold text-foreground">{chip.awayTeam}</span>
-        <span className={`font-mono font-bold ${chip.isLive ? "text-green-400" : "text-primary"}`}>
-          {chip.awayScore ?? 0} – {chip.homeScore ?? 0}
+        <span className={`font-mono font-bold text-[11px] ${chip.isLive ? "text-green-400" : "text-primary"}`}>
+          {chip.awayScore ?? 0}-{chip.homeScore ?? 0}
         </span>
         <span className="font-semibold text-foreground">{chip.homeTeam}</span>
       </div>
 
-      <div className="flex items-center gap-1.5 text-muted-foreground">
+      <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
         {chip.isLive && <LiveDot />}
         {chip.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
         <span className={chip.isLive ? "text-green-400" : chip.isFinal ? "text-muted-foreground/60" : ""}>
           {statusText}
         </span>
         {sig.signalCount > 0 && (
-          <span className="ml-auto text-[10px] font-semibold text-muted-foreground/80" data-testid={`mlb-ribbon-count-${chip.gameId}`}>
+          <span className="ml-auto font-semibold text-muted-foreground/80" data-testid={`mlb-ribbon-count-${chip.gameId}`}>
             {sig.signalCount} sig
           </span>
         )}
@@ -114,18 +114,21 @@ export function MlbSlateRibbon({ games, signals, selectedGameId, onSelectGame }:
 
   return (
     <div className="bg-card border border-border rounded-xl p-4" data-testid="section-mlb-slate-ribbon">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-2">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
           <Radio className="w-3.5 h-3.5 text-green-500" /> Today's Games
         </h2>
+        <span className="text-[10px] text-muted-foreground/70" data-testid="text-mlb-ribbon-count">
+          {games.length} game{games.length === 1 ? "" : "s"} &middot; scroll for more
+        </span>
       </div>
 
-      <div className="flex gap-2 overflow-x-auto sm:flex-wrap scrollbar-hide -mx-1 px-1">
+      <div className="flex gap-1.5 overflow-x-auto scrollbar-hide -mx-1 px-1">
         <button
           type="button"
           data-testid="mlb-ribbon-clear"
           onClick={() => onSelectGame(null)}
-          className={`shrink-0 px-3 py-2 rounded-lg border text-xs font-semibold transition-all min-w-[88px] ${
+          className={`shrink-0 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all min-w-[72px] ${
             selectedGameId === null
               ? "border-primary bg-primary/10 text-primary ring-1 ring-primary"
               : "border-border/60 bg-secondary/40 text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
