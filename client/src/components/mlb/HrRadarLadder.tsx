@@ -858,11 +858,17 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
 
   return (
     <div
-      className={`flex gap-3 rounded-2xl border ${t.cardTint} bg-card p-3.5 transition-all hover:brightness-110 ${t.tier === "fire" && !isResolved ? "hr-fire-pulse" : ""}`}
+      className={`flex gap-3 rounded-2xl border ${t.cardTint} bg-card p-3.5 transition-all hover:brightness-110 w-full min-w-0 ${t.tier === "fire" && !isResolved ? "hr-fire-pulse" : ""}`}
       style={{ boxShadow: `0 0 14px ${t.hex}${t.hot ? "59" : "26"}`, borderColor: `${t.hex}55` }}
       data-testid={`ladder-card-${section}-${entry.playerId}`}
     >
       <TierRail tier={t.tier} />
+      {/* Everything but the tier rail stacks vertically — window strength,
+          breakdown strip, reasons, trajectory, and actions below were siblings
+          of TierRail inside the (now horizontal) root flex row, which laid
+          every section out side-by-side in one unwrapped row instead of
+          stacking them under the header. This wrapper is that missing stack. */}
+      <div className="flex flex-col min-w-0 flex-1">
       <div className="flex items-start justify-between gap-2 min-w-0 flex-1">
         {/* Small stage icon — instant visual tier recognition, paired with the
             hero number below (Pre-Game Power treatment: icon + label under the
@@ -1463,6 +1469,7 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
           </Button>
         </div>
       )}
+      </div>
     </div>
   );
 }
