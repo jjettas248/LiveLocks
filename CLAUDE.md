@@ -30,6 +30,7 @@ npx tsx server/mlb/nearHrContact.test.ts            # near-HR + "almost HR" dete
 npx tsx server/mlb/pullAndPregame.test.ts           # pull rate + pregame HR-form prior
 npx tsx server/mlb/ibbAndRecentForm.test.ts         # recent form streak + IBB feared-slugger prior
 npx tsx server/mlb/hrReviewClassifier.test.ts       # 30 invariants — pre-HR review bucket taxonomy
+npx tsx server/mlb/hrMissDiagnostics.test.ts        # 78 invariants — HR miss diagnostic LLM-payload builders
 npx tsx server/mlb/hrRadarFireOnlyGrading.test.ts   # FIRE-only official grading, both ledger sides
 npx tsx server/mlb/hrRadarFreshnessOverlay.test.ts  # canonical-store freshness overlay (re-bucket/surface/terminal-safety)
 npx tsx server/mlb/hrRadarRuntimeSmoke.test.ts      # read-only contract smoke (freshness + FIRE-only record)
@@ -116,6 +117,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | MLB live event interpretation | `server/mlb/liveEventInterpretation.ts` |
 | MLB integrity firewall | `server/mlb/integrityFirewall.ts` |
 | MLB shadow qualification | `server/mlb/shadowQualification.ts` |
+| MLB HR miss diagnostics (LLM payload, read-only) | `server/mlb/hrMissDiagnostics.ts` (pure builders), `server/mlb/hrMissDiagnosticsService.ts` (DB gatherer), `client/src/components/admin/HrMissDiagnosticsCard.tsx` (admin card) |
 | MLB Pre-Game Power Radar + Win Attribution | `server/mlb/pregamePowerRadar/` — `shadowOutcomes.ts` (grading + `pregame_win`/`calibration_miss` attribution + public/admin stat getters), `winAttribution.ts` (pure attribution + daily-log builders), `calibrationStats.ts` (pure public/admin stat builders), `shared/pregameRadarWin.ts` (transport contracts: `DailyCashedLogResponse`, `PregameRadarPublicStats`, `PregameRadarCalibrationStats`); client `PregameWinCard.tsx` (public record + wins) + `components/admin/PregameRadarCalibrationCard.tsx` (admin calibration) |
 | MLB orchestrator (per-tick driver) | `server/mlb/liveGameOrchestrator.ts` |
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |
@@ -170,6 +172,7 @@ All gated by `requireAdmin`. Distinct namespaces:
 | `POST /api/admin/hr-board-studio/log-action` | Record admin copy/download/generate/view analytics |
 | `GET /api/admin/hr-board-studio/analytics` | Admin workflow summary rollup |
 | `GET /api/admin/mlb/pregame-radar/calibration` | Pregame Radar calibration breakdown (`?days=N`) — full denominator (wins + calibration misses), byTier/byScoreBand/byDriver + conversion rates |
+| `GET /api/admin/hr-radar/miss-payload` | HR Miss Diagnostic Payload — LLM-ready miss dossier (`?days=N&limit=N&categories=csv&format=json\|markdown`): fired/ready-only false positives + uncalled/late false negatives with engine snapshots, review buckets, and signal timelines |
 
 Admin pages live under `/admin`, `/admin/mlb-signal-intelligence`, `/admin/track-record`, and `/admin/hr-board-studio`.
 

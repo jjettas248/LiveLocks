@@ -3838,6 +3838,41 @@ export async function registerRoutes(
     }
   });
 
+  // ── HR Miss Diagnostic Payload Generator (admin, read-only) ─────────────
+  // Assembles an LLM-ready diagnostic payload for HR Radar misses (fired
+  // false positives + uncalled/late false negatives) so the admin can feed
+  // it to an external model for engine-improvement analysis. Query params:
+  //   days=N (1..30, default 7) · limit=N (1..200, default 50)
+  //   categories=csv of fired_miss|ready_only_miss|uncalled_hr|late_signal|early_window_exempt
+  //   format=json (default) | markdown (single copy-paste LLM prompt)
+  app.get("/api/admin/hr-radar/miss-payload", requireAdmin, async (req, res) => {
+    try {
+      const days = Math.max(1, Math.min(30, parseInt(String(req.query.days ?? "7"), 10) || 7));
+      const limit = Math.max(1, Math.min(200, parseInt(String(req.query.limit ?? "50"), 10) || 50));
+      const { generateHrMissDiagnosticPayload } = await import("./mlb/hrMissDiagnosticsService");
+      const { ALL_MISS_CATEGORIES, renderHrMissDiagnosticPayloadAsMarkdown } = await import("./mlb/hrMissDiagnostics");
+
+      let categories: any[] | undefined;
+      if (typeof req.query.categories === "string" && req.query.categories.trim()) {
+        const parsed = req.query.categories
+          .split(",")
+          .map((c) => c.trim())
+          .filter((c) => (ALL_MISS_CATEGORIES as readonly string[]).includes(c));
+        if (parsed.length > 0) categories = parsed;
+      }
+
+      const payload = await generateHrMissDiagnosticPayload({ days, limit, categories });
+      if (String(req.query.format ?? "json").toLowerCase() === "markdown") {
+        res.setHeader("Content-Type", "text/markdown; charset=utf-8");
+        return res.send(renderHrMissDiagnosticPayloadAsMarkdown(payload));
+      }
+      return res.json(payload);
+    } catch (e: any) {
+      console.error("[admin/hr-radar/miss-payload]", e.message);
+      return res.status(500).json({ error: "miss_payload_failed" });
+    }
+  });
+
   app.get("/api/mlb/hr-radar-grading/:sessionDate", requireAuth, async (req, res) => {
     try {
       const sessionDate = String(req.params.sessionDate);
