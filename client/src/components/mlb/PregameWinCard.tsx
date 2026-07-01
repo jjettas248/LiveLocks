@@ -6,6 +6,7 @@
 // and never derives win/loss or shows "Loss / Missed / -units".
 
 import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
 import { Trophy, Flame, Target } from "lucide-react";
 import type {
@@ -15,13 +16,24 @@ import type {
 } from "@shared/pregameRadarWin";
 
 /**
+ * Today's ET date, e.g. "2026-07-01" — mirrors the server's todayET() format.
+ * Included in query keys below so a day rollover always produces a fresh
+ * cache entry instead of showing yesterday's placeholder data (the endpoints
+ * themselves already scope their response to todayET() server-side).
+ */
+function todayET(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
+/**
  * Pregame Radar Record banner — "{wins} Wins Today · {firstAb} First-AB Cashes
  * · {flagged} Flagged Before First Pitch". Wins-only; hidden until there is
  * something to show (no zero-state shouting "0 wins").
  */
 export function PregameRadarRecord() {
   const { data } = useQuery<PregameRadarPublicStats>({
-    queryKey: ["/api/mlb/pregame-radar/record"],
+    queryKey: ["/api/mlb/pregame-radar/record", todayET()],
+    queryFn: () => apiRequest("GET", "/api/mlb/pregame-radar/record").then((r) => r.json()),
     refetchInterval: 60_000,
     placeholderData: (prev) => prev,
   });
@@ -87,7 +99,8 @@ function Stat({
  */
 export function PregameWinsSection() {
   const { data } = useQuery<DailyCashedLogResponse>({
-    queryKey: ["/api/mlb/daily-cashed-log"],
+    queryKey: ["/api/mlb/daily-cashed-log", todayET()],
+    queryFn: () => apiRequest("GET", "/api/mlb/daily-cashed-log").then((r) => r.json()),
     refetchInterval: 60_000,
     placeholderData: (prev) => prev,
   });
