@@ -5,7 +5,7 @@
 // next to the existing pregame routes.
 
 import type { Express, RequestHandler } from "express";
-import { todayET } from "../../utils/dateUtils";
+import { slateDateET } from "../../utils/dateUtils";
 import { getPregameRadarCalibrationStats, getPregameRadarPublicStats } from "./statsService";
 
 export function registerPregameRadarStatsRoutes(
@@ -14,13 +14,16 @@ export function registerPregameRadarStatsRoutes(
 ): void {
   app.get("/api/mlb/pregame-radar/record", guards.requireMLBAccess, async (req, res) => {
     try {
-      const dateET = String(req.query.date ?? todayET());
+      // Default to the slate day (6am-ET rollover) — matches the sessionDate
+      // stamped on every pregame signal, so post-midnight grades still land on
+      // the slate that is actually in play.
+      const dateET = String(req.query.date ?? slateDateET());
       const stats = await getPregameRadarPublicStats(dateET);
       return res.json(stats);
     } catch (err: any) {
       console.error("[mlb/pregame-radar/record]", err?.message ?? err);
       return res.json({
-        dateET: String(req.query.date ?? todayET()),
+        dateET: String(req.query.date ?? slateDateET()),
         pregameWinsToday: 0,
         firstAbPregameWinsToday: 0,
         pregameWinsLast7Days: 0,

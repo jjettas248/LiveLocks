@@ -199,7 +199,7 @@ export interface PregamePowerSignal {
   sport: "mlb";
   engine: "pregame_power_radar";
 
-  sessionDate: string; // todayET()
+  sessionDate: string; // slateDateET() — slate day (6am-ET rollover), matches build stamping
   gameId: string;
   gameDate: string;
   startsAt: string | null;
