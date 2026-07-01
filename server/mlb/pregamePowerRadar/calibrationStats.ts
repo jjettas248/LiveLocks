@@ -4,7 +4,7 @@
 // never mutate runtime state, live HR probability, persisted_plays, ROI, or W/L.
 
 import type { PregamePowerSignal } from "./types";
-import { wasPubliclyFlaggedPregame } from "./diagnostics";
+import { isPublicPregameSignal, wasPubliclyFlaggedPregame } from "./diagnostics";
 import { buildPregameRadarWinItem } from "./winAttribution";
 import type {
   PregameCalibrationBucket,
@@ -65,6 +65,15 @@ function rankedWinItems(signals: PregamePowerSignal[]): PregameRadarWinItem[] {
 
 /**
  * Public record stats. Wins-only: misses are not returned, counted, or exposed.
+ *
+ * `flaggedBeforeFirstPitchToday` intentionally uses `isPublicPregameSignal` (not
+ * the broader `wasPubliclyFlaggedPregame`) so it always matches the count of
+ * targets a user could actually see on the live radar — wins stay visible
+ * after grading, but a target whose game already went final without a HR drops
+ * out of both the live list and this count. Counting the raw intrinsic-eligible
+ * total here would silently include those hidden misses, producing a number
+ * with no on-screen target list to back it up and implicitly disclosing a miss
+ * rate next to "Wins Today" — exactly what the wins-only design forbids.
  */
 export function buildPublicStats(
   todaySignals: PregamePowerSignal[],
@@ -80,7 +89,7 @@ export function buildPublicStats(
     firstAbPregameWinsToday: todayWins.filter((s) => s.outcomes?.firstAbPregameWin === true).length,
     pregameWinsLast7Days: last7Wins.length,
     firstAbPregameWinsLast7Days: last7Wins.filter((s) => s.outcomes?.firstAbPregameWin === true).length,
-    flaggedBeforeFirstPitchToday: todaySignals.filter(wasPubliclyFlaggedPregame).length,
+    flaggedBeforeFirstPitchToday: todaySignals.filter(isPublicPregameSignal).length,
     topPregameWinPlayers: rankedWinItems(todaySignals).slice(0, 8),
   };
 }

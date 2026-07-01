@@ -21,6 +21,7 @@ function makeSignal(over: {
   becameLiveFire?: boolean;
   suppressed?: boolean;
   lineupStatus?: PregamePowerSignal["lineupStatus"];
+  gameStatus?: PregamePowerSignal["gameStatus"];
 }): PregamePowerSignal {
   return {
     signalId: over.signalId,
@@ -55,7 +56,7 @@ function makeSignal(over: {
     tags: [],
     lineupStatus: over.lineupStatus ?? "confirmed",
     weatherStatus: "confirmed",
-    gameStatus: "final",
+    gameStatus: over.gameStatus ?? "final",
     firstPitchLockEligible: true,
     lockedAt: "2026-06-29T17:00:00Z",
     hasMarketLine: false,
@@ -115,7 +116,9 @@ const miss = makeSignal({
   outcome: { hitHr: false, outcome: "calibration_miss", userVisible: false },
 });
 
-const pending = makeSignal({ signalId: "s-pending", score10: 6.4, tier: "strong", outcome: null });
+// Still-live target: game hasn't gone final yet, so it stays on the visible
+// radar (unlike `miss`, whose game already resolved and dropped out of view).
+const pending = makeSignal({ signalId: "s-pending", score10: 6.4, tier: "strong", outcome: null, gameStatus: "live" });
 const suppressedMiss = makeSignal({
   signalId: "s-hidden-miss",
   score10: 8.1,
@@ -138,7 +141,7 @@ const publicStats = buildPublicStats(today, [...today, yesterdayWin], "2026-06-2
 ok(publicStats.pregameWinsToday === 2, "public stats count wins only today");
 ok(publicStats.firstAbPregameWinsToday === 1, "public stats count first-AB subset today");
 ok(publicStats.pregameWinsLast7Days === 3, "public stats count last-7 public wins");
-ok(publicStats.flaggedBeforeFirstPitchToday === 4, "flagged count includes public targets, including pending, excluding suppressed");
+ok(publicStats.flaggedBeforeFirstPitchToday === 3, "flagged count matches the visible/live radar total (wins + still-live), excluding resolved misses and suppressed");
 ok(publicStats.topPregameWinPlayers.length === 2, "top players include public wins only");
 ok(publicStats.topPregameWinPlayers.every((w) => !/miss/i.test(w.label) && !/loss/i.test(w.label)), "public win rows do not expose miss/loss labels");
 
