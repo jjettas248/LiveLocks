@@ -6,7 +6,7 @@
 // source of the visual language both surfaces read, so the two can never drift
 // and the eye can instantly rank a play by heat:
 //
-//   TRACK (cool) → BUILD → READY → FIRE (hot) · CASHED (win) · MISSED (muted)
+//   WATCHING (cool) → BUILDING → HIGH CONVICTION → BET NOW (hot) · CASHED (win) · MISSED (muted)
 //
 // It contains NO data logic. It never reads engine fields, never recomputes a
 // score/probability/tier — callers pass already-derived, server-stamped values
@@ -43,7 +43,7 @@ export interface HrTierTheme {
 const THEME: Record<HrHeatTier, HrTierTheme> = {
   fire: {
     tier: "fire",
-    label: "Live Call",
+    label: "Bet Now",
     icon: Flame,
     text: "text-red-400",
     rail: "bg-red-500",
@@ -55,7 +55,7 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   },
   ready: {
     tier: "ready",
-    label: "Ready",
+    label: "High Conviction",
     icon: Zap,
     text: "text-orange-400",
     rail: "bg-orange-500",
@@ -81,7 +81,7 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   track: {
     // "Something is forming" — neutral blue-gray, recedes (spec).
     tier: "track",
-    label: "Tracking",
+    label: "Watching",
     icon: Eye,
     text: "text-slate-400",
     rail: "bg-slate-500",

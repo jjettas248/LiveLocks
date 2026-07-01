@@ -252,7 +252,7 @@ export const SECTION_META: Record<SectionKey, {
   defaultCollapsed: boolean;
 }> = {
   attackNow: {
-    label: "FIRE",
+    label: "BET NOW",
     icon: Flame,
     accent: "border-red-500/40 bg-red-500/5",
     badge: "bg-red-500 text-white",
@@ -261,16 +261,16 @@ export const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   ready: {
-    label: "READY",
+    label: "HIGH CONVICTION",
     icon: Zap,
     accent: "border-orange-500/40 bg-orange-500/5",
     badge: "bg-orange-500 text-white",
     description: "Strong HR setup forming — high-conviction watch context, not an official call until it fires.",
-    sublabel: "High conviction, waiting for final trigger",
+    sublabel: "One step from a Bet Now call",
     defaultCollapsed: false,
   },
   building: {
-    label: "ALMOST",
+    label: "BUILDING",
     icon: Zap,
     accent: "border-amber-500/40 bg-amber-500/5",
     badge: "bg-amber-500 text-white",
@@ -279,7 +279,7 @@ export const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   watch: {
-    label: "TRACK",
+    label: "WATCHING",
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
@@ -414,12 +414,12 @@ function deadOutcomeLabel(status: string): { label: string; color: string } {
  */
 function cashedFromTierLabel(
   status: string | null | undefined,
-): "Attack" | "Ready" | "Build" | "Watch" | null {
+): "Bet Now" | "High Conviction" | "Building" | "Watching" | null {
   switch (status) {
-    case "called_hit_attack": return "Attack";
-    case "called_hit_ready": return "Ready";
-    case "called_hit_build": return "Build";
-    case "called_hit_watch": return "Watch";
+    case "called_hit_attack": return "Bet Now";
+    case "called_hit_ready": return "High Conviction";
+    case "called_hit_build": return "Building";
+    case "called_hit_watch": return "Watching";
     default: return null;
   }
 }
@@ -595,7 +595,7 @@ function HrBreakdownStrip({ entry }: { entry: HrRadarLadderEntry }) {
       <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70 mb-1">
         Signal breakdown
       </div>
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${bars.length}, minmax(0, 1fr))` }}>
         {bars.map((bar) => {
           const color = hrBreakdownBar(bar.magnitude, bar.isHrProb);
           const valueText = formatBreakdownBarValue(bar);
@@ -765,9 +765,20 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
   // builder Quick Decide's Hero Card already uses, so this card and that one
   // never show different evidence for the same signal. Each chip carries its
   // own tone (fire/warn/info/good); pure display formatting of server data.
+  // Unlike Quick Decide's Hero Card, the Full Ladder already renders the
+  // canonical badge set in the header row above (entry.badges), so any chip
+  // that just re-states one of those badges is filtered out here to avoid
+  // showing the same evidence (e.g. "HR MAX WINDOW") twice on one card.
+  const badgeDerivedLabels = new Set(
+    (entry.badges ?? [])
+      .map((b) => HR_RADAR_BADGE_META[b]?.label.toUpperCase())
+      .filter((label): label is string => label != null),
+  );
   const driverChips = isResolved
     ? []
-    : buildDriverChips(entry, mapHrRadarRowToDisplayState(entry as unknown as HrRadarRowInput).drivers);
+    : buildDriverChips(entry, mapHrRadarRowToDisplayState(entry as unknown as HrRadarRowInput).drivers).filter(
+        (c) => !badgeDerivedLabels.has(c.label),
+      );
   // Big stage icon — reuse the section's SECTION_META icon (Flame/Zap/Eye).
   const StageIcon = SECTION_META[section]?.icon ?? null;
   // Outcome label for resolved rows uses the canonical outcome when present.

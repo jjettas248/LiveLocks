@@ -271,12 +271,14 @@ export function buildHrRadarCardViewModel(
   };
 }
 
-/** Public stage → display label (the one vocabulary). */
+/** Public stage → display label (the one vocabulary). A mix of confidence
+ *  (Watching/Building/High Conviction) and action (Bet Now) so the ladder
+ *  reads as betting guidance, not internal engine jargon. */
 export const HR_PUBLIC_STAGE_LABEL: Record<HrPublicStage, string> = {
-  track: "Track",
-  build: "Build",
-  ready: "Ready",
-  fire: "Fire",
+  track: "Watching",
+  build: "Building",
+  ready: "High Conviction",
+  fire: "Bet Now",
   cashed: "Cashed",
   missed: "Missed",
 };
