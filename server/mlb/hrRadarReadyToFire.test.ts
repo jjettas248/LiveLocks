@@ -36,22 +36,24 @@ console.log("\n=== HR Radar READY → FIRE Promotion — Invariant Suite ===\n")
 // ── Pure helper tests ─────────────────────────────────────────────────────
 console.log("maybePromoteReadyToFire — direct rule coverage");
 
-// Lane 1.4 PRIMARY gate: BET_NOW + canonical=attack + sustained(≥3) + CONTACT driver.
+// Lane 1.4 PRIMARY gate: BET_NOW + canonical=attack + sustained(≥2) + CONTACT driver.
 // Hit-rate tightening (2026-06): sustain raised 2→3 and the fire gate now
 // requires a CONTACT driver (elite_barrel/two_hard_hit_balls/massive_single_contact),
 // not pitcher_collapse_power alone.
+// Frequency rebalance (2026-07): sustain floor lowered 3→2 (contact-driver gate
+// still stands, so this isn't a full revert of the tightening).
 eq("A.1 BET_NOW + attack + sustain=3 + elite_barrel → fire",
   maybePromoteReadyToFire("ready", {
     dynamicState: "BET_NOW", canonicalStage: "attack",
     consecutivePromoteTicks: 3, qualifyingSignals: ["elite_barrel"],
   }), "fire");
 
-// Negative — sustain below the raised 3-tick floor.
-eq("A.1b BET_NOW + attack + sustain=2 + elite_barrel → ready (sustain<3)",
+// A.1b now sits exactly at the new 2-tick floor and should fire.
+eq("A.1b BET_NOW + attack + sustain=2 (new floor) + elite_barrel → fire",
   maybePromoteReadyToFire("ready", {
     dynamicState: "BET_NOW", canonicalStage: "attack",
     consecutivePromoteTicks: 2, qualifyingSignals: ["elite_barrel"],
-  }), "ready");
+  }), "fire");
 
 // Negative — pitcher_collapse_power is a STRONG driver but NOT a contact driver;
 // it can no longer fire on its own.
@@ -238,7 +240,7 @@ eq("E.5 outcome=called_hit stays resolved", e5.userStage, "resolved");
 console.log("\nmaybePromoteReadyToFire — Gate A peak currency (no stale peak)");
 
 // F.1 Old peak, decayed current AB — must NOT fire even with sustained BET_NOW +
-// contact driver. current/peak = 50/100 = 0.5 < 0.85 ⇒ stale peak block.
+// contact driver. current/peak = 50/100 = 0.5 < 0.75 ⇒ stale peak block.
 eq("F.1 BET_NOW + attack + sustain=3 + elite_barrel but current<<peak → ready (stale peak)",
   maybePromoteReadyToFire("ready", {
     dynamicState: "BET_NOW", canonicalStage: "attack",
@@ -246,7 +248,16 @@ eq("F.1 BET_NOW + attack + sustain=3 + elite_barrel but current<<peak → ready 
     currentReadinessScore: 50, peakReadinessScore: 100,
   }), "ready");
 
-// F.2 Current still near peak (90/100 = 0.9 ≥ 0.85) ⇒ peak is current ⇒ fire.
+// F.1b Frequency rebalance (2026-07): 80/100 = 0.8 was blocked under the old
+// 0.85 floor but fires under the new 0.75 floor — proves the loosening took.
+eq("F.1b BET_NOW + attack + sustain=3 + elite_barrel + current/peak=0.8 → fire (new floor)",
+  maybePromoteReadyToFire("ready", {
+    dynamicState: "BET_NOW", canonicalStage: "attack",
+    consecutivePromoteTicks: 3, qualifyingSignals: ["elite_barrel"],
+    currentReadinessScore: 80, peakReadinessScore: 100,
+  }), "fire");
+
+// F.2 Current still near peak (90/100 = 0.9 ≥ 0.75) ⇒ peak is current ⇒ fire.
 eq("F.2 BET_NOW + attack + sustain=3 + elite_barrel + current≈peak → fire",
   maybePromoteReadyToFire("ready", {
     dynamicState: "BET_NOW", canonicalStage: "attack",

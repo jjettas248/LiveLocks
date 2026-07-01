@@ -1,10 +1,10 @@
 // HR Radar — Full Ladder. Sectioned card grid: every entry renders through the
 // same premium LadderCard used by the signal-detail drawer, grouped under
-// section headers (FIRE → READY → BUILD → TRACK → CASHED → MISSED) so the
-// highest-to-lowest hierarchy is explicit rather than an internal sort the
-// user has to infer. PRESENTATION ONLY — every field reads the canonical view
-// model / raw entry (engine truth); this file adds no scoring, staging, or
-// probability logic.
+// section headers (BET NOW → HIGH CONVICTION → BUILDING → WATCHING → CASHED →
+// MISSED) so the highest-to-lowest hierarchy is explicit rather than an
+// internal sort the user has to infer. PRESENTATION ONLY — every field reads
+// the canonical view model / raw entry (engine truth); this file adds no
+// scoring, staging, or probability logic.
 
 import { LadderCard, SECTION_META, stageToSectionKey, type SectionKey } from "@/components/mlb/HrRadarLadder";
 import { compareByImportance, type HrRadarCardViewModel, type HrPublicStage } from "@/lib/mlb/hrRadarViewModel";
