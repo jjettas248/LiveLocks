@@ -16,17 +16,9 @@ import { getCanonicalHrRadarState } from "../hrRadarCanonicalStore";
 import { mlbGameCache } from "../dataPullService";
 import { getSnapshot } from "./pregamePowerRadarStore";
 import { wasPubliclyFlaggedPregame } from "./diagnostics";
-import { deriveWinAttribution, buildDailyPregameWins } from "./winAttribution";
-import { buildPublicStats, buildCalibrationStats } from "./calibrationStats";
-import { loadPregameSignalsForDate } from "./pregamePersistence";
-import { todayET, daysAgoET } from "../../utils/dateUtils";
+import { deriveWinAttribution } from "./winAttribution";
 import type { PregameOutcome, PregamePowerSignal } from "./types";
-import type {
-  PregameCalibrationRecord,
-  PregameRadarWinItem,
-  PregameRadarPublicStats,
-  PregameRadarCalibrationStats,
-} from "../../../shared/pregameRadarWin";
+import type { PregameCalibrationRecord } from "../../../shared/pregameRadarWin";
 
 /** Canonical live-HR hit inning lookup, keyed by `${gameId}|${playerId}`. */
 type CanonicalHitLookup = Map<string, { hitInning: number | null; hitHalf: string | null }>;
@@ -289,59 +281,3 @@ export function getPregameCalibrationRecord(): PregameCalibrationRecord {
   };
 }
 
-/** Today's public Pregame Radar Wins, grouped for the daily cashed log. */
-export function getPregameRadarWins(): {
-  pregameRadarWins: PregameRadarWinItem[];
-  firstAbPregameWins: PregameRadarWinItem[];
-} {
-  const snapshot = getSnapshot();
-  const all = snapshot ? Array.from(snapshot.signals.values()) : [];
-  return buildDailyPregameWins(all);
-}
-
-/** Today's in-memory signals, or [] before the first build of the day. */
-function todaySignals(): PregamePowerSignal[] {
-  const snapshot = getSnapshot();
-  return snapshot ? Array.from(snapshot.signals.values()) : [];
-}
-
-/**
- * Collect signals over the last `days` ET dates (inclusive of today). Today
- * comes from the live snapshot; prior dates are reconstructed from the DB.
- * Best-effort — a failed historical read just contributes nothing.
- */
-async function signalsOverDays(days: number): Promise<PregamePowerSignal[]> {
-  const today = todayET();
-  const out: PregamePowerSignal[] = [...todaySignals()];
-  for (let i = 1; i < days; i++) {
-    const d = daysAgoET(i);
-    if (d === today) continue;
-    out.push(...(await loadPregameSignalsForDate(d)));
-  }
-  return out;
-}
-
-/**
- * Public Pregame Radar Record (wins-only). Today's counts + win showcase from
- * the live snapshot; 7-day totals fold in DB history. Never exposes a miss.
- */
-export async function getPregameRadarPublicStats(): Promise<PregameRadarPublicStats> {
-  const today = todaySignals();
-  const last7 = await signalsOverDays(7);
-  return buildPublicStats(today, last7, todayET());
-}
-
-/**
- * Admin calibration breakdown over the last `days` ET dates (default 7). Full
- * denominator (wins AND calibration misses) — proxy metrics only, never ROI.
- */
-export async function getPregameRadarCalibrationStats(
-  days = 7,
-): Promise<PregameRadarCalibrationStats> {
-  const window = Math.max(1, Math.min(60, Math.floor(days)));
-  const signals = await signalsOverDays(window);
-  return buildCalibrationStats(signals, {
-    startET: daysAgoET(window - 1),
-    endET: todayET(),
-  });
-}

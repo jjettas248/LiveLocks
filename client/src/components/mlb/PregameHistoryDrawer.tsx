@@ -11,6 +11,7 @@ import { useQueries } from "@tanstack/react-query";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { ChevronDown, ChevronRight, FolderOpen, Trophy } from "lucide-react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { PregameWinCard } from "./PregameWinCard";
 import type { PregameRadarPublicStats } from "@shared/pregameRadarWin";
 
@@ -40,6 +41,7 @@ export function PregameHistoryDrawer() {
   const [open, setOpen] = useState(false);
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
   const dates = useMemo(() => lastNDatesET(HISTORY_DAYS), []);
+  const isMobile = useIsMobile();
 
   const results = useQueries({
     queries: dates.map((date) => ({
@@ -64,8 +66,13 @@ export function PregameHistoryDrawer() {
 
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent
-          side="left"
-          className="w-full sm:max-w-md overflow-y-auto"
+          side={isMobile ? "bottom" : "left"}
+          className={
+            isMobile
+              ? "w-full max-h-[85dvh] rounded-t-2xl flex flex-col overflow-hidden"
+              : "w-full max-w-md overflow-y-auto"
+          }
+          style={isMobile ? { paddingBottom: "env(safe-area-inset-bottom, 0px)" } : undefined}
           data-testid="drawer-pregame-history"
         >
           <SheetHeader>
@@ -75,7 +82,7 @@ export function PregameHistoryDrawer() {
             </SheetTitle>
           </SheetHeader>
 
-          <div className="mt-4 space-y-1.5">
+          <div className={`mt-4 space-y-1.5 ${isMobile ? "overflow-y-auto" : ""}`}>
             {dates.map((date, i) => {
               const query = results[i];
               const data = query?.data as PregameRadarPublicStats | undefined;
