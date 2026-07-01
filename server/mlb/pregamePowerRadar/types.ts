@@ -199,7 +199,7 @@ export interface PregamePowerSignal {
   sport: "mlb";
   engine: "pregame_power_radar";
 
-  sessionDate: string; // todayET()
+  sessionDate: string; // getMlbSlateDateET() — see gameDiscoveryService.ts
   gameId: string;
   gameDate: string;
   startsAt: string | null;

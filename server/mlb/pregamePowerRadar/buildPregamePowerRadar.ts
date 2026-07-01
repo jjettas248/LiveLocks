@@ -7,8 +7,7 @@
 // this module stays free of storage imports.
 
 import { randomUUID } from "crypto";
-import { todayET } from "../../utils/dateUtils";
-import { discoverTodaysGames } from "../gameDiscoveryService";
+import { discoverTodaysGames, getMlbSlateDateET } from "../gameDiscoveryService";
 import {
   getStartingLineup,
   getStartingPitcher,
@@ -126,7 +125,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   isPregamePowerRadarBuildRunning = true;
   const startedAt = new Date().toISOString();
   const buildId = `ppr_${Date.now()}_${randomUUID().slice(0, 8)}`;
-  const sessionDate = todayET();
+  const sessionDate = getMlbSlateDateET();
   console.log(`[PREGAME_POWER_RADAR_BUILD_START] buildId=${buildId} date=${sessionDate}`);
 
   const signals = new Map<string, PregamePowerSignal>();
