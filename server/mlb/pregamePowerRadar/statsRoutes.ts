@@ -6,7 +6,11 @@
 
 import type { Express, RequestHandler } from "express";
 import { todayET } from "../../utils/dateUtils";
-import { getPregameRadarCalibrationStats, getPregameRadarPublicStats } from "./statsService";
+import {
+  getPregameRadarCalibrationStats,
+  getPregameRadarPublicStats,
+  getPregameRadarDailyHistory,
+} from "./statsService";
 
 export function registerPregameRadarStatsRoutes(
   app: Express,
@@ -28,6 +32,18 @@ export function registerPregameRadarStatsRoutes(
         flaggedBeforeFirstPitchToday: 0,
         topPregameWinPlayers: [],
       });
+    }
+  });
+
+  app.get("/api/mlb/pregame-radar/history", guards.requireMLBAccess, async (req, res) => {
+    try {
+      const rawDays = Number(req.query.days ?? 14);
+      const days = Number.isFinite(rawDays) ? rawDays : 14;
+      const history = await getPregameRadarDailyHistory(days);
+      return res.json(history);
+    } catch (err: any) {
+      console.error("[mlb/pregame-radar/history]", err?.message ?? err);
+      return res.json([]);
     }
   });
 

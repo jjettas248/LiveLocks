@@ -670,7 +670,6 @@ export async function registerRoutes(
     try {
       const { todayET } = await import("./utils/dateUtils");
       const sessionDate = String(req.query.date ?? todayET());
-      const isToday = sessionDate === todayET();
 
       // Official live HR Radar cashes — already filtered to called_hit +
       // userVisible inside getCanonicalHrRadarOutcomes.
@@ -690,19 +689,13 @@ export async function registerRoutes(
         resolvedAt: h.resolvedAt ? new Date(h.resolvedAt).toISOString() : null,
       }));
 
-      // Pregame Radar Wins live in the in-memory snapshot (today only). For a
-      // historical date we surface official cashes alone rather than mis-dating
-      // today's wins.
-      let pregameRadarWins: DailyCashedLogResponse["pregameRadarWins"] = [];
-      let firstAbPregameWins: DailyCashedLogResponse["firstAbPregameWins"] = [];
-      if (isToday) {
-        const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
-        const { getPregameRadarWins } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
-        await getRadarSnapshot().catch(() => null);
-        const wins = getPregameRadarWins();
-        pregameRadarWins = wins.pregameRadarWins;
-        firstAbPregameWins = wins.firstAbPregameWins;
-      }
+      // Pregame Radar Wins — DB-persisted signals merged with the in-memory
+      // snapshot (today only), so today's wins survive snapshot rebuilds and
+      // historical dates are also served.
+      const { getPregameRadarWinsForDate } = await import("./mlb/pregamePowerRadar/statsService");
+      const wins = await getPregameRadarWinsForDate(sessionDate);
+      const pregameRadarWins: DailyCashedLogResponse["pregameRadarWins"] = wins.pregameRadarWins;
+      const firstAbPregameWins: DailyCashedLogResponse["firstAbPregameWins"] = wins.firstAbPregameWins;
 
       const response: DailyCashedLogResponse = {
         officialLiveCashes,
@@ -723,47 +716,14 @@ export async function registerRoutes(
     }
   });
 
-  // Public: Pregame Radar Record — wins-only. A pregame target that homers is a
-  // public win; one that misses is calibration-only and never appears here.
-  // Honors ?date=YYYY-MM-DD (ET) so the win-history drawer can look back at
-  // prior slates; defaults to today when omitted.
-  app.get("/api/mlb/pregame-radar/record", requireMLBAccess, async (req, res) => {
-    const { todayET } = await import("./utils/dateUtils");
-    const dateET = String(req.query.date ?? todayET());
-    try {
-      const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
-      const { getPregameRadarPublicStats } = await import("./mlb/pregamePowerRadar/statsService");
-      await getRadarSnapshot().catch(() => null);
-      return res.json(await getPregameRadarPublicStats(dateET));
-    } catch (e: any) {
-      console.error("[mlb/pregame-radar/record]", e?.message);
-      return res.json({
-        dateET,
-        pregameWinsToday: 0,
-        firstAbPregameWinsToday: 0,
-        pregameWinsLast7Days: 0,
-        firstAbPregameWinsLast7Days: 0,
-        flaggedBeforeFirstPitchToday: 0,
-        topPregameWinPlayers: [],
-      });
-    }
-  });
-
-  // Admin: Pregame Radar calibration breakdown — FULL denominator (wins AND
-  // calibration misses) so true target→HR conversion is visible internally.
-  // Proxy metrics only; never official ROI / W-L. ?days=N (default 7).
-  app.get("/api/admin/mlb/pregame-radar/calibration", requireAdmin, async (req, res) => {
-    try {
-      const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
-      const { getPregameRadarCalibrationStats } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
-      await getRadarSnapshot().catch(() => null);
-      const days = req.query.days ? Number(req.query.days) : 7;
-      return res.json(await getPregameRadarCalibrationStats(Number.isFinite(days) ? days : 7));
-    } catch (e: any) {
-      console.error("[admin/mlb/pregame-radar/calibration]", e?.message);
-      return res.status(500).json({ error: "Failed to fetch pregame radar calibration" });
-    }
-  });
+  // Public: Pregame Radar Record and admin calibration — DB-persisted signals
+  // merged with the in-memory snapshot, so stats survive snapshot
+  // rebuilds/restarts and historical dates (?date=YYYY-MM-DD) are servable.
+  // See statsRoutes.ts / statsService.ts for the merge logic.
+  {
+    const { registerPregameRadarStatsRoutes } = await import("./mlb/pregamePowerRadar/statsRoutes");
+    registerPregameRadarStatsRoutes(app, { requireMLBAccess, requireAdmin });
+  }
 
   // HR Radar precision/recall instrumentation (Recommendation #4). Read-only.
   // ?windowMs=N to change the lookback; ?includeRecords=1 for per-signal rows.

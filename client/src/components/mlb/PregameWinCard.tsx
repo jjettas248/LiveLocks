@@ -8,6 +8,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Trophy, Flame, Target } from "lucide-react";
+import { PregameRadarHistoryDrawer } from "./PregameRadarHistoryDrawer";
 import type {
   PregameRadarWinItem,
   PregameRadarPublicStats,
@@ -33,9 +34,12 @@ export function PregameRadarRecord() {
       className="p-3 bg-emerald-500/10 border-emerald-400/30"
       data-testid="pregame-radar-record"
     >
-      <div className="flex items-center gap-2 mb-1.5">
-        <Trophy className="w-4 h-4 text-emerald-300" />
-        <span className="text-sm font-bold text-emerald-200">Pregame Radar Record</span>
+      <div className="flex items-center justify-between gap-2 mb-1.5">
+        <div className="flex items-center gap-2">
+          <Trophy className="w-4 h-4 text-emerald-300" />
+          <span className="text-sm font-bold text-emerald-200">Pregame Radar Record</span>
+        </div>
+        <PregameRadarHistoryDrawer />
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
         <Stat value={data.pregameWinsToday} label="Wins Today" testid="pregame-record-wins-today" />
