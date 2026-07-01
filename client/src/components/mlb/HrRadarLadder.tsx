@@ -242,6 +242,23 @@ export type SectionKey =
   | "dead"
   | "modelReview";
 
+// Letter-style grade — a pure relabel of the server's own stage classification
+// (fire/ready/build/track), matching the A+/A/B+/... vocabulary MLB props
+// already use for `displayGrade`. This is NOT a new client-computed score —
+// HR Radar has no server-stamped combined score+tier grade field yet, so this
+// stays a coarse stage→label map rather than fabricating precision the data
+// doesn't support. Resolved stages carry no grade (the call is already decided).
+const STAGE_GRADE: Record<SectionKey, string | null> = {
+  attackNow: "A+",
+  ready: "B+",
+  building: "C+",
+  watch: "C",
+  noAbYet: null,
+  cashed: null,
+  dead: null,
+  modelReview: null,
+};
+
 export const SECTION_META: Record<SectionKey, {
   label: string;
   icon: typeof Flame;
@@ -589,25 +606,27 @@ function HrBreakdownStrip({ entry }: { entry: HrRadarLadderEntry }) {
   const bars = buildHrRadarBreakdownBars(entry as unknown as HrRadarRowInput);
   if (bars.length < 2) return null;
   return (
-    <div
-      className="mt-2 grid grid-cols-4 gap-1.5"
-      data-testid={`strip-hr-breakdown-${entry.playerId}`}
-    >
-      {bars.map((bar) => {
-        const color = hrBreakdownBar(bar.magnitude, bar.isHrProb);
-        const valueText = formatBreakdownBarValue(bar);
-        return (
-          <div key={bar.key} className="flex flex-col gap-0.5 min-w-0" title={`${bar.short} ${valueText}`}>
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[8px] text-muted-foreground/80 tracking-wide">{bar.short}</span>
-              <span className="text-[8px] font-bold tabular-nums" style={{ color }}>{valueText}</span>
+    <div className="mt-2" data-testid={`strip-hr-breakdown-${entry.playerId}`}>
+      <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70 mb-1">
+        Signal breakdown
+      </div>
+      <div className="grid grid-cols-4 gap-2">
+        {bars.map((bar) => {
+          const color = hrBreakdownBar(bar.magnitude, bar.isHrProb);
+          const valueText = formatBreakdownBarValue(bar);
+          return (
+            <div key={bar.key} className="flex flex-col gap-0.5 min-w-0" title={`${bar.label} ${valueText}`}>
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[9px] text-muted-foreground tracking-wide">{bar.short}</span>
+                <span className="text-[9px] font-bold tabular-nums" style={{ color }}>{valueText}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${bar.magnitude}%`, backgroundColor: color }} />
+              </div>
             </div>
-            <div className="h-1 rounded-full bg-secondary/60 overflow-hidden">
-              <div className="h-full rounded-full" style={{ width: `${bar.magnitude}%`, backgroundColor: color }} />
-            </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -885,6 +904,17 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
+            {/* Letter grade — the stage relabeled (see STAGE_GRADE comment). */}
+            {!isResolved && STAGE_GRADE[section] && (
+              <span
+                className={`text-[10px] font-black px-1.5 py-0.5 rounded-md border shrink-0 ${t.text}`}
+                style={{ borderColor: `${t.hex}55`, background: `${t.hex}1a` }}
+                data-testid={`badge-grade-${entry.playerId}`}
+                title="Grade reflects the signal's current stage (Fire/Ready/Build/Track)"
+              >
+                {STAGE_GRADE[section]}
+              </span>
+            )}
             {/* Record-eligibility tag — orthogonal to the driver chips below;
                 marks signals that count toward the official record. */}
             {recordEligible && (
@@ -1102,7 +1132,7 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
       {!isResolved && actionPct != null && (
         <div className="mt-2" data-testid={`window-strength-${entry.playerId}`}>
           <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
-            <span>Window strength</span>
+            <span>Signal strength</span>
             {/* Render the tier-banded strength on the /10 scale — NOT a "%".
                 Only a calibrated HR probability may render a percent. */}
             <span data-testid={`text-window-strength-${entry.playerId}`}>
