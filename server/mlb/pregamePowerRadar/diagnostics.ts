@@ -45,9 +45,14 @@ export function wasPubliclyFlaggedPregame(signal: PregamePowerSignal): boolean {
 /**
  * Final public-visibility predicate. Public surfaces only confirmed-lineup,
  * non-suppressed, strong+ targets. Live games show only locked rows.
+ *
+ * A graded target that actually homered stays visible after grading (display
+ * only — never re-derived) so the card can render its cashed/"HOMERED" state
+ * instead of silently disappearing from the list the moment the game goes final.
  */
 export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
   if (!wasPubliclyFlaggedPregame(signal)) return false;
+  if (signal.status === "graded" && signal.outcomes?.hitHr === true) return true;
   if (signal.status !== "active" && signal.status !== "locked") return false;
   if (signal.gameStatus === "final" || signal.gameStatus === "postponed") return false;
   if (signal.gameStatus === "live") return signal.status === "locked";

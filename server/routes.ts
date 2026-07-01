@@ -725,17 +725,20 @@ export async function registerRoutes(
 
   // Public: Pregame Radar Record — wins-only. A pregame target that homers is a
   // public win; one that misses is calibration-only and never appears here.
-  app.get("/api/mlb/pregame-radar/record", requireMLBAccess, async (_req, res) => {
+  // Honors ?date=YYYY-MM-DD (ET) so the win-history drawer can look back at
+  // prior slates; defaults to today when omitted.
+  app.get("/api/mlb/pregame-radar/record", requireMLBAccess, async (req, res) => {
+    const { todayET } = await import("./utils/dateUtils");
+    const dateET = String(req.query.date ?? todayET());
     try {
       const { getRadarSnapshot } = await import("./mlb/pregamePowerRadar/pregamePowerRadarService");
-      const { getPregameRadarPublicStats } = await import("./mlb/pregamePowerRadar/shadowOutcomes");
+      const { getPregameRadarPublicStats } = await import("./mlb/pregamePowerRadar/statsService");
       await getRadarSnapshot().catch(() => null);
-      return res.json(await getPregameRadarPublicStats());
+      return res.json(await getPregameRadarPublicStats(dateET));
     } catch (e: any) {
       console.error("[mlb/pregame-radar/record]", e?.message);
-      const { todayET } = await import("./utils/dateUtils");
       return res.json({
-        dateET: todayET(),
+        dateET,
         pregameWinsToday: 0,
         firstAbPregameWinsToday: 0,
         pregameWinsLast7Days: 0,

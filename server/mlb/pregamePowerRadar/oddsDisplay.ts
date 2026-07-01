@@ -3,25 +3,27 @@
 // PURELY a presentation/response-layer concern: reads already-cached sportsbook
 // lines (written by the live MLB orchestrator's existing odds fetches) and
 // stamps a `marketEdgeContext` onto each signal for the card UI. It NEVER
-// calls a live odds API itself (cache-read only, `allowStale: true`), never
-// touches score10/tier/drivers, and never mutates the canonical in-memory
-// snapshot — it returns shallow clones for the HTTP response only.
+// calls a live odds API itself — event-id resolution uses the cache-only
+// `resolveMLBOddsEventIdFromCache` (returns null rather than fetching when the
+// events list isn't already warm) and line lookups use `readOddsSnapshot`
+// (`allowStale: true`). It never touches score10/tier/drivers, and never
+// mutates the canonical in-memory snapshot — it returns shallow clones for the
+// HTTP response only.
 
-import { resolveMLBOddsEventId } from "../../oddsService";
+import { resolveMLBOddsEventIdFromCache } from "../../oddsService";
 import { readOddsSnapshot } from "../../odds/oddsCache";
 import type { PregamePowerSignal, PregameMarketEdgeContext } from "./types";
 
-// gameId → resolved odds-provider event id (or null). Process-lifetime cache;
-// a given game's odds-event id never changes once resolved.
-const eventIdByGameId = new Map<string, Promise<string | null>>();
+// gameId → resolved odds-provider event id. Process-lifetime cache; a given
+// game's odds-event id never changes once resolved from the cached events list.
+const eventIdByGameId = new Map<string, string>();
 
-function resolveEventIdCached(gameId: string, team: string, opponent: string): Promise<string | null> {
-  let pending = eventIdByGameId.get(gameId);
-  if (!pending) {
-    pending = resolveMLBOddsEventId(team, opponent).catch(() => null);
-    eventIdByGameId.set(gameId, pending);
-  }
-  return pending;
+function resolveEventIdCached(gameId: string, team: string, opponent: string): string | null {
+  const cached = eventIdByGameId.get(gameId);
+  if (cached) return cached;
+  const id = resolveMLBOddsEventIdFromCache(team, opponent);
+  if (id) eventIdByGameId.set(gameId, id);
+  return id;
 }
 
 function pickBestOverBook(
@@ -59,7 +61,7 @@ export async function attachBestOddsDisplay(
         const market = signal.primaryMarket;
         if (market !== "home_runs" && market !== "total_bases") return signal;
 
-        const eventId = await resolveEventIdCached(signal.gameId, signal.team, signal.opponent);
+        const eventId = resolveEventIdCached(signal.gameId, signal.team, signal.opponent);
         if (!eventId) return signal;
 
         const snap = readOddsSnapshot({
