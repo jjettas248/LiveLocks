@@ -7,22 +7,13 @@ import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, Aler
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
 import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
-import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
+import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, mapHrRadarRowToDisplayState, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
-import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
-import { buildHrRadarCardViewModel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
+import { type HrRadarBadge } from "@shared/hrRadarStage";
+import { buildHrRadarCardViewModel, buildDriverChips, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
 import { HrRadarFullLadderTable } from "@/components/mlb/hr-radar/HrRadarFullLadderTable";
-import { hrTierTheme, TierRail, tierFromLadderSection } from "@/components/mlb/hrRadarVisuals";
-
-// Tailwind classes per badge tone — UI styling only; labels/semantics come
-// from the shared HR_RADAR_BADGE_META (single source of truth).
-const HR_BADGE_TONE_CLASS: Record<HrRadarBadgeTone, string> = {
-  fire: "bg-red-500/15 text-red-400 border-red-500/30",
-  warn: "bg-orange-500/15 text-orange-300 border-orange-500/30",
-  info: "bg-blue-500/15 text-blue-300 border-blue-500/30",
-  good: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-};
+import { hrTierTheme, TierRail, tierFromLadderSection, badgeToneClasses } from "@/components/mlb/hrRadarVisuals";
 
 // ── Signal-first inning pill (LiveLocks MLB UX Phase 1) ───────────────
 // Pure read of the row's currentInning (preferred) or detectedInning.
@@ -766,6 +757,13 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
   // keyed off the same tier theme used everywhere else in HR Radar so a card
   // opened from the list and a card opened from the drawer are identical.
   const t = hrTierTheme(tierFromLadderSection(section));
+  // Driver chips (Pre-Game Power treatment) — the same badge+reformat chip
+  // builder Quick Decide's Hero Card already uses, so this card and that one
+  // never show different evidence for the same signal. Each chip carries its
+  // own tone (fire/warn/info/good); pure display formatting of server data.
+  const driverChips = isResolved
+    ? []
+    : buildDriverChips(entry, mapHrRadarRowToDisplayState(entry as unknown as HrRadarRowInput).drivers);
   // Big stage icon — reuse the section's SECTION_META icon (Flame/Zap/Eye).
   const StageIcon = SECTION_META[section]?.icon ?? null;
   // Outcome label for resolved rows uses the canonical outcome when present.
@@ -881,28 +879,11 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
-            {/* Step 5 — canonical badge set, server-derived and rendered
-                verbatim from shared/hrRadarStage.ts. "HR Max Window" is one of
-                these badges, not a ladder stage of its own. */}
-            {!isResolved && (entry.badges ?? []).map((b: HrRadarBadge) => {
-              const meta = HR_RADAR_BADGE_META[b];
-              if (!meta) return null;
-              return (
-                <span
-                  key={b}
-                  className={`text-[8px] font-black px-1.5 py-0.5 rounded-full border shrink-0 whitespace-nowrap ${HR_BADGE_TONE_CLASS[meta.tone]}`}
-                  data-testid={`badge-${b.replace(/_/g, "-")}-${entry.playerId}`}
-                  title={meta.title}
-                >
-                  {meta.label}
-                </span>
-              );
-            })}
-            {/* Record-eligibility tag (v14) — orthogonal to the canonical badge
-                set above; marks signals that count toward the official record. */}
+            {/* Record-eligibility tag — orthogonal to the driver chips below;
+                marks signals that count toward the official record. */}
             {recordEligible && (
               <span
-                className="text-[8px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-300 border border-red-500/30 shrink-0"
+                className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-300 border border-red-500/30 shrink-0"
                 data-testid={`badge-record-eligible-${entry.playerId}`}
                 title="This signal counts toward the official HR Radar record"
               >
@@ -910,6 +891,24 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
               </span>
             )}
           </div>
+          {/* Driver chips — Pre-Game Power treatment: a dedicated, legible row
+              (not crammed inline with the player name) so "why this matters"
+              reads as evidence, not a footnote. Step 5 canonical badges +
+              reformat-only chips (shared/hrRadarStage.ts), each in its own
+              tone (fire/warn/info/good) via buildDriverChips(). */}
+          {driverChips.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-1" data-testid={`driver-chips-${entry.playerId}`}>
+              {driverChips.map((c) => (
+                <span
+                  key={c.label}
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-md border shrink-0 whitespace-nowrap ${badgeToneClasses(c.tone)}`}
+                  data-testid={`chip-${c.label.replace(/\s+/g, "-").toLowerCase()}-${entry.playerId}`}
+                >
+                  {c.label}
+                </span>
+              ))}
+            </div>
+          )}
           {/* Plain-English reason — why this card matters now. */}
           {!isResolved && (
             <p
