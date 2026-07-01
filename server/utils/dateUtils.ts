@@ -21,14 +21,32 @@ export function daysAgoET(n: number): string {
  * gameDiscoveryService.discoverTodaysGames, which uses this same cutoff).
  */
 export function slateDateET(now: Date = new Date()): string {
-  const estOffset = -5 * 60; // EST = UTC-5 (standard); close enough for a 6am cutoff
-  const estMs = now.getTime() + (now.getTimezoneOffset() + estOffset) * 60 * 1000;
-  const est = new Date(estMs);
-  if (est.getHours() < 6) {
-    est.setDate(est.getDate() - 1);
+  // Read the wall-clock date + hour in America/New_York via Intl so the 6am
+  // cutoff is DST-aware (a fixed UTC-5 offset would make the cutoff land at
+  // 7am during EDT — the bulk of the MLB season).
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  let year = get("year");
+  let month = get("month");
+  let day = get("day");
+  const hour = get("hour") % 24; // some ICU builds render midnight as "24"
+
+  if (hour < 6) {
+    const prevDay = new Date(Date.UTC(year, month - 1, day));
+    prevDay.setUTCDate(prevDay.getUTCDate() - 1);
+    year = prevDay.getUTCFullYear();
+    month = prevDay.getUTCMonth() + 1;
+    day = prevDay.getUTCDate();
   }
-  const y = est.getFullYear();
-  const m = String(est.getMonth() + 1).padStart(2, "0");
-  const d2 = String(est.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d2}`;
+
+  const m = String(month).padStart(2, "0");
+  const d2 = String(day).padStart(2, "0");
+  return `${year}-${m}-${d2}`;
 }
