@@ -101,15 +101,6 @@ export interface PregameRadarPublicStats {
   topPregameWinPlayers: PregameRadarWinItem[];
 }
 
-/** One day's entry in the Pregame Radar history drawer. */
-export interface PregameRadarDailyHistoryEntry {
-  dateET: string;
-  flaggedBeforeFirstPitch: number;
-  pregameWinsCount: number;
-  firstAbPregameWinsCount: number;
-  wins: PregameRadarWinItem[];
-}
-
 export interface PregameCalibrationBucket {
   targets: number;
   wins: number;
