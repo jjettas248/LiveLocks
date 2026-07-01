@@ -263,6 +263,9 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
         ))}
       </div>
 
+      {/* Win Attribution — public Pregame Radar Record, shown above today's plays. */}
+      <PregameRadarRecord />
+
       {isLoading && !data && (
         <Card className="p-6 text-center text-sm text-muted-foreground">Loading pre-game targets…</Card>
       )}
@@ -283,8 +286,7 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
         ))}
       </div>
 
-      {/* Win Attribution — public Pregame Radar Record + today's wins (wins-only). */}
-      <PregameRadarRecord />
+      {/* Win Attribution — today's wins (wins-only). Record card now renders above the plays list. */}
       <PregameWinsSection />
     </div>
   );
