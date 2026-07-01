@@ -138,13 +138,13 @@ export function HrRadarHeroCard({
           </div>
         )}
 
-        {/* Distance to Fire */}
+        {/* Distance to Bet Now */}
         {!isFire && (
           <div>
             <HeatMeter
               score10={vm.score10}
               tier={vm.stage}
-              label="Distance to Fire"
+              label="Distance to Bet Now"
               valueDisplay="percent"
               testId="hero-distance-to-fire"
               valueTestId="text-hero-distance"

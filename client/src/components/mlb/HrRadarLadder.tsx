@@ -252,7 +252,7 @@ export const SECTION_META: Record<SectionKey, {
   defaultCollapsed: boolean;
 }> = {
   attackNow: {
-    label: "FIRE",
+    label: "BET NOW",
     icon: Flame,
     accent: "border-red-500/40 bg-red-500/5",
     badge: "bg-red-500 text-white",
@@ -261,16 +261,16 @@ export const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   ready: {
-    label: "READY",
+    label: "HIGH CONVICTION",
     icon: Zap,
     accent: "border-orange-500/40 bg-orange-500/5",
     badge: "bg-orange-500 text-white",
     description: "Strong HR setup forming — high-conviction watch context, not an official call until it fires.",
-    sublabel: "High conviction, waiting for final trigger",
+    sublabel: "One step from a Bet Now call",
     defaultCollapsed: false,
   },
   building: {
-    label: "ALMOST",
+    label: "BUILDING",
     icon: Zap,
     accent: "border-amber-500/40 bg-amber-500/5",
     badge: "bg-amber-500 text-white",
@@ -279,7 +279,7 @@ export const SECTION_META: Record<SectionKey, {
     defaultCollapsed: false,
   },
   watch: {
-    label: "TRACK",
+    label: "WATCHING",
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
@@ -414,12 +414,12 @@ function deadOutcomeLabel(status: string): { label: string; color: string } {
  */
 function cashedFromTierLabel(
   status: string | null | undefined,
-): "Attack" | "Ready" | "Build" | "Watch" | null {
+): "Bet Now" | "High Conviction" | "Building" | "Watching" | null {
   switch (status) {
-    case "called_hit_attack": return "Attack";
-    case "called_hit_ready": return "Ready";
-    case "called_hit_build": return "Build";
-    case "called_hit_watch": return "Watch";
+    case "called_hit_attack": return "Bet Now";
+    case "called_hit_ready": return "High Conviction";
+    case "called_hit_build": return "Building";
+    case "called_hit_watch": return "Watching";
     default: return null;
   }
 }
@@ -592,7 +592,8 @@ function HrBreakdownStrip({ entry }: { entry: HrRadarLadderEntry }) {
   if (bars.length < 2) return null;
   return (
     <div
-      className="mt-2 grid grid-cols-4 gap-1.5"
+      className="mt-2 grid gap-1.5"
+      style={{ gridTemplateColumns: `repeat(${bars.length}, minmax(0, 1fr))` }}
       data-testid={`strip-hr-breakdown-${entry.playerId}`}
     >
       {bars.map((bar) => {
