@@ -353,18 +353,18 @@ export function deriveDrivers(row: HrRadarRowInput, max = 4): string[] {
 // recomputed probability or threshold — it tells the user what the engine is
 // waiting on to promote the row.
 const NEXT_ESCALATION: Record<CanonicalUserStage, string | null> = {
-  track: "Tracking — needs harder contact and a confirming swing to develop.",
-  build: "Developing — one more barrel / hard fly can push this to READY.",
-  ready: "High-conviction setup — one more barrel / hard fly becomes a LIVE CALL.",
+  track: "Watching — needs harder contact and a confirming swing to develop.",
+  build: "Building — one more barrel / hard fly can push this to High Conviction.",
+  ready: "High Conviction setup — one more barrel / hard fly becomes a Bet Now call.",
   fire: null,
   resolved: null,
 };
 
 const ACTION_STRENGTH_LABEL: Record<CanonicalUserStage, string> = {
-  fire: "Live call",
-  ready: "Strong setup",
-  build: "Developing setup",
-  track: "Early formation",
+  fire: "Bet Now",
+  ready: "High Conviction",
+  build: "Building",
+  track: "Watching",
   resolved: "Resolved",
 };
 

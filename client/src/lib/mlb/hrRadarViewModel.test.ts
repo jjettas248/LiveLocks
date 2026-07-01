@@ -195,7 +195,7 @@ console.log("\ncross-tier board priority");
   assert("no live rows → no top priority", selectTopPriority([withResolved[0]]) == null);
 
   const labeled = buildHrRadarCardViewModel(entry({ playerId: "l1", userStage: "ready", displayCurrentScore10: 8, momentumLabel: "heating_up" }));
-  assert("reason label includes stage and momentum", topPriorityReasonLabel(labeled) === "Ready · heating up");
+  assert("reason label includes stage and momentum", topPriorityReasonLabel(labeled) === "High Conviction · heating up");
 }
 
 // ── 6. Stage-movement detection (dopamine layer) ───────────────────────────
@@ -214,8 +214,8 @@ console.log("\nstage movement detection");
 // ── 7. Stage labels consistent ─────────────────────────────────────────────
 console.log("\nstage labels");
 assert("public labels cover the one ladder",
-  HR_PUBLIC_STAGE_LABEL.track === "Track" && HR_PUBLIC_STAGE_LABEL.build === "Build" &&
-  HR_PUBLIC_STAGE_LABEL.ready === "Ready" && HR_PUBLIC_STAGE_LABEL.fire === "Fire" &&
+  HR_PUBLIC_STAGE_LABEL.track === "Watching" && HR_PUBLIC_STAGE_LABEL.build === "Building" &&
+  HR_PUBLIC_STAGE_LABEL.ready === "High Conviction" && HR_PUBLIC_STAGE_LABEL.fire === "Bet Now" &&
   HR_PUBLIC_STAGE_LABEL.cashed === "Cashed" && HR_PUBLIC_STAGE_LABEL.missed === "Missed");
 
 console.log(`\n=== Result: ${pass} pass, ${fail} fail ===`);

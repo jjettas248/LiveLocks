@@ -513,7 +513,10 @@ export interface ReadyToFireContext {
 // + peak-staleness cliff.
 // Hit-rate tightening (2026-06): 2 ticks let brief conviction blips fire. Lift
 // to 3 so the model must hold top conviction longer before a card commits.
-const READY_TO_FIRE_SUSTAIN_TICKS = 3;
+// Frequency rebalance (2026-07): 3 ticks made FIRE too rare in practice — back
+// off to 2. The contact-driver requirement below still blocks a bare conviction
+// blip with no real bat evidence, so this isn't a full revert of the tightening.
+const READY_TO_FIRE_SUSTAIN_TICKS = 2;
 
 // Fire Gate A — peak currency (2026-06 false-call reduction). FIRE must reflect
 // CURRENT contact conviction, never a stale peak the card is merely riding. The
@@ -523,7 +526,11 @@ const READY_TO_FIRE_SUSTAIN_TICKS = 3;
 // readiness is unknown/zero (e.g. unit tests / fast-path rows) so the gate never
 // fabricates a block from missing data. The FAST_PROMOTE_ELITE fast-path (Rule
 // B) bypasses this — an elite barrel is itself the fresh, current evidence.
-const FIRE_PEAK_CURRENCY_RATIO = 0.85;
+// Frequency rebalance (2026-07): 0.85 required near-zero decay off peak, which
+// combined with the sustain-tick gate made FIRE nearly unreachable. Loosened to
+// 0.75 — still requires the card to be close to its best form, just not razor-
+// fresh.
+const FIRE_PEAK_CURRENCY_RATIO = 0.75;
 
 /**
  * Promote a READY user stage to FIRE when the model holds sustained top
