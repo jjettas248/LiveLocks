@@ -34,6 +34,45 @@ export function isHrMaxWindowStage(stage: CanonicalHrRadarStage): boolean {
   return stage === "fire" || stage === "ready";
 }
 
+// ── The one display-grade vocabulary ────────────────────────────────────────
+// Mirrors MLB props' `displayGrade` letter scale (server/mlb/normalizeSignal.ts
+// deriveDisplayGrade) so both sports speak the same grade language. Combines
+// the categorical stage with the numeric /10 score — never the stage alone —
+// so two READY rows with different conviction actually grade differently.
+export type HrRadarDisplayGrade = "A+" | "A" | "B+" | "B" | "B-" | "Watch";
+
+/**
+ * Derive the letter grade from the canonical stage + the row's conviction-
+ * capped /10 display score. Pure lookup, no I/O. Resolved rows carry no grade
+ * — the call is already decided, there is nothing left to grade.
+ *
+ * Thresholds are calibrated against `fallbackScoreForStage()`
+ * (server/mlb/hrRadarUserStage.ts: track=2.5, build=5.5, ready=7.5, fire=9.0)
+ * so the boundary floors line up with each stage's typical score, and a
+ * higher score within a stage always earns a grade at least as good as a
+ * lower one in the same stage.
+ */
+export function deriveHrRadarDisplayGrade(
+  stage: CanonicalHrRadarStage,
+  score10: number | null,
+): HrRadarDisplayGrade | null {
+  if (stage === "resolved") return null;
+  const s = score10 ?? 0;
+  switch (stage) {
+    case "fire":
+      return s >= 9.5 ? "A+" : "A";
+    case "ready":
+      if (s >= 9.0) return "A";
+      if (s >= 8.0) return "B+";
+      return "B";
+    case "build":
+      return s >= 6.5 ? "B-" : "Watch";
+    case "track":
+    default:
+      return "Watch";
+  }
+}
+
 // ── The one badge taxonomy ─────────────────────────────────────────────────
 // Badges are contextual tags layered ON a stage — never stages themselves.
 export type HrRadarBadge =

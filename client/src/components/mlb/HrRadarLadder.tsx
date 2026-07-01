@@ -113,6 +113,9 @@ export interface HrRadarLadderEntry {
   displayInitialScore10?: number | null;
   displayCurrentScore10?: number | null;
   displayPeakScore10?: number | null;
+  // Server-computed letter grade (stage x displayCurrentScore10). Read
+  // verbatim — never re-derive a grade from stage alone on the client.
+  displayGrade?: "A+" | "A" | "B+" | "B" | "B-" | "Watch" | null;
   displayCap10?: number | null;
   displayCapBadgeLabel?: string | null;
   displayCapReason?: string | null;
@@ -241,23 +244,6 @@ export type SectionKey =
   | "cashed"
   | "dead"
   | "modelReview";
-
-// Letter-style grade — a pure relabel of the server's own stage classification
-// (fire/ready/build/track), matching the A+/A/B+/... vocabulary MLB props
-// already use for `displayGrade`. This is NOT a new client-computed score —
-// HR Radar has no server-stamped combined score+tier grade field yet, so this
-// stays a coarse stage→label map rather than fabricating precision the data
-// doesn't support. Resolved stages carry no grade (the call is already decided).
-const STAGE_GRADE: Record<SectionKey, string | null> = {
-  attackNow: "A+",
-  ready: "B+",
-  building: "C+",
-  watch: "C",
-  noAbYet: null,
-  cashed: null,
-  dead: null,
-  modelReview: null,
-};
 
 export const SECTION_META: Record<SectionKey, {
   label: string;
@@ -904,15 +890,17 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
             <span className="text-[10px] text-muted-foreground uppercase tracking-wide shrink-0">
               {entry.team}
             </span>
-            {/* Letter grade — the stage relabeled (see STAGE_GRADE comment). */}
-            {!isResolved && STAGE_GRADE[section] && (
+            {/* Letter grade — server-computed from stage x conviction score
+                (shared/hrRadarStage.ts deriveHrRadarDisplayGrade). Rendered
+                verbatim; never re-derived on the client. */}
+            {!isResolved && entry.displayGrade && (
               <span
                 className={`text-[10px] font-black px-1.5 py-0.5 rounded-md border shrink-0 ${t.text}`}
                 style={{ borderColor: `${t.hex}55`, background: `${t.hex}1a` }}
                 data-testid={`badge-grade-${entry.playerId}`}
-                title="Grade reflects the signal's current stage (Fire/Ready/Build/Track)"
+                title="Grade reflects the signal's current stage and conviction score"
               >
-                {STAGE_GRADE[section]}
+                {entry.displayGrade}
               </span>
             )}
             {/* Record-eligibility tag — orthogonal to the driver chips below;

@@ -46,6 +46,8 @@ export interface HrRadarCardViewModel {
   /** Server-stamped /10 score (read, never computed). */
   score10: number;
   scoreLabel: string;
+  /** Server-computed letter grade (stage x score10), read verbatim. */
+  displayGrade: string | null;
   /** One-line "why now" — verbatim top server driver. */
   headline: string;
   /** Secondary context line (inning / next-PA), or "". */
@@ -206,6 +208,7 @@ export function buildHrRadarCardViewModel(
     stage,
     score10,
     scoreLabel: score10.toFixed(1),
+    displayGrade: d.displayGrade,
     headline,
     subhead,
     nextEventLabel: nextEventFor(stage, d.nextEscalation),
