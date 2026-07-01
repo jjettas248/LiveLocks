@@ -76,6 +76,17 @@
 
     --elevate-1: rgba(255, 255, 255, 0.04);
     --elevate-2: rgba(255, 255, 255, 0.08);
+
+    /* Premium surface depth scale (additive). Layered near-black tints that give
+       cards real elevation instead of one flat border. surface-1 = lowest
+       (page-adjacent panels), surface-3 = highest (hero cards / popovers).
+       Consume via Tailwind `bg-surface-1` etc. or hsl(var(--surface-2)). */
+    --surface-1: 240 10% 7%;
+    --surface-2: 240 10% 9%;
+    --surface-3: 240 9% 12%;
+    /* Hairline border + soft outer glow used by the premium card shell. */
+    --surface-border: 240 10% 16%;
+    --surface-glow: 217 91% 60%;
   }
 
   * {
@@ -107,6 +118,41 @@
 }
 
 @layer utilities {
+  /* Premium typography scale. Raises the legibility floor: the smallest label is
+     11px (was 9–10px). Use these instead of ad-hoc text-[9px]/text-[10px] so the
+     type rhythm is consistent and tunable in one place. */
+  .text-micro {
+    font-size: 0.6875rem;   /* 11px */
+    line-height: 1rem;
+    letter-spacing: 0.01em;
+  }
+  .text-label {
+    font-size: 0.6875rem;   /* 11px */
+    line-height: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+  .text-body-premium {
+    font-size: 0.8125rem;   /* 13px */
+    line-height: 1.25rem;
+  }
+  .text-title-premium {
+    font-family: var(--font-display);
+    font-size: 1rem;        /* 16px */
+    line-height: 1.4rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .text-hero-num {
+    font-family: var(--font-display);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
   .text-glow {
     text-shadow: 0 0 20px hsl(var(--primary) / 0.5);
   }

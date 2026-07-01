@@ -98,6 +98,21 @@ export default {
           ncaab: "hsl(var(--sport-ncaab) / <alpha-value>)",
         },
         brand: "hsl(var(--brand-accent) / <alpha-value>)",
+        // Premium surface depth scale — layered elevation for the card shell.
+        surface: {
+          1: "hsl(var(--surface-1) / <alpha-value>)",
+          2: "hsl(var(--surface-2) / <alpha-value>)",
+          3: "hsl(var(--surface-3) / <alpha-value>)",
+          border: "hsl(var(--surface-border) / <alpha-value>)",
+        },
+      },
+      boxShadow: {
+        // Elevation scale paired with the surface tokens. `surface-glow` is the
+        // primary-tinted halo used sparingly on hero/active cards.
+        "surface-sm": "0 1px 2px hsl(0 0% 0% / 0.4)",
+        "surface-md": "0 4px 12px -2px hsl(0 0% 0% / 0.5)",
+        "surface-lg": "0 12px 30px -8px hsl(0 0% 0% / 0.6)",
+        "surface-glow": "0 0 22px -4px hsl(var(--surface-glow) / 0.35)",
       },
       fontFamily: {
         sans: ["var(--font-sans)"],

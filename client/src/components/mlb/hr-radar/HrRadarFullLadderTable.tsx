@@ -1,98 +1,40 @@
-// HR Radar — Full Ladder compact command table. The power-user research view:
-// dense, sortable rows instead of giant expanded cards. Clicking a row opens
-// the deep diagnostic drawer. PRESENTATION ONLY — every cell reads the canonical
-// view model (engine truth). Raw diagnostics (RDY/HR%/PVUL/peak) live in the
-// drawer, never here.
+// HR Radar — Full Ladder. Sectioned card grid: every entry renders through the
+// same premium LadderCard used by the signal-detail drawer, grouped under
+// section headers (FIRE → READY → BUILD → TRACK → CASHED → MISSED) so the
+// highest-to-lowest hierarchy is explicit rather than an internal sort the
+// user has to infer. PRESENTATION ONLY — every field reads the canonical view
+// model / raw entry (engine truth); this file adds no scoring, staging, or
+// probability logic.
 
-import { useState } from "react";
-import { ChevronRight, ArrowUpDown } from "lucide-react";
+import { LadderCard, SECTION_META, stageToSectionKey, type SectionKey } from "@/components/mlb/HrRadarLadder";
 import type { HrRadarCardViewModel, HrPublicStage } from "@/lib/mlb/hrRadarViewModel";
-import { HR_PUBLIC_STAGE_LABEL, compareByImportance } from "@/lib/mlb/hrRadarViewModel";
-import { hrTierTheme, TierRail } from "@/components/mlb/hrRadarVisuals";
+import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
+import type { HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+import { hrTierTheme } from "@/components/mlb/hrRadarVisuals";
 
-type SortKey = "stage" | "score" | "player";
+// Canonical display order — mirrors the order HrRadarLadder already builds
+// `tableRows` in (fire → ready → build → track → cashed → missed).
+const STAGE_ORDER: HrPublicStage[] = ["fire", "ready", "build", "track", "cashed", "missed"];
 
-const STATUS_LABEL: Record<HrPublicStage, string> = {
-  fire: "Live",
-  ready: "Watch",
-  build: "Track",
-  track: "Track",
-  cashed: "Cashed",
-  missed: "Missed",
-};
-
-function inningSortValue(vm: HrRadarCardViewModel): number {
-  const inn = vm.entry.currentInning ?? vm.entry.detectedInning ?? 99;
-  return inn;
-}
-
-function StageCell({ vm }: { vm: HrRadarCardViewModel }) {
-  const t = hrTierTheme(vm.stage);
-  return (
-    <div className="flex items-center gap-2 min-w-0">
-      <TierRail tier={vm.stage} className="h-5" />
-      <span className={`text-[11px] font-black uppercase tracking-wide ${t.text}`}>
-        {HR_PUBLIC_STAGE_LABEL[vm.stage]}
-      </span>
-    </div>
-  );
-}
-
-function HeaderCell({
-  label,
-  sortKey,
-  active,
-  onSort,
-  className = "",
-  align = "left",
-}: {
-  label: string;
-  sortKey?: SortKey;
-  active?: boolean;
-  onSort?: (k: SortKey) => void;
-  className?: string;
-  align?: "left" | "right";
-}) {
-  const content = (
-    <span className={`inline-flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}>
-      {label}
-      {sortKey && <ArrowUpDown className={`w-3 h-3 ${active ? "text-foreground" : "text-muted-foreground/40"}`} />}
-    </span>
-  );
-  return (
-    <th
-      className={`px-2 py-2 text-[10px] font-bold uppercase tracking-wider text-muted-foreground ${align === "right" ? "text-right" : "text-left"} ${sortKey ? "cursor-pointer hover:text-foreground" : ""} ${className}`}
-      onClick={sortKey && onSort ? () => onSort(sortKey) : undefined}
-      data-testid={sortKey ? `ladder-th-${sortKey}` : undefined}
-    >
-      {content}
-    </th>
-  );
+export interface HrRadarFullLadderTableProps {
+  rows: HrRadarCardViewModel[];
+  onRowClick: (vm: HrRadarCardViewModel) => void;
+  onAddToSlip?: (sig: MlbSignalData) => void;
+  onOpenDetails?: (entry: HrRadarLadderEntry) => void;
+  onPass?: (entry: HrRadarLadderEntry) => void;
+  onAccept?: (entry: HrRadarLadderEntry) => void;
+  isAccepted?: (entry: HrRadarLadderEntry) => boolean;
 }
 
 export function HrRadarFullLadderTable({
   rows,
   onRowClick,
-}: {
-  rows: HrRadarCardViewModel[];
-  onRowClick: (vm: HrRadarCardViewModel) => void;
-}) {
-  const [sortKey, setSortKey] = useState<SortKey>("stage");
-  const [asc, setAsc] = useState(false);
-
-  const onSort = (k: SortKey) => {
-    if (k === sortKey) setAsc((v) => !v);
-    else { setSortKey(k); setAsc(k === "player"); }
-  };
-
-  const sorted = [...rows].sort((a, b) => {
-    let cmp = 0;
-    if (sortKey === "stage") cmp = compareByImportance(a, b) || inningSortValue(a) - inningSortValue(b);
-    else if (sortKey === "score") cmp = b.score10 - a.score10;
-    else cmp = a.playerName.localeCompare(b.playerName);
-    return asc ? -cmp : cmp;
-  });
-
+  onAddToSlip,
+  onOpenDetails,
+  onPass,
+  onAccept,
+  isAccepted,
+}: HrRadarFullLadderTableProps) {
   if (rows.length === 0) {
     return (
       <div className="rounded-xl border border-border/40 bg-card/40 p-6 text-center text-sm text-muted-foreground" data-testid="ladder-table-empty">
@@ -102,76 +44,49 @@ export function HrRadarFullLadderTable({
   }
 
   return (
-    <div className="rounded-xl border border-border/40 bg-card/40 overflow-hidden" data-testid="hr-ladder-table">
-      <table className="w-full border-collapse">
-        <thead className="bg-muted/20 border-b border-border/40">
-          <tr>
-            <HeaderCell label="Stage" sortKey="stage" active={sortKey === "stage"} onSort={onSort} />
-            <HeaderCell label="Player" sortKey="player" active={sortKey === "player"} onSort={onSort} />
-            <HeaderCell label="Score" sortKey="score" active={sortKey === "score"} onSort={onSort} align="right" />
-            <HeaderCell label="Next PA" className="hidden sm:table-cell" align="right" />
-            <HeaderCell label="Last Trigger" className="hidden md:table-cell" />
-            <HeaderCell label="Drivers" className="hidden lg:table-cell" />
-            <HeaderCell label="Status" className="hidden sm:table-cell" align="right" />
-            <th className="w-6" />
-          </tr>
-        </thead>
-        <tbody>
-          {sorted.map((vm) => {
-            const t = hrTierTheme(vm.stage);
-            const nextPa = vm.inningLabel ?? vm.nextPaLabel ?? "—";
-            return (
-              <tr
-                key={vm.id}
-                onClick={() => onRowClick(vm)}
-                className="border-b border-border/20 last:border-0 hover:bg-muted/20 cursor-pointer transition-colors"
-                data-testid={`ladder-table-row-${vm.playerId}`}
-                data-stage={vm.stage}
+    <div className="space-y-4" data-testid="hr-ladder-table">
+      {STAGE_ORDER.map((stage) => {
+        const groupRows = rows
+          .filter((vm) => vm.stage === stage)
+          .sort((a, b) => b.score10 - a.score10);
+        if (groupRows.length === 0) return null;
+
+        const section: SectionKey = stageToSectionKey(stage);
+        const meta = SECTION_META[section];
+        const SectionIcon = meta.icon;
+        const t = hrTierTheme(stage);
+
+        return (
+          <section key={stage} data-testid={`ladder-section-${stage}`}>
+            <div className="flex items-center gap-2 px-1 mb-2">
+              <SectionIcon className={`w-4 h-4 ${t.text}`} aria-hidden="true" />
+              <h3 className={`text-xs font-black uppercase tracking-wide ${t.text}`}>{meta.label}</h3>
+              <span className="text-[11px] text-muted-foreground truncate">{meta.sublabel}</span>
+              <span
+                className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full bg-muted/50 text-muted-foreground shrink-0"
+                data-testid={`ladder-section-count-${stage}`}
               >
-                <td className="px-2 py-2.5"><StageCell vm={vm} /></td>
-                <td className="px-2 py-2.5 min-w-0">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-sm font-semibold text-foreground truncate" data-testid={`ladder-table-player-${vm.playerId}`}>
-                      {vm.playerName}
-                    </span>
-                    <span className="text-[9px] text-muted-foreground uppercase shrink-0">{vm.team}</span>
-                  </div>
-                  {/* Mobile-only inline meta (columns hidden < sm). */}
-                  <div className="sm:hidden text-[10px] text-muted-foreground/70 truncate">
-                    {nextPa !== "—" ? `${nextPa} · ` : ""}{STATUS_LABEL[vm.stage]}
-                  </div>
-                </td>
-                <td className="px-2 py-2.5 text-right">
-                  <span className={`text-sm font-black tabular-nums ${t.text}`}>{vm.scoreLabel}</span>
-                </td>
-                <td className="px-2 py-2.5 text-right hidden sm:table-cell">
-                  <span className="text-xs tabular-nums text-muted-foreground">{nextPa}</span>
-                </td>
-                <td className="px-2 py-2.5 hidden md:table-cell">
-                  <span className="text-xs text-muted-foreground truncate block max-w-[180px]">{vm.headline || "—"}</span>
-                </td>
-                <td className="px-2 py-2.5 hidden lg:table-cell">
-                  <div className="flex flex-wrap gap-1 max-w-[220px]">
-                    {vm.driverChips.length > 0
-                      ? vm.driverChips.map((c) => (
-                          <span key={c} className={`text-[8px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full border ${t.chip}`}>
-                            {c}
-                          </span>
-                        ))
-                      : <span className="text-xs text-muted-foreground/50">—</span>}
-                  </div>
-                </td>
-                <td className="px-2 py-2.5 text-right hidden sm:table-cell">
-                  <span className={`text-[10px] font-bold uppercase tracking-wide ${t.text}`}>{STATUS_LABEL[vm.stage]}</span>
-                </td>
-                <td className="px-1 py-2.5 text-right">
-                  <ChevronRight className="w-4 h-4 text-muted-foreground/40 inline" />
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                {groupRows.length}
+              </span>
+            </div>
+            <div className="grid gap-2.5">
+              {groupRows.map((vm) => (
+                <LadderCard
+                  key={vm.id}
+                  entry={vm.entry}
+                  section={section}
+                  onAddToSlip={onAddToSlip}
+                  onOpenDetails={onOpenDetails}
+                  onPass={onPass}
+                  onAccept={onAccept}
+                  isAccepted={isAccepted ? isAccepted(vm.entry) : false}
+                  onOpenDrawer={() => onRowClick(vm)}
+                />
+              ))}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

@@ -4,7 +4,8 @@ import { useLiveSignalCounts } from "@/hooks/useLiveSignalCounts";
 import { SportSignalCard } from "@/components/signals/SportSignalCard";
 import { SignalSkeletonCard } from "@/components/signals/SignalSkeletonCard";
 import { QueryErrorState } from "@/components/common/QueryErrorState";
-import { Zap, X, ChevronUp, Lock, Sparkles, Trophy } from "lucide-react";
+import { EmptyState } from "@/components/sports/EmptyState";
+import { Zap, X, ChevronUp, Lock, Sparkles, Trophy, Radar } from "lucide-react";
 
 type TopPlaysPanelProps = {
   isElite?: boolean;
@@ -114,10 +115,10 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip, onViewD
             )}
           </div>
           <div className="text-left">
-            <span className={`text-sm font-bold ${hasPlays ? "text-green-400" : "text-muted-foreground"}`}>
+            <span className={`text-title-premium ${hasPlays ? "text-green-400" : "text-foreground"}`}>
               {hasPlays ? "Live Signals" : "Signal Feed"}
             </span>
-            <span className="block text-[10px] text-muted-foreground/70">
+            <span className="block text-micro text-muted-foreground/70">
               {isError && !hasPlays ? "Couldn't load — tap to retry" : isLoading ? "Scanning..." : hasPlays ? `${plays.length} signal${plays.length !== 1 ? "s" : ""} across all sports` : "Monitoring opportunities"}
             </span>
           </div>
@@ -128,7 +129,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip, onViewD
       {isOpen && (
         <div className="space-y-3 animate-in slide-in-from-top-2 duration-200" data-testid="panel-top-plays">
           <div className="flex items-center justify-between px-1">
-            <h2 className="text-xs font-bold text-muted-foreground uppercase tracking-wider">Live Signals</h2>
+            <h2 className="text-label">Live Signals</h2>
             <button
               data-testid="button-close-edge-feed"
               onClick={handleToggle}
@@ -154,18 +155,11 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip, onViewD
           )}
 
           {!isLoading && !isError && plays.length === 0 && (
-            <div className="rounded-xl border border-border/40 bg-card p-6 text-center">
-              <div className="flex items-center justify-center gap-2 text-sm text-blue-400">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
-                </span>
-                Processing live markets
-              </div>
-              <div className="text-xs text-muted-foreground/60 mt-1">
-                Open any sport tab to view markets, run manual calculations, and see engine probabilities in real time.
-              </div>
-            </div>
+            <EmptyState
+              icon={<Radar className="animate-pulse text-blue-400" />}
+              title="Processing live markets"
+              description="Open any sport tab to view markets, run manual calculations, and see engine probabilities in real time."
+            />
           )}
 
           {!isLoading && plays.length > 0 && isElite && (() => {
@@ -338,7 +332,7 @@ export function TopPlaysPanel({ isElite, onNavigateToSport, onAddToSlip, onViewD
                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${totalSignals > 0 ? "bg-green-400" : "bg-blue-400"} opacity-75`} />
                   <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${totalSignals > 0 ? "bg-green-400" : "bg-blue-400"}`} />
                 </span>
-                <span className="text-[10px] text-muted-foreground font-medium">
+                <span className="text-micro text-muted-foreground font-medium">
                   {totalSignals > 0
                     ? `${totalSignals} live signal${totalSignals !== 1 ? "s" : ""} across all sports right now`
                     : "Scanning for live signals across all sports"}

@@ -15,6 +15,7 @@
 // reset in index.css.
 
 import { Flame, Zap, TrendingUp, Eye, Trophy, CircleSlash, type LucideIcon } from "lucide-react";
+import type { HrRadarBadgeTone } from "@shared/hrRadarStage";
 
 // ── Canonical heat tier — the one scale both surfaces collapse onto. ─────────
 export type HrHeatTier = "fire" | "ready" | "build" | "track" | "cashed" | "missed";
@@ -118,6 +119,22 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
 
 export function hrTierTheme(tier: HrHeatTier): HrTierTheme {
   return THEME[tier];
+}
+
+// ── Badge tone → chip classes. A driver chip's meaning (fire/warn/info/good,
+// from HR_RADAR_BADGE_META) is a DIFFERENT axis than the row's stage — e.g.
+// "PARK BOOST" (good) and "NEAR HR" (warn) should never render identically
+// just because they both appear on a READY row. Single source so every
+// chip renderer (Full Ladder, Hero Card, Decision Queue) agrees.
+const BADGE_TONE_CLASS: Record<HrRadarBadgeTone, string> = {
+  fire: "bg-red-500/15 text-red-400 border-red-500/30",
+  warn: "bg-orange-500/15 text-orange-300 border-orange-500/30",
+  info: "bg-blue-500/15 text-blue-300 border-blue-500/30",
+  good: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
+};
+
+export function badgeToneClasses(tone: HrRadarBadgeTone): string {
+  return BADGE_TONE_CLASS[tone];
 }
 
 // ── Map each surface's section vocabulary onto the shared heat tier. ─────────

@@ -15,7 +15,16 @@ import {
   type HrRadarRowInput,
   type CanonicalUserStage,
 } from "@/components/mlb/hrRadarDisplayState";
-import { HR_RADAR_BADGE_META, type HrRadarBadge } from "@shared/hrRadarStage";
+import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
+
+// A driver chip's label alone lost its meaning (fire/warn/info/good) once it
+// left the badge taxonomy — every chip then had to borrow its ROW's stage
+// color instead of its own. Carrying tone alongside the label keeps that
+// information intact all the way to the renderer.
+export interface HrDriverChip {
+  label: string;
+  tone: HrRadarBadgeTone;
+}
 
 // ── The one public ladder, everywhere. ───────────────────────────────────────
 export type HrPublicStage = "track" | "build" | "ready" | "fire" | "cashed" | "missed";
@@ -43,8 +52,8 @@ export interface HrRadarCardViewModel {
   subhead: string;
   /** What the engine is waiting on to advance — anticipation copy. */
   nextEventLabel: string;
-  /** ≤3 short, server-stamped trigger chips. */
-  driverChips: string[];
+  /** ≤3 short, server-stamped trigger chips, each carrying its own tone. */
+  driverChips: HrDriverChip[];
   primaryCta: HrPrimaryCta;
   primaryCtaLabel: string;
   /** True only for an official, record-eligible FIRE call. */
@@ -118,30 +127,32 @@ function publicStage(
 // Build ≤3 short trigger chips from server-stamped evidence ONLY — the badge
 // taxonomy first (already short, e.g. "NEAR HR", "PITCHER FATIGUE"), then a few
 // reformat-only chips for pregame power and live contact. Never invents a tag.
-function buildDriverChips(entry: HrRadarLadderEntry, drivers: string[]): string[] {
-  const chips: string[] = [];
+// Formal badges keep their own tone (HR_RADAR_BADGE_META); the reformat-only
+// chips aren't part of that taxonomy so they get a neutral "info" tone.
+function buildDriverChips(entry: HrRadarLadderEntry, drivers: string[]): HrDriverChip[] {
+  const chips: HrDriverChip[] = [];
   const seen = new Set<string>();
-  const push = (c: string) => {
-    const key = c.toUpperCase();
+  const push = (label: string, tone: HrRadarBadgeTone) => {
+    const key = label.toUpperCase();
     if (!seen.has(key) && chips.length < 3) {
       seen.add(key);
-      chips.push(key);
+      chips.push({ label: key, tone });
     }
   };
 
   for (const b of entry.badges ?? []) {
     const meta = HR_RADAR_BADGE_META[b as HrRadarBadge];
-    if (meta) push(meta.label);
+    if (meta) push(meta.label, meta.tone);
   }
-  if (entry.pregamePowerTarget || entry.pregameSeedTier) push("PREGAME STRONG");
+  if (entry.pregamePowerTarget || entry.pregameSeedTier) push("PREGAME STRONG", "info");
 
   // Reformat-only: surface a couple of recognizable phrases already present in
   // the server drivers as compact chips (display formatting, not invention).
   for (const d of drivers) {
     const t = d.toLowerCase();
-    if (t.includes("live contact")) push("LIVE CONTACT");
-    else if (t.includes("hard-hit") || t.includes("hard hit") || t.includes("barrel")) push("HARD CONTACT");
-    else if (t.includes("climb")) push("SIGNAL CLIMBING");
+    if (t.includes("live contact")) push("LIVE CONTACT", "info");
+    else if (t.includes("hard-hit") || t.includes("hard hit") || t.includes("barrel")) push("HARD CONTACT", "info");
+    else if (t.includes("climb")) push("SIGNAL CLIMBING", "info");
   }
   return chips.slice(0, 3);
 }

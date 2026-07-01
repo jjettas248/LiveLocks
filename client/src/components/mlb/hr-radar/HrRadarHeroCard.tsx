@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, X, Flame } from "lucide-react";
 import type { HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
 import { HR_PUBLIC_STAGE_LABEL } from "@/lib/mlb/hrRadarViewModel";
-import { hrTierTheme, HeatMeter, TierRail, momentumGlyph } from "@/components/mlb/hrRadarVisuals";
+import { hrTierTheme, HeatMeter, TierRail, momentumGlyph, badgeToneClasses } from "@/components/mlb/hrRadarVisuals";
 
 const prefersReducedMotion = (): boolean =>
   typeof window !== "undefined" &&
@@ -103,6 +103,14 @@ export function HrRadarHeroCard({
               )}
             </div>
             <div className="text-[9px] uppercase tracking-widest text-muted-foreground mt-1">/ 10 strength</div>
+            {/* Calibrated HR chance — the closest thing HR Radar has to "the
+                edge": only populated on official FIRE calls (gated upstream),
+                pure renderer of vm.hrChancePct. */}
+            {vm.hrChancePct != null && (
+              <div className={`text-xs font-bold tabular-nums mt-0.5 ${t.text}`} data-testid="text-hero-hr-chance">
+                {Math.round(vm.hrChancePct)}% HR chance
+              </div>
+            )}
           </div>
         </div>
 
@@ -113,16 +121,18 @@ export function HrRadarHeroCard({
           </p>
         )}
 
-        {/* Trigger chips */}
+        {/* Trigger chips — each carries its own tone (fire/warn/info/good) so
+            two different badge types never look identical just because they
+            share a stage. */}
         {vm.driverChips.length > 0 && (
           <div className="flex flex-wrap gap-1.5" data-testid="hero-chips">
             {vm.driverChips.map((c, i) => (
               <span
-                key={c}
-                className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border ${t.chip}`}
+                key={c.label}
+                className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full border ${badgeToneClasses(c.tone)}`}
                 data-testid={`chip-hero-${i}`}
               >
-                {c}
+                {c.label}
               </span>
             ))}
           </div>
