@@ -7,7 +7,7 @@
 // this module stays free of storage imports.
 
 import { randomUUID } from "crypto";
-import { todayET } from "../../utils/dateUtils";
+import { slateDateET } from "../../utils/dateUtils";
 import { discoverTodaysGames } from "../gameDiscoveryService";
 import {
   getStartingLineup,
@@ -126,7 +126,11 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   isPregamePowerRadarBuildRunning = true;
   const startedAt = new Date().toISOString();
   const buildId = `ppr_${Date.now()}_${randomUUID().slice(0, 8)}`;
-  const sessionDate = todayET();
+  // Uses the same 6am-ET slate-day cutoff as discoverTodaysGames() below, so a
+  // build that runs between midnight and 6am ET (which still discovers
+  // yesterday's slate) tags the resulting signals with yesterday's date too —
+  // instead of minting "today"-tagged wins for a slate that already finished.
+  const sessionDate = slateDateET();
   console.log(`[PREGAME_POWER_RADAR_BUILD_START] buildId=${buildId} date=${sessionDate}`);
 
   const signals = new Map<string, PregamePowerSignal>();

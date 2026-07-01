@@ -598,7 +598,7 @@ app.use((req, res, next) => {
       const { installPregamePersistence } = await import(
         "./mlb/pregamePowerRadar/pregamePersistence"
       );
-      const { todayET } = await import("./utils/dateUtils");
+      const { slateDateET } = await import("./utils/dateUtils");
 
       // Wire DB persistence (build sink + DB fallback) before the first build.
       installPregamePersistence();
@@ -614,7 +614,7 @@ app.use((req, res, next) => {
       setInterval(() => {
         try {
           const snap = getSnapshot();
-          const needInitial = !snap || snap.sessionDate !== todayET();
+          const needInitial = !snap || snap.sessionDate !== slateDateET();
           let nearFirstPitch = false;
           if (snap) {
             const now = Date.now();
