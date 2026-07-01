@@ -13,6 +13,21 @@ type MlbGameChipViewModel = {
   isLive: boolean;
   isFinal: boolean;
   isPregame: boolean;
+  /** Outs in the current half-inning (live games only, 0–2), else null. */
+  outs: number | null;
+  /** Base occupancy (live games only), else null. */
+  runners: { first: boolean; second: boolean; third: boolean } | null;
+  /** Age of the server game-state snapshot in ms, else null. */
+  gameStateAgeMs: number | null;
+};
+
+// Server-stamped live game state from /api/mlb/live-games. All fields optional
+// / no-op when absent so partial cache rows never destabilize the UI.
+export type GameStateLike = {
+  outs?: number | null;
+  runnersOnBase?: string[] | null;
+  stampedAt?: number | null;
+  ageMs?: number | null;
 };
 
 export type GameLike = {
@@ -27,6 +42,7 @@ export type GameLike = {
   isTopInning?: boolean;
   status?: string | null;
   startTime?: string | null;
+  gameState?: GameStateLike | null;
 };
 
 export function formatMlbDisplayInning(game: GameLike): string {
@@ -45,7 +61,17 @@ export function formatMlbDisplayStatus(game: GameLike): string {
   if (s === "pregame" || s === "scheduled" || s === "status_scheduled") {
     if (game.startTime) {
       try {
-        return new Date(game.startTime).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", hour12: true });
+        // ET-anchored: the product is Eastern-Time canonical, so anchor start
+        // times to the ballpark slate rather than the viewer's device zone.
+        const d = new Date(game.startTime);
+        if (Number.isNaN(d.getTime())) return "Scheduled";
+        const t = d.toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+          timeZone: "America/New_York",
+        });
+        return `${t} ET`;
       } catch { return "Scheduled"; }
     }
     return "Scheduled";
@@ -70,6 +96,28 @@ export function normalizeMlbGameChip(game: GameLike): MlbGameChipViewModel {
   const isLive = status === "live";
   const isFinal = status === "final";
   const isPregame = !isLive && !isFinal;
+
+  // Live base/out state — read-only mapping of server-stamped gameState.
+  // All-null when absent or not live, so chips render exactly as before.
+  const gs = game.gameState;
+  const outs = isLive && typeof gs?.outs === "number" && Number.isInteger(gs.outs) && gs.outs >= 0 && gs.outs <= 2
+    ? gs.outs
+    : null;
+  const runners = isLive && Array.isArray(gs?.runnersOnBase)
+    ? {
+        first: gs!.runnersOnBase!.includes("first"),
+        second: gs!.runnersOnBase!.includes("second"),
+        third: gs!.runnersOnBase!.includes("third"),
+      }
+    : null;
+  // Prefer server-computed ageMs; fall back to stampedAt (subject to client
+  // clock skew, hence secondary). Null when neither is present.
+  const gameStateAgeMs = typeof gs?.ageMs === "number" && gs.ageMs >= 0
+    ? gs.ageMs
+    : typeof gs?.stampedAt === "number" && gs.stampedAt > 0
+      ? Math.max(0, Date.now() - gs.stampedAt)
+      : null;
+
   return {
     gameId: game.gameId,
     awayTeam: String(game.awayAbbr ?? game.awayTeam ?? ""),
@@ -83,6 +131,9 @@ export function normalizeMlbGameChip(game: GameLike): MlbGameChipViewModel {
     isLive,
     isFinal,
     isPregame,
+    outs,
+    runners,
+    gameStateAgeMs,
   };
 }
 

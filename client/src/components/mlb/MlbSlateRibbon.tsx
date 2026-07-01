@@ -6,6 +6,7 @@
 // grade / isBettable. Selecting a chip filters the active surface (HR Radar /
 // Pre-Game Power) to that game; the leading "All games" pill clears the filter.
 
+import { useEffect, useState } from "react";
 import {
   normalizeMlbGameChip,
   deriveMlbRibbonChipSignal,
@@ -15,6 +16,12 @@ import {
 } from "@/lib/mlb/mlbNormalizers";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { Radio } from "lucide-react";
+
+// Base/out state is greyed out once the server game-state snapshot is older
+// than this — the orchestrator polls every ~10s, so >60s means it's frozen.
+const GAME_STATE_STALE_MS = 60_000;
+// "Updated Ns ago" turns amber after 3 missed 15s polls.
+const RIBBON_UPDATED_WARN_MS = 45_000;
 
 // Local tone → Tailwind classes (mirror of HR Radar's HR_BADGE_TONE_CLASS, kept
 // inline so the ribbon stays self-contained and does not import across the
@@ -81,18 +88,42 @@ function MlbSlateRibbonChip({
 
       <div className="flex items-center justify-between w-full gap-1.5">
         <span className="font-semibold text-foreground">{chip.awayTeam}</span>
-        <span className={`font-mono font-bold text-[11px] ${chip.isLive ? "text-green-400" : "text-primary"}`}>
-          {chip.awayScore ?? 0}-{chip.homeScore ?? 0}
-        </span>
+        {chip.awayScore != null && chip.homeScore != null ? (
+          <span className={`font-mono font-bold text-[11px] ${chip.isLive ? "text-green-400" : "text-primary"}`}>
+            {chip.awayScore}-{chip.homeScore}
+          </span>
+        ) : (
+          <span className="font-mono text-[11px] text-muted-foreground/60">@</span>
+        )}
         <span className="font-semibold text-foreground">{chip.homeTeam}</span>
       </div>
 
       <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
         {chip.isLive && <LiveDot />}
         {chip.isFinal && <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 inline-block" />}
-        <span className={chip.isLive ? "text-green-400" : chip.isFinal ? "text-muted-foreground/60" : ""}>
+        <span className={`whitespace-nowrap ${chip.isLive ? "text-green-400" : chip.isFinal ? "text-muted-foreground/60" : ""}`}>
           {statusText}
         </span>
+        {chip.isLive && (chip.runners !== null || chip.outs !== null) && (
+          <span
+            data-testid={`mlb-ribbon-basestate-${chip.gameId}`}
+            aria-label={baseOutAriaLabel(chip.runners, chip.outs)}
+            className={`whitespace-nowrap font-mono ${
+              chip.gameStateAgeMs !== null && chip.gameStateAgeMs > GAME_STATE_STALE_MS
+                ? "text-muted-foreground/40"
+                : "text-muted-foreground/80"
+            }`}
+          >
+            {chip.runners && (
+              <>
+                {chip.runners.first ? "◆" : "◇"}
+                {chip.runners.second ? "◆" : "◇"}
+                {chip.runners.third ? "◆" : "◇"}
+              </>
+            )}
+            {chip.outs !== null && <> {chip.outs}o</>}
+          </span>
+        )}
         {sig.signalCount > 0 && (
           <span className="ml-auto font-semibold text-muted-foreground/80" data-testid={`mlb-ribbon-count-${chip.gameId}`}>
             {sig.signalCount} sig
@@ -103,7 +134,32 @@ function MlbSlateRibbonChip({
   );
 }
 
-export function MlbSlateRibbon({ games, signals, selectedGameId, onSelectGame }: MlbSlateRibbonProps) {
+function baseOutAriaLabel(
+  runners: { first: boolean; second: boolean; third: boolean } | null,
+  outs: number | null,
+): string {
+  const parts: string[] = [];
+  if (runners) {
+    const occupied = [runners.first && "first", runners.second && "second", runners.third && "third"].filter(Boolean);
+    parts.push(occupied.length > 0 ? `runners on ${occupied.join(", ")}` : "bases empty");
+  }
+  if (outs !== null) parts.push(`${outs} out${outs === 1 ? "" : "s"}`);
+  return parts.join(", ");
+}
+
+export function MlbSlateRibbon({ games, signals, selectedGameId, onSelectGame, dataUpdatedAt }: MlbSlateRibbonProps) {
+  // "Updated Ns ago" depends on Date.now(), so tick a slow local clock to
+  // drive re-renders (same renderer-only pattern as MlbSignalCard). Inactive
+  // when the caller doesn't supply dataUpdatedAt.
+  const hasUpdatedAt = typeof dataUpdatedAt === "number" && dataUpdatedAt > 0;
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!hasUpdatedAt) return;
+    const id = setInterval(() => forceTick(t => (t + 1) % 1_000_000), 5_000);
+    return () => clearInterval(id);
+  }, [hasUpdatedAt]);
+  const updatedAgoMs = hasUpdatedAt ? Math.max(0, Date.now() - dataUpdatedAt!) : null;
+
   if (games.length === 0) {
     return (
       <div className="text-xs text-muted-foreground py-3" data-testid="text-no-mlb-games-today">
@@ -120,6 +176,14 @@ export function MlbSlateRibbon({ games, signals, selectedGameId, onSelectGame }:
         </h2>
         <span className="text-[10px] text-muted-foreground/70" data-testid="text-mlb-ribbon-count">
           {games.length} game{games.length === 1 ? "" : "s"} &middot; scroll for more
+          {updatedAgoMs !== null && (
+            <span
+              data-testid="text-mlb-ribbon-updated"
+              className={updatedAgoMs > RIBBON_UPDATED_WARN_MS ? "text-amber-400" : ""}
+            >
+              {" "}&middot; updated {Math.round(updatedAgoMs / 1000)}s ago
+            </span>
+          )}
         </span>
       </div>
 

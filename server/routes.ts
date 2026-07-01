@@ -1733,6 +1733,12 @@ export async function registerRoutes(
 
   const mlbLiveGamesCache = new Map<string, { ts: number; games: any[] }>();
   const MLB_LIVE_GAMES_TTL = 15_000;
+  // Phantom-live guard: a SCHEDULED game whose start time has passed only counts
+  // as live while we're inside the start grace window OR the orchestrator has
+  // fresh game state confirming first pitch. Otherwise a rain delay/postponement
+  // would render as a live 0-0 game indefinitely.
+  const MLB_START_GRACE_MS = 20 * 60_000;
+  const MLB_STATE_FRESH_MS = 10 * 60_000;
 
   // ── MLB preview player generator ─────────────────────────────────────────────
   // Derives preview cards from REAL game data only — no fabricated names/matchups.
@@ -1883,16 +1889,27 @@ export async function registerRoutes(
         const competition = event.competitions?.[0];
         if (!competition) continue;
 
+        const gameId = String(event.id);
+        const cachedState = mlbGameCache.gameState[gameId];
+
         const statusName: string = competition.status?.type?.name ?? event.status?.type?.name ?? "STATUS_SCHEDULED";
         const isLiveEspn = statusName === "STATUS_IN_PROGRESS" || statusName === "STATUS_DELAYED";
         const isFinal = statusName === "STATUS_FINAL" || statusName === "STATUS_FORFEIT";
-        // Time-based fallback: if ESPN still shows SCHEDULED but start time has passed, treat as LIVE
+        // Time-based fallback: if ESPN still shows SCHEDULED but start time has
+        // passed, treat as LIVE — but only while the orchestrator has fresh game
+        // state confirming first pitch, or we're within the start grace window.
         const gameStartMs = event.date ? new Date(event.date).getTime() : 0;
-        const startedByTime = gameStartMs > 0 && Date.now() >= gameStartMs;
+        const startTimePassed = gameStartMs > 0 && Date.now() >= gameStartMs;
+        const hasRecentGameState = typeof cachedState?.fetchedAt === "number"
+          && Date.now() - cachedState.fetchedAt < MLB_STATE_FRESH_MS;
+        const withinStartGrace = startTimePassed && Date.now() <= gameStartMs + MLB_START_GRACE_MS;
+        const startedByTime = startTimePassed && (hasRecentGameState || withinStartGrace);
+        if (!isLiveEspn && !isFinal && startTimePassed && !startedByTime) {
+          console.log(`[MLB STATUS_GUARD] game=${gameId} scheduled start passed ${Math.round((Date.now() - gameStartMs) / 60_000)}min ago with no fresh game state — keeping pregame (likely delay/postponement)`);
+        }
         const isLive = isLiveEspn || startedByTime;
         const canonicalState = isFinal ? "final" : isLive ? "live" : "pregame";
         console.log(`[MLB STATUS] ${statusName} → ${canonicalState} (espnLive=${isLiveEspn} timeLive=${startedByTime}) ${event.date ?? "no-time"}`);
-        const gameId = String(event.id);
 
         const homeCompetitor = competition.competitors?.find((c: any) => c.homeAway === "home");
         const awayCompetitor = competition.competitors?.find((c: any) => c.homeAway === "away");
@@ -1911,8 +1928,7 @@ export async function registerRoutes(
         const homeScore: number = (isLive || isFinal) ? (parseFloat(homeCompetitor?.score ?? "0") || 0) : 0;
         const awayScore: number = (isLive || isFinal) ? (parseFloat(awayCompetitor?.score ?? "0") || 0) : 0;
 
-        // Inning from cached game state (orchestrator-maintained) — fallback to ESPN status detail
-        const cachedState = mlbGameCache.gameState[gameId];
+        // Inning from cached game state (orchestrator-maintained, hoisted above) — fallback to ESPN status detail
         const statusDetail: string = competition.status?.type?.shortDetail ?? "";
         const espnPeriod: number = typeof competition.status?.period === "number"
           ? competition.status.period
@@ -2052,6 +2068,10 @@ export async function registerRoutes(
           gameState: cachedState ? {
             outs: cachedState.outs,
             runnersOnBase: cachedState.runnersOnBase,
+            // Freshness (additive): stampedAt lets the client compute true age;
+            // ageMs is server-computed but optimistic by up to the route cache TTL.
+            stampedAt: cachedState.fetchedAt,
+            ageMs: Date.now() - cachedState.fetchedAt,
           } : null,
           signalCount: allVisibleSigs.length,
           qualifiedSignalCount: qualifiedSigs.length,
