@@ -3,6 +3,8 @@
 // Includes ALL games regardless of status (pregame + live).
 // Maps ESPN event IDs to MLB Stats API gamePk for downstream data pulls.
 
+import { slateDateET } from "../utils/dateUtils";
+
 export interface MLBGame {
   gameId: string;
   gamePk?: string;
@@ -15,14 +17,10 @@ export interface MLBGame {
 }
 
 function getESTSlateDate(): Date {
-  const now = new Date();
-  const estOffset = -5 * 60;
-  const estMs = now.getTime() + (now.getTimezoneOffset() + estOffset) * 60 * 1000;
-  const est = new Date(estMs);
-  if (est.getHours() < 6) {
-    est.setDate(est.getDate() - 1);
-  }
-  return est;
+  // Delegates to the shared slate-day cutoff (6am ET) so game discovery and
+  // the Pre-Game Power Radar's sessionDate stamping never disagree.
+  const [y, m, d] = slateDateET().split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
 function todayDateStrEspn(): string {

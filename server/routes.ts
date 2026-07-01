@@ -26,7 +26,7 @@ import { enrichNCAABGameFull, clearEnrichmentCache, getEnrichmentCacheStats } fr
 import { calculateParlay } from "./parlayService";
 import { registerAuthRoutes, requirePlayAccess, requireMLBAccess, requireAuth, requireAdmin, requireTier } from "./auth";
 import { resolveAccess } from "./utils/access";
-import { todayET, daysAgoET } from "./utils/dateUtils";
+import { todayET, daysAgoET, slateDateET } from "./utils/dateUtils";
 import {
   HR_RADAR_GOLDMASTER_V1,
   enrichWithUserStage,
@@ -5473,17 +5473,7 @@ export async function registerRoutes(
   // Returns today's date in EST as YYYYMMDD, rolling over at 6am EST
   // (games that finish after midnight still belong to the previous slate until 6am)
   function getESTSlateDate(): string {
-    const now = new Date();
-    const estOffset = -5 * 60; // EST = UTC-5 (standard); close enough for 6am cutoff
-    const estMs = now.getTime() + (now.getTimezoneOffset() + estOffset) * 60 * 1000;
-    const est = new Date(estMs);
-    if (est.getHours() < 6) {
-      est.setDate(est.getDate() - 1);
-    }
-    const y = est.getFullYear();
-    const m = String(est.getMonth() + 1).padStart(2, "0");
-    const d = String(est.getDate()).padStart(2, "0");
-    return `${y}${m}${d}`;
+    return slateDateET().replace(/-/g, "");
   }
 
   // Proxy ESPN live NBA scoreboard to avoid CORS
