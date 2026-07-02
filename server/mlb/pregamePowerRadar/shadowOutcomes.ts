@@ -151,6 +151,18 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
           console.log(
             `[PREGAME_RADAR_WIN] ${signal.signalId} player=${signal.batterName} inning=${outcome.hrInning ?? "?"} pa=${outcome.plateAppearanceNumber ?? "?"} firstAb=${outcome.firstAbPregameWin === true}`,
           );
+          // Logged once at grading time (not per HTTP read) so polling clients
+          // never multiply this into per-request log spam — see
+          // buildPregameRadarWinItem for the same slateDateET resolution.
+          console.log("[PREGAME_RADAR_DATE_KEY]", {
+            playerName: signal.batterName,
+            gameId: signal.gameId,
+            rawGameDate: signal.gameDate,
+            gameStartTime: signal.startsAt,
+            slateDateET: signal.sessionDate,
+            settlementTime: outcome.resolvedAt,
+            groupedUnder: signal.sessionDate,
+          });
         } else if (outcome.outcome === "pregame_win") {
           console.log(`[PREGAME_RADAR_WIN_INTERNAL] ${signal.signalId} player=${signal.batterName} (homered, not publicly flagged)`);
         } else {

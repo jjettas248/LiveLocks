@@ -703,17 +703,6 @@ export async function registerRoutes(
       const firstAbPregameWins: DailyCashedLogResponse["firstAbPregameWins"] = wins.firstAbPregameWins;
       const sectionMeta = buildPregameWinsSectionMeta(sessionDate, slateDateET());
 
-      for (const w of pregameRadarWins) {
-        console.log("[PREGAME_RADAR_DATE_KEY]", {
-          playerName: w.playerName,
-          gameId: w.gameId,
-          slateDateET: w.slateDateET,
-          gameStartTimeET: w.gameStartTimeET,
-          resolvedAt: w.resolvedAt,
-          groupedUnder: sessionDate,
-        });
-      }
-
       const response: DailyCashedLogResponse = {
         officialLiveCashes,
         pregameRadarWins,
