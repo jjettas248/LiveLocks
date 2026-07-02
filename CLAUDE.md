@@ -40,6 +40,7 @@ npx tsx server/mlb/pregamePowerRadar/winAttribution.test.ts  # Pregame Radar Win
 npx tsx server/mlb/pregamePowerRadar/calibrationStats.test.ts # Pregame Radar public stats (wins-only) vs admin calibration (full denominator: byTier/byScoreBand/byDriver + conversion rates)
 npx tsx server/mlb/pregamePowerRadar/gradedStatePreservation.test.ts # Pregame Radar graded-state carry across snapshot rebuilds + wrong-slate snapshot refusal
 npx tsx server/mlb/pregamePowerRadar/slateDateRepair.test.ts # Pregame Radar slate-date repair planner (startsAt/gameDate correction, collision detection, no blanket day-shift)
+npx tsx server/mlb/pregamePowerRadar/nearHrRecentForm.test.ts # Pregame Radar near-HR recent-form component (retroactive nearHrContact reuse, recency weighting, consecutive-day bonus, leakage guard)
 npx tsx server/utils/dateUtils.test.ts               # slateDateET() 6am-ET rollover + toEtDateKey() ET calendar-date conversion invariants
 ```
 
@@ -121,7 +122,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | MLB integrity firewall | `server/mlb/integrityFirewall.ts` |
 | MLB shadow qualification | `server/mlb/shadowQualification.ts` |
 | MLB HR miss diagnostics (LLM payload, read-only) | `server/mlb/hrMissDiagnostics.ts` (pure builders), `server/mlb/hrMissDiagnosticsService.ts` (DB gatherer), `client/src/components/admin/HrMissDiagnosticsCard.tsx` (admin card) |
-| MLB Pre-Game Power Radar + Win Attribution | `server/mlb/pregamePowerRadar/` — `shadowOutcomes.ts` (grading + `pregame_win`/`calibration_miss` attribution + public/admin stat getters), `winAttribution.ts` (pure attribution + daily-log builders), `calibrationStats.ts` (pure public/admin stat builders), `shared/pregameRadarWin.ts` (transport contracts: `DailyCashedLogResponse`, `PregameRadarPublicStats`, `PregameRadarCalibrationStats`); client `PregameWinCard.tsx` (public record + wins) + `components/admin/PregameRadarCalibrationCard.tsx` (admin calibration) |
+| MLB Pre-Game Power Radar + Win Attribution | `server/mlb/pregamePowerRadar/` — `shadowOutcomes.ts` (grading + `pregame_win`/`calibration_miss` attribution + public/admin stat getters), `winAttribution.ts` (pure attribution + daily-log builders), `calibrationStats.ts` (pure public/admin stat builders), `scoring.ts` (6-component weighted composite), `nearHrRecentForm.ts` (Component 6 — retroactive near-HR contact form via `nearHrContact.ts`, last 3 ET days, recency-weighted + consecutive-day bonus), `shared/pregameRadarWin.ts` (transport contracts: `DailyCashedLogResponse`, `PregameRadarPublicStats`, `PregameRadarCalibrationStats`); client `PregameWinCard.tsx` (public record + wins) + `components/admin/PregameRadarCalibrationCard.tsx` (admin calibration) |
 | MLB orchestrator (per-tick driver) | `server/mlb/liveGameOrchestrator.ts` |
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |
 | NBA playoff rotation truth | `server/services/nbaRotationHistoryService.ts` |

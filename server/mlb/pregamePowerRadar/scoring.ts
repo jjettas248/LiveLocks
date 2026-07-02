@@ -17,6 +17,7 @@ export interface ScoringComponents {
   matchupFitScore: number;
   parkWeatherScore: number;
   lineupOpportunityScore: number;
+  nearHrRecentFormScore: number;
   bvpModifier: number;
 }
 
@@ -84,11 +85,12 @@ export function classifyTier(
 }
 
 export const COMPONENT_WEIGHTS = {
-  batterPower: 0.3,
-  pitcherVulnerability: 0.25,
-  matchupFit: 0.2,
-  parkWeather: 0.15,
-  lineupOpportunity: 0.1,
+  batterPower: 0.28,
+  pitcherVulnerability: 0.23,
+  matchupFit: 0.18,
+  parkWeather: 0.14,
+  lineupOpportunity: 0.09,
+  nearHrRecentForm: 0.08,
 } as const;
 
 /** Fixed data-coverage formula — do not invent another. Returns 0–1. */
@@ -124,7 +126,8 @@ export function composePregameScore(
       c.pitcherVulnerabilityScore * COMPONENT_WEIGHTS.pitcherVulnerability +
       c.matchupFitScore * COMPONENT_WEIGHTS.matchupFit +
       c.parkWeatherScore * COMPONENT_WEIGHTS.parkWeather +
-      c.lineupOpportunityScore * COMPONENT_WEIGHTS.lineupOpportunity,
+      c.lineupOpportunityScore * COMPONENT_WEIGHTS.lineupOpportunity +
+      c.nearHrRecentFormScore * COMPONENT_WEIGHTS.nearHrRecentForm,
   );
 
   const bvpAdjustedScore = clamp10(baseScore + c.bvpModifier);
