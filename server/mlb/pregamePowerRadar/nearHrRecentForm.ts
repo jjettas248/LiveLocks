@@ -78,7 +78,7 @@ export function computeNearHrRecentForm(inputs: NearHrRecentFormInputs): Compone
   // NOT a weighted average — so a single strong day's contribution still
   // scales with how recent it was (a plain weighted average of one value
   // collapses to that value regardless of its weight).
-  let qualifyingDayCount = 0;
+  const qualifyingOffsets: number[] = [];
   let weightedExcess = 0;
 
   for (const dayKey of Array.from(byDay.keys()).sort()) {
@@ -105,7 +105,7 @@ export function computeNearHrRecentForm(inputs: NearHrRecentFormInputs): Compone
     weightedExcess += (points - QUIET_DAY_POINTS) * weight;
 
     if (peak.tier) {
-      qualifyingDayCount++;
+      qualifyingOffsets.push(offset);
       drivers.push({
         key: `near_hr_form_${dayKey}`,
         label: tierLabel(peak.tier),
@@ -116,14 +116,22 @@ export function computeNearHrRecentForm(inputs: NearHrRecentFormInputs): Compone
     }
   }
 
+  // Bonus requires two ADJACENT qualifying offsets (e.g. yesterday + the day
+  // before) — not just "2+ qualifying days somewhere in the window". Offsets
+  // 1 and 3 with nothing on offset 2 is a gap, not a streak.
+  const sortedOffsets = [...qualifyingOffsets].sort((a, b) => a - b);
+  const hasConsecutivePair = sortedOffsets.some(
+    (offset, i) => i > 0 && offset - sortedOffsets[i - 1] === 1,
+  );
+
   let score10 = QUIET_DAY_POINTS + weightedExcess;
-  if (qualifyingDayCount >= 2) {
+  if (hasConsecutivePair) {
     score10 += CONSECUTIVE_DAY_BONUS;
     drivers.push({
       key: "near_hr_form_consecutive",
       label: "Consecutive-Day Near-HR Pattern",
       direction: "positive",
-      evidence: `${qualifyingDayCount} of last ${WINDOW_DAYS} days`,
+      evidence: `${qualifyingOffsets.length} of last ${WINDOW_DAYS} days, back-to-back`,
       weight: 80,
     });
   }

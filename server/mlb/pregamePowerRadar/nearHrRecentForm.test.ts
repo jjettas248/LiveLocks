@@ -67,6 +67,22 @@ ok(
   "no consecutive-day driver when only 1 day qualifies",
 );
 
+// Non-adjacent qualifying days (offset 1 + offset 3, gap on offset 2) must
+// NOT earn the consecutive-day bonus — 2+ qualifying days somewhere in the
+// window is not the same as a back-to-back streak.
+const gappedTwoDays = computeNearHrRecentForm({
+  events: [watchEvent(OFFSET_1_DAY), watchEvent(OFFSET_3_DAY)],
+  sessionDateEt: SESSION_DATE,
+});
+ok(
+  !gappedTwoDays.drivers.some((d) => d.key === "near_hr_form_consecutive"),
+  "no consecutive-day driver when qualifying days are non-adjacent (offset 1 + offset 3)",
+);
+ok(
+  gappedTwoDays.score10 < twoDaysOneEventEach.score10,
+  `non-adjacent 2-day pattern scores lower than a true back-to-back streak (gapped=${gappedTwoDays.score10}, streak=${twoDaysOneEventEach.score10})`,
+);
+
 // ── Leakage guard: current-game-day event never contributes ──────────────────
 const sameDayOnly = computeNearHrRecentForm({ events: [leanEvent(SAME_DAY)], sessionDateEt: SESSION_DATE });
 ok(!sameDayOnly.available && sameDayOnly.score10 === 5, "same-day-only event → treated as no data (leaked in nothing)");
