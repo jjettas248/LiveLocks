@@ -664,6 +664,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         gameStatus,
         firstPitchLockEligible,
         new Date().toISOString(),
+        buildId,
       );
       for (const carried of carriedOver) {
         signals.set(carried.signalId, carried);

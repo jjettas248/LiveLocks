@@ -42,6 +42,13 @@ export function carryForwardGradedState(
  * the game-status-derived fields so grading can still resolve them and the
  * badge reflects reality — everything else (score, tier, drivers, and any
  * already-stamped outcome) is preserved untouched.
+ *
+ * Scoped to already-live/final games only: a pre-first-pitch lineup change
+ * (a late scratch) is a legitimate reason for a batter to disappear — he
+ * never played, so he must not be held on the public board as a confirmed
+ * target, and would likely never get a box-score line to grade. Only an
+ * in-game substitution (the game is already live or final) should carry the
+ * dropped batter's signal forward.
  */
 export function carryForwardDroppedFromLineup(
   gameId: string,
@@ -50,14 +57,17 @@ export function carryForwardDroppedFromLineup(
   gameStatus: PregameGameStatus,
   firstPitchLockEligible: boolean,
   nowIso: string,
+  buildId: string,
 ): PregamePowerSignal[] {
-  const isLocked = !firstPitchLockEligible && (gameStatus === "live" || gameStatus === "final");
+  if (gameStatus !== "live" && gameStatus !== "final") return [];
+  const isLocked = !firstPitchLockEligible;
   return prevSignalsForGame
     .filter((prev) => prev.gameId === gameId && !currentLineupBatterIds.has(prev.batterId))
     .map((prev) => ({
       ...prev,
       gameStatus,
       firstPitchLockEligible,
+      buildId,
       status: prev.status === "graded" ? "graded" : isLocked ? "locked" : prev.status,
       lockedAt: prev.lockedAt ?? (isLocked ? nowIso : null),
     }));
