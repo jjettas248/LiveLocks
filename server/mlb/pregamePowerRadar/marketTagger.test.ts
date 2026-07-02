@@ -124,8 +124,28 @@ ok(
   "batterPower unavailable not public",
 );
 ok(
-  isPublicPregameSignal(makeSignal({ score10: 5.5, everPubliclyFlagged: true })),
-  "a currently-ineligible signal recovers via a frozen everPubliclyFlagged: true",
+  !isPublicPregameSignal(makeSignal({ score10: 5.5, everPubliclyFlagged: true })),
+  "a still-active (not graded) signal does NOT recover via everPubliclyFlagged — live gates (e.g. score) must stay authoritative pre-grading",
+);
+ok(
+  isPublicPregameSignal(makeSignal({
+    status: "graded", score10: 5.5, everPubliclyFlagged: true,
+    outcomes: { hitHr: true, outcome: "pregame_win", userVisible: true },
+  })),
+  "a graded win recovers via a frozen everPubliclyFlagged: true even if score10 has since drifted below threshold",
+);
+ok(
+  !isPublicPregameSignal(makeSignal({ suppressed: true, everPubliclyFlagged: true })),
+  "a scratched/suppressed still-active signal stays hidden even with a frozen everPubliclyFlagged: true — suppression must always be live, never overridden by history, until the game is graded",
+);
+ok(
+  isPublicPregameSignal(makeSignal({
+    status: "graded",
+    suppressed: true,
+    everPubliclyFlagged: true,
+    outcomes: { hitHr: true, outcome: "pregame_win", userVisible: true },
+  })),
+  "a graded win stays visible via the frozen flag even if suppressed got set post-grading (game already happened, suppression is moot)",
 );
 
 console.log(`\nmarketTagger.test: ${passed} passed, ${failed} failed`);

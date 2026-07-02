@@ -19,24 +19,26 @@ export function carryForwardGradedState(
   fresh: PregamePowerSignal,
   prev: PregamePowerSignal | undefined,
 ): PregamePowerSignal {
-  const sameSlate = prev != null && prev.sessionDate === fresh.sessionDate;
-
-  // Freeze "was this ever a legitimate publicly-flagged pregame target" —
-  // OR'd forward so a later dip in the mutable eligibility fields (tier,
-  // score, dataCoverageScore, etc., all re-fetched from live data on every
-  // rebuild) can never erase an earlier true evaluation.
-  fresh.everPubliclyFlagged =
-    wasPubliclyFlaggedPregame(fresh) || (sameSlate && prev!.everPubliclyFlagged === true);
-
-  if (!sameSlate) return fresh;
-  if (prev!.outcomes && !fresh.outcomes) {
-    fresh.outcomes = prev!.outcomes;
-    if (prev!.status === "graded") fresh.status = "graded";
+  if (!prev || prev.sessionDate !== fresh.sessionDate) {
+    // Freeze "was this ever a legitimate publicly-flagged pregame target" —
+    // OR'd forward (below) so a later dip in the mutable eligibility fields
+    // (tier, score, dataCoverageScore, etc., all re-fetched from live data on
+    // every rebuild) can never erase an earlier true evaluation. No same-slate
+    // prior copy to OR against here, so this rebuild's own live evaluation is
+    // all there is.
+    fresh.everPubliclyFlagged = wasPubliclyFlaggedPregame(fresh);
+    return fresh;
   }
-  fresh.becameLiveReady = fresh.becameLiveReady || prev!.becameLiveReady;
-  fresh.becameLiveFire = fresh.becameLiveFire || prev!.becameLiveFire;
-  fresh.convertedLiveAt = fresh.convertedLiveAt ?? prev!.convertedLiveAt;
+
+  fresh.everPubliclyFlagged = wasPubliclyFlaggedPregame(fresh) || prev.everPubliclyFlagged === true;
+  if (prev.outcomes && !fresh.outcomes) {
+    fresh.outcomes = prev.outcomes;
+    if (prev.status === "graded") fresh.status = "graded";
+  }
+  fresh.becameLiveReady = fresh.becameLiveReady || prev.becameLiveReady;
+  fresh.becameLiveFire = fresh.becameLiveFire || prev.becameLiveFire;
+  fresh.convertedLiveAt = fresh.convertedLiveAt ?? prev.convertedLiveAt;
   // First lock time sticks across rebuilds of a live/final game.
-  if (prev!.lockedAt) fresh.lockedAt = prev!.lockedAt;
+  if (prev.lockedAt) fresh.lockedAt = prev.lockedAt;
   return fresh;
 }

@@ -15,15 +15,20 @@
 // in-memory OR-accumulator this flag depends on. Relying on a *single* fresh
 // rebuild at that point re-runs the exact same live, drift-prone predicate
 // that caused the original bug, with no better odds of landing on `true`.
-// So this reads TWO independent snapshots and unhides on either landing
+//
+// So this checks TWO independent sources and unhides on either landing
 // eligible:
-//   1. `getRadarSnapshot()` — the TTL/DB-fallback-aware "stored" read. For a
-//      long-running process this already reflects everything OR'd in across
-//      every natural rebuild since the target locked (a genuine historical
-//      signal, not a fresh recompute); for a cold process it falls back to
-//      whatever was last persisted.
-//   2. A forced fresh rebuild — a second, independent chance under current
-//      data, same as the live card list gets on every request.
+//   1. The DB-persisted `ever_publicly_flagged` column, read directly (no
+//      rebuild). `server/storage.ts`'s upsert OR-merges this column on every
+//      write, so it durably accumulates any "lucky" true evaluation from a
+//      natural rebuild that ran between deploy and this backfill invocation —
+//      independent of whatever the in-memory snapshot looks like right now.
+//   2. A forced fresh rebuild — one more live chance under current data, same
+//      as the live card list gets on every request.
+//
+// Scope: only today's slate (the in-memory snapshot / DB rows for
+// `slateDateET()`), matching the "today's already-graded misses" backfill
+// this was built for — it does not reach back into prior slate days.
 //
 // Never creates a new win, never touches calibration misses, and never
 // mutates anything but `outcomes.userVisible` on the in-memory signal + its
@@ -33,8 +38,8 @@
 // ROI / official W-L.
 
 import { storage } from "../../storage";
+import { slateDateET } from "../../utils/dateUtils";
 import { buildPregamePowerRadar } from "./buildPregamePowerRadar";
-import { getRadarSnapshot } from "./pregamePowerRadarService";
 import { getSnapshot } from "./pregamePowerRadarStore";
 import { signalToRow } from "./pregamePersistence";
 
@@ -46,15 +51,17 @@ export interface PregameVisibilityBackfillResult {
 
 /** One-off admin backfill: unhide pregame wins wrongly stamped non-public. */
 export async function backfillPregameWinVisibility(): Promise<PregameVisibilityBackfillResult> {
-  // Stored/TTL-aware read first — captures whatever eligibility history is
-  // already known (in-memory accumulation or DB fallback) before a forced
-  // rebuild has a chance to overwrite it with a possibly-drifted fresh read.
-  const stored = await getRadarSnapshot().catch(() => ({ snapshot: null }));
-  const storedFlagged = new Set<string>();
-  if (stored.snapshot) {
-    for (const s of Array.from(stored.snapshot.signals.values())) {
-      if (s.everPubliclyFlagged) storedFlagged.add(s.signalId);
+  // Durable historical read: a direct DB read (no rebuild) so it can never
+  // collapse into "just another fresh live recompute" the way a second
+  // getRadarSnapshot()/buildPregamePowerRadar() call would on a cold process.
+  const persistedFlagged = new Set<string>();
+  try {
+    const rows = await storage.getPregamePowerRadarSignalsByDate(slateDateET());
+    for (const r of rows) {
+      if (r.everPubliclyFlagged) persistedFlagged.add(r.signalId);
     }
+  } catch (err: any) {
+    console.warn(`[PREGAME_RADAR_VISIBILITY_BACKFILL] persisted read failed:`, err?.message);
   }
 
   // Best-effort: if a build is already in flight or fails, fall back to
@@ -74,7 +81,7 @@ export async function backfillPregameWinVisibility(): Promise<PregameVisibilityB
 
     const outcome = signal.outcomes;
     if (outcome.outcome !== "pregame_win" || outcome.userVisible === true) continue;
-    if (!signal.everPubliclyFlagged && !storedFlagged.has(signal.signalId)) continue;
+    if (!signal.everPubliclyFlagged && !persistedFlagged.has(signal.signalId)) continue;
 
     signal.outcomes = { ...outcome, userVisible: true };
     signal.everPubliclyFlagged = true;
