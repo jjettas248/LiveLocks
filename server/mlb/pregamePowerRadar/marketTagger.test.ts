@@ -83,7 +83,7 @@ function makeSignal(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     status: "active", suppressed: false, suppressedReasons: [],
-    outcomes: null, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
+    outcomes: null, everPubliclyFlagged: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
     diagnostics: {
       batterPowerScore: 8, pitcherVulnerabilityScore: 7, matchupFitScore: 6, parkWeatherScore: 6,
       lineupOpportunityScore: 6, marketFitScore: 7, dataCoverageScore: 0.95, suppressed: false,
@@ -122,6 +122,10 @@ ok(
     diagnostics: { ...makeSignal({}).diagnostics, rawInputsAvailable: { ...makeSignal({}).diagnostics.rawInputsAvailable, batterPower: false } },
   })),
   "batterPower unavailable not public",
+);
+ok(
+  isPublicPregameSignal(makeSignal({ score10: 5.5, everPubliclyFlagged: true })),
+  "a currently-ineligible signal recovers via a frozen everPubliclyFlagged: true",
 );
 
 console.log(`\nmarketTagger.test: ${passed} passed, ${failed} failed`);

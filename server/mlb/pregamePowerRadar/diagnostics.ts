@@ -49,9 +49,15 @@ export function wasPubliclyFlaggedPregame(signal: PregamePowerSignal): boolean {
  * A graded target that actually homered stays visible after grading (display
  * only — never re-derived) so the card can render its cashed/"HOMERED" state
  * instead of silently disappearing from the list the moment the game goes final.
+ *
+ * Eligibility also accepts the frozen `everPubliclyFlagged` flag (OR'd), not
+ * just the live re-derivation — a target that was ever legitimately flagged
+ * pregame must never silently drop out of the list because a later rebuild's
+ * freshly-refetched mutable fields (tier/score/dataCoverageScore/etc.) dipped
+ * below threshold.
  */
 export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
-  if (!wasPubliclyFlaggedPregame(signal)) return false;
+  if (!wasPubliclyFlaggedPregame(signal) && !signal.everPubliclyFlagged) return false;
   if (signal.status === "graded" && signal.outcomes?.hitHr === true) return true;
   if (signal.status !== "active" && signal.status !== "locked") return false;
   if (signal.gameStatus === "final" || signal.gameStatus === "postponed") return false;

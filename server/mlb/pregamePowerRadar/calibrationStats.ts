@@ -4,7 +4,7 @@
 // never mutate runtime state, live HR probability, persisted_plays, ROI, or W/L.
 
 import type { PregamePowerSignal } from "./types";
-import { isPublicPregameSignal, wasPubliclyFlaggedPregame } from "./diagnostics";
+import { isPublicPregameSignal } from "./diagnostics";
 import { buildPregameRadarWinItem } from "./winAttribution";
 import type {
   PregameCalibrationBucket,
@@ -51,7 +51,7 @@ function finalizeBuckets(map: Record<string, MutableBucket>): Record<string, Pre
 
 function rankedWinItems(signals: PregamePowerSignal[]): PregameRadarWinItem[] {
   const flagged = signals
-    .filter((s) => wasPubliclyFlaggedPregame(s))
+    .filter((s) => s.everPubliclyFlagged)
     .slice()
     .sort((a, b) => b.score10 - a.score10);
 
@@ -102,7 +102,7 @@ export function buildCalibrationStats(
   signals: PregamePowerSignal[],
   range: { startET: string; endET: string },
 ): PregameRadarCalibrationStats {
-  const targets = signals.filter(wasPubliclyFlaggedPregame);
+  const targets = signals.filter((s) => s.everPubliclyFlagged);
   const wins = targets.filter(isPublicPregameWin);
   const misses = targets.filter(isCalibrationMiss);
   const firstAbWins = wins.filter((s) => s.outcomes?.firstAbPregameWin === true);

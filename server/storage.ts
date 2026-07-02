@@ -3221,6 +3221,7 @@ export class DatabaseStorage implements IStorage {
           suppressed: row.suppressed,
           suppressedReasons: row.suppressedReasons,
           outcomes: sql`COALESCE(excluded.outcomes, ${pregamePowerRadarSignals.outcomes})`,
+          everPubliclyFlagged: sql`${pregamePowerRadarSignals.everPubliclyFlagged} OR excluded.ever_publicly_flagged`,
           becameLiveReady: sql`${pregamePowerRadarSignals.becameLiveReady} OR excluded.became_live_ready`,
           becameLiveFire: sql`${pregamePowerRadarSignals.becameLiveFire} OR excluded.became_live_fire`,
           convertedLiveAt: sql`COALESCE(excluded.converted_live_at, ${pregamePowerRadarSignals.convertedLiveAt})`,

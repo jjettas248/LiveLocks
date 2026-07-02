@@ -608,6 +608,22 @@ export async function registerRoutes(
     }
   });
 
+  // Admin one-off: unhide already-graded pregame wins that were incorrectly
+  // stamped non-public before `everPubliclyFlagged` existed to freeze
+  // eligibility. Never creates a new win — only unhides an existing
+  // `pregame_win` record. Safe to call more than once (idempotent no-op on
+  // signals already corrected).
+  app.post("/api/admin/mlb/pregame-power-radar/backfill-visibility", requireAdmin, async (_req, res) => {
+    try {
+      const { backfillPregameWinVisibility } = await import("./mlb/pregamePowerRadar/pregameVisibilityBackfill");
+      const result = await backfillPregameWinVisibility();
+      return res.json(result);
+    } catch (err) {
+      console.error("[admin/mlb/pregame-power-radar/backfill-visibility]", err);
+      return res.status(500).json({ error: "Failed to backfill pregame radar win visibility" });
+    }
+  });
+
   // Public: confirmed-lineup, non-suppressed targets for today's slate.
   app.get("/api/mlb/pregame-power-radar", requireMLBAccess, async (_req, res) => {
     try {

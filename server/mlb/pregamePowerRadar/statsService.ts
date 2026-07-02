@@ -30,10 +30,11 @@ function uniqueBySignalId(signals: PregamePowerSignal[]): PregamePowerSignal[] {
   const byId = new Map<string, PregamePowerSignal>();
   for (const signal of signals) {
     const existing = byId.get(signal.signalId);
+    const everPubliclyFlagged = existing?.everPubliclyFlagged || signal.everPubliclyFlagged;
     if (existing?.outcomes && !signal.outcomes) {
-      byId.set(signal.signalId, { ...signal, status: existing.status, outcomes: existing.outcomes });
+      byId.set(signal.signalId, { ...signal, status: existing.status, outcomes: existing.outcomes, everPubliclyFlagged });
     } else {
-      byId.set(signal.signalId, signal);
+      byId.set(signal.signalId, { ...signal, everPubliclyFlagged });
     }
   }
   return Array.from(byId.values());

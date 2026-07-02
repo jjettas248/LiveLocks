@@ -264,6 +264,16 @@ export interface PregamePowerSignal {
 
   // Outcome / live-bridge fields — wired now, populated in Phase 4/5.
   outcomes?: PregameOutcome | null;
+  /**
+   * Frozen once true, OR'd forward across same-slate rebuilds by
+   * `carryForwardGradedState`. True the instant `wasPubliclyFlaggedPregame`
+   * ever evaluates true for this signalId within the current slate. Grading
+   * and the public/admin stat builders read THIS field instead of
+   * re-deriving the live (mutable-field) predicate, so a later dip in
+   * dataCoverageScore/tier/etc. can never erase an earlier "was publicly
+   * flagged" status.
+   */
+  everPubliclyFlagged: boolean;
   becameLiveReady: boolean;
   becameLiveFire: boolean;
   convertedLiveAt: string | null;
