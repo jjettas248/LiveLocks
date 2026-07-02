@@ -150,6 +150,7 @@ function makeSignal(over: {
     suppressed: false,
     suppressedReasons: [],
     outcomes: over.outcome ?? null,
+    everPubliclyFlagged: false,
     becameLiveReady: false,
     becameLiveFire: false,
     convertedLiveAt: null,

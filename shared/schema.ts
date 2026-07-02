@@ -988,6 +988,7 @@ export const pregamePowerRadarSignals = pgTable("pregame_power_radar_signals", {
   suppressed: boolean("suppressed").notNull().default(false),
   suppressedReasons: jsonb("suppressed_reasons").notNull().default([]),
   outcomes: jsonb("outcomes"),
+  everPubliclyFlagged: boolean("ever_publicly_flagged").notNull().default(false),
   becameLiveReady: boolean("became_live_ready").notNull().default(false),
   becameLiveFire: boolean("became_live_fire").notNull().default(false),
   convertedLiveAt: timestamp("converted_live_at"),

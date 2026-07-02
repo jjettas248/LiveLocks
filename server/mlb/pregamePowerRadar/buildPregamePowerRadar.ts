@@ -590,6 +590,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           suppressed: scoring.suppressed,
           suppressedReasons: scoring.suppressedReasons,
           outcomes: null,
+          everPubliclyFlagged: false,
           becameLiveReady: false,
           becameLiveFire: false,
           convertedLiveAt: null,

@@ -69,6 +69,7 @@ function makeSignal(over: Partial<PregamePowerSignal> = {}): PregamePowerSignal 
     status: "active",
     suppressed: false,
     suppressedReasons: [],
+    everPubliclyFlagged: false,
     becameLiveReady: false,
     becameLiveFire: false,
     convertedLiveAt: null,

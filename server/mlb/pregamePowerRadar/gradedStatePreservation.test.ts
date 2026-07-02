@@ -10,7 +10,13 @@
 //   3. A batter subbed out of the live batting order (pinch hit/run, defensive
 //      sub, injury) must not simply vanish from the rebuilt Map — his prior
 //      signal (score/tier/outcomes) must be carried forward with only the
-//      game-status-derived fields refreshed (carryForwardDroppedFromLineup).
+//      game-status-derived fields refreshed (carryForwardDroppedFromLineup),
+//      but only once the game is already live/final — a pre-first-pitch
+//      scratch must still disappear.
+//   4. `everPubliclyFlagged` freezes "was this ever a legitimate publicly-
+//      flagged pregame target" and ORs forward across rebuilds, so a later
+//      dip in re-fetched mutable eligibility fields can't erase an earlier
+//      true evaluation — but never leaks across slate days.
 //
 // Run: npx tsx server/mlb/pregamePowerRadar/gradedStatePreservation.test.ts
 
@@ -41,7 +47,7 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     status: "active", suppressed: false, suppressedReasons: [],
-    outcomes: null, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
+    outcomes: null, everPubliclyFlagged: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
     diagnostics: {
       batterPowerScore: 8, pitcherVulnerabilityScore: 7, matchupFitScore: 6, parkWeatherScore: 6,
       lineupOpportunityScore: 6, marketFitScore: 7, dataCoverageScore: 0.95, suppressed: false,
@@ -116,7 +122,29 @@ const gradedWin: PregameOutcome = {
   ok(fresh.outcomes === newerOutcome, "already-graded rebuilt copy keeps its own outcome");
 }
 
-// ── 7. Store never serves a snapshot for a different slate date ──────────────
+// ── 7. everPubliclyFlagged ORs forward across same-slate rebuilds ────────────
+{
+  // sig({})'s default drivers: [] intrinsically fails wasPubliclyFlaggedPregame
+  // (needs >=2 positive drivers), isolating the carry-forward OR from the
+  // live intrinsic recompute.
+  const prev = sig({ everPubliclyFlagged: true });
+  const fresh = sig({});
+  carryForwardGradedState(fresh, prev);
+  ok(fresh.everPubliclyFlagged === true, "everPubliclyFlagged ORs forward across rebuilds");
+}
+
+// ── 8. everPubliclyFlagged never leaks across slate days ────────────────────
+{
+  const prevDay = sig({
+    signalId: "mlb-pregame:2026-06-30:g1:b1", sessionDate: "2026-06-30",
+    everPubliclyFlagged: true,
+  });
+  const fresh = sig({});
+  carryForwardGradedState(fresh, prevDay);
+  ok(fresh.everPubliclyFlagged === false, "everPubliclyFlagged does not leak across slate days");
+}
+
+// ── 9. Store never serves a snapshot for a different slate date ──────────────
 {
   _resetForTests();
   const snapshot: PregamePowerSnapshot = {
@@ -131,7 +159,7 @@ const gradedWin: PregameOutcome = {
   _resetForTests();
 }
 
-// ── 8. Batter dropped from the live lineup carries his signal forward ────────
+// ── 10. Batter dropped from the live lineup carries his signal forward ───────
 {
   const prev = sig({
     signalId: "mlb-pregame:2026-07-01:g1:b1", gameId: "g1", batterId: "b1",
@@ -153,7 +181,7 @@ const gradedWin: PregameOutcome = {
   ok(carried[0]?.buildId === "b-new", "carried signal is stamped with the current build id, not the stale one");
 }
 
-// ── 9. Dropped batter's already-graded HR outcome survives the carry ────────
+// ── 11. Dropped batter's already-graded HR outcome survives the carry ───────
 {
   const prev = sig({
     signalId: "mlb-pregame:2026-07-01:g1:b1", gameId: "g1", batterId: "b1",
@@ -175,7 +203,7 @@ const gradedWin: PregameOutcome = {
   ok(carried[0]?.buildId === "b-new", "graded carried signal is also restamped with the current build id");
 }
 
-// ── 10. Batter still in the lineup is not duplicated by the carry pass ──────
+// ── 12. Batter still in the lineup is not duplicated by the carry pass ──────
 {
   const prev = sig({ signalId: "mlb-pregame:2026-07-01:g1:b1", gameId: "g1", batterId: "b1" });
   const carried = carryForwardDroppedFromLineup(
@@ -190,7 +218,7 @@ const gradedWin: PregameOutcome = {
   ok(carried.length === 0, "batter still in the lineup is not carried forward (already rebuilt)");
 }
 
-// ── 11. Signals from a different game are never carried into this game ──────
+// ── 13. Signals from a different game are never carried into this game ──────
 {
   const otherGame = sig({ signalId: "mlb-pregame:2026-07-01:g2:b9", gameId: "g2", batterId: "b9" });
   const carried = carryForwardDroppedFromLineup(
@@ -205,7 +233,7 @@ const gradedWin: PregameOutcome = {
   ok(carried.length === 0, "a different game's prior signals are never carried into this game");
 }
 
-// ── 12. Pre-first-pitch lineup scratch is NOT carried forward ──────────────
+// ── 14. Pre-first-pitch lineup scratch is NOT carried forward ───────────────
 // A confirmed-lineup batter dropped before first pitch (a late scratch) never
 // played — he must disappear like before, not linger as a stale "confirmed"
 // pregame target that later becomes an ungradable final row.
