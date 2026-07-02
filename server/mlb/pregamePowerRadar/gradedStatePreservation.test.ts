@@ -37,7 +37,7 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     status: "active", suppressed: false, suppressedReasons: [],
-    outcomes: null, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
+    outcomes: null, everPubliclyFlagged: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
     diagnostics: {
       batterPowerScore: 8, pitcherVulnerabilityScore: 7, matchupFitScore: 6, parkWeatherScore: 6,
       lineupOpportunityScore: 6, marketFitScore: 7, dataCoverageScore: 0.95, suppressed: false,
@@ -112,7 +112,29 @@ const gradedWin: PregameOutcome = {
   ok(fresh.outcomes === newerOutcome, "already-graded rebuilt copy keeps its own outcome");
 }
 
-// ── 7. Store never serves a snapshot for a different slate date ──────────────
+// ── 7. everPubliclyFlagged ORs forward across same-slate rebuilds ────────────
+{
+  // sig({})'s default drivers: [] intrinsically fails wasPubliclyFlaggedPregame
+  // (needs >=2 positive drivers), isolating the carry-forward OR from the
+  // live intrinsic recompute.
+  const prev = sig({ everPubliclyFlagged: true });
+  const fresh = sig({});
+  carryForwardGradedState(fresh, prev);
+  ok(fresh.everPubliclyFlagged === true, "everPubliclyFlagged ORs forward across rebuilds");
+}
+
+// ── 8. everPubliclyFlagged never leaks across slate days ────────────────────
+{
+  const prevDay = sig({
+    signalId: "mlb-pregame:2026-06-30:g1:b1", sessionDate: "2026-06-30",
+    everPubliclyFlagged: true,
+  });
+  const fresh = sig({});
+  carryForwardGradedState(fresh, prevDay);
+  ok(fresh.everPubliclyFlagged === false, "everPubliclyFlagged does not leak across slate days");
+}
+
+// ── 9. Store never serves a snapshot for a different slate date ──────────────
 {
   _resetForTests();
   const snapshot: PregamePowerSnapshot = {

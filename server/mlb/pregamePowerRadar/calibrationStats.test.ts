@@ -2,6 +2,7 @@
 // Run: npx tsx server/mlb/pregamePowerRadar/calibrationStats.test.ts
 
 import { buildPublicStats, buildCalibrationStats } from "./calibrationStats";
+import { wasPubliclyFlaggedPregame } from "./diagnostics";
 import type { PregameOutcome, PregamePowerSignal } from "./types";
 
 let passed = 0;
@@ -22,8 +23,9 @@ function makeSignal(over: {
   suppressed?: boolean;
   lineupStatus?: PregamePowerSignal["lineupStatus"];
   gameStatus?: PregamePowerSignal["gameStatus"];
+  everPubliclyFlagged?: boolean;
 }): PregamePowerSignal {
-  return {
+  const signal = {
     signalId: over.signalId,
     sport: "mlb",
     engine: "pregame_power_radar",
@@ -66,6 +68,7 @@ function makeSignal(over: {
     suppressed: over.suppressed ?? false,
     suppressedReasons: [],
     outcomes: over.outcome ?? null,
+    everPubliclyFlagged: false, // placeholder — computed below from the real predicate
     becameLiveReady: over.becameLiveReady ?? false,
     becameLiveFire: over.becameLiveFire ?? false,
     convertedLiveAt: null,
@@ -74,6 +77,12 @@ function makeSignal(over: {
       rawInputsAvailable: { batterPower: true, lineup: true, pitcherProfile: true, park: true, weather: true, bvp: false },
     } as any,
   } as PregamePowerSignal;
+  // Mirror `carryForwardGradedState`'s freeze: everPubliclyFlagged reflects
+  // whether the intrinsic predicate was ever true, not a flat default — a
+  // flat `false` would silently zero out every assertion below since
+  // `rankedWinItems`/`buildCalibrationStats` now read this field directly.
+  signal.everPubliclyFlagged = over.everPubliclyFlagged ?? wasPubliclyFlaggedPregame(signal);
+  return signal;
 }
 
 const firstAbWin = makeSignal({
@@ -165,6 +174,29 @@ const missPublic = buildPublicStats([miss], [miss], "2026-06-29");
 ok(missPublic.pregameWinsToday === 0 && missPublic.topPregameWinPlayers.length === 0, "calibration_miss absent from public stats");
 const missAdmin = buildCalibrationStats([miss], { startET: "2026-06-29", endET: "2026-06-29" });
 ok(missAdmin.targets === 1 && missAdmin.calibrationMisses === 1, "calibration_miss contributes to admin stats");
+
+// Regression: a target that was legitimately publicly flagged pregame, then
+// had a mutable eligibility field (dataCoverageScore) dip below threshold by
+// the time stats are read, must still count — this is the exact "Wins Today"
+// undercount bug. wasPubliclyFlaggedPregame would evaluate false against the
+// drifted diagnostics below; everPubliclyFlagged freezes the earlier true
+// evaluation and must be what rankedWinItems/buildCalibrationStats read.
+const driftedWin = makeSignal({
+  signalId: "s-drifted",
+  score10: 8.0,
+  tier: "elite",
+  batterName: "Drifted Win",
+  everPubliclyFlagged: true,
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true, firstAbPregameWin: false },
+});
+(driftedWin.diagnostics as any).dataCoverageScore = 0.2;
+
+const driftedStats = buildPublicStats([driftedWin], [driftedWin], "2026-06-29");
+ok(driftedStats.pregameWinsToday === 1, "everPubliclyFlagged survives a later dataCoverageScore dip (Wins Today)");
+ok(driftedStats.topPregameWinPlayers.length === 1, "drifted-but-flagged win still appears in the drawer's win list");
+
+const driftedCalibration = buildCalibrationStats([driftedWin], { startET: "2026-06-29", endET: "2026-06-29" });
+ok(driftedCalibration.targets === 1 && driftedCalibration.wins === 1, "drifted-but-flagged win still counts in admin calibration");
 
 console.log(`\ncalibrationStats.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

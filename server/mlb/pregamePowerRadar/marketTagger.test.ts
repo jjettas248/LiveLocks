@@ -83,7 +83,7 @@ function makeSignal(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     status: "active", suppressed: false, suppressedReasons: [],
-    outcomes: null, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
+    outcomes: null, everPubliclyFlagged: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
     diagnostics: {
       batterPowerScore: 8, pitcherVulnerabilityScore: 7, matchupFitScore: 6, parkWeatherScore: 6,
       lineupOpportunityScore: 6, marketFitScore: 7, dataCoverageScore: 0.95, suppressed: false,
@@ -122,6 +122,30 @@ ok(
     diagnostics: { ...makeSignal({}).diagnostics, rawInputsAvailable: { ...makeSignal({}).diagnostics.rawInputsAvailable, batterPower: false } },
   })),
   "batterPower unavailable not public",
+);
+ok(
+  !isPublicPregameSignal(makeSignal({ score10: 5.5, everPubliclyFlagged: true })),
+  "a still-active (not graded) signal does NOT recover via everPubliclyFlagged — live gates (e.g. score) must stay authoritative pre-grading",
+);
+ok(
+  isPublicPregameSignal(makeSignal({
+    status: "graded", score10: 5.5, everPubliclyFlagged: true,
+    outcomes: { hitHr: true, outcome: "pregame_win", userVisible: true },
+  })),
+  "a graded win recovers via a frozen everPubliclyFlagged: true even if score10 has since drifted below threshold",
+);
+ok(
+  !isPublicPregameSignal(makeSignal({ suppressed: true, everPubliclyFlagged: true })),
+  "a scratched/suppressed still-active signal stays hidden even with a frozen everPubliclyFlagged: true — suppression must always be live, never overridden by history, until the game is graded",
+);
+ok(
+  isPublicPregameSignal(makeSignal({
+    status: "graded",
+    suppressed: true,
+    everPubliclyFlagged: true,
+    outcomes: { hitHr: true, outcome: "pregame_win", userVisible: true },
+  })),
+  "a graded win stays visible via the frozen flag even if suppressed got set post-grading (game already happened, suppression is moot)",
 );
 
 console.log(`\nmarketTagger.test: ${passed} passed, ${failed} failed`);

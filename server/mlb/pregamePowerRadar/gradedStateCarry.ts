@@ -7,6 +7,7 @@
 // grading pass (or forever, once the box score cache expired).
 
 import type { PregamePowerSignal } from "./types";
+import { wasPubliclyFlaggedPregame } from "./diagnostics";
 
 /**
  * Carry grading + live-bridge truth forward from the previous same-slate copy
@@ -18,7 +19,18 @@ export function carryForwardGradedState(
   fresh: PregamePowerSignal,
   prev: PregamePowerSignal | undefined,
 ): PregamePowerSignal {
-  if (!prev || prev.sessionDate !== fresh.sessionDate) return fresh;
+  if (!prev || prev.sessionDate !== fresh.sessionDate) {
+    // Freeze "was this ever a legitimate publicly-flagged pregame target" —
+    // OR'd forward (below) so a later dip in the mutable eligibility fields
+    // (tier, score, dataCoverageScore, etc., all re-fetched from live data on
+    // every rebuild) can never erase an earlier true evaluation. No same-slate
+    // prior copy to OR against here, so this rebuild's own live evaluation is
+    // all there is.
+    fresh.everPubliclyFlagged = wasPubliclyFlaggedPregame(fresh);
+    return fresh;
+  }
+
+  fresh.everPubliclyFlagged = wasPubliclyFlaggedPregame(fresh) || prev.everPubliclyFlagged === true;
   if (prev.outcomes && !fresh.outcomes) {
     fresh.outcomes = prev.outcomes;
     if (prev.status === "graded") fresh.status = "graded";

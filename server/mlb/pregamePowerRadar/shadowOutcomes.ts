@@ -15,7 +15,6 @@ import { storage } from "../../storage";
 import { getCanonicalHrRadarState } from "../hrRadarCanonicalStore";
 import { mlbGameCache } from "../dataPullService";
 import { getSnapshot } from "./pregamePowerRadarStore";
-import { wasPubliclyFlaggedPregame } from "./diagnostics";
 import { deriveWinAttribution } from "./winAttribution";
 import type { PregameOutcome, PregamePowerSignal } from "./types";
 import type { PregameCalibrationRecord } from "../../../shared/pregameRadarWin";
@@ -70,7 +69,7 @@ function resolveOutcome(
 
   const attribution = deriveWinAttribution({
     hitHr,
-    wasPubliclyFlagged: wasPubliclyFlaggedPregame(signal),
+    wasPubliclyFlagged: signal.everPubliclyFlagged,
     priorABResults,
     hrPlayInning: hrPlay?.inning ?? null,
     hrPlayHalf: hrPlay?.halfInning ?? null,
@@ -206,6 +205,7 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
           suppressed: signal.suppressed,
           suppressedReasons: signal.suppressedReasons,
           outcomes: signal.outcomes ?? null,
+          everPubliclyFlagged: signal.everPubliclyFlagged,
           becameLiveReady: signal.becameLiveReady,
           becameLiveFire: signal.becameLiveFire,
           convertedLiveAt: signal.convertedLiveAt ? new Date(signal.convertedLiveAt) : null,
@@ -280,7 +280,7 @@ export function getPregameCalibrationRecord(): PregameCalibrationRecord {
   // Public win rate denominator = publicly-flagged graded targets (wins +
   // public calibration misses). Internal (unflagged) hits are excluded.
   const publicGraded = graded.filter(
-    (s) => wasPubliclyFlaggedPregame(s) && s.outcomes?.outcome != null,
+    (s) => s.everPubliclyFlagged && s.outcomes?.outcome != null,
   ).length;
 
   return {

@@ -86,6 +86,7 @@ function mkSignal(partial: Partial<PregamePowerSignal> & { batterId: string }): 
     suppressed: false,
     suppressedReasons: [],
     outcomes: null,
+    everPubliclyFlagged: false,
     becameLiveReady: false,
     becameLiveFire: false,
     convertedLiveAt: null,
