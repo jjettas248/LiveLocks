@@ -12,6 +12,7 @@ import {
   locateHrInPlayerABs,
   buildPregameRadarWinItem,
   buildDailyPregameWins,
+  buildPregameWinsSectionMeta,
   type PlayerAbResult,
 } from "./winAttribution";
 import {
@@ -203,6 +204,33 @@ ok(grouped.firstAbPregameWins.length === 1, "first-AB subset isolated");
 ok(grouped.firstAbPregameWins[0].signalId === "s-first", "first-AB subset is the first-AB win");
 ok(grouped.pregameRadarWins[0].signalId === "s-first", "wins ranked by pregame score desc");
 ok(grouped.pregameRadarWins[0].pregameRank === 1 && grouped.pregameRadarWins[1].pregameRank === 2, "ranks assigned by score order");
+
+// ── buildPregameRadarWinItem — canonical date attribution ─────────────────
+// sessionDate is authoritative (already slateDateET()-stamped at build time);
+// it must never be re-derived from the HR/settlement timestamp.
+ok(firstItem?.slateDateET === "2026-06-29", "win item's slateDateET mirrors the signal's sessionDate, not resolvedAt");
+ok(firstItem?.displayDateLabel === "Mon, Jun 29", "win item carries a pre-formatted display label");
+ok(firstItem?.detectedBeforeFirstPitch === true, "win item marks detectedBeforeFirstPitch true (userVisible win implies pregame flag)");
+ok(firstItem?.homeredInGame === true, "win item marks homeredInGame true");
+ok(firstItem?.gameStartTimeET === null, "gameStartTimeET is null when the signal has no startsAt (test fixture)");
+
+const withStart = makeSignal({
+  signalId: "s-with-start",
+  score10: 6.5,
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true, hrInning: 2, hrHalf: "top", plateAppearanceNumber: 1, firstAbPregameWin: true, resolvedAt: "2026-06-29T22:00:00Z" },
+});
+(withStart as any).startsAt = "2026-06-29T23:05:00.000Z";
+const withStartItem = buildPregameRadarWinItem(withStart, 3);
+ok(withStartItem?.gameStartTimeET != null, "gameStartTimeET is populated when startsAt is present");
+
+// ── buildPregameWinsSectionMeta — dashboard title never implies "today" for a stale slate ──
+const todayMeta = buildPregameWinsSectionMeta("2026-07-01", "2026-07-01");
+ok(todayMeta.isToday === true, "same-day query is flagged isToday");
+ok(todayMeta.titleLabel === "Pregame Radar Wins", "today's slate uses the plain 'Pregame Radar Wins' title");
+
+const yesterdayMeta = buildPregameWinsSectionMeta("2026-06-30", "2026-07-01");
+ok(yesterdayMeta.isToday === false, "prior-day query is not flagged isToday");
+ok(yesterdayMeta.titleLabel === "Tue, Jun 30 Pregame Radar Wins", "stale slate's title is explicitly dated, never implying today");
 
 console.log(`\nwinAttribution.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -14,9 +14,16 @@ import { ChevronDown, ChevronRight, FolderOpen, Trophy } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { PregameWinCard } from "./PregameWinCard";
 import type { PregameRadarPublicStats } from "@shared/pregameRadarWin";
+import { formatPlainDateLabel } from "@shared/dateLabel";
 
 const HISTORY_DAYS = 21;
 
+/**
+ * Distinct ET calendar dates going back from "now", newest first. This drives
+ * which slate-day rows the drawer queries — the server's own slateDateET()
+ * scoping on each date's data (not this enumeration) is what determines which
+ * plays land under which row, so a plain ET calendar-day walk here is safe.
+ */
 function lastNDatesET(n: number): string[] {
   const fmt = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
   const seen = new Set<string>();
@@ -29,12 +36,6 @@ function lastNDatesET(n: number): string[] {
     }
   }
   return out;
-}
-
-function formatDateLabel(dateET: string): string {
-  const [y, m, d] = dateET.split("-").map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d, 12));
-  return dt.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 export function PregameHistoryDrawer() {
@@ -105,7 +106,7 @@ export function PregameHistoryDrawer() {
                       ) : (
                         <ChevronRight className="w-3.5 h-3.5 shrink-0" />
                       )}
-                      {formatDateLabel(date)}
+                      {formatPlainDateLabel(date)}
                     </span>
                     {query?.isLoading ? (
                       <span className="text-[11px] text-muted-foreground">…</span>

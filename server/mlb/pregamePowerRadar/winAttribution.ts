@@ -22,6 +22,8 @@ import {
   PREGAME_WIN_COPY,
   FIRST_AB_PREGAME_WIN_COPY,
 } from "../../../shared/pregameRadarWin";
+import { formatPlainDateLabel } from "../../../shared/dateLabel";
+import { toEtDateKey, toEtTimeLabel } from "../../utils/dateUtils";
 
 /** Minimal AB shape (subset of dataPullService priorABResults). */
 export interface PlayerAbResult {
@@ -144,6 +146,22 @@ function pregameDriverDigest(drivers: PowerDriver[]): PregameRadarWinItem["prega
 }
 
 /**
+ * Canonical slate-date attribution for a win row. `signal.sessionDate` is
+ * authoritative — it is stamped with slateDateET() (6am-ET rollover) at build
+ * time and is the same value the DB unique index (sessionDate, gameId,
+ * batterId) keys off, so it can never disagree with how the target was
+ * actually grouped/deduped. `gameDate`/`startsAt` are read-only fallbacks for
+ * the rare case sessionDate is missing (never happens in practice; the field
+ * is required) — never the settlement/HR timestamp, which is the date source
+ * that produced the original off-by-one bug.
+ */
+function resolveSlateDateET(signal: PregamePowerSignal): string {
+  if (signal.sessionDate) return signal.sessionDate;
+  if (signal.startsAt) return toEtDateKey(signal.startsAt);
+  return signal.gameDate;
+}
+
+/**
  * Map a graded, won pre-game signal to a public daily-log row. `rank` is the
  * signal's 1-based pre-game rank (by score) among the day's flagged targets,
  * or null when unknown. Returns null when the signal is not a userVisible win.
@@ -156,6 +174,7 @@ export function buildPregameRadarWinItem(
   if (!o || o.outcome !== "pregame_win" || o.userVisible !== true) return null;
 
   const firstAb = o.firstAbPregameWin === true;
+  const slateDateET = resolveSlateDateET(signal);
   return {
     source: "pregame_power_radar",
     signalId: signal.signalId,
@@ -179,6 +198,11 @@ export function buildPregameRadarWinItem(
     becameLiveReady: signal.becameLiveReady === true,
     becameLiveFire: signal.becameLiveFire === true,
     resolvedAt: o.resolvedAt ?? null,
+    slateDateET,
+    displayDateLabel: formatPlainDateLabel(slateDateET),
+    gameStartTimeET: signal.startsAt ? toEtTimeLabel(signal.startsAt) : null,
+    detectedBeforeFirstPitch: true,
+    homeredInGame: true,
     label: firstAb ? FIRST_AB_PREGAME_WIN_LABEL : PREGAME_WIN_LABEL,
     cardCopy: firstAb ? FIRST_AB_PREGAME_WIN_COPY : PREGAME_WIN_COPY,
   };
@@ -210,5 +234,32 @@ export function buildDailyPregameWins(signals: PregamePowerSignal[]): {
   return {
     pregameRadarWins: wins,
     firstAbPregameWins: wins.filter((w) => w.firstAbPregameWin),
+  };
+}
+
+/**
+ * Server-stamped section title for the daily cashed log's Pregame Radar Wins
+ * block. "Wins" means settled/homered; a slate that isn't today's must say so
+ * rather than implying yesterday's settled wins belong to today's active
+ * slate. Clients render `titleLabel` verbatim — never re-derive it.
+ */
+export function buildPregameWinsSectionMeta(
+  queriedSlateDateET: string,
+  todaySlateDateET: string,
+): {
+  latestSettledSlateDateET: string;
+  todaySlateDateET: string;
+  isToday: boolean;
+  titleLabel: string;
+} {
+  const isToday = queriedSlateDateET === todaySlateDateET;
+  const titleLabel = isToday
+    ? "Pregame Radar Wins"
+    : `${formatPlainDateLabel(queriedSlateDateET)} Pregame Radar Wins`;
+  return {
+    latestSettledSlateDateET: queriedSlateDateET,
+    todaySlateDateET,
+    isToday,
+    titleLabel,
   };
 }

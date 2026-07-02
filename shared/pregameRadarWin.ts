@@ -39,6 +39,7 @@ export interface CashLogItem {
 export interface PregameRadarWinItem {
   source: "pregame_power_radar";
   signalId: string;
+  /** @deprecated use slateDateET — kept for existing readers, same value. */
   sessionDate: string;
   gameId: string;
   playerId: string;
@@ -62,6 +63,15 @@ export interface PregameRadarWinItem {
   becameLiveReady: boolean;
   becameLiveFire: boolean;
   resolvedAt: string | null;
+  // Canonical date attribution (server-stamped — clients render verbatim,
+  // never re-derive from a raw timestamp). slateDateET is the MLB slate day
+  // (6am-ET rollover) the pregame target was flagged on, NOT the HR/settlement
+  // timestamp's date.
+  slateDateET: string;
+  displayDateLabel: string;
+  gameStartTimeET: string | null;
+  detectedBeforeFirstPitch: true;
+  homeredInGame: true;
   // Display contract.
   label: typeof PREGAME_WIN_LABEL | typeof FIRST_AB_PREGAME_WIN_LABEL;
   cardCopy: string;
@@ -73,6 +83,15 @@ export interface DailyCashedLogResponse {
   pregameRadarWins: PregameRadarWinItem[];
   firstAbPregameWins: PregameRadarWinItem[];
   engineCashesTotal: number;
+  /** Slate day (6am-ET rollover) these wins are scoped to. */
+  latestSettledSlateDateET: string;
+  /** Today's slate day per the server clock, for isToday comparison. */
+  todaySlateDateET: string;
+  /** True when latestSettledSlateDateET === todaySlateDateET. */
+  isToday: boolean;
+  /** Server-stamped section title — "Pregame Radar Wins" vs "Yesterday's
+   *  Pregame Radar Wins" vs "Today's Pregame Radar Targets". Render verbatim. */
+  titleLabel: string;
 }
 
 /** Admin-only calibration rollup (pregame proxy — never official ROI / W-L). */
