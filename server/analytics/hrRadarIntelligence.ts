@@ -81,6 +81,29 @@ export interface HrRadarIntelligenceSnapshot {
     watchCashedWithoutFire: number;// READY-only that still cashed a HR (shadow win, NOT official)
     readyOnlyMissed: number;       // READY-only that resolved without a HR (NOT an official miss)
   };
+  // ── Playability outcome-bucket metrics (spec §8, 2026-07) ────────────────
+  // Distinct from officialFireRecord above: that block uses the STRICT
+  // FIRE-only official-grading definition (matches storage.ts's write-side
+  // gate). These metrics use the PLAYABILITY definition of "official" —
+  // Playable (ready) AND Attack (fire) both count, per the product's
+  // Watchlist/Lean/Playable/Attack contract (isOfficialPlayability in
+  // shared/hrRadarStage.ts). Admin-only; never surfaced publicly.
+  playabilityMetrics: {
+    officialRecall: number | null;          // (attack+playable cashed) / all HRs observed
+    radarCoverageRecall: number | null;     // (attack+playable+lean+watchlist cashed) / all HRs
+    lateSignalRate: number | null;          // late-signal HRs / all HRs
+    trueUncalledHrRate: number | null;      // no pre-HR playability at all / all HRs
+    // Of rows that ever reached Playable/Attack (any outcome), what fraction
+    // actually resulted in an HR. Precision, not recall — denominator is all
+    // resolved Playable+/Attack+ rows, not just the HR-graded ones above.
+    playableAttackPrecision: number | null;
+    // Of rows that reached Lean, what fraction progressed to Playable/Attack
+    // (any outcome). Approximation: reuses the buildToReady stage-conversion
+    // rate above — the spec's literal "all watchlist/lean covered players"
+    // denominator (including players who never advanced AND never resolved)
+    // isn't tracked by this ring-buffer trace model.
+    watchlistLeanConversionRate: number | null;
+  };
 }
 
 interface SignalTrace {
@@ -223,6 +246,18 @@ export function computeHrRadarIntelligence(opts?: {
     watchCashedWithoutFire = 0,
     readyOnlyMissed = 0;
 
+  // Playability outcome-bucket counts (2026-07) — classify each CASHED trace
+  // (a signal whose player hit an HR) by the HIGHEST playability tier it
+  // reached before the HR, using the playability definition of "official"
+  // (Playable + Attack). Also tally resolved Playable+/Attack+ rows
+  // (regardless of outcome) for the precision metric.
+  let attackBeforeHr = 0,
+    playableBeforeHr = 0,
+    leanBeforeHr = 0,
+    watchlistBeforeHr = 0;
+  let playableAttackResolved = 0, // ready+ rows that resolved (cashed or missed)
+    playableAttackCashed = 0;     // ...of which actually cashed
+
   for (const t of Array.from(traces.values())) {
     // Official vs shadow bucketing — independent of the conversion-rate math
     // below; uses only whether the FIRE/READY stages were observed.
@@ -239,6 +274,17 @@ export function computeHrRadarIntelligence(opts?: {
         if (t.cashedAt != null) watchCashedWithoutFire++;
         else if (t.missedAt != null) readyOnlyMissed++;
       }
+    }
+
+    if (t.cashedAt != null) {
+      if (t.reachedFire != null) attackBeforeHr++;
+      else if (t.reachedReady != null) playableBeforeHr++;
+      else if (t.reachedBuild != null) leanBeforeHr++;
+      else if (t.reachedTrack != null) watchlistBeforeHr++;
+    }
+    if (t.reachedReady != null && (t.cashedAt != null || t.missedAt != null)) {
+      playableAttackResolved++;
+      if (t.cashedAt != null) playableAttackCashed++;
     }
     if (t.reachedTrack != null) {
       nTrack++;
@@ -299,6 +345,22 @@ export function computeHrRadarIntelligence(opts?: {
   const recallDenom = calledHits + uncalledOrLate;
   const recall = recallDenom > 0 ? calledHits / recallDenom : null;
 
+  // ── Playability metrics (spec §8) ─────────────────────────────────────────
+  const lateSignalCount = missBreakdown["late_signal"] ?? 0;
+  const trueUncalledCount = Math.max(0, uncalledOrLate - lateSignalCount);
+  const allHrsObserved = attackBeforeHr + playableBeforeHr + leanBeforeHr + watchlistBeforeHr
+    + lateSignalCount + trueUncalledCount;
+  const playabilityMetrics: HrRadarIntelligenceSnapshot["playabilityMetrics"] = {
+    officialRecall: allHrsObserved > 0 ? (attackBeforeHr + playableBeforeHr) / allHrsObserved : null,
+    radarCoverageRecall: allHrsObserved > 0
+      ? (attackBeforeHr + playableBeforeHr + leanBeforeHr + watchlistBeforeHr) / allHrsObserved
+      : null,
+    lateSignalRate: allHrsObserved > 0 ? lateSignalCount / allHrsObserved : null,
+    trueUncalledHrRate: allHrsObserved > 0 ? trueUncalledCount / allHrsObserved : null,
+    playableAttackPrecision: playableAttackResolved > 0 ? playableAttackCashed / playableAttackResolved : null,
+    watchlistLeanConversionRate: nBuild > 0 ? nBuildToReady / nBuild : null,
+  };
+
   const leadTimes = leadEvents
     .map((e) => e.leadTimeMs)
     .filter((v): v is number => typeof v === "number" && Number.isFinite(v) && v >= 0)
@@ -358,6 +420,7 @@ export function computeHrRadarIntelligence(opts?: {
       watchCashedWithoutFire,
       readyOnlyMissed,
     },
+    playabilityMetrics,
   };
 }
 

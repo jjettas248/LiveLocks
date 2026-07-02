@@ -47,6 +47,11 @@ export interface HrRadarRowInput {
   // Stage / lifecycle signals (server-stamped).
   userStage?: string | null;
   officialSignalStage?: string | null;
+  // Playability language (server-stamped) — render verbatim, never derive.
+  playabilityStatus?: "watchlist" | "lean" | "playable" | "attack" | "resolved" | null;
+  playabilityLabel?: string | null;
+  playabilityDescription?: string | null;
+  isOfficialSignal?: boolean | null;
   // Legacy canonical-entity stage ("watch"|"building"|"attack"|"cooling"|"closed").
   // Older/cached rows may carry this without a `userStage`.
   currentStage?: string | null;
@@ -353,18 +358,18 @@ export function deriveDrivers(row: HrRadarRowInput, max = 4): string[] {
 // recomputed probability or threshold — it tells the user what the engine is
 // waiting on to promote the row.
 const NEXT_ESCALATION: Record<CanonicalUserStage, string | null> = {
-  track: "Watching — needs harder contact and a confirming swing to develop.",
-  build: "Building — one more barrel / hard fly can push this to High Conviction.",
-  ready: "High Conviction setup — one more barrel / hard fly becomes a Bet Now call.",
+  track: "Watchlist — needs harder contact and a confirming swing to develop.",
+  build: "Lean — one more barrel / hard fly can push this to Playable.",
+  ready: "Playable setup — one more barrel / hard fly becomes an Attack call.",
   fire: null,
   resolved: null,
 };
 
 const ACTION_STRENGTH_LABEL: Record<CanonicalUserStage, string> = {
-  fire: "Bet Now",
-  ready: "High Conviction",
-  build: "Building",
-  track: "Watching",
+  fire: "Attack",
+  ready: "Playable",
+  build: "Lean",
+  track: "Watchlist",
   resolved: "Resolved",
 };
 

@@ -131,7 +131,9 @@ export interface HrRadarApplyResult {
 // Default display floors per active stage. Kept in lock-step with
 // hrRadarUserStage.fallbackScoreForStage so a row that lands in build
 // renders ≥ 5.5 even when the engine score is 0. Caller-supplied
-// displayScore10 always wins when present.
+// displayScore10 always wins when present. Also mirrored by
+// shared/hrRadarStage.ts PLAYABILITY_SCORE_FLOOR under the playability names
+// (watch→watchlist, build→lean, ready→playable, fire→attack).
 const STAGE_SCORE_FLOOR: Record<HrRadarLifecycleState, number | null> = {
   inactive: null,
   watch: 3.5,

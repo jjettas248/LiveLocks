@@ -448,14 +448,22 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-semibold">
               <Activity className="w-3 h-3" />
-              <span data-testid="text-analyze-tier">Tier: {pregameSeedTier ?? alert.confidenceTier?.toUpperCase()}</span>
-              {pregameSeedTier && (
+              {/* Server-stamped playability language (Watchlist/Lean/Playable/Attack) —
+                  render verbatim, never the raw confidenceTier/signalState jargon. */}
+              <span data-testid="text-analyze-tier">
+                Playability: {(alert as any).playabilityLabel ?? pregameSeedTier ?? alert.confidenceTier?.toUpperCase()}
+              </span>
+              {pregameSeedTier && !(alert as any).playabilityLabel && (
                 <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">
                   Pregame
                 </span>
               )}
-              <span className="text-muted-foreground/40">|</span>
-              <span>State: {alert.signalState?.toUpperCase()}</span>
+              {(alert as any).playabilityDescription && (
+                <>
+                  <span className="text-muted-foreground/40">|</span>
+                  <span>{(alert as any).playabilityDescription}</span>
+                </>
+              )}
             </div>
             {pregameDrivers.length > 0 && (
               <div className="flex flex-wrap gap-1" data-testid="chips-analyze-pregame-drivers">

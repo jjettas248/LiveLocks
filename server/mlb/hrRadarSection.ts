@@ -281,6 +281,52 @@ export function resolveFinalNoHrGrading(args: {
   return reachedHrMaxWindow(args) ? "called_miss" : "expired";
 }
 
+// ── Playability outcome buckets (spec §7, 2026-07) ──────────────────────────
+// Classifies an HR by the HIGHEST playability tier reached before the HR
+// timestamp, using the playability names (attack/playable/lean/watchlist)
+// instead of the internal fire/ready/build/track vocabulary. Composes the
+// EXISTING gates above (reachedFireCommitment) rather than inventing new
+// grading logic — attack_before_hr vs playable_before_hr is exactly the same
+// split `officialCall = reachedHrMaxWindow && reachedFireCommitment` already
+// makes at the HR-hit write site (storage.ts). Pure; never grades anything —
+// purely a read-side classification for outcome copy / admin analytics.
+export type HrOutcomeBucket =
+  | "attack_before_hr"
+  | "playable_before_hr"
+  | "lean_before_hr"
+  | "watchlist_before_hr"
+  | "late_signal"
+  | "uncalled_hr";
+
+export function deriveHrOutcomeBucket(args: {
+  firstAttackAtMs?: number | null;    // = firstFireAt
+  firstPlayableAtMs?: number | null;  // = firstReadyAt
+  firstLeanAtMs?: number | null;      // = firstBuiltAt
+  firstWatchlistAtMs?: number | null; // = firstTrackedAt
+  hrEndTimeMs?: number | null;
+  reachedFireCommitment: boolean;
+  gradingStatus?: string | null;
+}): HrOutcomeBucket {
+  if (norm(args.gradingStatus) === "late_signal") return "late_signal";
+  const before = (t?: number | null): boolean =>
+    t != null && args.hrEndTimeMs != null && t < args.hrEndTimeMs;
+  if (before(args.firstAttackAtMs) && args.reachedFireCommitment) return "attack_before_hr";
+  if (before(args.firstPlayableAtMs) || before(args.firstAttackAtMs)) return "playable_before_hr";
+  if (before(args.firstLeanAtMs)) return "lean_before_hr";
+  if (before(args.firstWatchlistAtMs)) return "watchlist_before_hr";
+  return "uncalled_hr";
+}
+
+/**
+ * Single source of truth for "is this bucket an official call" — true only
+ * for attack/playable_before_hr. Mirrors CALLED_HIT_OUTCOME_STATUSES' role
+ * for the tiered called_hit_* statuses; admin metrics (§3.2) key off this
+ * rather than re-listing the bucket set at each call site.
+ */
+export function isOfficialOutcomeBucket(bucket: HrOutcomeBucket): boolean {
+  return bucket === "attack_before_hr" || bucket === "playable_before_hr";
+}
+
 /**
  * Near-HR credit (2026-06) — peak batted-ball contact a player produced while
  * an HR-Max-Window signal was active. Stored on the alert's `contactSnapshot`

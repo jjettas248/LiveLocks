@@ -942,6 +942,168 @@ export function computePregameSeed(
   return { seedScore, formScore: formBreakdown.score, drivers: dedupedDrivers };
 }
 
+// ── Pregame HR-prior score (coverage-only; spec §2.3, 2026-07) ─────────────
+// A SEPARATE, more specific weighted composition than computePregameSeed()
+// above. computePregameSeed feeds the 0-100 DISPLAY readiness number (still
+// authoritative, still capped at PREGAME_SEED_CAP=55). This function feeds a
+// PROMOTION DECISION only — Watchlist/Lean radar coverage, never Playable/
+// Attack — on an independent 0-1 scale per the product spec's exact weights.
+// Pure, no I/O. Missing component inputs are NEUTRAL (0.5), never zero-
+// suppressed, and reported in `missingInputs` for diagnostics.
+export interface PregameHrPriorResult {
+  priorScore: number; // 0-1
+  componentScores: {
+    batterPower: number;
+    pitcherHrVulnerability: number;
+    parkWeatherBoost: number;
+    lineupOpportunity: number;
+    handednessMatchup: number;
+    recentPowerForm: number;
+  };
+  missingInputs: string[];
+  drivers: string[];
+}
+
+const PREGAME_PRIOR_WEIGHTS = {
+  batterPower: 0.35,
+  pitcherHrVulnerability: 0.20,
+  parkWeatherBoost: 0.15,
+  lineupOpportunity: 0.10,
+  handednessMatchup: 0.10,
+  recentPowerForm: 0.10,
+} as const;
+
+function clamp01(n: number): number {
+  return Math.max(0, Math.min(1, n));
+}
+
+function scoreBatterPower(input: HRConversionInput): number | null {
+  const parts: number[] = [];
+  if (input.seasonHRRate != null) parts.push(clamp01(input.seasonHRRate / 0.07));
+  if (input.barrelRate != null) parts.push(clamp01(input.barrelRate / 0.16));
+  if (input.hardHitRate != null) parts.push(clamp01(input.hardHitRate / 0.50));
+  if (input.xISO != null) parts.push(clamp01(input.xISO / 0.28));
+  else if (input.xSLG != null) parts.push(clamp01((input.xSLG - 0.350) / 0.300));
+  return parts.length ? clamp01(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
+}
+
+function scorePitcherHrVulnerability(input: HRConversionInput): number | null {
+  const parts: number[] = [];
+  if (input.era != null) parts.push(clamp01((input.era - 3.0) / 4.0));
+  if (input.isPitcherCollapsing) parts.push(1.0);
+  const veloDrop = input.pitcherDeterioration?.velocityDrop;
+  if (veloDrop != null) parts.push(clamp01(veloDrop / 3.0));
+  return parts.length ? clamp01(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
+}
+
+function scoreParkWeatherBoost(input: HRConversionInput): number | null {
+  const parts: number[] = [];
+  if (input.parkFactor != null) parts.push(clamp01((input.parkFactor - 0.90) / 0.30));
+  if (input.isIndoors === true) {
+    parts.push(0.5);
+  } else if (input.windSpeed != null && input.windDirection != null) {
+    const favorable = /out|tail/i.test(input.windDirection);
+    parts.push(favorable ? clamp01(input.windSpeed / 20) : clamp01(0.5 - input.windSpeed / 40));
+  }
+  return parts.length ? clamp01(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
+}
+
+function scoreLineupOpportunity(input: HRConversionInput): number | null {
+  if (input.battingOrderSlot == null) return null;
+  // Slot 1 (most remaining PA opportunity) → ~1.0; slot 9 → ~0.2.
+  return clamp01(1 - (input.battingOrderSlot - 1) / 8);
+}
+
+function scoreHandednessMatchup(input: HRConversionInput): number | null {
+  const splits = input.batterHandednessSplits;
+  if (splits == null) return null;
+  const hrRate = input.pitcherThrows === "L" ? splits.hrRateVsLHP : splits.hrRateVsRHP;
+  if (typeof hrRate !== "number") return null;
+  return clamp01(hrRate / 0.06);
+}
+
+function scoreRecentPowerForm(input: HRConversionInput): number | null {
+  const parts: number[] = [];
+  if (input.hrRateLast30 != null) parts.push(clamp01(input.hrRateLast30 / 0.07));
+  if (input.hrRateLast15 != null) parts.push(clamp01(input.hrRateLast15 / 0.08));
+  if (input.hrRateLast7 != null) parts.push(clamp01(input.hrRateLast7 / 0.10));
+  if (input.recentOps != null && input.seasonOps != null) {
+    parts.push(clamp01((input.recentOps - input.seasonOps) / 0.300 + 0.5));
+  }
+  return parts.length ? clamp01(parts.reduce((a, b) => a + b, 0) / parts.length) : null;
+}
+
+const PREGAME_PRIOR_NEUTRAL = 0.5;
+
+export function computePregameHrPriorScore(input: HRConversionInput): PregameHrPriorResult {
+  const raw = {
+    batterPower: scoreBatterPower(input),
+    pitcherHrVulnerability: scorePitcherHrVulnerability(input),
+    parkWeatherBoost: scoreParkWeatherBoost(input),
+    lineupOpportunity: scoreLineupOpportunity(input),
+    handednessMatchup: scoreHandednessMatchup(input),
+    recentPowerForm: scoreRecentPowerForm(input),
+  };
+
+  const componentScores = {
+    batterPower: raw.batterPower ?? PREGAME_PRIOR_NEUTRAL,
+    pitcherHrVulnerability: raw.pitcherHrVulnerability ?? PREGAME_PRIOR_NEUTRAL,
+    parkWeatherBoost: raw.parkWeatherBoost ?? PREGAME_PRIOR_NEUTRAL,
+    lineupOpportunity: raw.lineupOpportunity ?? PREGAME_PRIOR_NEUTRAL,
+    handednessMatchup: raw.handednessMatchup ?? PREGAME_PRIOR_NEUTRAL,
+    recentPowerForm: raw.recentPowerForm ?? PREGAME_PRIOR_NEUTRAL,
+  };
+
+  const missingInputs = (Object.keys(raw) as (keyof typeof raw)[]).filter((k) => raw[k] == null);
+
+  const drivers: string[] = [];
+  if (componentScores.batterPower >= 0.7) drivers.push("Elite batter power profile");
+  if (componentScores.pitcherHrVulnerability >= 0.7) drivers.push("Pitcher HR-vulnerable");
+  if (componentScores.parkWeatherBoost >= 0.7) drivers.push("Park/weather HR boost");
+  if (componentScores.recentPowerForm >= 0.7) drivers.push("Hot recent power form");
+
+  const priorScore = clamp01(
+    componentScores.batterPower * PREGAME_PRIOR_WEIGHTS.batterPower +
+    componentScores.pitcherHrVulnerability * PREGAME_PRIOR_WEIGHTS.pitcherHrVulnerability +
+    componentScores.parkWeatherBoost * PREGAME_PRIOR_WEIGHTS.parkWeatherBoost +
+    componentScores.lineupOpportunity * PREGAME_PRIOR_WEIGHTS.lineupOpportunity +
+    componentScores.handednessMatchup * PREGAME_PRIOR_WEIGHTS.handednessMatchup +
+    componentScores.recentPowerForm * PREGAME_PRIOR_WEIGHTS.recentPowerForm,
+  );
+
+  return { priorScore, componentScores, missingInputs, drivers };
+}
+
+export type PregamePriorPromotion = "none" | "watchlist" | "lean";
+
+const PREGAME_PRIOR_WATCHLIST_FLOOR = 0.70;
+const PREGAME_PRIOR_LEAN_FLOOR = 0.78;
+const PREGAME_PRIOR_LEAN_INNING_FLOOR = 6;
+const PREGAME_PRIOR_LEAN_BULLPEN_FLOOR = 0.65;
+
+/**
+ * Promotion decision for the pregame prior — coverage-only. HARD INVARIANT:
+ * no combination of prior-score inputs can ever promote past "lean" — that
+ * cap is enforced structurally (this function's return type has no
+ * "playable"/"attack" member), never by a threshold that could be tuned past
+ * it. Watchlist/Lean are non-official radar coverage; Playable/Attack require
+ * live qualifying-signal evidence and never come from a pregame prior alone.
+ */
+export function derivePregamePriorPromotion(args: {
+  priorScore: number;
+  inning?: number | null;
+  pitcherOrBullpenVulnerabilityScore?: number | null;
+}): PregamePriorPromotion {
+  const { priorScore, inning, pitcherOrBullpenVulnerabilityScore } = args;
+  if (
+    priorScore >= PREGAME_PRIOR_LEAN_FLOOR &&
+    inning != null && inning >= PREGAME_PRIOR_LEAN_INNING_FLOOR &&
+    pitcherOrBullpenVulnerabilityScore != null && pitcherOrBullpenVulnerabilityScore >= PREGAME_PRIOR_LEAN_BULLPEN_FLOOR
+  ) return "lean";
+  if (priorScore >= PREGAME_PRIOR_WATCHLIST_FLOOR) return "watchlist";
+  return "none";
+}
+
 // Map the 0–100 pregame form score to a small capped multiplier on baseRate.
 // Center (50) → 1.0; elite (~90) → ~1.14; cold (~20) → ~0.90.
 function pregamePriorMultiplier(score: number): number {

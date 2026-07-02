@@ -46,10 +46,16 @@ import type { CanonicalHrRadarStage } from "@shared/hrRadarStage";
 import {
   deriveHrRadarBadges,
   deriveHrRadarDisplayGrade,
+  getPlayabilityDescription,
+  getPlayabilityLabel,
+  getPlayabilityStatus,
+  isOfficialPlayability,
   type HrRadarBadge,
   type HrRadarDisplayGrade,
+  type PlayabilityStatus,
 } from "@shared/hrRadarStage";
 export type HrRadarUserStage = CanonicalHrRadarStage;
+export type { PlayabilityStatus };
 
 // ── Path-based promotion table ─────────────────────────────────────────────
 // The HR Radar runs two parallel scoring tracks. The dynamic state machine
@@ -274,6 +280,9 @@ export function toSignalScore10(value: number | null | undefined): number {
  * Display-only fallback. Used to keep Track rows from showing a meaningless
  * 0.0 in the UI when the engine has not yet emitted a readiness number. NEVER
  * use this for grading — only for the score badge.
+ *
+ * Mirrors `PLAYABILITY_SCORE_FLOOR` (shared/hrRadarStage.ts) and
+ * `STAGE_SCORE_FLOOR` (hrRadarStateMachine.ts) — keep all three in lock-step.
  */
 export function fallbackScoreForStage(stage: HrRadarUserStage): number {
   if (stage === "track") return 2.5;
@@ -325,7 +334,16 @@ export type HrQualifyingSignalType =
   // LA in [16,34]). Recognized via factors.maxXBA / per-AB tags / the
   // orchestrator's nearHr drivers ("High-xBA HR danger contact" /
   // "Barrel + high-xBA danger") propagated into triggerTags.
-  | "high_xba_danger";
+  | "high_xba_danger"
+  // Playability calibration (2026-07) — ballpark/wind environment favors HR.
+  // Co-signal for the massive-contact Attack gate (§2.2); also feeds the
+  // existing park_boost badge (shared/hrRadarStage.ts deriveHrRadarBadges).
+  | "park_weather_boost";
+
+/** Human-readable driver copy for qualifying signals the UI may surface verbatim. */
+export const QUALIFYING_SIGNAL_DRIVER_LABEL: Partial<Record<HrQualifyingSignalType, string>> = {
+  late_game_power_build: "Late-game HR-shaped contact",
+};
 
 /**
  * Derive qualifying signals from the engine's existing diagnostic snapshot
@@ -348,11 +366,20 @@ export function deriveQualifyingSignals(input: {
     // Phase 2 STEP 4 — peak xBA across recent ABs. Optional; when missing
     // the high_xba_danger signal can still fire from triggerTags.
     maxXBA?: number | null;
+    // Playability calibration (2026-07) — late-game distance band (§2.1) and
+    // park/wind favorability (§2.2). Both already exist on HRBuildResult
+    // .factors (HRSignalBuilder.ts) — additive, no-op when absent.
+    maxDistance?: number | null;
+    parkWindBoost?: number | null;
   } | null;
   triggerTags?: string[] | null;
   inning?: number | null;
   positiveDrivers?: string[] | null;
   conversionProbability?: number | null;
+  // Playability calibration (2026-07) — plate-appearance index for the
+  // late-game promotion gate (§2.1). Optional; when absent the PA>=3 gate is
+  // not enforced (no-op per §7a rule 2) and only the inning>=7 tightening applies.
+  paCount?: number | null;
 }): HrQualifyingSignalType[] {
   const out = new Set<HrQualifyingSignalType>();
   const f = input.factors ?? {};
@@ -360,6 +387,7 @@ export function deriveQualifyingSignals(input: {
   const drivers = (input.positiveDrivers ?? []).map(d => String(d).toLowerCase());
   const inning = input.inning ?? null;
   const conv = input.conversionProbability ?? null;
+  const paCount = input.paCount ?? null;
 
   const barrels = Number(f.barrels ?? 0);
   const hardHits = Number(f.hardHits ?? 0);
@@ -367,8 +395,10 @@ export function deriveQualifyingSignals(input: {
   const maxEV = Number(f.maxEV ?? 0);
   const avgEV = Number(f.avgEV ?? 0);
   const maxLA = Number(f.maxLA ?? 0);
+  const maxDistance = Number(f.maxDistance ?? 0);
   const nearBarrel = Number(f.nearBarrels ?? 0);
   const pFatigue = Number(f.pitcherFatigueBoost ?? 0);
+  const parkWindBoost = Number(f.parkWindBoost ?? 0);
 
   if (barrels >= 1) out.add("elite_barrel");
   if (nearBarrel >= 1 || tags.some(t => t.includes("near_barrel"))) out.add("near_barrel");
@@ -379,7 +409,19 @@ export function deriveQualifyingSignals(input: {
       drivers.some(d => d.includes("fatigue") || d.includes("collapse"))) {
     out.add("pitcher_collapse_power");
   }
-  if (inning != null && inning >= 6 && (barrels >= 1 || hardHits >= 1 || deepFly >= 1 || (avgEV >= 92))) {
+  if (parkWindBoost > 0 || tags.some(t => t.includes("park") || t.includes("wind")) ||
+      drivers.some(d => d.includes("park") || d.includes("wind"))) {
+    out.add("park_weather_boost");
+  }
+  // Late-game barrel promotion (spec §2.1, tightened 2026-07 from inning>=6):
+  // inning>=7, PA index>=3 (when known), and either a barrel or one of two
+  // EV+launch-angle(+distance) bands drawn from real historical false
+  // negatives (Amed Rosario: 110.9 EV / 18° LA / 361 ft barrel in T8).
+  const lateGameContact =
+    barrels >= 1 ||
+    (maxEV >= 105 && maxLA >= 12 && maxLA <= 32) ||
+    (maxEV >= 100 && maxLA >= 18 && maxLA <= 35 && maxDistance >= 340);
+  if (inning != null && inning >= 7 && (paCount == null || paCount >= 3) && lateGameContact) {
     out.add("late_game_power_build");
   }
   if (maxEV >= 108 || (barrels >= 1 && maxEV >= 105)) out.add("massive_single_contact");
@@ -423,11 +465,19 @@ export function deriveSuggestedUserStageFromSignals(args: {
   qualifyingSignals: HrQualifyingSignalType[];
 }): HrRadarUserStage {
   const signals = new Set(args.qualifyingSignals ?? []);
+  // Massive-contact Attack gate (spec §5/§7a calibration change, 2026-07):
+  // massive_single_contact alone caps at Playable/ready (still a very strong
+  // signal) — it only reaches Attack/fire when paired with an independent
+  // vulnerability signal (pitcher fatigue/bullpen collapse or a park/weather
+  // HR boost). Previously massive_single_contact alone auto-fired; see
+  // MLB_GOLDMASTER_VERSION bump in goldmasterGuard.ts for the re-baseline.
   if (
-    signals.has("massive_single_contact") ||
+    (signals.has("massive_single_contact") &&
+      (signals.has("pitcher_collapse_power") || signals.has("park_weather_boost"))) ||
     (signals.has("elite_barrel") && signals.has("pitcher_collapse_power"))
   ) return "fire";
   if (
+    signals.has("massive_single_contact") ||
     signals.has("elite_barrel") ||
     signals.has("two_hard_hit_balls") ||
     signals.has("near_barrel") ||
@@ -667,6 +717,13 @@ export interface UserStageEnrichment {
   userStage: HrRadarUserStage;
   stageLabel: string;       // "Track" / "Build" / "Ready" / "Fire" / "Resolved"
   stageDescription: string; // user-facing copy
+  // ── Playability language (user-facing) ──────────────────────────────────
+  // The betting-actionable vocabulary the UI must render instead of the raw
+  // internal stage above. Only "playable"/"attack" are official calls.
+  playabilityStatus: PlayabilityStatus;
+  playabilityLabel: string;       // "Watchlist" / "Lean" / "Playable" / "Attack" / "Resolved"
+  playabilityDescription: string; // e.g. "Official HR signal active"
+  isOfficialSignal: boolean;      // true only for playable ("ready") / attack ("fire")
   qualifyingSignals: HrQualifyingSignalType[];
   // Step 5 — single canonical badge set (shared/hrRadarStage.ts). Derived
   // server-side from evidence; the UI renders these verbatim and never invents
@@ -720,6 +777,16 @@ export interface UserStageEnrichment {
   firstReadyInning: number | null;
   firstFireAt: string | null;
   firstFireInning: number | null;
+  // Playability aliases of the fields above — additive, computed, never
+  // persisted as new columns (spec: "add aliases in API response if safer").
+  firstWatchlistAt: string | null;   // = firstTrackedAt
+  firstWatchlistInning: number | null;
+  firstLeanAt: string | null;        // = firstBuiltAt
+  firstLeanInning: number | null;
+  firstPlayableAt: string | null;    // = firstReadyAt
+  firstPlayableInning: number | null;
+  firstAttackAt: string | null;      // = firstFireAt
+  firstAttackInning: number | null;
   hrOccurredAt: string | null;
   hrOccurredInning: number | null;
   // Admin/debug — kept hidden from normal user copy.
@@ -771,6 +838,9 @@ export function enrichWithUserStage(input: {
   // (HRAlertSnapshot.consecutivePromoteTicks), persisted on the stage contract.
   consecutivePromoteTicks?: number | null;
   useFallbackScore?: boolean; // Phase 3: opt-in display fallback for zero rows
+  // Playability calibration (2026-07) — plate-appearance index, forwarded to
+  // deriveQualifyingSignals' late-game promotion gate (§2.1). Optional.
+  paCount?: number | null;
   // ── HR Radar Lifecycle Repair — observability ────────────────────────
   // Identity fields used purely to label transition diagnostics. Optional;
   // when omitted (e.g. unit tests) no transition tags are emitted from
@@ -806,6 +876,7 @@ export function enrichWithUserStage(input: {
     inning: input.inning ?? input.detectedInning ?? null,
     positiveDrivers: input.positiveDrivers,
     conversionProbability: input.conversionProbability,
+    paCount: input.paCount ?? null,
   });
 
   // Phase 7 — combine. Resolved is sticky from legacy mapping.
@@ -876,6 +947,12 @@ export function enrichWithUserStage(input: {
         `[HR_RADAR_TRANSITION] from=${prevForTrace} to=${userStage} ` +
         `signalId=${sid} gameId=${gid} playerId=${pid} player=${pname}`,
       );
+      console.log(
+        `[HR_RADAR_PLAYABILITY_MAPPED] from=${getPlayabilityStatus(prevForTrace)} ` +
+        `to=${getPlayabilityStatus(userStage)} internalStage=${userStage} ` +
+        `isOfficialSignal=${isOfficialPlayability(getPlayabilityStatus(userStage))} ` +
+        `signalId=${sid} gameId=${gid} playerId=${pid} player=${pname}`,
+      );
       if (userStage === "ready") {
         console.log(`[HR_RADAR_READY] signalId=${sid} gameId=${gid} playerId=${pid} player=${pname}`);
       } else if (userStage === "fire") {
@@ -909,15 +986,32 @@ export function enrichWithUserStage(input: {
   // initial/current/peakReadinessScore on the alert row is untouched.
   const useFallback = input.useFallbackScore === true;
   const evidenceFloorActive = qualifyingSignals.length > 0;
+  // Playability floor (spec §3): a row that reached the official Playable/
+  // Attack tier must never display below its stage's score floor, even when
+  // no qualifying-signal evidence was captured this cycle (e.g. a legacy
+  // alertTier/dynamicState-only promotion with no factors passed in) — the
+  // evidence/useFallback gates above only covered the case where qualifying
+  // signals were present. Display/order only; never affects
+  // engineProbability/calibratedProbability/conversionProbability/grading.
+  const officialFloorActive = userStage === "ready" || userStage === "fire";
   const fallback = fallbackScoreForStage(userStage);
   const applyFloor = (s: number | null): number | null => {
-    if (!evidenceFloorActive && !useFallback) return s;
+    if (!evidenceFloorActive && !useFallback && !officialFloorActive) return s;
     if (s == null || s === 0) return fallback;
     return Math.max(s, fallback);
   };
   const currentSignalScore10 = applyFloor(currentFromInput);
   const initialSignalScore10 = applyFloor(initialFromInput);
   const peakSignalScore10 = applyFloor(peakFromInput);
+
+  if (officialFloorActive && currentFromInput != null && currentFromInput < fallback) {
+    console.log(
+      `[HR_RADAR_PLAYABILITY_SCORE_FLOOR_APPLIED] player=${input.player ?? "?"} ` +
+      `rawScore10=${currentFromInput} floorScore10=${fallback} internalStage=${userStage} ` +
+      `playabilityStatus=${getPlayabilityStatus(userStage)} playabilityLabel=${getPlayabilityLabel(getPlayabilityStatus(userStage))} ` +
+      `qualifyingSignals=${qualifyingSignals.join(",") || "none"}`,
+    );
+  }
 
   // ── Conviction-aware DISPLAY scores ────────────────────────────────────
   // For rows whose alertPath the engine intentionally locks at WATCH (e.g.
@@ -990,14 +1084,28 @@ export function enrichWithUserStage(input: {
     parkBoost,
   });
   const displayGrade = deriveHrRadarDisplayGrade(userStage, displayCurrentScore10);
+  const playabilityStatus = getPlayabilityStatus(userStage);
+
+  // Append qualifying-signal driver copy (e.g. "Late-game HR-shaped contact")
+  // to the user-facing reasons, deduped against whatever the caller already
+  // supplied. Server-side only, from already-computed evidence — CLAUDE.md
+  // §3.5 (drivers built server-side, UI renders verbatim, never invented).
+  const signalDriverLabels = qualifyingSignals
+    .map((s) => QUALIFYING_SIGNAL_DRIVER_LABEL[s])
+    .filter((label): label is string => !!label);
+  const cleanReasons = Array.from(new Set([...(input.userReasons ?? []), ...signalDriverLabels]));
 
   return {
     userStage,
     stageLabel: getUserStageLabel(userStage),
     stageDescription: getUserStageCopy(userStage),
+    playabilityStatus,
+    playabilityLabel: getPlayabilityLabel(playabilityStatus),
+    playabilityDescription: getPlayabilityDescription(playabilityStatus),
+    isOfficialSignal: isOfficialPlayability(playabilityStatus),
     qualifyingSignals,
     badges,
-    cleanReasons: input.userReasons ?? [],
+    cleanReasons,
     initialSignalScore10,
     currentSignalScore10,
     peakSignalScore10,
@@ -1019,6 +1127,14 @@ export function enrichWithUserStage(input: {
     firstReadyInning,
     firstFireAt,
     firstFireInning,
+    firstWatchlistAt: firstTrackedAt,
+    firstWatchlistInning: firstTrackedInning,
+    firstLeanAt: firstBuiltAt,
+    firstLeanInning: firstBuiltInning,
+    firstPlayableAt: firstReadyAt,
+    firstPlayableInning: firstReadyInning,
+    firstAttackAt: firstFireAt,
+    firstAttackInning: firstFireInning,
     hrOccurredAt,
     hrOccurredInning,
     adminReasons: input.adminReasons ?? [],

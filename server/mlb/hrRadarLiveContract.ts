@@ -35,3 +35,23 @@ export function isHrRadarPregameSeedEnabled(
   const raw = (env.HR_RADAR_PREGAME_SEED ?? "").trim().toLowerCase();
   return raw === "true" || raw === "1" || raw === "on" || raw === "yes";
 }
+
+/**
+ * Pregame HR-prior promotion gate (spec §2.3, 2026-07).
+ *
+ * Sibling to the seed gate above and independently toggleable: when a
+ * presence-floor row's `computePregameHrPriorScore` reaches the Lean
+ * threshold (priorScore>=0.78 + inning>=6 + bullpen vulnerability>=0.65), the
+ * row's canonical stage is lifted from "watch" (Watchlist) to "building"
+ * (Lean) instead of staying pinned at Watchlist. This is STILL coverage-only
+ * — it can never reach "attack"/"building"→"ready" promotion on its own — so
+ * it never touches the FIRE-only official W/L record, same invariant as the
+ * seed gate above. Gated OFF by default until rollout is confirmed safe.
+ * Set `HR_RADAR_PREGAME_PRIOR_PROMOTION` to true/1/on/yes to enable.
+ */
+export function isHrRadarPregamePriorPromotionEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const raw = (env.HR_RADAR_PREGAME_PRIOR_PROMOTION ?? "").trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "on" || raw === "yes";
+}

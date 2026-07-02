@@ -180,6 +180,20 @@ export interface HrRadarLadderEntry {
   userStage?: "track" | "build" | "ready" | "fire" | "resolved";
   stageLabel?: string;
   stageDescription?: string;
+  // Playability language (server-stamped) — render verbatim, never derive.
+  // Only "playable"/"attack" are official calls.
+  playabilityStatus?: "watchlist" | "lean" | "playable" | "attack" | "resolved";
+  playabilityLabel?: string;
+  playabilityDescription?: string;
+  isOfficialSignal?: boolean;
+  firstWatchlistAt?: string | null;
+  firstWatchlistInning?: number | null;
+  firstLeanAt?: string | null;
+  firstLeanInning?: number | null;
+  firstPlayableAt?: string | null;
+  firstPlayableInning?: number | null;
+  firstAttackAt?: string | null;
+  firstAttackInning?: number | null;
   qualifyingSignals?: string[];
   // Step 5 — canonical badge set, server-derived; rendered verbatim.
   badges?: HrRadarBadge[];
@@ -255,39 +269,39 @@ export const SECTION_META: Record<SectionKey, {
   defaultCollapsed: boolean;
 }> = {
   attackNow: {
-    label: "BET NOW",
+    label: "ATTACK",
     icon: Flame,
     accent: "border-red-500/40 bg-red-500/5",
     badge: "bg-red-500 text-white",
-    description: "Highest-conviction HR signals firing right now.",
+    description: "Max-conviction HR window — official HR signal active.",
     sublabel: "Act now — conviction confirmed",
     defaultCollapsed: false,
   },
   ready: {
-    label: "HIGH CONVICTION",
+    label: "PLAYABLE",
     icon: Zap,
     accent: "border-orange-500/40 bg-orange-500/5",
     badge: "bg-orange-500 text-white",
-    description: "Strong HR setup forming — high-conviction watch context, not an official call until it fires.",
-    sublabel: "One step from a Bet Now call",
+    description: "Official HR signal active — strong setup, one step from Attack.",
+    sublabel: "One step from an Attack call",
     defaultCollapsed: false,
   },
   building: {
-    label: "BUILDING",
+    label: "LEAN",
     icon: Zap,
     accent: "border-amber-500/40 bg-amber-500/5",
     badge: "bg-amber-500 text-white",
-    description: "Heating up, waiting on confirmation — context only, not graded to the record yet.",
-    sublabel: "Heating up, waiting on confirmation",
+    description: "Signal forming · not official — worth tracking, not graded to the record yet.",
+    sublabel: "Signal forming, not official",
     defaultCollapsed: false,
   },
   watch: {
-    label: "WATCHING",
+    label: "WATCHLIST",
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
-    description: "Tracking. HR conditions are forming, not actionable yet.",
-    sublabel: "Early formation detected",
+    description: "Worth monitoring · not official — HR conditions are forming.",
+    sublabel: "Worth monitoring · not official",
     defaultCollapsed: false,
   },
   noAbYet: {
@@ -392,7 +406,7 @@ function formatHalfInning(inning: number | null, half: string | null): string | 
 
 function deadOutcomeLabel(status: string): { label: string; color: string } {
   switch (status) {
-    case "uncalled_hr": return { label: "Uncalled HR", color: "bg-zinc-700 text-zinc-100" };
+    case "uncalled_hr": return { label: "True uncalled HR", color: "bg-zinc-700 text-zinc-100" };
     case "late_signal": return { label: "Late signal", color: "bg-orange-700 text-orange-100" };
     case "called_miss":
     case "miss":
@@ -417,12 +431,12 @@ function deadOutcomeLabel(status: string): { label: string; color: string } {
  */
 function cashedFromTierLabel(
   status: string | null | undefined,
-): "Bet Now" | "High Conviction" | "Building" | "Watching" | null {
+): "Attack" | "Playable" | "Lean" | "Watchlist" | null {
   switch (status) {
-    case "called_hit_attack": return "Bet Now";
-    case "called_hit_ready": return "High Conviction";
-    case "called_hit_build": return "Building";
-    case "called_hit_watch": return "Watching";
+    case "called_hit_attack": return "Attack";
+    case "called_hit_ready": return "Playable";
+    case "called_hit_build": return "Lean";
+    case "called_hit_watch": return "Watchlist";
     default: return null;
   }
 }
@@ -1959,25 +1973,25 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 rounded-lg bg-card border border-border/40"
           data-testid="ladder-summary-bar"
         >
-          {/* Unified public ladder vocabulary — FIRE · READY · BUILD · TRACK. */}
+          {/* Unified public ladder vocabulary — Attack · Playable · Lean · Watchlist. */}
           {counts.attackNow > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-fire">
-              <Flame className="w-3 h-3" /> FIRE {counts.attackNow}
+              <Flame className="w-3 h-3" /> Attack {counts.attackNow}
             </span>
           )}
           {counts.ready > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-orange-400" data-testid="summary-ready">
-              <Zap className="w-3 h-3" /> READY {counts.ready}
+              <Zap className="w-3 h-3" /> Playable {counts.ready}
             </span>
           )}
           {counts.building > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-build">
-              <Zap className="w-3 h-3" /> BUILD {counts.building}
+              <Zap className="w-3 h-3" /> Lean {counts.building}
             </span>
           )}
           {counts.watch > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-slate-400" data-testid="summary-track">
-              <Eye className="w-3 h-3" /> TRACK {counts.watch}
+              <Eye className="w-3 h-3" /> Watchlist {counts.watch}
             </span>
           )}
           {counts.cashed > 0 && (

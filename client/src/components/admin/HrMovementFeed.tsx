@@ -12,16 +12,17 @@ interface Props {
 
 const STAGE_FILTERS = ["all", "FIRE", "READY", "BUILD", "WATCH", "CASHED", "MISSED"];
 
-// Map the engine's raw stage tokens to the SAME user-facing vocabulary the HR
-// Radar ladder shows (see SECTION_META in HrRadarLadder.tsx): BUILD→ALMOST and
-// WATCH→TRACK so this admin feed never surfaces a stage name that disagrees
-// with — or looks more raw than — what users see on the live ladder. The raw
-// token is still used for filtering; only the displayed text is humanized.
+// Map the engine's raw stage tokens to the SAME playability vocabulary the HR
+// Radar ladder shows (see SECTION_META in HrRadarLadder.tsx): Watchlist/Lean/
+// Playable/Attack, so this admin feed never surfaces a stage name that
+// disagrees with — or looks more raw than — what users see on the live
+// ladder. The raw token is still used for filtering; only the displayed text
+// is humanized.
 const STAGE_LABELS: Record<string, string> = {
-  FIRE: "FIRE",
-  READY: "READY",
-  BUILD: "ALMOST",
-  WATCH: "TRACK",
+  FIRE: "ATTACK",
+  READY: "PLAYABLE",
+  BUILD: "LEAN",
+  WATCH: "WATCHLIST",
   CASHED: "CASHED",
   MISSED: "MISSED",
   EXPIRED: "EXPIRED",
