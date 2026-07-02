@@ -6,13 +6,27 @@
 // Power Radar rebuild running overnight agrees with discoverTodaysGames() on
 // which slate is currently in play (see buildPregamePowerRadar.ts).
 
-import { slateDateET } from "./dateUtils";
+import { slateDateET, toEtDateKey } from "./dateUtils";
+import { formatPlainDateLabel } from "../../shared/dateLabel";
 
 let passed = 0;
 let failed = 0;
 function ok(cond: boolean, msg: string) {
   if (cond) { passed++; } else { failed++; console.error(`  ✗ ${msg}`); }
 }
+
+// ── toEtDateKey — plain ET calendar date (midnight rollover) ──────────────
+
+// Late-night UTC should map to prior ET date.
+ok(toEtDateKey("2026-07-01T02:30:00.000Z") === "2026-06-30", "toEtDateKey: 2:30am UTC on Jul 1 is Jun 30 ET");
+
+// Afternoon UTC should map to same ET date.
+ok(toEtDateKey("2026-07-01T16:00:00.000Z") === "2026-07-01", "toEtDateKey: 4pm UTC on Jul 1 is Jul 1 ET");
+
+// ── formatPlainDateLabel — must never shift the visible day ───────────────
+ok(formatPlainDateLabel("2026-07-01") === "Wed, Jul 1", "formatPlainDateLabel: 2026-07-01 -> Wed, Jul 1");
+ok(formatPlainDateLabel("2026-06-27") === "Sat, Jun 27", "formatPlainDateLabel: 2026-06-27 -> Sat, Jun 27");
+ok(formatPlainDateLabel("2026-06-28") === "Sun, Jun 28", "formatPlainDateLabel: 2026-06-28 -> Sun, Jun 28");
 
 // Builds the UTC instant for a given ET wall-clock time. `utcOffsetHours` is
 // how many hours ahead of ET that UTC is at that instant — 5 for EST

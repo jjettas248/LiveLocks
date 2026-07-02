@@ -697,24 +697,32 @@ export async function registerRoutes(
       // snapshot (today only), so today's wins survive snapshot rebuilds and
       // historical dates are also served.
       const { getPregameRadarWinsForDate } = await import("./mlb/pregamePowerRadar/statsService");
+      const { buildPregameWinsSectionMeta } = await import("./mlb/pregamePowerRadar/winAttribution");
       const wins = await getPregameRadarWinsForDate(sessionDate);
       const pregameRadarWins: DailyCashedLogResponse["pregameRadarWins"] = wins.pregameRadarWins;
       const firstAbPregameWins: DailyCashedLogResponse["firstAbPregameWins"] = wins.firstAbPregameWins;
+      const sectionMeta = buildPregameWinsSectionMeta(sessionDate, slateDateET());
 
       const response: DailyCashedLogResponse = {
         officialLiveCashes,
         pregameRadarWins,
         firstAbPregameWins,
         engineCashesTotal: officialLiveCashes.length + pregameRadarWins.length,
+        ...sectionMeta,
       };
       return res.json(response);
     } catch (e: any) {
       console.error("[mlb/daily-cashed-log]", e?.message);
+      const fallbackDate = slateDateET();
       const empty: DailyCashedLogResponse = {
         officialLiveCashes: [],
         pregameRadarWins: [],
         firstAbPregameWins: [],
         engineCashesTotal: 0,
+        latestSettledSlateDateET: fallbackDate,
+        todaySlateDateET: fallbackDate,
+        isToday: true,
+        titleLabel: "Pregame Radar Wins",
       };
       return res.json(empty);
     }

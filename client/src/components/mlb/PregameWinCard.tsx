@@ -124,7 +124,7 @@ export function PregameWinsSection() {
     <div className="space-y-2" data-testid="section-pregame-radar-wins">
       <h3 className="text-sm font-bold flex items-center gap-1.5">
         <Trophy className="w-4 h-4 text-emerald-300" />
-        Pregame Radar Wins
+        {data?.titleLabel ?? "Pregame Radar Wins"}
         <span className="text-[11px] font-normal text-muted-foreground">
           flagged before first pitch · later homered
         </span>
