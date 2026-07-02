@@ -6,7 +6,10 @@
 // source of the visual language both surfaces read, so the two can never drift
 // and the eye can instantly rank a play by heat:
 //
-//   WATCHING (cool) → BUILDING → HIGH CONVICTION → BET NOW (hot) · CASHED (win) · MISSED (muted)
+//   WATCHLIST (cool) → LEAN → PLAYABLE → ATTACK (hot) · CASHED (win) · MISSED (muted)
+//
+// Only Playable and Attack are official, graded HR calls — Watchlist/Lean are
+// radar coverage, not official picks.
 //
 // It contains NO data logic. It never reads engine fields, never recomputes a
 // score/probability/tier — callers pass already-derived, server-stamped values
@@ -43,7 +46,7 @@ export interface HrTierTheme {
 const THEME: Record<HrHeatTier, HrTierTheme> = {
   fire: {
     tier: "fire",
-    label: "Bet Now",
+    label: "Attack",
     icon: Flame,
     text: "text-red-400",
     rail: "bg-red-500",
@@ -55,7 +58,7 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   },
   ready: {
     tier: "ready",
-    label: "High Conviction",
+    label: "Playable",
     icon: Zap,
     text: "text-orange-400",
     rail: "bg-orange-500",
@@ -68,7 +71,7 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   build: {
     // "Signal is heating up" — electric blue ownership (spec).
     tier: "build",
-    label: "Building",
+    label: "Lean",
     icon: TrendingUp,
     text: "text-blue-400",
     rail: "bg-blue-500",
@@ -81,7 +84,7 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   track: {
     // "Something is forming" — neutral blue-gray, recedes (spec).
     tier: "track",
-    label: "Watching",
+    label: "Watchlist",
     icon: Eye,
     text: "text-slate-400",
     rail: "bg-slate-500",

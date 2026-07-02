@@ -227,11 +227,11 @@ export function HrQuickDecide({ onAddToSlip, onSwitchToLadder }: HrQuickDecidePr
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-medium" data-testid="hr-live-counts">
           <span className="text-muted-foreground/70">Live:</span>
-          <span className="text-red-400">{counts.fire} Bet Now</span>
+          <span className="text-red-400">{counts.fire} Attack</span>
           <span className="text-muted-foreground/40">·</span>
-          <span className="text-orange-400">{counts.ready} High Conviction</span>
+          <span className="text-orange-400">{counts.ready} Playable</span>
           <span className="text-muted-foreground/40">·</span>
-          <span className="text-blue-400">{counts.build} Building</span>
+          <span className="text-blue-400">{counts.build} Lean</span>
           {cashedVMs.length > 0 && (
             <>
               <span className="text-muted-foreground/40">·</span>
@@ -250,7 +250,7 @@ export function HrQuickDecide({ onAddToSlip, onSwitchToLadder }: HrQuickDecidePr
           data-testid="hr-hero-empty"
         >
           <Radar className="w-6 h-6 text-muted-foreground/60 mx-auto" />
-          <p className="text-sm font-semibold text-foreground">No Bet Now or High Conviction calls right now.</p>
+          <p className="text-sm font-semibold text-foreground">No Attack or Playable calls right now.</p>
           <p className="text-xs text-muted-foreground leading-snug">
             {trackedCount > 0
               ? `Radar is tracking ${trackedCount} power window${trackedCount === 1 ? "" : "s"}. Next trigger: live contact, barrel, or pitcher fatigue.`

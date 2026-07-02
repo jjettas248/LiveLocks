@@ -84,7 +84,7 @@ import { applyFamilySuppression } from "./marketFamily";
 import { trackSignalDirection } from "./directionalBias";
 import { evaluateHRAlert, markAlertSent, clearGameCooldowns, type HRAlertInput } from "./evaluateHRAlert";
 import { recomputeHrAlertState, clearGameHrStates, getHrAlertState, mapDynamicStateToStage, computeUnifiedCanonicalStage, seedHrAlertDetection, closeHrAlertOnHit, deriveCanonicalPromotionIntent, type HRAlertSnapshot, type HrRadarStage } from "./hrAlertEngine";
-import { computePregameSeed, type HRConversionInput } from "./hrConversionModel";
+import { computePregameSeed, computePregameHrPriorScore, derivePregamePriorPromotion, type HRConversionInput } from "./hrConversionModel";
 import { PREGAME_SEED_CAP } from "@shared/hrRadarConviction";
 import {
   recomputeNonHrSignalState,
@@ -112,7 +112,7 @@ import { classifyHrReview } from "./hrReviewClassifier";
 import { getPreHrContactEvents } from "./hrPreHrEventResolver";
 import { getPreHrHrRadarBusEvidence } from "./hrPreHrBusEvidence";
 import { getPregameSignalFor } from "./pregamePowerRadar/pregamePowerRadarStore";
-import { isHrRadarPregameSeedEnabled } from "./hrRadarLiveContract";
+import { isHrRadarPregameSeedEnabled, isHrRadarPregamePriorPromotionEnabled } from "./hrRadarLiveContract";
 import { resolveMlbGameSessionDate } from "../utils/mlbSessionDate";
 
 // Max of the finite numbers in a list, or null when none are finite.
@@ -4836,6 +4836,39 @@ export class LiveGameOrchestrator {
           isHotHitter: oh.isHotHitter,
         });
 
+        // Pregame HR-prior promotion (spec §2.3, coverage-only) — a SEPARATE
+        // 0-1 weighted score from the seedScore above. Can lift this row's
+        // canonicalStage from "watch" (Watchlist) to "building" (Lean), but
+        // structurally can never reach "attack"/graded stages — see
+        // derivePregamePriorPromotion's HARD INVARIANT comment. Independently
+        // flagged so it can roll out separately from the seed-display gate.
+        let presenceCanonicalStage: "watch" | "building" = "watch";
+        let presenceConfidenceTier: "monitor" | "building" = "monitor";
+        let presenceSignalState: "watching" | "live" = "watching";
+        let pregamePriorForDiag: ReturnType<typeof computePregameHrPriorScore> | null = null;
+        let pregamePriorPromotion: "none" | "watchlist" | "lean" = "none";
+        if (isHrRadarPregamePriorPromotionEnabled()) {
+          pregamePriorForDiag = computePregameHrPriorScore(pregameFormInput);
+          pregamePriorPromotion = derivePregamePriorPromotion({
+            priorScore: pregamePriorForDiag.priorScore,
+            inning: state.inning,
+            pitcherOrBullpenVulnerabilityScore: pregamePriorForDiag.componentScores.pitcherHrVulnerability,
+          });
+          if (pregamePriorPromotion === "lean") {
+            presenceCanonicalStage = "building";
+            presenceConfidenceTier = "building";
+            presenceSignalState = "live";
+          }
+          console.log(
+            `[HR_RADAR_PREGAME_PRIOR] player=${batter.playerName} gameId=${gameId} inning=${state.inning} ` +
+            `componentScores=${JSON.stringify(pregamePriorForDiag.componentScores)} ` +
+            `missingInputs=${pregamePriorForDiag.missingInputs.join(",") || "none"} ` +
+            `finalScore=${pregamePriorForDiag.priorScore.toFixed(3)} ` +
+            `resultingStage=${pregamePriorPromotion === "lean" ? "build" : "track"} ` +
+            `playabilityStatus=${pregamePriorPromotion === "lean" ? "lean" : "watchlist"} isOfficialSignal=false`,
+          );
+        }
+
         storage.createOrUpdateHrRadarAlert({
           gameId,
           playerId: batter.playerId,
@@ -4846,9 +4879,9 @@ export class LiveGameOrchestrator {
           half: state.isTopInning ? "top" : "bottom",
           readinessScore: seedScore,
           dynamicReadinessScore: null,
-          canonicalStage: "watch",
-          confidenceTier: "monitor",
-          signalState: "watching",
+          canonicalStage: presenceCanonicalStage,
+          confidenceTier: presenceConfidenceTier,
+          signalState: presenceSignalState,
           triggerTags: ["presence_floor", ...eligibilityReasons],
           summaryText: dedupedDrivers.length > 0
             ? `Pregame power profile — ${dedupedDrivers.slice(0, 2).join(", ")}`
@@ -4871,6 +4904,15 @@ export class LiveGameOrchestrator {
               formScore,
               drivers: dedupedDrivers,
             },
+            ...(pregamePriorForDiag ? {
+              pregamePrior: {
+                priorScore: pregamePriorForDiag.priorScore,
+                componentScores: pregamePriorForDiag.componentScores,
+                missingInputs: pregamePriorForDiag.missingInputs,
+                drivers: pregamePriorForDiag.drivers,
+                promotion: pregamePriorPromotion,
+              },
+            } : {}),
           },
           presenceSeedScore: seedScore,
           buildScore: null,

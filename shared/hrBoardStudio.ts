@@ -30,7 +30,7 @@ export const HR_BOARD_ASSET_LABELS: Record<HrBoardAssetType, string> = {
   top_player_spotlight: "Top Player Spotlight",
   top3_watchlist: "Top 3 Watchlist",
   movement_alert: "Movement Alert",
-  ready_fire_alert: "Ready/Fire Alert",
+  ready_fire_alert: "Playable/Attack Alert",
   cashed_proof: "Cashed Proof",
   near_miss_transparency: "Near-Miss Transparency",
   postgame_recap: "Postgame Recap",
@@ -96,7 +96,7 @@ export type CtaVariant =
 export const HR_BOARD_CTA_TEXT: Record<CtaVariant, string> = {
   board_in_bio: "Full board is in bio.",
   movement_on_jump: "I'll post movement when someone jumps.",
-  follow_for_movement: "Follow for READY/FIRE movement.",
+  follow_for_movement: "Follow for Playable/Attack movement.",
   not_a_pick: "Not a pick. This is a signal board.",
   none: "",
 };

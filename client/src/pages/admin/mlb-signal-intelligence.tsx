@@ -74,6 +74,16 @@ interface IntelligencePayload {
       watchCashedWithoutFire: number;
       readyOnlyMissed: number;
     };
+    // Playability outcome-bucket metrics (2026-07). Optional so older server
+    // payloads still type-check.
+    playabilityMetrics?: {
+      officialRecall: number | null;
+      radarCoverageRecall: number | null;
+      lateSignalRate: number | null;
+      trueUncalledHrRate: number | null;
+      playableAttackPrecision: number | null;
+      watchlistLeanConversionRate: number | null;
+    };
   };
   drivers: {
     observedDrivers: number;
@@ -292,15 +302,15 @@ export default function MlbSignalIntelligencePage() {
             <StatCard label="Transitions" value={hr.totals.transitionsObserved} />
             <StatCard label="Cashed" value={hr.totals.cashedObserved} />
             <StatCard label="Missed" value={hr.totals.missedObserved} />
-            <StatCard label="False FIRE" value={pct(hr.falseFireRate)} sub="FIRE → MISSED rate" />
-            <StatCard label="TRACK → BUILD" value={pct(hr.conversion.trackToBuild)} />
-            <StatCard label="BUILD → READY" value={pct(hr.conversion.buildToReady)} />
-            <StatCard label="READY → FIRE" value={pct(hr.conversion.readyToFire)} />
-            <StatCard label="FIRE → CASHED" value={pct(hr.conversion.fireToCashed)} />
-            <StatCard label="Avg TRACK dur" value={dur(hr.averageDurationMs.track)} />
-            <StatCard label="Avg BUILD dur" value={dur(hr.averageDurationMs.build)} />
-            <StatCard label="Avg READY dur" value={dur(hr.averageDurationMs.ready)} />
-            <StatCard label="Avg FIRE dur" value={dur(hr.averageDurationMs.fire)} />
+            <StatCard label="False Attack" value={pct(hr.falseFireRate)} sub="Attack → MISSED rate" />
+            <StatCard label="Watchlist → Lean" value={pct(hr.conversion.trackToBuild)} />
+            <StatCard label="Lean → Playable" value={pct(hr.conversion.buildToReady)} />
+            <StatCard label="Playable → Attack" value={pct(hr.conversion.readyToFire)} />
+            <StatCard label="Attack → Cashed" value={pct(hr.conversion.fireToCashed)} />
+            <StatCard label="Avg Watchlist dur" value={dur(hr.averageDurationMs.track)} />
+            <StatCard label="Avg Lean dur" value={dur(hr.averageDurationMs.build)} />
+            <StatCard label="Avg Playable dur" value={dur(hr.averageDurationMs.ready)} />
+            <StatCard label="Avg Attack dur" value={dur(hr.averageDurationMs.fire)} />
           </div>
           <div className="text-xs">
             <span className="text-muted-foreground">Stage distribution: </span>
@@ -308,29 +318,47 @@ export default function MlbSignalIntelligencePage() {
               <Badge key={s} variant="outline" className="mr-1 mb-1" data-testid={`badge-stage-${s}`}>{s}: {n}</Badge>
             ))}
           </div>
-          {/* FIRE-only official record vs shadow/watch (2026-06) — only FIRE
-              signals count toward the official ledger; READY/BUILD/WATCH that
-              resolve are shadow intelligence, never official W/L. */}
+          {/* FIRE-only official record vs shadow/watch (2026-06) — this block
+              uses the STRICT FIRE-only grading gate (only Attack calls count),
+              matching storage.ts's write-side gate. See "Playability coverage"
+              below for the wider Playable+Attack=official definition. */}
           {hr.officialFireRecord && (
             <div className="space-y-2" data-testid="block-hr-official-shadow">
-              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-500">Official record (FIRE only)</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-emerald-500">Official record (Attack only)</div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <StatCard label="FIRE calls" value={hr.officialFireRecord.fireCalls} sub="resolved FIRE signals" />
-                <StatCard label="FIRE cashed" value={hr.officialFireRecord.fireCashed} />
-                <StatCard label="FIRE missed" value={hr.officialFireRecord.fireMissed} />
-                <StatCard label="FIRE hit rate" value={pct(hr.officialFireRecord.fireHitRate)} sub="official W/L" />
+                <StatCard label="Attack calls" value={hr.officialFireRecord.fireCalls} sub="resolved Attack signals" />
+                <StatCard label="Attack cashed" value={hr.officialFireRecord.fireCashed} />
+                <StatCard label="Attack missed" value={hr.officialFireRecord.fireMissed} />
+                <StatCard label="Attack hit rate" value={pct(hr.officialFireRecord.fireHitRate)} sub="official W/L" />
               </div>
               {hr.shadowWatchIntelligence && (
                 <>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-amber-500 pt-1">Shadow / watch (not official)</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-amber-500 pt-1">Playable / shadow (not Attack-official)</div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    <StatCard label="READY reached" value={hr.shadowWatchIntelligence.readyReached} />
-                    <StatCard label="READY → FIRE" value={hr.shadowWatchIntelligence.watchPromotedToFire} sub="promoted" />
-                    <StatCard label="READY-only" value={hr.shadowWatchIntelligence.readyOnly} sub="never fired" />
-                    <StatCard label="Watch cashed (no FIRE)" value={hr.shadowWatchIntelligence.watchCashedWithoutFire} sub="shadow win, not official" />
+                    <StatCard label="Playable reached" value={hr.shadowWatchIntelligence.readyReached} />
+                    <StatCard label="Playable → Attack" value={hr.shadowWatchIntelligence.watchPromotedToFire} sub="promoted" />
+                    <StatCard label="Playable-only" value={hr.shadowWatchIntelligence.readyOnly} sub="never reached Attack" />
+                    <StatCard label="Playable cashed (no Attack)" value={hr.shadowWatchIntelligence.watchCashedWithoutFire} sub="shadow win, not Attack-official" />
                   </div>
                 </>
               )}
+            </div>
+          )}
+          {/* Playability coverage metrics (spec §8, 2026-07) — Playable AND
+              Attack both count as official here, per the product's Watchlist/
+              Lean/Playable/Attack contract. Distinct from the Attack-only
+              block above. */}
+          {hr.playabilityMetrics && (
+            <div className="space-y-2" data-testid="block-hr-playability-metrics">
+              <div className="text-xs font-semibold uppercase tracking-wide text-sky-500 pt-1">Playability coverage</div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <StatCard label="Official recall" value={pct(hr.playabilityMetrics.officialRecall)} sub="Playable+Attack / all HRs" />
+                <StatCard label="Radar coverage recall" value={pct(hr.playabilityMetrics.radarCoverageRecall)} sub="any tier / all HRs" />
+                <StatCard label="Late signal rate" value={pct(hr.playabilityMetrics.lateSignalRate)} />
+                <StatCard label="True uncalled HR rate" value={pct(hr.playabilityMetrics.trueUncalledHrRate)} />
+                <StatCard label="Playable/Attack precision" value={pct(hr.playabilityMetrics.playableAttackPrecision)} />
+                <StatCard label="Watchlist/Lean conversion" value={pct(hr.playabilityMetrics.watchlistLeanConversionRate)} />
+              </div>
             </div>
           )}
           {hr.sampleSizeWarning && (

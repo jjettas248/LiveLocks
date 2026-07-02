@@ -3679,6 +3679,7 @@ export async function registerRoutes(
               adminReasons: adminReasonsArr,
               alertPath: alert.alertPath ?? null,
               useFallbackScore: true,
+              paCount: plateAppearancesTracked,
               gameId: alert.gameId,
               playerId: alert.playerId,
               player: alert.playerName,
@@ -4214,6 +4215,7 @@ export async function registerRoutes(
           adminReasons: [],
           alertPath: r.alertPath ?? null,
           useFallbackScore: true,
+          paCount: typeof diag?.abContext?.plateAppearancesTracked === "number" ? diag.abContext.plateAppearancesTracked : null,
           gameId: r.gameId,
           playerId: r.playerId,
           player: r.playerName,
@@ -4365,8 +4367,46 @@ export async function registerRoutes(
         : noAbsYet
           ? "no_abs_yet"
           : null;
+
+      // Playability language (spec 2026-07) — stamp the same additive
+      // enrichWithUserStage fields the ladder/board routes already carry so
+      // the analyze modal can render Watchlist/Lean/Playable/Attack verbatim
+      // instead of the raw confidenceTier/signalState jargon. Best-effort;
+      // never blocks the response.
+      let alertWithPlayability: any = alert;
+      try {
+        const analyzeDiag = (alert as any).diagnosticsSnapshot ?? {};
+        const v1 = enrichWithUserStage({
+          legacyTier: (alert as any).confidenceTier,
+          legacyState: (alert as any).signalState,
+          dynamicState: analyzeDiag?.stageContract?.dynamicState ?? null,
+          canonicalStage: analyzeDiag?.stageContract?.currentCanonicalStage ?? null,
+          outcome: (alert as any).status === "hit" ? "called_hit" : (alert as any).status === "miss" ? "miss" : "pending",
+          currentReadinessScore: (alert as any).currentReadinessScore != null ? parseFloat((alert as any).currentReadinessScore) : null,
+          peakReadinessScore: (alert as any).peakReadinessScore != null ? parseFloat((alert as any).peakReadinessScore) : null,
+          factors: analyzeDiag?.factors ?? (alert as any).contactSnapshot ?? {},
+          triggerTags: (alert as any).triggerTags ?? [],
+          positiveDrivers: analyzeDiag?.positiveDrivers ?? [],
+          conversionProbability: typeof analyzeDiag?.scoreContract?.conversionProbability === "number" ? analyzeDiag.scoreContract.conversionProbability : null,
+          inning: (alert as any).signalInning ?? (alert as any).detectedInning ?? null,
+          detectedAt: (alert as any).detectedAt ?? null,
+          detectedInning: (alert as any).detectedInning ?? null,
+          signalDetectedAt: (alert as any).signalDetectedAt ?? null,
+          signalInning: (alert as any).signalInning ?? null,
+          alertPath: (alert as any).alertPath ?? null,
+          useFallbackScore: true,
+        });
+        alertWithPlayability = {
+          ...alert,
+          playabilityStatus: v1.playabilityStatus,
+          playabilityLabel: v1.playabilityLabel,
+          playabilityDescription: v1.playabilityDescription,
+          isOfficialSignal: v1.isOfficialSignal,
+        };
+      } catch { /* best-effort — never blocks the analyze modal */ }
+
       return res.json({
-        alert,
+        alert: alertWithPlayability,
         source,
         partial,
         partialReason,

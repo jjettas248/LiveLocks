@@ -34,6 +34,70 @@ export function isHrMaxWindowStage(stage: CanonicalHrRadarStage): boolean {
   return stage === "fire" || stage === "ready";
 }
 
+// ── Playability language (user-facing) ──────────────────────────────────────
+// The internal stage ladder above (track|build|ready|fire|resolved) stays as
+// the engine's canonical vocabulary. Everything user-facing renders the
+// betting-actionable playability language below instead — the server stamps
+// it, the UI renders it verbatim, and it never re-derives from the internal
+// stage name on its own. Only "playable" and "attack" are official calls.
+export type PlayabilityStatus = "watchlist" | "lean" | "playable" | "attack" | "resolved";
+
+export const STAGE_TO_PLAYABILITY: Record<CanonicalHrRadarStage, PlayabilityStatus> = {
+  track: "watchlist",
+  build: "lean",
+  ready: "playable",
+  fire: "attack",
+  resolved: "resolved",
+};
+
+export const PLAYABILITY_LABEL: Record<PlayabilityStatus, string> = {
+  watchlist: "Watchlist",
+  lean: "Lean",
+  playable: "Playable",
+  attack: "Attack",
+  resolved: "Resolved",
+};
+
+export const PLAYABILITY_DESCRIPTION: Record<PlayabilityStatus, string> = {
+  watchlist: "Worth monitoring · not official",
+  lean: "Signal forming · not official",
+  playable: "Official HR signal active",
+  attack: "Max-conviction HR window",
+  resolved: "Result finalized",
+};
+
+/**
+ * Display/order-only score floor per playability tier. Never used for
+ * grading. Mirrors `fallbackScoreForStage()` (server/mlb/hrRadarUserStage.ts)
+ * and `STAGE_SCORE_FLOOR` (server/mlb/hrRadarStateMachine.ts) — keep all
+ * three in lock-step. `playable` is held at 7.5 (exceeds the requested 7.0
+ * floor) so it doesn't regress the existing calibration.
+ */
+export const PLAYABILITY_SCORE_FLOOR: Record<PlayabilityStatus, number> = {
+  watchlist: 2.5,
+  lean: 5.5,
+  playable: 7.5,
+  attack: 9.0,
+  resolved: 0,
+};
+
+export function getPlayabilityStatus(stage: CanonicalHrRadarStage): PlayabilityStatus {
+  return STAGE_TO_PLAYABILITY[stage];
+}
+
+export function getPlayabilityLabel(status: PlayabilityStatus): string {
+  return PLAYABILITY_LABEL[status];
+}
+
+export function getPlayabilityDescription(status: PlayabilityStatus): string {
+  return PLAYABILITY_DESCRIPTION[status];
+}
+
+/** Only Playable (ready) and Attack (fire) are official, graded HR calls. */
+export function isOfficialPlayability(status: PlayabilityStatus): boolean {
+  return status === "playable" || status === "attack";
+}
+
 // ── The one display-grade vocabulary ────────────────────────────────────────
 // Mirrors MLB props' `displayGrade` letter scale (server/mlb/normalizeSignal.ts
 // deriveDisplayGrade) so both sports speak the same grade language. Combines
