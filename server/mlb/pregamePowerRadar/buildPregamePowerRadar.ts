@@ -20,6 +20,7 @@ import { fetchBaseballSavantData, getMarketParkFactor, isVenueIndoors } from "..
 import {
   fetchPitcherHandednessSplits,
   fetchBatterHandednessSplits,
+  fetchRecentContactEventsForBatters,
   syncWeather,
   syncBvPMatchup,
   syncBatterOrderSplits,
@@ -43,6 +44,7 @@ import { round1 as round1Score } from "./scoreUtils";
 import { computeParkWeatherScore } from "./parkWeatherScore";
 import { hydratePregamePlayerParkWindFit } from "./playerParkWindFit";
 import { computeLineupOpportunity } from "./lineupOpportunity";
+import { computeNearHrRecentForm, type RecentContactEventRow } from "./nearHrRecentForm";
 import { computeMarketTags } from "./marketTagger";
 import { composePregameScore } from "./scoring";
 import { carryForwardGradedState } from "./gradedStateCarry";
@@ -98,6 +100,20 @@ function mapGameStatus(espnStatus: string | undefined): PregameGameStatus {
   if (s.includes("PRE")) return "pre";
   if (s.includes("SCHEDULED")) return "scheduled";
   return "unknown";
+}
+
+/**
+ * Lower bound for the near-HR recent-form lookback query — 3 ET calendar
+ * days before `sessionDateEt`, floored using the EDT (UTC-4) offset so the
+ * cutoff always lands at or before the true local midnight regardless of
+ * DST (EDT's UTC instant for local midnight is earlier than EST's for the
+ * same date — using EDT's offset guarantees a safe over-fetch, never an
+ * under-fetch). computeNearHrRecentForm exact-filters every row by ET
+ * calendar day before use, so the extra slop is harmless.
+ */
+function nearHrLookbackSinceUtc(sessionDateEt: string): Date {
+  const [y, m, d] = sessionDateEt.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d - 3, 4, 0, 0));
 }
 
 function savantToPowerInputs(s: Awaited<ReturnType<typeof fetchBaseballSavantData>>): BatterPowerInputs {
@@ -187,6 +203,21 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
 
       const lineup = getStartingLineup(gamePk);
       if (lineup.length > 0) lineupGames++;
+
+      // Near-HR recent-form: one batch query per game (not per-player N+1).
+      // Never touches the game currently being scored — sessionDate is the
+      // leakage boundary, enforced again inside computeNearHrRecentForm.
+      const nearHrContactByPlayer = new Map<string, RecentContactEventRow[]>();
+      if (lineup.length > 0) {
+        const rows = await fetchRecentContactEventsForBatters(
+          lineup.map((l) => l.playerId),
+          nearHrLookbackSinceUtc(sessionDate),
+        );
+        for (const r of rows) {
+          if (!nearHrContactByPlayer.has(r.playerId)) nearHrContactByPlayer.set(r.playerId, []);
+          nearHrContactByPlayer.get(r.playerId)!.push(r);
+        }
+      }
 
       const weather = mlbGameCache.weather[game.gameId];
       const venueName = weather?.venueName ?? null;
@@ -383,6 +414,11 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           obpAhead: null,
         });
 
+        const nearHrRecentForm = computeNearHrRecentForm({
+          events: nearHrContactByPlayer.get(player.playerId) ?? [],
+          sessionDateEt: sessionDate,
+        });
+
         const marketTags = computeMarketTags({
           batterPowerScore: batterPower.score10,
           pitcherVulnerabilityScore,
@@ -401,6 +437,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           ...matchupFit.drivers,
           ...parkWeather.drivers,
           ...lineupOpp.drivers,
+          ...nearHrRecentForm.drivers,
           ...marketTags.drivers,
         ];
         const positiveDriverCount = drivers.filter((d) => d.direction === "positive").length;
@@ -414,6 +451,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             matchupFitScore: matchupFit.score10,
             parkWeatherScore: parkWeather.score10,
             lineupOpportunityScore: lineupOpp.score10,
+            nearHrRecentFormScore: nearHrRecentForm.score10,
             bvpModifier: matchupFit.bvpModifier,
           },
           {
@@ -448,6 +486,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           ...matchupFit.warnings,
           ...parkWeather.warnings,
           ...lineupOpp.warnings,
+          ...nearHrRecentForm.warnings,
         ];
 
         const weatherStatus: PregameWeatherStatus = isIndoors
@@ -551,6 +590,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             parkWeatherScore: parkWeather.available ? parkWeather.score10 : null,
             lineupOpportunityScore: lineupOpp.available ? lineupOpp.score10 : null,
             marketFitScore: marketTags.score10,
+            nearHrRecentFormScore: nearHrRecentForm.available ? nearHrRecentForm.score10 : null,
             pitcherOrderSplitAvailable: pitcherOrderSplit.available,
             pitcherOrderSplitScore: pitcherOrderSplit.available ? pitcherOrderSplit.score10 : null,
             pitcherOrderSplitDirection: pitcherOrderSplit.direction,
@@ -583,6 +623,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               park: parkHrFactor != null,
               weather: weatherAvailable,
               bvp: matchupFit.bvpAvailable,
+              nearHrRecentForm: nearHrRecentForm.available,
             },
           },
         };

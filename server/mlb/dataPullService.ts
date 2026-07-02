@@ -1210,6 +1210,33 @@ export async function fetchBatterHandednessSplits(batterId: string): Promise<Bat
   }
 }
 
+/**
+ * Recent per-AB contact events for a batch of batters, since `sinceUtc`.
+ * Thin read wrapper over storage — kept here (rather than imported directly
+ * into pregamePowerRadar/buildPregamePowerRadar.ts) so that module stays free
+ * of storage imports, matching its existing sink-callback persistence
+ * convention. Never throws.
+ */
+export async function fetchRecentContactEventsForBatters(
+  playerIds: string[],
+  sinceUtc: Date,
+): Promise<Array<{
+  playerId: string;
+  exitVelocity: number | null;
+  launchAngle: number | null;
+  distance: number | null;
+  isBarrel: boolean;
+  result: string | null;
+  timestamp: Date;
+}>> {
+  if (playerIds.length === 0) return [];
+  try {
+    return await storage.getRecentContactEventsForPlayers(playerIds, sinceUtc);
+  } catch {
+    return [];
+  }
+}
+
 // ── syncWeather ───────────────────────────────────────────────────────────────
 
 export async function syncWeather(statsPk: string, cacheKey?: string): Promise<void> {

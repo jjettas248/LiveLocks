@@ -135,6 +135,8 @@ export interface PregamePowerDiagnostics {
   parkWeatherScore: number | null;
   lineupOpportunityScore: number | null;
   marketFitScore: number | null;
+  /** Component 6 — retroactive near-HR contact form over the last 3 ET days. */
+  nearHrRecentFormScore?: number | null;
 
   // ── Layer 1: pitcher vs the batter's lineup slot (allowed-by-slot) ───────────
   pitcherOrderSplitAvailable: boolean;
@@ -191,6 +193,7 @@ export interface PregamePowerDiagnostics {
     park: boolean;
     weather: boolean;
     bvp: boolean;
+    nearHrRecentForm?: boolean;
   };
 }
 

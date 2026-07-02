@@ -51,7 +51,7 @@ const flags: ScoringFlags = {
   parkAvailable: true, weatherAvailable: true, bvpAvailable: false,
   parkIsOnlyPositiveDriver: false, positiveDriverCount: 3,
 };
-const comps = { batterPowerScore: 7, pitcherVulnerabilityScore: 7, matchupFitScore: 7, parkWeatherScore: 7, lineupOpportunityScore: 7, bvpModifier: 0 };
+const comps = { batterPowerScore: 7, pitcherVulnerabilityScore: 7, matchupFitScore: 7, parkWeatherScore: 7, lineupOpportunityScore: 7, nearHrRecentFormScore: 7, bvpModifier: 0 };
 const score = composePregameScore(comps, flags).score10;
 // Different market context must not change the composite (it isn't an input).
 ok(typeof score === "number", `composite computed without market input (got ${score})`);

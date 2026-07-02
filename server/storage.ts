@@ -2759,6 +2759,53 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
+  /**
+   * Recent per-AB contact events for a batch of players, since `sinceUtc`.
+   * Used by the Pre-Game Power Radar's near-HR recent-form component to
+   * retroactively classify prior-game contact quality (never the game
+   * currently being scored — the caller enforces that boundary).
+   */
+  async getRecentContactEventsForPlayers(
+    playerIds: string[],
+    sinceUtc: Date,
+  ): Promise<Array<{
+    playerId: string;
+    exitVelocity: number | null;
+    launchAngle: number | null;
+    distance: number | null;
+    isBarrel: boolean;
+    result: string | null;
+    timestamp: Date;
+  }>> {
+    if (playerIds.length === 0) return [];
+    try {
+      const rows = await db
+        .select({
+          playerId: contactEvents.playerId,
+          exitVelocity: contactEvents.exitVelocity,
+          launchAngle: contactEvents.launchAngle,
+          distance: contactEvents.distance,
+          isBarrel: contactEvents.isBarrel,
+          result: contactEvents.result,
+          timestamp: contactEvents.timestamp,
+        })
+        .from(contactEvents)
+        .where(and(inArray(contactEvents.playerId, playerIds), gte(contactEvents.timestamp, sinceUtc)));
+      return rows.map((r) => ({
+        playerId: r.playerId,
+        exitVelocity: r.exitVelocity != null ? Number(r.exitVelocity) : null,
+        launchAngle: r.launchAngle != null ? Number(r.launchAngle) : null,
+        distance: r.distance != null ? Number(r.distance) : null,
+        isBarrel: r.isBarrel ?? false,
+        result: r.result ?? null,
+        timestamp: r.timestamp ?? new Date(),
+      }));
+    } catch (err: any) {
+      console.warn(`[ContactEvent] getRecentContactEventsForPlayers failed: ${err.message}`);
+      return [];
+    }
+  }
+
   async persistGamePlayerStats(stats: Array<{
     gameId: string;
     gamePk?: string | null;

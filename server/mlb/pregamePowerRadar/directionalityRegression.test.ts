@@ -64,7 +64,7 @@ const combinedPv = combineVuln(8.0, true, bibee5.score10, true); // handedness v
 ok(combinedPv < 5.5, `#5 suppression pulls combined pitcher vuln below neutral (got ${combinedPv})`);
 
 const colson = composePregameScore(
-  { batterPowerScore: 8.6, pitcherVulnerabilityScore: combinedPv, matchupFitScore: 6.5, parkWeatherScore: 5.5, lineupOpportunityScore: 5.0, bvpModifier: colsonBvp.bvpModifier },
+  { batterPowerScore: 8.6, pitcherVulnerabilityScore: combinedPv, matchupFitScore: 6.5, parkWeatherScore: 5.5, lineupOpportunityScore: 5.0, nearHrRecentFormScore: 5, bvpModifier: colsonBvp.bvpModifier },
   { ...baseFlags, bvpDirection: colsonBvp.bvpDirection, bvpZeroProduction: colsonBvp.bvpZeroProduction, pitcherOrderSplitDirection: bibee5.direction, batterOrderSplitDirection: "neutral" },
 );
 ok(colson.tier === "power_watch", `Colson #5 vs Bibee → power_watch, not elite (got ${colson.tier})`);
@@ -77,7 +77,7 @@ ok(colson.downgradeReasons.includes("pitcher_slot_suppression") && colson.downgr
 // ─────────────────────────────────────────────────────────────────────────────
 console.log("[3] Weak-from-slot blocks elite");
 const weakSlot = composePregameScore(
-  { batterPowerScore: 8.0, pitcherVulnerabilityScore: 7.0, matchupFitScore: 7.5, parkWeatherScore: 7.5, lineupOpportunityScore: 7.0, bvpModifier: 0 },
+  { batterPowerScore: 8.0, pitcherVulnerabilityScore: 7.0, matchupFitScore: 7.5, parkWeatherScore: 7.5, lineupOpportunityScore: 7.0, nearHrRecentFormScore: 5, bvpModifier: 0 },
   { ...baseFlags, bvpDirection: "neutral", pitcherOrderSplitDirection: "vulnerable", batterOrderSplitDirection: "weak" },
 );
 ok(weakSlot.tier !== "elite" && weakSlot.tier !== "nuclear", `weak-from-slot is not a clean elite (got ${weakSlot.tier})`);
@@ -88,13 +88,13 @@ ok(weakSlot.warningTags.includes("Weak From Lineup Slot"), "warns Weak From Line
 // ─────────────────────────────────────────────────────────────────────────────
 console.log("[4] Power-only vs positive control");
 const powerOnly = composePregameScore(
-  { batterPowerScore: 9.0, pitcherVulnerabilityScore: 4.5, matchupFitScore: 6, parkWeatherScore: 7, lineupOpportunityScore: 6, bvpModifier: 0 },
+  { batterPowerScore: 9.0, pitcherVulnerabilityScore: 4.5, matchupFitScore: 6, parkWeatherScore: 7, lineupOpportunityScore: 6, nearHrRecentFormScore: 5, bvpModifier: 0 },
   baseFlags,
 );
 ok(powerOnly.tier === "power_watch", `elite power + weak pitcher → power_watch (got ${powerOnly.tier})`);
 
 const elite = composePregameScore(
-  { batterPowerScore: 8.0, pitcherVulnerabilityScore: 8.2, matchupFitScore: 7.5, parkWeatherScore: 7.5, lineupOpportunityScore: 8.0, bvpModifier: 0 },
+  { batterPowerScore: 8.0, pitcherVulnerabilityScore: 8.2, matchupFitScore: 7.5, parkWeatherScore: 7.5, lineupOpportunityScore: 8.0, nearHrRecentFormScore: 5, bvpModifier: 0 },
   { ...baseFlags, bvpDirection: "neutral", pitcherOrderSplitDirection: "vulnerable", batterOrderSplitDirection: "strong" },
 );
 ok(elite.tier === "elite" || elite.tier === "nuclear", `strong batter + vulnerable pitcher + good context → elite (got ${elite.tier})`);
@@ -119,7 +119,7 @@ ok(unavail.drivers.length === 0, "G2/G3: unavailable order-split emits NO driver
 // Colson in PRODUCTION today: order-split unavailable, but BvP zero-production +
 // the gate still downgrade him out of a clean Elite (handedness genuinely vuln).
 const colsonProd = composePregameScore(
-  { batterPowerScore: 8.6, pitcherVulnerabilityScore: 7.5, matchupFitScore: 6.5, parkWeatherScore: 5.5, lineupOpportunityScore: 5.0, bvpModifier: colsonBvp.bvpModifier },
+  { batterPowerScore: 8.6, pitcherVulnerabilityScore: 7.5, matchupFitScore: 6.5, parkWeatherScore: 5.5, lineupOpportunityScore: 5.0, nearHrRecentFormScore: 5, bvpModifier: colsonBvp.bvpModifier },
   { ...baseFlags, bvpDirection: colsonBvp.bvpDirection, bvpZeroProduction: colsonBvp.bvpZeroProduction, pitcherOrderSplitDirection: "unavailable", batterOrderSplitDirection: "neutral" },
 );
 ok(colsonProd.tier !== "elite" && colsonProd.tier !== "nuclear", `G6: Colson (prod, order unavailable) is NOT clean elite (got ${colsonProd.tier})`);
@@ -129,7 +129,7 @@ ok(!colsonProd.warningTags.includes("Pitcher Slot Suppression"), "G3: no slot-su
 // Batter power alone, no pitcher evidence at all (handedness + order unavailable
 // ⇒ neutral 5) must NOT reach elite.
 const powerNoPitcher = composePregameScore(
-  { batterPowerScore: 9.5, pitcherVulnerabilityScore: 5.0, matchupFitScore: 6, parkWeatherScore: 8, lineupOpportunityScore: 7, bvpModifier: 0 },
+  { batterPowerScore: 9.5, pitcherVulnerabilityScore: 5.0, matchupFitScore: 6, parkWeatherScore: 8, lineupOpportunityScore: 7, nearHrRecentFormScore: 5, bvpModifier: 0 },
   { ...baseFlags, pitcherOrderSplitDirection: "unavailable", batterOrderSplitDirection: "unavailable" },
 );
 ok(powerNoPitcher.tier === "power_watch", `G5: power alone + no pitcher evidence → power_watch (got ${powerNoPitcher.tier})`);

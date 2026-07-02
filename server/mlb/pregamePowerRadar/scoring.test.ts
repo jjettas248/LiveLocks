@@ -52,6 +52,7 @@ const comps: ScoringComponents = {
   matchupFitScore: 8,
   parkWeatherScore: 8,
   lineupOpportunityScore: 8,
+  nearHrRecentFormScore: 8,
   bvpModifier: 0,
 };
 const r1 = composePregameScore(comps, fullFlags);
@@ -77,7 +78,7 @@ ok(rFewDrivers.suppressedReasons.includes("insufficient_drivers"), "insufficient
 
 // ── Below threshold with full data → suppressed (distinct from data-capped) ───
 const rWeak = composePregameScore(
-  { batterPowerScore: 3, pitcherVulnerabilityScore: 3, matchupFitScore: 3, parkWeatherScore: 3, lineupOpportunityScore: 3, bvpModifier: 0 },
+  { batterPowerScore: 3, pitcherVulnerabilityScore: 3, matchupFitScore: 3, parkWeatherScore: 3, lineupOpportunityScore: 3, nearHrRecentFormScore: 3, bvpModifier: 0 },
   fullFlags,
 );
 ok(rWeak.suppressedReasons.includes("below_threshold_after_full_data"), "below_threshold_after_full_data reason");
