@@ -6,7 +6,7 @@
 // the board's cashed/"HOMERED" treatment and the day's win log until the next
 // grading pass (or forever, once the box score cache expired).
 
-import type { PregamePowerSignal } from "./types";
+import type { PregameGameStatus, PregamePowerSignal } from "./types";
 
 /**
  * Carry grading + live-bridge truth forward from the previous same-slate copy
@@ -29,4 +29,36 @@ export function carryForwardGradedState(
   // First lock time sticks across rebuilds of a live/final game.
   if (prev.lockedAt) fresh.lockedAt = prev.lockedAt;
   return fresh;
+}
+
+/**
+ * A rebuild only recreates signals for batters still in the freshly-fetched
+ * live batting order (rosterService's lineup reflects real-time
+ * substitutions, not the fixed starting 9). A batter who is subbed out after
+ * being flagged — pinch hit/run, defensive sub, injury — would otherwise
+ * vanish from the Map entirely, since carryForwardGradedState above only
+ * runs on freshly-rebuilt signals. This finds that game's previous-build
+ * signals whose batter is no longer in the current lineup and refreshes only
+ * the game-status-derived fields so grading can still resolve them and the
+ * badge reflects reality — everything else (score, tier, drivers, and any
+ * already-stamped outcome) is preserved untouched.
+ */
+export function carryForwardDroppedFromLineup(
+  gameId: string,
+  currentLineupBatterIds: Set<string>,
+  prevSignalsForGame: PregamePowerSignal[],
+  gameStatus: PregameGameStatus,
+  firstPitchLockEligible: boolean,
+  nowIso: string,
+): PregamePowerSignal[] {
+  const isLocked = !firstPitchLockEligible && (gameStatus === "live" || gameStatus === "final");
+  return prevSignalsForGame
+    .filter((prev) => prev.gameId === gameId && !currentLineupBatterIds.has(prev.batterId))
+    .map((prev) => ({
+      ...prev,
+      gameStatus,
+      firstPitchLockEligible,
+      status: prev.status === "graded" ? "graded" : isLocked ? "locked" : prev.status,
+      lockedAt: prev.lockedAt ?? (isLocked ? nowIso : null),
+    }));
 }

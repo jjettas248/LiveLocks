@@ -44,18 +44,23 @@ export function wasPubliclyFlaggedPregame(signal: PregamePowerSignal): boolean {
 
 /**
  * Final public-visibility predicate. Public surfaces only confirmed-lineup,
- * non-suppressed, strong+ targets. Live games show only locked rows.
+ * non-suppressed, strong+ targets. Live and final games show only locked rows.
  *
  * A graded target that actually homered stays visible after grading (display
- * only — never re-derived) so the card can render its cashed/"HOMERED" state
- * instead of silently disappearing from the list the moment the game goes final.
+ * only — never re-derived) so the card can render its cashed/"HOMERED" state.
+ * A `final` game whose shadow grader hasn't run yet is treated the same as a
+ * `live` one — still visible as a pending/locked row — instead of vanishing
+ * the instant the game goes final only to (maybe) reappear once the 5-minute
+ * grading pass catches up (or never, if the box score cache never resolves
+ * for that game). A graded miss still hides once `status` flips to `"graded"`
+ * without `hitHr`, via the active/locked check above.
  */
 export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
   if (!wasPubliclyFlaggedPregame(signal)) return false;
   if (signal.status === "graded" && signal.outcomes?.hitHr === true) return true;
   if (signal.status !== "active" && signal.status !== "locked") return false;
-  if (signal.gameStatus === "final" || signal.gameStatus === "postponed") return false;
-  if (signal.gameStatus === "live") return signal.status === "locked";
+  if (signal.gameStatus === "postponed") return false;
+  if (signal.gameStatus === "live" || signal.gameStatus === "final") return signal.status === "locked";
   return true;
 }
 

@@ -1,16 +1,20 @@
 // Pre-Game Power Radar — graded-state preservation invariants.
 //
-// Guards the two regressions that blanked the daily win card:
+// Guards the regressions that blanked the daily win card:
 //   1. A snapshot rebuild (outcomes=null, becameLive*=false) must carry forward
 //      the shadow grader's / live bridge's already-stamped state for the same
 //      slate day (carryForwardGradedState).
 //   2. The runtime service must never serve a previous slate's snapshot as the
 //      current one (getRadarSnapshot / peekRadarSnapshot wrong-date guard is
 //      exercised here via the store's date-scoped accessor).
+//   3. A batter subbed out of the live batting order (pinch hit/run, defensive
+//      sub, injury) must not simply vanish from the rebuilt Map — his prior
+//      signal (score/tier/outcomes) must be carried forward with only the
+//      game-status-derived fields refreshed (carryForwardDroppedFromLineup).
 //
 // Run: npx tsx server/mlb/pregamePowerRadar/gradedStatePreservation.test.ts
 
-import { carryForwardGradedState } from "./gradedStateCarry";
+import { carryForwardGradedState, carryForwardDroppedFromLineup } from "./gradedStateCarry";
 import {
   setSnapshot,
   getSnapshotForDate,
@@ -125,6 +129,74 @@ const gradedWin: PregameOutcome = {
   ok(getSnapshotForDate("2026-07-01") === null, "date-scoped store read refuses a previous slate's snapshot");
   ok(getSnapshotForDate("2026-06-30") === snapshot, "date-scoped store read serves the matching slate");
   _resetForTests();
+}
+
+// ── 8. Batter dropped from the live lineup carries his signal forward ────────
+{
+  const prev = sig({
+    signalId: "mlb-pregame:2026-07-01:g1:b1", gameId: "g1", batterId: "b1",
+    gameStatus: "live", status: "active", lockedAt: null,
+  });
+  const carried = carryForwardDroppedFromLineup(
+    "g1",
+    new Set(["b2", "b3"]), // b1 no longer in the fetched lineup
+    [prev],
+    "live",
+    false,
+    "2026-07-01T20:00:00.000Z",
+  );
+  ok(carried.length === 1, "dropped batter is carried forward");
+  ok(carried[0]?.batterId === "b1", "carried signal keeps the original batterId");
+  ok(carried[0]?.status === "locked", "live game locks the carried signal");
+  ok(carried[0]?.lockedAt === "2026-07-01T20:00:00.000Z", "lockedAt is stamped on first carry into a locked game");
+}
+
+// ── 9. Dropped batter's already-graded HR outcome survives the carry ────────
+{
+  const prev = sig({
+    signalId: "mlb-pregame:2026-07-01:g1:b1", gameId: "g1", batterId: "b1",
+    gameStatus: "final", status: "graded", outcomes: gradedWin, lockedAt: "2026-07-01T22:00:00.000Z",
+  });
+  const carried = carryForwardDroppedFromLineup(
+    "g1",
+    new Set(["b2"]),
+    [prev],
+    "final",
+    false,
+    "2026-07-01T23:00:00.000Z",
+  );
+  ok(carried.length === 1, "graded dropped batter is still carried forward");
+  ok(carried[0]?.outcomes === gradedWin, "already-stamped HR outcome is preserved verbatim");
+  ok(carried[0]?.status === "graded", "terminal graded status is never downgraded by the carry");
+  ok(carried[0]?.lockedAt === "2026-07-01T22:00:00.000Z", "existing lockedAt is not overwritten");
+}
+
+// ── 10. Batter still in the lineup is not duplicated by the carry pass ──────
+{
+  const prev = sig({ signalId: "mlb-pregame:2026-07-01:g1:b1", gameId: "g1", batterId: "b1" });
+  const carried = carryForwardDroppedFromLineup(
+    "g1",
+    new Set(["b1"]), // still in the fetched lineup — a fresh signal is built for him
+    [prev],
+    "live",
+    false,
+    "2026-07-01T20:00:00.000Z",
+  );
+  ok(carried.length === 0, "batter still in the lineup is not carried forward (already rebuilt)");
+}
+
+// ── 11. Signals from a different game are never carried into this game ──────
+{
+  const otherGame = sig({ signalId: "mlb-pregame:2026-07-01:g2:b9", gameId: "g2", batterId: "b9" });
+  const carried = carryForwardDroppedFromLineup(
+    "g1",
+    new Set([]),
+    [otherGame],
+    "live",
+    false,
+    "2026-07-01T20:00:00.000Z",
+  );
+  ok(carried.length === 0, "a different game's prior signals are never carried into this game");
 }
 
 console.log(`\ngradedStatePreservation.test: ${passed} passed, ${failed} failed`);
