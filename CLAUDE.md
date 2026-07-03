@@ -32,6 +32,8 @@ npx tsx server/mlb/ibbAndRecentForm.test.ts         # recent form streak + IBB f
 npx tsx server/mlb/hrReviewClassifier.test.ts       # 30 invariants — pre-HR review bucket taxonomy
 npx tsx server/mlb/hrMissDiagnostics.test.ts        # 78 invariants — HR miss diagnostic LLM-payload builders
 npx tsx server/mlb/hrRadarFireOnlyGrading.test.ts   # FIRE-only official grading, both ledger sides
+npx tsx server/mlb/hrOccurrenceEngine.test.ts       # occurrence engine: edge decouple + conv-cal rail + pitcher-fade-only gate
+npx tsx server/mlb/hrEvGate.test.ts                 # edge/EV decoupling — HR Radar tier is odds-independent
 npx tsx server/mlb/hrRadarFreshnessOverlay.test.ts  # canonical-store freshness overlay (re-bucket/surface/terminal-safety)
 npx tsx server/mlb/hrRadarRuntimeSmoke.test.ts      # read-only contract smoke (freshness + FIRE-only record)
 npx tsx server/analytics/hrRadarOfficialSplit.test.ts # analytics official(FIRE) vs shadow(watch) split

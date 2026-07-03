@@ -19,6 +19,13 @@
 //     authoritative. The overlay only ever moves rows WITHIN the live buckets.
 //   • No engine math here. It re-buckets and copies already-computed values.
 //   • Additive & no-op when the canonical store is empty (partial data safe).
+//   • Occurrence contract (2026-06): the overlay only ever re-buckets to the
+//     canonical `section`, which the engine gates on HR-occurrence probability +
+//     batter-side evidence (no edge/odds, and no pitcher-fade-only promotion —
+//     see hrAlertEngine.deriveCanonicalPromotionIntent). So a row that was
+//     conv-cal-rail-capped or pitcher-fade-blocked stays in BUILD/WATCH and can
+//     never be surfaced here as an actionable FIRE/READY call. The HR chance the
+//     UI renders is the entry's occurrence probability, never an edge/value prob.
 
 import type { CanonicalHrRadarState } from "./hrRadarCanonicalStore";
 import { buildHrRadarDisplayContract } from "./hrRadarDisplayContract";

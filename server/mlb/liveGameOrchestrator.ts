@@ -3880,7 +3880,15 @@ export class LiveGameOrchestrator {
         if (resolvedLine === null) {
           if (market === "home_runs") {
             hrRadarOnly = true;
-            console.log(`[MLB HR_RADAR_ONLY][${gameId}] ${batter.playerName} — no book line for home_runs, running HR radar scan only`);
+            // HR occurrence engine (2026-06) — a missing sportsbook line is
+            // NORMAL for HR Radar, not an error/skip. The 0.5 below is the
+            // fixed HR-occurrence threshold (P(HR>=1)), not a fake book line.
+            // Odds are optional display-only context; occurrence runs regardless.
+            console.log(
+              `[HR_RADAR_OCCURRENCE_ONLY][${gameId}] player=${batter.playerName} threshold=0.5 ` +
+              `lineSource=fixed_hr_threshold oddsSource=none hrRadarOnly=true ` +
+              `edgeEligible=false occurrenceEligible=true`,
+            );
           } else {
             console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${batter.playerName}", reason: "no_book_line" }`);
             auditRecordRejection(gameId, "staleOdds", market, "no_book_line_batter");
