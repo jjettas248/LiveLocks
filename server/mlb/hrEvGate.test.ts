@@ -1,12 +1,14 @@
-// HR Radar — Phase 2 EV gate unit tests.
-// Verifies the actionable HR Max Window (officialAlert) tier only holds when
-// the model's game P(HR) beats the de-vigged market-implied probability.
+// HR Radar — EV/edge decoupling unit tests (2026-06).
+// HR Radar is a HR-OCCURRENCE engine: sportsbook edge/value is observability
+// only and must NEVER change the alert tier/level. The de-vig helpers are kept
+// (used by the [HR_EDGE_DECOUPLED] log); the wrapper no longer demotes on edge.
 // Run: npx tsx server/mlb/hrEvGate.test.ts
 
 import {
   americanToImpliedProb,
   deviggedMarketHrProb,
-  HR_EV_EDGE_MARGIN,
+  evaluateHRAlert,
+  type HRAlertInput,
 } from "./evaluateHRAlert";
 
 let pass = 0;
@@ -39,23 +41,42 @@ check("de-vig over < raw over implied (hold removed)", dv < americanToImpliedPro
 check("de-vig one-sided = raw over implied", approx(deviggedMarketHrProb(300, null)!, 0.25));
 check("de-vig no over price → null", deviggedMarketHrProb(null, -400) === null);
 
-// ─── EV-gate decision math (mirrors evaluateHRAlert wrapper) ────────────────
-// model beats de-vigged market by ≥ margin → PASS (keep officialAlert);
-// otherwise DEMOTE to prepare.
-function gate(modelProb: number, overOdds: number | null, underOdds: number | null): "officialAlert" | "prepare" {
-  const mkt = deviggedMarketHrProb(overOdds, underOdds);
-  if (mkt == null) return "officialAlert"; // no price → no-op
-  return modelProb >= mkt * (1 + HR_EV_EDGE_MARGIN) ? "officialAlert" : "prepare";
+// ─── Edge decoupling — evaluateHRAlert tier is odds-INDEPENDENT ─────────────
+// Spec #3/#4: edge cannot promote AND cannot suppress HR Radar. The wrapper
+// must return the SAME tier/level/signalState regardless of the sportsbook
+// price (including a negative-edge short favorite that previously DEMOTED).
+function mkInput(overOdds: number | null, underOdds: number | null): HRAlertInput {
+  return {
+    playerId: "p1", playerName: "Test Slugger", teamAbbr: "NYY", gameId: "G1",
+    hrBuildScore: 7, hrIntensity: "high",
+    factors: {
+      contactClasses: [], hrShapedCount: 2, missedHrCount: 1, eliteHrCount: 1,
+      qualifiedEVMean: 105, maxDistance: 410, maxEV: 108,
+    } as any,
+    inning: 6, isTopInning: true, battingOrderSlot: 3, remainingPA: 2.2,
+    pitchCount: 85, timesThrough: 3, parkFactor: 1.05,
+    batterHand: "R", pitcherThrows: "L", era: 5.2,
+    barrelRate: 0.14, hardHitRate: 0.48, xSLG: 0.62, seasonHRRate: 0.06,
+    overOdds, underOdds,
+    priorABResults: [
+      { exitVelocity: 106, launchAngle: 28, distance: 405, outcome: "flyout" },
+      { exitVelocity: 103, launchAngle: 24, distance: 360, outcome: "double" },
+    ],
+  } as HRAlertInput;
 }
-// Market over +300 two-sided ≈ 0.238; required = 0.238 * 1.10 ≈ 0.262.
-check("model 30% vs +300/-400 mkt (~23.8%) → PASS (keeps HR Max Window)",
-  gate(0.30, 300, -400) === "officialAlert");
-check("model 24% vs +300/-400 mkt (~23.8%) → DEMOTE (edge below margin)",
-  gate(0.24, 300, -400) === "prepare");
-check("model 12% vs short -120 favorite mkt → DEMOTE",
-  gate(0.12, -120, 100) === "prepare");
-check("no market price → no-op, stays officialAlert",
-  gate(0.06, null, null) === "officialAlert");
+// A short -120 favorite is a NEGATIVE-edge price for most model probabilities —
+// the old gate would have demoted officialAlert. Now it must not.
+const withOdds = evaluateHRAlert(mkInput(-120, 100));
+const noOdds = evaluateHRAlert(mkInput(null, null));
+const richOdds = evaluateHRAlert(mkInput(550, -700)); // long price / different edge
+check("#3 edge cannot promote: tier identical with vs without odds",
+  withOdds.alertTier === noOdds.alertTier, `withOdds=${withOdds.alertTier} noOdds=${noOdds.alertTier}`);
+check("#4 edge cannot suppress: level identical with vs without odds",
+  withOdds.level === noOdds.level, `withOdds=${withOdds.level} noOdds=${noOdds.level}`);
+check("edge-independent signalState (negative vs long price)",
+  withOdds.signalState === richOdds.signalState, `neg=${withOdds.signalState} long=${richOdds.signalState}`);
+check("no triggerReason mentions EV/edge gating",
+  !/EV-gated|edge/i.test(withOdds.triggerReason), withOdds.triggerReason);
 
 console.log(`[HR_EV_GATE_TEST] passed=${pass} failed=${fail}`);
 if (fail > 0) process.exit(1);

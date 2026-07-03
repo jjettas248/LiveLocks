@@ -47,7 +47,7 @@ import { computeLineupOpportunity } from "./lineupOpportunity";
 import { computeNearHrRecentForm, type RecentContactEventRow } from "./nearHrRecentForm";
 import { computeMarketTags } from "./marketTagger";
 import { composePregameScore } from "./scoring";
-import { carryForwardGradedState } from "./gradedStateCarry";
+import { carryForwardGradedState, carryForwardDroppedFromLineup } from "./gradedStateCarry";
 import {
   getSnapshot,
   setSnapshot,
@@ -156,6 +156,17 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   const prevSnapshot = getSnapshot();
   const prevSignals =
     prevSnapshot && prevSnapshot.sessionDate === sessionDate ? prevSnapshot.signals : null;
+  // Grouped by gameId so a batter dropped from the live lineup (see
+  // carryForwardDroppedFromLineup below) can be found without an O(games ×
+  // prevSignals) scan.
+  const prevSignalsByGame = new Map<string, PregamePowerSignal[]>();
+  if (prevSignals) {
+    for (const s of Array.from(prevSignals.values())) {
+      const list = prevSignalsByGame.get(s.gameId);
+      if (list) list.push(s);
+      else prevSignalsByGame.set(s.gameId, [s]);
+    }
+  }
 
   const signals = new Map<string, PregamePowerSignal>();
   let gamesScanned = 0;
@@ -638,6 +649,29 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           createdPublicEligible++;
           console.log(`[PREGAME_POWER_RADAR_SIGNAL_CREATED] ${signalId} ${player.playerName} ${scoring.tier} score=${scoring.score10} market=${marketTags.primaryMarket}`);
         }
+      }
+
+      // Preserve targets for batters who dropped out of the live-fetched
+      // batting order since the previous build (pinch hit/run, defensive
+      // sub, injury) — carryForwardGradedState above only runs for batters
+      // still in `lineup`; without this pass a subbed-out batter's signal
+      // (including any already-stamped HR outcome) is silently absent from
+      // the rebuilt Map.
+      const lineupBatterIds = new Set(lineup.map((l) => l.playerId));
+      const carriedOver = carryForwardDroppedFromLineup(
+        game.gameId,
+        lineupBatterIds,
+        prevSignalsByGame.get(game.gameId) ?? [],
+        gameStatus,
+        firstPitchLockEligible,
+        new Date().toISOString(),
+        buildId,
+      );
+      for (const carried of carriedOver) {
+        signals.set(carried.signalId, carried);
+        console.log(
+          `[PREGAME_POWER_RADAR_SIGNAL_CARRIED] ${carried.signalId} ${carried.batterName} dropped from live batting order — preserved (status=${carried.status})`,
+        );
       }
     }
   } catch (err: any) {

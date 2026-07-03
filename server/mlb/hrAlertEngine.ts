@@ -1,6 +1,22 @@
 import type { HRAlertInput, HRAlertResult } from "./evaluateHRAlert";
 import { evaluateHRAlert } from "./evaluateHRAlert";
+import type { BatterEvidenceQuality } from "./hrConversionModel";
 import type { HrRadarLifecycleEvent, HrRadarLifecycleState } from "./hrRadarStateMachine";
+
+// ── Per-tick diagnostic throttle (2026-06) ──────────────────────────────────
+// [HR_OCCURRENCE_PROB] / [HR_CONV_CAL_RAIL_BLOCKED] / [HR_PITCHER_FADE_ONLY_BLOCKED]
+// fire on every recompute tick per batter; without throttling a full slate
+// floods the logs. Emit at most once per key per window (the state itself is
+// observable in the canonical store / freshness endpoint between samples).
+const HR_DIAG_THROTTLE_MS = 30_000;
+const _hrDiagLastLogMs = new Map<string, number>();
+function shouldLogHrDiag(key: string, everyMs: number = HR_DIAG_THROTTLE_MS): boolean {
+  const now = Date.now();
+  const last = _hrDiagLastLogMs.get(key);
+  if (last != null && now - last < everyMs) return false;
+  _hrDiagLastLogMs.set(key, now);
+  return true;
+}
 
 export type DynamicHRState = "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
 
@@ -16,6 +32,19 @@ export type DynamicHRState = "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "C
  * but the live UX MUST always use HrRadarStage derived via mapDynamicStateToStage.
  */
 export type HrRadarStage = "watch" | "building" | "attack" | "cooling" | "closed";
+
+/**
+ * HR occurrence engine (2026-06) — clamp the PERSISTED canonical stage so a
+ * no-batter-evidence signal can never persist as attack/strong. Mirrors the
+ * deriveCanonicalPromotionIntent gate for DB-backed readers (ladder/board) and
+ * grading, which read snapshot.canonicalStage rather than the FSM upsert. Pure.
+ */
+export function clampPersistedCanonicalStage(
+  stage: HrRadarStage,
+  evidenceQuality: BatterEvidenceQuality,
+): HrRadarStage {
+  return stage === "attack" && evidenceQuality === "none" ? "building" : stage;
+}
 
 export function mapDynamicStateToStage(s: DynamicHRState): HrRadarStage {
   switch (s) {
@@ -125,6 +154,11 @@ export interface HRAlertSnapshot {
   hrConversionProbabilityRaw: number;
   hrConversionProbabilityCalibrated: number;
   peakConversionProbability: number;
+  // HR occurrence contract (2026-06) — evidence-rail-capped P(HR>=1) and the
+  // batter-side contact-evidence class. Promotion reads these; both are
+  // independent of sportsbook odds/edge/line.
+  hrOccurrenceProbability: number;
+  batterEvidenceQuality: BatterEvidenceQuality;
   /** @deprecated Use peakConversionProbability for probabilities or peakReadinessScore for readiness. */
   peakScore: number;
 
@@ -514,7 +548,24 @@ export function recomputeHrAlertState(
   // the PATH evaluator's signalState into ONE stage at the engine boundary
   // so every downstream consumer sees the same value.
   const dynamicStage = mapDynamicStateToStage(newState);
-  const canonicalStage = computeUnifiedCanonicalStage(dynamicStage, alertResult.signalState);
+  // HR occurrence contract (2026-06) — batter-side evidence class (from the
+  // conversion model's contact classifier). Derived BEFORE the canonical stage
+  // so it can clamp the PERSISTED stage too, not just the FSM upsert.
+  const batterEvidenceQuality: BatterEvidenceQuality = convResult?.occurrenceEvidenceQuality ?? "none";
+  // A no-batter-evidence signal must never PERSIST as attack/strong. The DB ladder/
+  // board and grading read snapshot.canonicalStage (not the FSM upsert), so
+  // without this they could surface/credit a row that
+  // deriveCanonicalPromotionIntent already capped at BUILD. Mirror that gate on
+  // the persisted stage: attack → building when there is no fresh batter evidence.
+  const rawCanonicalStage = computeUnifiedCanonicalStage(dynamicStage, alertResult.signalState);
+  let canonicalStage = clampPersistedCanonicalStage(rawCanonicalStage, batterEvidenceQuality);
+  if (canonicalStage !== rawCanonicalStage && shouldLogHrDiag(`stageclamp:${input.gameId}:${input.playerId}`)) {
+    console.log(
+      `[HR_PITCHER_FADE_ONLY_BLOCKED] persisted-stage clamp ${rawCanonicalStage}→${canonicalStage} ` +
+      `player=${input.playerName} game=${input.gameId} inning=${input.inning} ` +
+      `pitVuln=${Math.round(pitcherVuln)} evidence=none`,
+    );
+  }
 
   // Observability: emit when the unified stage promotes above the dynamic
   // stage so we can audit how often PATH override is firing.
@@ -524,6 +575,30 @@ export function recomputeHrAlertState(
       `dynamic=${dynamicStage} pathSignal=${alertResult.signalState ?? "null"} ` +
       `canonical=${canonicalStage} calProb=${effectiveCalibrated.toFixed(3)} ` +
       `path=${alertResult.diagnostics?.alertPath ?? "n/a"}`
+    );
+  }
+
+  // HR occurrence contract (2026-06) — evidence-rail-capped P(HR>=1). The
+  // batter-side evidence class (batterEvidenceQuality) is derived above so it
+  // can also clamp the persisted canonical stage.
+  const hrOccurrenceProbability = convResult?.hrOccurrenceProbability ?? effectiveCalibrated;
+  if (shouldLogHrDiag(`occ:${input.gameId}:${input.playerId}`)) {
+    console.log(
+      `[HR_OCCURRENCE_PROB] player=${input.playerName} gameId=${input.gameId} ` +
+      `projection=${rawProb.toFixed(3)} remainingPA=${remainingPA.toFixed(1)} ` +
+      `rawOccurrenceProb=${rawProb.toFixed(3)} calibratedOccurrenceProb=${hrOccurrenceProbability.toFixed(3)} ` +
+      `evidence=${batterEvidenceQuality} drivers=${(positiveDrivers ?? []).slice(0, 3).join("|") || "none"} ` +
+      `source=hr_occurrence_only`,
+    );
+  }
+  if (convResult?.calibrationRailBlocked && shouldLogHrDiag(`rail:${input.gameId}:${input.playerId}`)) {
+    console.log(
+      `[HR_CONV_CAL_RAIL_BLOCKED] player=${input.playerName} gameId=${input.gameId} ` +
+      `convRaw=${(convResult.hrConversionProbability ?? 0).toFixed(3)} ` +
+      `oldConvCal=${(convResult.preCapCalibratedProbability ?? 0).toFixed(3)} ` +
+      `newConvCal=${hrOccurrenceProbability.toFixed(3)} inning=${input.inning} ` +
+      `pitchCount=${input.pitchCount ?? "n/a"} pitVuln=${Math.round(pitcherVuln)} ` +
+      `evidenceQuality=${batterEvidenceQuality}`,
     );
   }
 
@@ -544,6 +619,8 @@ export function recomputeHrAlertState(
     peakReadinessScore: prev.peakReadinessScore,
     hrConversionProbabilityRaw: rawProb,
     hrConversionProbabilityCalibrated: effectiveCalibrated,
+    hrOccurrenceProbability,
+    batterEvidenceQuality,
     peakConversionProbability: prev.peakConversionProbability,
     peakScore: prev.peakConversionProbability, // deprecated alias
     remainingPAExpectation: remainingPA,
@@ -601,30 +678,61 @@ export function deriveCanonicalPromotionIntent(
   const stage = snap.canonicalStage;
   const sustained = (snap.consecutivePromoteTicks ?? 0) >= PROMOTE_SUSTAIN_TICKS;
 
+  // HR occurrence engine (2026-06) — READY/FIRE require FRESH batter-side
+  // contact evidence. Pitcher vulnerability is supporting context, never the
+  // sole driver, and in innings 1–3 pitcher-fade alone cannot promote past
+  // BUILD/WATCH. `batterEvidenceQuality` comes from the conversion model's
+  // contact-evidence classifier (no sportsbook odds/edge involved).
+  const inning = snap.currentInning > 0 ? snap.currentInning : (snap.detectedInning ?? 0);
+  const hasBatterEvidence = snap.batterEvidenceQuality !== "none";
+  const earlyInning = inning > 0 && inning <= 3;
+
   // Cool-off / closed — let the FSM own decay + terminal stickiness.
   if (state === "COOLED_OFF" || state === "CLOSED") {
     return { event: null, floor: null, reason: `no_promote_from_${state.toLowerCase()}` };
   }
 
-  // Pitcher fade — wire the previously-dead PITCHER_FADE event. A fading /
-  // fatigued pitcher (vuln >= floor) while the batter is already building is a
-  // ready-grade promotion regardless of contact. Gated by sustain.
+  // Pitcher fade — a fading/fatigued pitcher (vuln >= floor) is SUPPORTING
+  // context. It may floor to READY only when paired with fresh batter-side
+  // evidence, and never as the sole driver in innings 1–3. Otherwise it falls
+  // through to the build/watch floors below (it does not vanish).
   if (
     snap.pitcherHrVulnerability >= FADE_VULN_THRESHOLD &&
     (state === "PREPARE" || state === "BET_NOW")
   ) {
     if (!sustained) return { event: null, floor: null, reason: "pitcher_fade_awaiting_sustain" };
-    return {
-      event: "PITCHER_FADE",
-      floor: "ready",
-      reason: `pitcher_fade_vuln_${Math.round(snap.pitcherHrVulnerability)}`,
-    };
+    if (hasBatterEvidence && !earlyInning) {
+      return {
+        event: "PITCHER_FADE",
+        floor: "ready",
+        reason: `pitcher_fade_vuln_${Math.round(snap.pitcherHrVulnerability)}`,
+      };
+    }
+    if (shouldLogHrDiag(`fade:${Math.round(snap.pitcherHrVulnerability)}:${inning}:${state}`)) {
+      console.log(
+        `[HR_PITCHER_FADE_ONLY_BLOCKED] pitVuln=${Math.round(snap.pitcherHrVulnerability)} ` +
+        `inning=${inning} evidence=${snap.batterEvidenceQuality} state=${state} ` +
+        `reason=${!hasBatterEvidence ? "no_batter_evidence" : "early_inning_1_3"} — ` +
+        `pitcher-fade not floored to READY (capped at BUILD)`,
+      );
+    }
+    // fall through to the build/watch floors below.
   }
 
-  // Top conviction + attack window → ready (fire is gated separately in the
-  // user-stage layer). Requires sustain to avoid single-tick flapping.
+  // Top conviction + attack window → ready, but ONLY with fresh batter-side
+  // evidence (occurrence engine). A BET_NOW driven by pitcher context alone
+  // (no batter contact) caps at BUILD, never READY/FIRE.
   if (state === "BET_NOW" && stage === "attack") {
     if (!sustained) return { event: null, floor: null, reason: "bet_now_attack_awaiting_sustain" };
+    if (!hasBatterEvidence) {
+      if (shouldLogHrDiag(`fade_betnow:${inning}:${Math.round(snap.pitcherHrVulnerability)}`)) {
+        console.log(
+          `[HR_PITCHER_FADE_ONLY_BLOCKED] bet_now_attack without batter evidence — ` +
+          `capped at BUILD inning=${inning} pitVuln=${Math.round(snap.pitcherHrVulnerability)} evidence=none`,
+        );
+      }
+      return { event: "PROMOTE", promoteTo: "build", floor: "build", reason: "bet_now_attack_no_batter_evidence_capped_build" };
+    }
     return { event: "PROMOTE", promoteTo: "ready", floor: "ready", reason: "bet_now_attack_sustained" };
   }
 
@@ -672,6 +780,8 @@ export function getHrAlertState(gameId: string, playerId: string): HRAlertSnapsh
       peakReadinessScore: prev.peakReadinessScore,
       hrConversionProbabilityRaw: 0,
       hrConversionProbabilityCalibrated: 0,
+      hrOccurrenceProbability: 0,
+      batterEvidenceQuality: "none",
       peakConversionProbability: prev.peakConversionProbability,
       peakScore: prev.peakConversionProbability,
       remainingPAExpectation: 0,

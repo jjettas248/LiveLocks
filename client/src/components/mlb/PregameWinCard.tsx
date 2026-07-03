@@ -1,142 +1,16 @@
-// MLB Pre-Game Power Radar — Win Attribution surfaces (public, wins-only).
+// MLB Pre-Game Power Radar — Win Attribution row card (public, wins-only).
 //
 // Direction 2 product rule: a pre-game target that homers is a public Pregame
 // Radar Win; a target that misses is calibration-only and is NEVER rendered
 // here. The server stamps label / cardCopy / drivers; the UI renders verbatim
 // and never derives win/loss or shows "Loss / Missed / -units".
+//
+// The only rendering surface for wins is the Win History drawer
+// (PregameHistoryDrawer.tsx), which reuses PregameWinCard below.
 
-import { useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
-import { Trophy, Flame, Target } from "lucide-react";
-import type {
-  PregameRadarWinItem,
-  PregameRadarPublicStats,
-  DailyCashedLogResponse,
-} from "@shared/pregameRadarWin";
-
-/**
- * Current ET slate day, e.g. "2026-07-01" — mirrors the server's slateDateET()
- * (day rolls over at 6am ET, not midnight, so late games stay on the slate
- * that started the evening before). Included in query keys below so a slate
- * rollover always produces a fresh cache entry instead of showing yesterday's
- * placeholder data (the endpoints themselves already scope their response to
- * the slate day server-side).
- */
-function slateDateET(): string {
-  const now = new Date();
-  const hourET = Number(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      hour12: false,
-    }).format(now),
-  ) % 24;
-  const d = new Date(now);
-  if (hourET < 6) d.setDate(d.getDate() - 1);
-  return d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-}
-
-/**
- * Pregame Radar Record banner — "{wins} Wins Today · {firstAb} First-AB Cashes
- * · {flagged} Flagged Before First Pitch". Wins-only; hidden until there is
- * something to show (no zero-state shouting "0 wins").
- */
-export function PregameRadarRecord() {
-  const { data } = useQuery<PregameRadarPublicStats>({
-    queryKey: ["/api/mlb/pregame-radar/record", slateDateET()],
-    queryFn: () => apiRequest("GET", "/api/mlb/pregame-radar/record").then((r) => r.json()),
-    refetchInterval: 60_000,
-    placeholderData: (prev) => prev,
-  });
-
-  if (!data || data.flaggedBeforeFirstPitchToday === 0) return null;
-
-  return (
-    <Card
-      className="p-3 bg-emerald-500/10 border-emerald-400/30"
-      data-testid="pregame-radar-record"
-    >
-      <div className="flex items-center gap-2 mb-1.5">
-        <Trophy className="w-4 h-4 text-emerald-300" />
-        <span className="text-sm font-bold text-emerald-200">Pregame Radar Record</span>
-      </div>
-      <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
-        <Stat value={data.pregameWinsToday} label="Wins Today" testid="pregame-record-wins-today" />
-        <Stat
-          value={data.firstAbPregameWinsToday}
-          label="First-AB Cashes"
-          testid="pregame-record-firstab-today"
-        />
-        <Stat
-          value={data.flaggedBeforeFirstPitchToday}
-          label="Flagged Before First Pitch"
-          testid="pregame-record-flagged-today"
-        />
-        <Stat
-          value={data.pregameWinsLast7Days}
-          label="Wins (7d)"
-          testid="pregame-record-wins-7d"
-          muted
-        />
-      </div>
-    </Card>
-  );
-}
-
-function Stat({
-  value,
-  label,
-  testid,
-  muted = false,
-}: {
-  value: number;
-  label: string;
-  testid: string;
-  muted?: boolean;
-}) {
-  return (
-    <div className={muted ? "opacity-70" : undefined}>
-      <span className="font-bold text-emerald-100" data-testid={testid}>
-        {value}
-      </span>{" "}
-      <span className="text-muted-foreground">{label}</span>
-    </div>
-  );
-}
-
-/**
- * Pregame Radar Wins section — today's public wins from the daily cashed log.
- * Hidden when empty. Misses never appear (server already excludes them).
- */
-export function PregameWinsSection() {
-  const { data } = useQuery<DailyCashedLogResponse>({
-    queryKey: ["/api/mlb/daily-cashed-log", slateDateET()],
-    queryFn: () => apiRequest("GET", "/api/mlb/daily-cashed-log").then((r) => r.json()),
-    refetchInterval: 60_000,
-    placeholderData: (prev) => prev,
-  });
-
-  const wins = data?.pregameRadarWins ?? [];
-  if (wins.length === 0) return null;
-
-  return (
-    <div className="space-y-2" data-testid="section-pregame-radar-wins">
-      <h3 className="text-sm font-bold flex items-center gap-1.5">
-        <Trophy className="w-4 h-4 text-emerald-300" />
-        {data?.titleLabel ?? "Pregame Radar Wins"}
-        <span className="text-[11px] font-normal text-muted-foreground">
-          flagged before first pitch · later homered
-        </span>
-      </h3>
-      <div className="grid gap-2">
-        {wins.map((w) => (
-          <PregameWinCard key={w.signalId} win={w} />
-        ))}
-      </div>
-    </div>
-  );
-}
+import { Flame, Target } from "lucide-react";
+import type { PregameRadarWinItem } from "@shared/pregameRadarWin";
 
 function inningText(win: PregameRadarWinItem): string | null {
   if (win.hrInning == null) return null;

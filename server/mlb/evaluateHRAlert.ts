@@ -1467,56 +1467,32 @@ export function deviggedMarketHrProb(
 
 export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
   const result = evaluateHRAlertCore(input);
-  // Only the actionable HR Max Window tier is EV-gated.
-  if (result.alertTier !== "officialAlert") return result;
-  const marketImplied = deviggedMarketHrProb(input.overOdds, input.underOdds);
-  if (marketImplied == null) return result; // no price → preserve legacy behavior
-  const modelProb =
-    result.diagnostics.hrConversion?.calibratedProbability ??
-    result.diagnostics.hrConversion?.hrConversionProbability ??
-    null;
-  if (modelProb == null) return result;
-  const required = marketImplied * (1 + HR_EV_EDGE_MARGIN);
-  const edgePct = marketImplied > 0 ? ((modelProb - marketImplied) / marketImplied) * 100 : 0;
-  if (modelProb >= required) {
-    // Positive edge — keep the actionable tier; annotate for observability.
-    console.log(
-      `[HR_RADAR_EV_GATE] PASS ${input.playerName} game=${input.gameId} ` +
-      `model=${(modelProb * 100).toFixed(1)}% mkt=${(marketImplied * 100).toFixed(1)}% edge=${edgePct.toFixed(0)}%`,
-    );
-    return result;
+  // ── HR occurrence engine — edge decoupled (2026-06) ───────────────────────
+  // HR Radar tiers are a function of HR OCCURRENCE probability + baseball
+  // evidence, NOT of sportsbook edge/value. The previous EV-gate demoted the
+  // actionable HR Max Window tier (officialAlert → prepare) whenever the model
+  // didn't beat the de-vigged market price by HR_EV_EDGE_MARGIN — i.e. a
+  // negative betting edge SUPPRESSED a real HR-occurrence signal. That is
+  // exactly the bias this hotfix removes. We still compute the edge, but ONLY
+  // for observability ([HR_EDGE_DECOUPLED]); it never changes the tier/level.
+  // (The FIRE-only ledger and canonical FIRE promotion are independently gated
+  // on occurrence probability + batter-side evidence, so keeping the tier here
+  // does not let weak signals through.)
+  if (result.alertTier === "officialAlert") {
+    const marketImplied = deviggedMarketHrProb(input.overOdds, input.underOdds);
+    const modelProb =
+      result.diagnostics.hrConversion?.hrOccurrenceProbability ??
+      result.diagnostics.hrConversion?.calibratedProbability ??
+      result.diagnostics.hrConversion?.hrConversionProbability ??
+      null;
+    if (marketImplied != null && modelProb != null) {
+      const edgePct = marketImplied > 0 ? ((modelProb - marketImplied) / marketImplied) * 100 : 0;
+      console.log(
+        `[HR_EDGE_DECOUPLED] ${input.playerName} game=${input.gameId} ` +
+        `occurrence=${(modelProb * 100).toFixed(1)}% mkt=${(marketImplied * 100).toFixed(1)}% ` +
+        `edge=${edgePct.toFixed(0)}% — tier preserved (HR Radar is occurrence-only; edge does not gate)`,
+      );
+    }
   }
-  // Insufficient edge — demote HR Max Window → Building (prepare). Still
-  // surfaced as context; just not graded/bet as a max-window pick.
-  //
-  // IMPORTANT: demoting `alertTier` alone is not enough. The orchestrator
-  // persists `signalState`/`decision` (not alertTier) into the DB
-  // `confidenceTier`/`signalState` columns (PEAK → strong/actionable), and the
-  // grading helper `reachedHrMaxWindow` treats strong/actionable as the HR Max
-  // Window tier — so an EV-demoted PEAK signal would still be graded/notified as
-  // actionable. Clear every actionable marker: drop to BUILDING/PREPARE and
-  // downgrade the level from ALERT → WATCH so cooldown/notifications (gated on
-  // level === "ALERT") don't fire for a non-bet signal.
-  // Truthful demote reason: an EV demote driven by a model probability that
-  // was itself deflated by absent inputs is a data-quality outcome, not a clean
-  // "the market is simply better priced" call.
-  const evSuppressionReason = result.diagnostics.dataQuality === "degraded"
-    ? "below_threshold_with_degraded_data"
-    : "below_threshold_with_full_data";
-  console.log(
-    `[HR_RADAR_EV_GATE] DEMOTE ${input.playerName} game=${input.gameId} ` +
-    `model=${(modelProb * 100).toFixed(1)}% mkt=${(marketImplied * 100).toFixed(1)}% ` +
-    `edge=${edgePct.toFixed(0)}% need≥${(required * 100).toFixed(1)}% → building (${evSuppressionReason})`,
-  );
-  return {
-    ...result,
-    alertTier: "prepare",
-    level: result.level === "ALERT" ? "WATCH" : result.level,
-    signalState: result.signalState === "PEAK" ? "BUILDING" : result.signalState,
-    decision: result.decision === "BET_NOW" ? "PREPARE" : result.decision,
-    triggerReason:
-      `${result.triggerReason} · EV-gated (model ${(modelProb * 100).toFixed(1)}% ` +
-      `vs mkt ${(marketImplied * 100).toFixed(1)}%, edge ${edgePct.toFixed(0)}%)`,
-    diagnostics: { ...result.diagnostics, suppressionReason: evSuppressionReason },
-  };
+  return result;
 }
