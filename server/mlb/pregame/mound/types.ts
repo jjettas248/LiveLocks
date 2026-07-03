@@ -20,6 +20,17 @@ export type MoundTier = "track" | "watch" | "strong" | "elite" | "nuclear";
 /** Markets the Mound can tag. Pitcher-positive only — never an "allowed" market. */
 export type MoundMarket = "pitcher_strikeouts" | "pitcher_outs";
 
+/**
+ * Runtime mirror of MoundMarket, co-located with the type so callers have one
+ * source of truth for the allowlist instead of inline duplicates. The
+ * `satisfies` check catches an INVALID entry being added here (one that isn't
+ * a MoundMarket) at compile time; it can't catch a NEW MoundMarket value
+ * being forgotten here (TS has no built-in tuple-vs-union exhaustiveness
+ * check), so a future MoundMarket addition still requires updating this list
+ * by hand — but at least there is only one list to update, not several.
+ */
+export const MOUND_MARKETS = ["pitcher_strikeouts", "pitcher_outs"] as const satisfies readonly MoundMarket[];
+
 export type MoundLineupStatus = "confirmed" | "projected" | "unconfirmed";
 export type MoundWeatherStatus = "confirmed" | "estimated" | "roof" | "unknown";
 export type MoundGameStatus =

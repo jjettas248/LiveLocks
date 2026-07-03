@@ -77,6 +77,12 @@ function toPublicTier(tier: string): "watch" | "strong" | "elite" {
 function toPlateMarketKey(m: string): "home_runs" | "hits" | "total_bases" {
   if (m === "home_runs") return "home_runs";
   if (m === "total_bases") return "total_bases";
+  if (m !== "hits") {
+    // Unreachable today (marketTagger.ts only emits home_runs/total_bases),
+    // but if Plate ever ships its Phase-5 rbi/hrr markets without a matching
+    // update here, this makes the mislabel observable instead of silent.
+    console.warn(`[MLB_PREGAME_CONTRACT_VALIDATION] unexpected Plate market "${m}" — falling back to "hits" in the hub response`);
+  }
   return "hits";
 }
 
@@ -229,18 +235,22 @@ function rankTargets(targets: PregameRadarTarget[]): PregameRadarTarget[] {
     .map((t, i) => ({ ...t, rank: i + 1 }));
 }
 
-function deriveSlateStatus(targets: PregameRadarTarget[]): MlbPregameHubResponse["slateStatus"] {
-  if (targets.length === 0) return "pre_first_pitch";
-  // We don't carry gameStatus on the reshaped target; use badges/tracking as a
-  // best-effort proxy — locked targets imply live/final, homered/cashed implies final.
-  const anyPending = targets.some((t) => t.tracking.outcomeStatus === "pending" && t.badges.length === 0);
-  const allResolved = targets.every((t) => t.tracking.outcomeStatus === "hit" || t.tracking.outcomeStatus === "calibration");
-  if (allResolved) return "final";
-  if (!anyPending) return "in_progress";
+/**
+ * Derives slateStatus from the RAW gameStatus values both engines already
+ * compute per-signal — not from the reshaped PregameRadarTarget's badges/
+ * outcomeStatus, which are a lossy proxy (e.g. a live game with a still-
+ * pending, badge-less target used to read identically to a fully-scheduled
+ * slate). Takes plain strings so it works uniformly across Plate's
+ * PregameGameStatus and Mound's MoundGameStatus (same literal value set).
+ */
+function deriveSlateStatus(gameStatuses: string[]): MlbPregameHubResponse["slateStatus"] {
+  if (gameStatuses.length === 0) return "pre_first_pitch";
+  if (gameStatuses.some((s) => s === "live")) return "in_progress";
+  if (gameStatuses.every((s) => s === "final" || s === "postponed")) return "final";
   return "pre_first_pitch";
 }
 
-async function buildPlateView(): Promise<{ view: PregameRadarView; source: MlbPregameHubResponse["source"] }> {
+async function buildPlateView(): Promise<{ view: PregameRadarView; source: MlbPregameHubResponse["source"]; gameStatuses: string[] }> {
   const { snapshot, source } = await getRadarSnapshot();
   const dateET = slateDateET();
   const signals = snapshot ? Array.from(snapshot.signals.values()) : [];
@@ -285,10 +295,14 @@ async function buildPlateView(): Promise<{ view: PregameRadarView; source: MlbPr
       diagnostics: response.diagnostics,
     },
     source: source === "rebuilt" ? "api" : source === "db_fallback" ? "cache" : "memory",
+    // Raw, authoritative per-signal gameStatus — includes suppressed/non-public
+    // signals too, since slateStatus reflects the whole slate's game state,
+    // not just the publicly-flagged subset.
+    gameStatuses: signals.map((s) => s.gameStatus),
   };
 }
 
-async function buildMoundView(): Promise<{ view: PregameRadarView; source: MlbPregameHubResponse["source"] }> {
+async function buildMoundView(): Promise<{ view: PregameRadarView; source: MlbPregameHubResponse["source"]; gameStatuses: string[] }> {
   const { snapshot, source } = await getMoundRadarSnapshot();
   const dateET = slateDateET();
   const signals = snapshot ? Array.from(snapshot.signals.values()) : [];
@@ -333,6 +347,7 @@ async function buildMoundView(): Promise<{ view: PregameRadarView; source: MlbPr
       diagnostics: response.diagnostics,
     },
     source: source === "rebuilt" ? "api" : source === "db_fallback" ? "cache" : "memory",
+    gameStatuses: signals.map((s) => s.gameStatus),
   };
 }
 
@@ -352,8 +367,7 @@ export async function buildPregameHubResponse(): Promise<MlbPregameHubResponse> 
     winsLast7Days: plate.view.record.winsLast7Days + mound.view.record.winsLast7Days,
   };
 
-  const allTargets = [...plate.view.targets, ...mound.view.targets];
-  const slateStatus = deriveSlateStatus(allTargets);
+  const slateStatus = deriveSlateStatus([...plate.gameStatuses, ...mound.gameStatuses]);
 
   const source: MlbPregameHubResponse["source"] =
     plate.source === "api" || mound.source === "api" ? "api" : plate.source === "cache" || mound.source === "cache" ? "cache" : "memory";

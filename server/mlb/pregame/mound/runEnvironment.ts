@@ -43,6 +43,23 @@ export function computeRunEnvironment(
     { value: sWind, weight: 2 },
   ]);
 
+  const suppressing = (sPark != null && sPark >= 6.5) || (sTemp != null && sTemp >= 6.5) || sWind === 8;
+
+  // Human-readable evidence for the park row's tooltip / the hub API's
+  // weatherLabel — mirrors Plate's carryDriverText contract. Picks the
+  // single dominant reason so it stays a short, honest sentence rather than
+  // concatenating every contributing factor.
+  let driverText: string | null = null;
+  if (!inputs.isIndoors) {
+    if (sWind === 8) {
+      driverText = `Wind blowing in${inputs.windMph != null ? ` (${Math.round(inputs.windMph)} mph)` : ""} — suppresses offense`;
+    } else if (sTemp != null && sTemp >= 6.5) {
+      driverText = `Cool air${inputs.temperatureF != null ? ` (${Math.round(inputs.temperatureF)}°F)` : ""} — suppresses offense`;
+    } else if (sPark != null && sPark >= 6.5) {
+      driverText = `Run-suppressing park${inputs.parkFactorRuns != null ? ` (factor ${round1(inputs.parkFactorRuns)})` : ""}`;
+    }
+  }
+
   let parkContext: MoundParkContext;
   if (!inputs.venueName || (!inputs.weatherAvailable && !inputs.isIndoors)) {
     parkContext = {
@@ -55,7 +72,6 @@ export function computeRunEnvironment(
     };
     warnings.push("Park/weather context unavailable");
   } else {
-    const suppressing = (sPark != null && sPark >= 6.5) || (sTemp != null && sTemp >= 6.5) || sWind === 8;
     parkContext = {
       venueName: inputs.venueName,
       temperatureF: inputs.temperatureF,
@@ -64,6 +80,7 @@ export function computeRunEnvironment(
         inputs.windDirection === "in" ? "In" : inputs.windDirection === "out" ? "Out" : inputs.windDirection === "cross" ? "Crosswind" : inputs.windDirection === "calm" ? "Calm" : null,
       runEnvironmentLabel: inputs.isIndoors ? "Neutral Conditions" : suppressing ? "Run Suppression" : "Neutral Air",
       runEnvironmentType: inputs.isIndoors ? "neutral" : suppressing ? "suppress" : "neutral",
+      driverText,
     };
   }
 
@@ -71,6 +88,10 @@ export function computeRunEnvironment(
     return { score10: 5, available: false, drivers, warnings, parkContext };
   }
 
+  // Exactly ONE positive driver per independently-computed sub-signal — never
+  // two chips for the same threshold crossing. A signal backed by a single
+  // real number (e.g. park factor alone) must never inflate the "≥2 positive
+  // drivers" publish-quality gate by being double-counted as two chips.
   if (sPark != null && sPark >= 6.5) {
     drivers.push({
       key: "re_park",
@@ -79,7 +100,6 @@ export function computeRunEnvironment(
       weight: Math.round(sPark * 10),
       evidence: inputs.parkFactorRuns != null ? `Run factor ${round1(inputs.parkFactorRuns)}` : undefined,
     });
-    drivers.push({ key: "re_park_suppress", label: "Park Run Suppression", direction: "positive", weight: Math.round(sPark * 10) });
   }
   if (sTemp != null && sTemp >= 6.5) {
     drivers.push({ key: "re_cool", label: "Cool Temps", direction: "positive", weight: Math.round(sTemp * 10), evidence: inputs.temperatureF != null ? `${inputs.temperatureF}°F` : undefined });
@@ -87,8 +107,10 @@ export function computeRunEnvironment(
   if (sWind === 8) {
     drivers.push({ key: "re_wind_in", label: "Wind In", direction: "positive", weight: 70 });
   }
+  // Park+temp both favorable is genuinely distinct compounding evidence (not
+  // a restatement of re_park/re_cool above) — worth exactly one additional
+  // driver, not two.
   if (sPark != null && sTemp != null && sPark >= 6 && sTemp >= 6) {
-    drivers.push({ key: "re_weather_suppress", label: "Weather Run Suppression", direction: "positive", weight: 60 });
     drivers.push({ key: "re_low_run_env", label: "Low Run Environment", direction: "positive", weight: 60 });
   }
 

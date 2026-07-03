@@ -17,6 +17,8 @@ export interface WorkloadInputs {
   bbPer9: number | null;
   avgInningsPerStart: number | null;
   lastStartPitchCount: number | null;
+  /** Actual innings pitched in that SAME last start — the correct denominator for pitches/inning. */
+  lastStartInningsPitched: number | null;
   ipVarianceLast3: number | null;
   archetype: MLBPitcherArchetype | null;
 }
@@ -33,9 +35,14 @@ export function computeWorkload(inputs: WorkloadInputs): ComponentScore {
   const sWalk = inputs.bbPer9 != null ? lin(inputs.bbPer9, 4.5, 1.5) : null;
   const sLeash = inputs.avgInningsPerStart != null ? lin(inputs.avgInningsPerStart, 4.5, 7.0) : null;
 
+  // Pitches/inning MUST be paired with that SAME start's innings — pairing a
+  // single-start pitch count with a season-aggregate innings figure produces
+  // a wrong-direction ratio for any start that deviates from the pitcher's
+  // season average (e.g. an early hook after a short, high-pitch outing would
+  // otherwise misread as "efficient").
   const pitchesPerInning =
-    inputs.lastStartPitchCount != null && inputs.avgInningsPerStart != null && inputs.avgInningsPerStart > 0
-      ? inputs.lastStartPitchCount / inputs.avgInningsPerStart
+    inputs.lastStartPitchCount != null && inputs.lastStartInningsPitched != null && inputs.lastStartInningsPitched > 0
+      ? inputs.lastStartPitchCount / inputs.lastStartInningsPitched
       : null;
   const sEfficiency = pitchesPerInning != null ? lin(pitchesPerInning, 18, 13) : null;
   const sStability = inputs.ipVarianceLast3 != null ? lin(inputs.ipVarianceLast3, 2.5, 0.3) : null;

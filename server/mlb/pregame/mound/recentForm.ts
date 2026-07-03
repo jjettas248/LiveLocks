@@ -5,7 +5,7 @@
 // nearHrRecentForm.ts — different inputs, different thresholds, no shared code.
 
 import type { ComponentScore, MoundDriver } from "./types";
-import { lin, weightedAvg, round1 } from "./scoreUtils";
+import { lin, weightedAvg, round1, seasonKPer9ToPerStartExpectation } from "./scoreUtils";
 
 export interface RecentFormInputs {
   pitcherKnown: boolean;
@@ -31,7 +31,7 @@ export function computeRecentForm(inputs: RecentFormInputs): ComponentScore {
   // Recent K form relative to season pace — trending up (>0) is a positive signal.
   const kTrend =
     avgRecentK != null && inputs.seasonKPer9 != null
-      ? avgRecentK - inputs.seasonKPer9 * (6 / 9) // rough per-start expectation at ~6 IP
+      ? avgRecentK - seasonKPer9ToPerStartExpectation(inputs.seasonKPer9)
       : null;
   const sKTrend = kTrend != null ? lin(kTrend, -2, 2) : null;
   // Blow-up risk: elevated recent ERA vs a typical quality-start baseline.

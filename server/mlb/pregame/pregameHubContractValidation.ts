@@ -7,6 +7,7 @@
 // pregamePowerRadar/pregamePersistence.ts).
 
 import type { PregameRadarTarget, PregameRadarViewKey } from "../../../shared/mlbPregameHub";
+import { MOUND_MARKETS } from "./mound/types";
 
 /** Logs and drops any target that fails the contract; never throws. */
 export function validateTargets(targets: PregameRadarTarget[], view: PregameRadarViewKey): PregameRadarTarget[] {
@@ -17,7 +18,7 @@ export function validateTargets(targets: PregameRadarTarget[], view: PregameRada
     if (!t.actorType) problems.push("missing_actorType");
     if (!t.view) problems.push("missing_view");
     if (view === "mound" && t.tracking.firstAbCashEligible !== false) problems.push("mound_firstAbCashEligible_not_false");
-    if (view === "mound" && !["pitcher_strikeouts", "pitcher_outs"].includes(t.primaryMarket.key)) problems.push("mound_disallowed_market");
+    if (view === "mound" && !(MOUND_MARKETS as readonly string[]).includes(t.primaryMarket.key)) problems.push("mound_disallowed_market");
     if (problems.length > 0) {
       console.warn(`[MLB_PREGAME_CONTRACT_VALIDATION] dropped target id=${t.id} view=${view} problems=${problems.join(",")}`);
       continue;

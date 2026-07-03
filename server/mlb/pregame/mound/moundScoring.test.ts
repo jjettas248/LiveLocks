@@ -11,6 +11,7 @@ import {
 } from "./scoring";
 import { computePitcherSkill } from "./pitcherSkill";
 import { computeWorkload } from "./workload";
+import { computeRunEnvironment } from "./runEnvironment";
 
 let passed = 0;
 let failed = 0;
@@ -79,14 +80,61 @@ ok(psKnown.drivers.some((d) => d.key === "ps_k9"), "high K/9 → Pitcher High K%
 
 // ── Component scorer: workload unavailable when pitcher unknown ──────────────
 const wlUnknown = computeWorkload({
-  pitcherKnown: false, bbPer9: null, avgInningsPerStart: null, lastStartPitchCount: null, ipVarianceLast3: null, archetype: null,
+  pitcherKnown: false, bbPer9: null, avgInningsPerStart: null, lastStartPitchCount: null, lastStartInningsPitched: null, ipVarianceLast3: null, archetype: null,
 });
 ok(!wlUnknown.available, "workload: pitcherKnown=false → unavailable");
 
 const wlLongLeash = computeWorkload({
-  pitcherKnown: true, bbPer9: 2.0, avgInningsPerStart: 6.5, lastStartPitchCount: 95, ipVarianceLast3: 0.5, archetype: "ace",
+  pitcherKnown: true, bbPer9: 2.0, avgInningsPerStart: 6.5, lastStartPitchCount: 95, lastStartInningsPitched: 6.5, ipVarianceLast3: 0.5, archetype: "ace",
 });
 ok(wlLongLeash.drivers.some((d) => d.key === "wl_leash"), "6.5 avg IP/start → Long Leash driver");
+
+// ── Regression: pitches/inning must use the SAME start's innings, not the
+// season average — a short/aberrant outing must not misread as "efficient".
+const wlShortOuting = computeWorkload({
+  pitcherKnown: true, bbPer9: 2.0, avgInningsPerStart: 7.0, lastStartPitchCount: 45, lastStartInningsPitched: 3.0, ipVarianceLast3: 1.0, archetype: null,
+});
+ok(
+  !wlShortOuting.drivers.some((d) => d.key === "wl_efficient"),
+  "45 pitches over an actual 3.0 IP outing (15 pitches/inning) must NOT fire Efficient Pitch Profile, even though season avg is 7.0 IP/start",
+);
+
+const wlTrulyEfficient = computeWorkload({
+  pitcherKnown: true, bbPer9: 2.0, avgInningsPerStart: 7.0, lastStartPitchCount: 45, lastStartInningsPitched: 7.0, ipVarianceLast3: 0.3, archetype: null,
+});
+ok(
+  wlTrulyEfficient.drivers.some((d) => d.key === "wl_efficient"),
+  "45 pitches over an actual 7.0 IP outing (6.4 pitches/inning) SHOULD fire Efficient Pitch Profile",
+);
+
+// ── Regression: computeRunEnvironment must never double-count one signal
+// into two positive drivers (the ≥2-positive-driver publish gate must reflect
+// genuinely independent evidence, not the same park-factor threshold twice).
+const reParkOnly = computeRunEnvironment({
+  venueName: "Comerica Park", parkFactorRuns: 0.80, isIndoors: false, weatherAvailable: false,
+  temperatureF: null, windMph: null, windDirection: null,
+});
+const reParkOnlyPositives = reParkOnly.drivers.filter((d) => d.direction === "positive");
+ok(
+  reParkOnlyPositives.length === 1,
+  `park factor alone must produce exactly 1 positive driver, not a duplicate (got ${reParkOnlyPositives.length}: ${reParkOnlyPositives.map((d) => d.key).join(",")})`,
+);
+
+const reParkAndTemp = computeRunEnvironment({
+  venueName: "Comerica Park", parkFactorRuns: 0.80, isIndoors: false, weatherAvailable: true,
+  temperatureF: 50, windMph: 5, windDirection: "calm",
+});
+const reComboPositives = reParkAndTemp.drivers.filter((d) => d.direction === "positive");
+ok(
+  reComboPositives.length === 3,
+  `park (1) + cool temp (1) + combo "Low Run Environment" (1) = exactly 3 positive drivers, not the pre-fix 5 (got ${reComboPositives.length}: ${reComboPositives.map((d) => d.key).join(",")})`,
+);
+
+// ── Regression: MoundParkContext.driverText must be populated when available.
+ok(
+  reParkAndTemp.parkContext.driverText != null,
+  `driverText must be populated for an available parkContext, not left null/undefined (got ${reParkAndTemp.parkContext.driverText})`,
+);
 
 console.log(`\nmoundScoring.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

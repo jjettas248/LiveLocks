@@ -8,7 +8,7 @@
 // Run: npx tsx server/mlb/pregame/mound/moundMarketRestriction.test.ts
 
 import { computeMarketTags, marketSetupLabel } from "./marketTagger";
-import type { MoundMarket } from "./types";
+import { MOUND_MARKETS } from "./types";
 
 let passed = 0;
 let failed = 0;
@@ -17,7 +17,7 @@ function ok(cond: boolean, msg: string) {
 }
 
 const DISALLOWED_MARKETS = ["hits_allowed", "walks_allowed", "hr_allowed", "earned_runs"];
-const ALLOWED_MARKETS: MoundMarket[] = ["pitcher_strikeouts", "pitcher_outs"];
+const ALLOWED_MARKETS = MOUND_MARKETS;
 
 // ── computeMarketTags always emits exactly the two allowed markets ───────────
 const cases = [

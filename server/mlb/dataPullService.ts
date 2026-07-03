@@ -618,6 +618,14 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
     }
 
     mlbGameCache.gamePitchingBoxScore[gameId] = { byPitcherId, fetchedAt: Date.now() };
+    // No Tank01-style fallback source exists for pitching lines (unlike batting
+    // below) — surface an empty/partial parse so a transient live-feed gap is
+    // observable rather than silently producing no settlement data. This is
+    // self-healing: syncGameBoxScore is re-invoked on every orchestrator poll
+    // while the game remains active, so a later call typically fills the gap.
+    if (Object.keys(byPitcherId).length === 0 && Object.keys(byPlayerId).length > 0) {
+      console.warn(`[MLB pull] syncGameBoxScore: game ${gameId} — batting present but 0 pitching entries parsed (transient live-feed gap?)`);
+    }
 
     if (Object.keys(byPlayerId).length === 0) {
       try {

@@ -24,6 +24,7 @@ import {
 } from "../../../../shared/moundRadarWin";
 import { formatPlainDateLabel } from "../../../../shared/dateLabel";
 import { toEtDateKey, toEtTimeLabel } from "../../../utils/dateUtils";
+import { round1, seasonKPer9ToPerStartExpectation } from "./scoreUtils";
 
 export interface MoundOutcomeAttributionInput {
   primaryMarket: "pitcher_strikeouts" | "pitcher_outs";
@@ -43,9 +44,9 @@ export interface MoundOutcomeAttributionResult {
 /** Season-baseline per-start expectation for the given primary market. */
 function seasonBaseline(input: MoundOutcomeAttributionInput): number | null {
   if (input.primaryMarket === "pitcher_strikeouts") {
-    return input.seasonKPer9 != null ? Math.round(input.seasonKPer9 * (6 / 9) * 10) / 10 : null;
+    return input.seasonKPer9 != null ? round1(seasonKPer9ToPerStartExpectation(input.seasonKPer9)) : null;
   }
-  return input.seasonAvgInningsPerStart != null ? Math.round(input.seasonAvgInningsPerStart * 3 * 10) / 10 : null;
+  return input.seasonAvgInningsPerStart != null ? round1(input.seasonAvgInningsPerStart * 3) : null;
 }
 
 export function deriveMoundOutcome(input: MoundOutcomeAttributionInput): MoundOutcomeAttributionResult {

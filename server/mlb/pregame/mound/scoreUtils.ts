@@ -45,3 +45,16 @@ export function weightedAvg(
   if (wsum === 0) return { score: 0, coverage: 0 };
   return { score: clamp10(sum / wsum), coverage: total === 0 ? 0 : present / total };
 }
+
+/**
+ * Season K/9 → expected per-start strikeout count, assuming a ~6-inning
+ * start. Single source of truth for this conversion — used by BOTH
+ * recentForm.ts's "Recent K Form" scoring trend and
+ * moundOutcomeAttribution.ts's settlement bar, so the two can never silently
+ * drift apart (a pregame score claiming a pitcher is "trending above
+ * expectation" and the settlement rule judging "did they beat expectation"
+ * must use the identical expectation).
+ */
+export function seasonKPer9ToPerStartExpectation(seasonKPer9: number): number {
+  return seasonKPer9 * (6 / 9);
+}

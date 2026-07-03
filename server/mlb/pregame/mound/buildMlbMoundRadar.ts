@@ -167,20 +167,17 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           (starter.team === game.homeTeam ? game.awayTeam : game.homeTeam);
 
         // ── Gather inputs (each guarded — degrade to neutral on failure) ────
-        try {
-          await syncPitcherSeasonStats(starter.pitcherId);
-        } catch { /* degrade below */ }
+        // Three independent network calls, no data dependency between them —
+        // run concurrently rather than paying 3x the round-trip latency per
+        // starter across a full slate's ~30 probable starters.
+        const [, handSplitsResult, recentStartsResult] = await Promise.allSettled([
+          syncPitcherSeasonStats(starter.pitcherId),
+          fetchPitcherHandednessSplits(starter.pitcherId),
+          fetchPitcherRecentStarts(starter.pitcherId),
+        ]);
         const seasonStats = mlbPlayerCache.pitcherSeasonStats[starter.pitcherId] ?? null;
-
-        let handSplits: Awaited<ReturnType<typeof fetchPitcherHandednessSplits>> = null;
-        try {
-          handSplits = await fetchPitcherHandednessSplits(starter.pitcherId);
-        } catch { /* degrade below */ }
-
-        let recentStarts: Awaited<ReturnType<typeof fetchPitcherRecentStarts>> | null = null;
-        try {
-          recentStarts = await fetchPitcherRecentStarts(starter.pitcherId);
-        } catch { /* degrade below */ }
+        const handSplits = handSplitsResult.status === "fulfilled" ? handSplitsResult.value : null;
+        const recentStarts = recentStartsResult.status === "fulfilled" ? recentStartsResult.value : null;
 
         const pitcherKnown = true; // starter itself is always known here
         const avgInningsPerStart =
@@ -226,6 +223,10 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           bbPer9: seasonStats?.bbPer9 ?? null,
           avgInningsPerStart,
           lastStartPitchCount: recentStarts?.lastStartPitchCount ?? null,
+          // last3StartInningsPitched[0] is the SAME start lastStartPitchCount
+          // came from (fetchPitcherRecentStarts builds both from `starts[0]`,
+          // most-recent-first) — the correct pitches/inning denominator.
+          lastStartInningsPitched: recentStarts?.last3StartInningsPitched?.[0] ?? null,
           ipVarianceLast3: recentStarts?.ipVarianceLast3 ?? null,
           archetype,
         });
