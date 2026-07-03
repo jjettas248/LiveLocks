@@ -1,5 +1,5 @@
 export type CanonicalPitchType =
-  | "FF" | "SI" | "FC" | "SL" | "SW" | "CU" | "KC" | "CH" | "FS" | "OT";
+  | "FF" | "SI" | "FC" | "SL" | "SW" | "CU" | "KC" | "CH" | "FS" | "KN" | "OT";
 
 export type PitchFamily = "fastball" | "breaking" | "offspeed" | "other";
 
@@ -13,6 +13,7 @@ const CODE_DIRECT: Record<string, CanonicalPitchType> = {
   KC: "KC",
   CH: "CH",
   FS: "FS", FO: "FS", SC: "FS",
+  KN: "KN",
 };
 
 const NAME_RULES: Array<{ test: RegExp; code: CanonicalPitchType }> = [
@@ -23,6 +24,7 @@ const NAME_RULES: Array<{ test: RegExp; code: CanonicalPitchType }> = [
   { test: /\bslurve\b/i, code: "SL" },
   { test: /\bslider\b/i, code: "SL" },
   { test: /\bknuckle[\s-]?curve\b/i, code: "KC" },
+  { test: /\bknuckleball\b/i, code: "KN" },
   { test: /\b(curve|curveball|knuckler)\b/i, code: "CU" },
   { test: /\bchangeup\b|\bchange[\s-]?up\b|\bchange\b/i, code: "CH" },
   { test: /\b(splitter|split[\s-]?finger|forkball|screwball)\b/i, code: "FS" },
@@ -46,7 +48,7 @@ export function normalizePitchTypeCode(input: string | null | undefined): Canoni
 export const PITCH_FAMILY: Record<CanonicalPitchType, PitchFamily> = {
   FF: "fastball", SI: "fastball", FC: "fastball",
   SL: "breaking", SW: "breaking", CU: "breaking", KC: "breaking",
-  CH: "offspeed", FS: "offspeed",
+  CH: "offspeed", FS: "offspeed", KN: "offspeed",
   OT: "other",
 };
 
@@ -73,5 +75,6 @@ export const PITCH_DISPLAY_LABEL: Record<CanonicalPitchType, string> = {
   KC: "Knuckle Curve",
   CH: "Change",
   FS: "Splitter",
+  KN: "Knuckleball",
   OT: "Other",
 };

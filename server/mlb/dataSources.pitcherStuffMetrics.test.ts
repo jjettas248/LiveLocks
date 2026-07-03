@@ -95,5 +95,18 @@ ok(
   `adding a 61st (non-whiff) pitch of an unrecognized type dilutes SwStr% via the total-pitch denominator (${baseline.swStrPct} → ${withUnknownPitch.swStrPct})`,
 );
 
+// ── Regression: knuckleball (KN) rows must land in the offspeed family, not
+// "other" — a KN-heavy pitcher's primary pitch must be eligible for the
+// Pitch Mix Misses Bats driver just like CH/FS.
+function buildKnuckleballOuting(): Row[] {
+  const rows: Row[] = [];
+  for (let i = 0; i < 10; i++) rows.push(pitch("FF", "ball")); // 10 fastballs, no swings
+  for (let i = 0; i < 25; i++) rows.push(pitch("KN", "swinging_strike")); // 25 knuckleballs, all whiffs
+  return rows;
+}
+const knuckleball = aggregatePitcherStuffMetrics(buildKnuckleballOuting());
+ok(knuckleball.whiffPctByFamily.offspeed === 100, `KN pitches bucket into the offspeed family, not "other" (got whiffPctByFamily=${JSON.stringify(knuckleball.whiffPctByFamily)})`);
+ok(knuckleball.missesBatsFamily?.family === "offspeed", `KN-heavy pitcher qualifies for Pitch Mix Misses Bats via the offspeed family (got ${knuckleball.missesBatsFamily?.family})`);
+
 console.log(`\ndataSources.pitcherStuffMetrics.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
