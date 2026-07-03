@@ -2,6 +2,7 @@
 // Mirrors pregamePowerRadar/diagnostics.ts's role, own thresholds.
 
 import type { MoundSignal, MoundRadarResponse } from "./types";
+import { MOUND_PUBLISH_MIN_SCORE } from "./scoring";
 
 export function positiveMoundDrivers(signal: MoundSignal) {
   return signal.drivers.filter((d) => d.direction === "positive");
@@ -17,7 +18,7 @@ export function wasPubliclyFlaggedMound(signal: MoundSignal): boolean {
   return (
     signal.lineupStatus === "confirmed" &&
     tierEligible &&
-    signal.score10 >= 6.0 &&
+    signal.score10 >= MOUND_PUBLISH_MIN_SCORE &&
     positiveMoundDrivers(signal).length >= 2 &&
     signal.diagnostics.dataCoverageScore >= 0.6 &&
     signal.diagnostics.rawInputsAvailable.pitcherSeasonStats === true &&
