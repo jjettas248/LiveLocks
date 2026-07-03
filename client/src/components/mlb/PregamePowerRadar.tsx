@@ -232,10 +232,10 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
         <div>
           <h2 className="text-lg font-bold flex items-center gap-2">
             <Target className="w-5 h-5 text-amber-400" />
-            Pre-Game Power Radar
+            The Plate
           </h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Pre-game targets from today's confirmed lineups — power setups, not guarantees.
+            Hitter targets from today's confirmed lineups — power and production setups, not guarantees.
           </p>
         </div>
         {data && (

@@ -1031,3 +1031,87 @@ export const pregamePowerRadarBuilds = pgTable("pregame_power_radar_builds", {
 export const insertPregamePowerRadarBuildSchema = createInsertSchema(pregamePowerRadarBuilds).omit({ createdAt: true, updatedAt: true });
 export type PregamePowerRadarBuildRow = typeof pregamePowerRadarBuilds.$inferSelect;
 export type InsertPregamePowerRadarBuild = z.infer<typeof insertPregamePowerRadarBuildSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MLB Mound Radar — durable snapshots (additive; never feeds ROI).
+//
+// Sibling of pregame_power_radar_signals/builds above, pitcher-typed. NOT a
+// reuse/extension of the Plate tables — Plate's unique identity is hard-typed
+// to batterId and must not be repurposed for pitchers.
+//
+// Unique identity is (sessionDate, gameId, pitcherId) — NOT primaryMarket.
+// ─────────────────────────────────────────────────────────────────────────────
+export const mlbMoundRadarSignals = pgTable("mlb_mound_radar_signals", {
+  signalId: text("signal_id").primaryKey(),
+  buildId: text("build_id").notNull(),
+  sessionDate: text("session_date").notNull(),
+  gameId: text("game_id").notNull(),
+  gameDate: text("game_date").notNull(),
+  startsAt: text("starts_at"),
+  gameStatus: text("game_status").notNull().default("unknown"),
+  firstPitchLockEligible: boolean("first_pitch_lock_eligible").notNull().default(false),
+  pitcherId: text("pitcher_id").notNull(),
+  pitcherName: text("pitcher_name").notNull(),
+  team: text("team").notNull(),
+  opponent: text("opponent").notNull(),
+  opposingLineupConfirmed: boolean("opposing_lineup_confirmed").notNull().default(false),
+  primaryMarket: text("primary_market").notNull(),
+  marketTags: jsonb("market_tags").notNull().default([]),
+  marketScores: jsonb("market_scores").notNull().default({}),
+  score10: numeric("score_10").notNull(),
+  tier: text("tier").notNull(),
+  drivers: jsonb("drivers").notNull().default([]),
+  warnings: jsonb("warnings").notNull().default([]),
+  diagnostics: jsonb("diagnostics").notNull().default({}),
+  lineupStatus: text("lineup_status").notNull(),
+  weatherStatus: text("weather_status").notNull(),
+  hasMarketLine: boolean("has_market_line").notNull().default(false),
+  isOfficialPlay: boolean("is_official_play").notNull().default(false),
+  isPregameTarget: boolean("is_pregame_target").notNull().default(true),
+  status: text("status").notNull().default("active"),
+  suppressed: boolean("suppressed").notNull().default(false),
+  suppressedReasons: jsonb("suppressed_reasons").notNull().default([]),
+  outcomes: jsonb("outcomes"),
+  everPubliclyFlagged: boolean("ever_publicly_flagged").notNull().default(false),
+  becameLiveReady: boolean("became_live_ready").notNull().default(false),
+  becameLiveFire: boolean("became_live_fire").notNull().default(false),
+  convertedLiveAt: timestamp("converted_live_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+  lockedAt: timestamp("locked_at"),
+  gradedAt: timestamp("graded_at"),
+}, (table) => ({
+  uniqueIdx: uniqueIndex("mlb_mound_radar_signals_unique_idx").on(table.sessionDate, table.gameId, table.pitcherId),
+  dateIdx: index("mlb_mound_radar_signals_session_date_idx").on(table.sessionDate),
+  buildIdx: index("mlb_mound_radar_signals_build_idx").on(table.buildId),
+}));
+
+export const insertMlbMoundRadarSignalSchema = createInsertSchema(mlbMoundRadarSignals).omit({ createdAt: true, updatedAt: true });
+export type MlbMoundRadarSignalRow = typeof mlbMoundRadarSignals.$inferSelect;
+export type InsertMlbMoundRadarSignal = z.infer<typeof insertMlbMoundRadarSignalSchema>;
+
+// Durable build manifest — required for DB fallback + latest-build lookup.
+export const mlbMoundRadarBuilds = pgTable("mlb_mound_radar_builds", {
+  buildId: text("build_id").primaryKey(),
+  sessionDate: text("session_date").notNull(),
+  startedAt: text("started_at").notNull(),
+  completedAt: text("completed_at"),
+  gamesScanned: integer("games_scanned").notNull().default(0),
+  pitchersEvaluated: integer("pitchers_evaluated").notNull().default(0),
+  starterCoverage: numeric("starter_coverage"),
+  weatherCoverage: numeric("weather_coverage"),
+  pitcherCoverage: numeric("pitcher_coverage"),
+  lineupCoverage: numeric("lineup_coverage"),
+  signalsCreated: integer("signals_created").notNull().default(0),
+  suppressedCount: integer("suppressed_count").notNull().default(0),
+  status: text("status").notNull().default("complete"),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  dateIdx: index("mlb_mound_radar_builds_session_date_idx").on(table.sessionDate),
+}));
+
+export const insertMlbMoundRadarBuildSchema = createInsertSchema(mlbMoundRadarBuilds).omit({ createdAt: true, updatedAt: true });
+export type MlbMoundRadarBuildRow = typeof mlbMoundRadarBuilds.$inferSelect;
+export type InsertMlbMoundRadarBuild = z.infer<typeof insertMlbMoundRadarBuildSchema>;

@@ -8,7 +8,7 @@ import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { LiveFeed } from "@/components/mlb/LiveFeed";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
-import { PregamePowerRadar } from "@/components/mlb/PregamePowerRadar";
+import { PregameHub } from "@/components/mlb/pregame/PregameHub";
 import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
 import { type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
@@ -1000,7 +1000,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
 
       {activeSubTab === "pregame_power" && (
         <div className="space-y-4">
-          <PregamePowerRadar selectedGameId={selectedGameId} />
+          <PregameHub selectedGameId={selectedGameId} />
         </div>
       )}
 

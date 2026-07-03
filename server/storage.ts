@@ -53,6 +53,12 @@ import {
   type InsertPregamePowerRadarSignal,
   type PregamePowerRadarBuildRow,
   type InsertPregamePowerRadarBuild,
+  mlbMoundRadarSignals,
+  mlbMoundRadarBuilds,
+  type MlbMoundRadarSignalRow,
+  type InsertMlbMoundRadarSignal,
+  type MlbMoundRadarBuildRow,
+  type InsertMlbMoundRadarBuild,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -390,6 +396,13 @@ export interface IStorage {
   getPregamePowerRadarSignalsByGame(sessionDate: string, gameId: string): Promise<PregamePowerRadarSignalRow[]>;
   recordPregamePowerBuild(build: InsertPregamePowerRadarBuild): Promise<void>;
   getLatestPregamePowerBuild(sessionDate: string): Promise<PregamePowerRadarBuildRow | null>;
+
+  // ── MLB Mound Radar (additive; never feeds ROI; sibling of Pre-Game Power Radar) ──
+  upsertMlbMoundRadarSignal(row: InsertMlbMoundRadarSignal): Promise<void>;
+  getMlbMoundRadarSignalsByDate(sessionDate: string): Promise<MlbMoundRadarSignalRow[]>;
+  getMlbMoundRadarSignalsByGame(sessionDate: string, gameId: string): Promise<MlbMoundRadarSignalRow[]>;
+  recordMlbMoundRadarBuild(build: InsertMlbMoundRadarBuild): Promise<void>;
+  getLatestMlbMoundRadarBuild(sessionDate: string): Promise<MlbMoundRadarBuildRow | null>;
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -3326,6 +3339,96 @@ export class DatabaseStorage implements IStorage {
       .from(pregamePowerRadarBuilds)
       .where(eq(pregamePowerRadarBuilds.sessionDate, sessionDate))
       .orderBy(desc(pregamePowerRadarBuilds.startedAt))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async upsertMlbMoundRadarSignal(row: InsertMlbMoundRadarSignal): Promise<void> {
+    // Mirrors upsertPregamePowerRadarSignal's merge discipline: outcome-bearing
+    // fields merge (non-null incoming wins) rather than overwrite, so a later
+    // ungraded rebuild can never clobber the grader's already-stamped truth.
+    await db
+      .insert(mlbMoundRadarSignals)
+      .values(row)
+      .onConflictDoUpdate({
+        target: mlbMoundRadarSignals.signalId,
+        set: {
+          buildId: row.buildId,
+          gameStatus: row.gameStatus,
+          firstPitchLockEligible: row.firstPitchLockEligible,
+          opposingLineupConfirmed: row.opposingLineupConfirmed ?? false,
+          primaryMarket: row.primaryMarket,
+          marketTags: row.marketTags,
+          marketScores: row.marketScores,
+          score10: row.score10,
+          tier: row.tier,
+          drivers: row.drivers,
+          warnings: row.warnings,
+          diagnostics: row.diagnostics,
+          lineupStatus: row.lineupStatus,
+          weatherStatus: row.weatherStatus,
+          // "graded" is terminal — a rebuild's "active"/"locked" never demotes it.
+          status: sql`CASE WHEN ${mlbMoundRadarSignals.status} = 'graded' THEN ${mlbMoundRadarSignals.status} ELSE excluded.status END`,
+          suppressed: row.suppressed,
+          suppressedReasons: row.suppressedReasons,
+          outcomes: sql`COALESCE(excluded.outcomes, ${mlbMoundRadarSignals.outcomes})`,
+          everPubliclyFlagged: sql`${mlbMoundRadarSignals.everPubliclyFlagged} OR excluded.ever_publicly_flagged`,
+          becameLiveReady: sql`${mlbMoundRadarSignals.becameLiveReady} OR excluded.became_live_ready`,
+          becameLiveFire: sql`${mlbMoundRadarSignals.becameLiveFire} OR excluded.became_live_fire`,
+          convertedLiveAt: sql`COALESCE(excluded.converted_live_at, ${mlbMoundRadarSignals.convertedLiveAt})`,
+          lockedAt: sql`COALESCE(${mlbMoundRadarSignals.lockedAt}, excluded.locked_at)`,
+          gradedAt: sql`COALESCE(excluded.graded_at, ${mlbMoundRadarSignals.gradedAt})`,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async getMlbMoundRadarSignalsByDate(sessionDate: string): Promise<MlbMoundRadarSignalRow[]> {
+    return db
+      .select()
+      .from(mlbMoundRadarSignals)
+      .where(eq(mlbMoundRadarSignals.sessionDate, sessionDate));
+  }
+
+  async getMlbMoundRadarSignalsByGame(sessionDate: string, gameId: string): Promise<MlbMoundRadarSignalRow[]> {
+    return db
+      .select()
+      .from(mlbMoundRadarSignals)
+      .where(and(
+        eq(mlbMoundRadarSignals.sessionDate, sessionDate),
+        eq(mlbMoundRadarSignals.gameId, gameId),
+      ));
+  }
+
+  async recordMlbMoundRadarBuild(build: InsertMlbMoundRadarBuild): Promise<void> {
+    await db
+      .insert(mlbMoundRadarBuilds)
+      .values(build)
+      .onConflictDoUpdate({
+        target: mlbMoundRadarBuilds.buildId,
+        set: {
+          completedAt: build.completedAt ?? null,
+          gamesScanned: build.gamesScanned ?? 0,
+          pitchersEvaluated: build.pitchersEvaluated ?? 0,
+          starterCoverage: build.starterCoverage ?? null,
+          weatherCoverage: build.weatherCoverage ?? null,
+          pitcherCoverage: build.pitcherCoverage ?? null,
+          lineupCoverage: build.lineupCoverage ?? null,
+          signalsCreated: build.signalsCreated ?? 0,
+          suppressedCount: build.suppressedCount ?? 0,
+          status: build.status ?? "complete",
+          error: build.error ?? null,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  async getLatestMlbMoundRadarBuild(sessionDate: string): Promise<MlbMoundRadarBuildRow | null> {
+    const rows = await db
+      .select()
+      .from(mlbMoundRadarBuilds)
+      .where(eq(mlbMoundRadarBuilds.sessionDate, sessionDate))
+      .orderBy(desc(mlbMoundRadarBuilds.startedAt))
       .limit(1);
     return rows[0] ?? null;
   }

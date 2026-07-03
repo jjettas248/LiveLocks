@@ -655,6 +655,65 @@ app.use((req, res, next) => {
     }
   })();
 
+  // ── MLB Mound Radar — guarded scheduled builds ──────────────────
+  // Sibling of the Pre-Game Power Radar block above, independent build/grade
+  // intervals and independent try/catch so a Mound failure can never affect
+  // Plate (or vice versa).
+  (async () => {
+    try {
+      const { buildMlbMoundRadar } = await import("./mlb/pregame/mound/buildMlbMoundRadar");
+      const { getMoundSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarStore");
+      const { installMoundPersistence } = await import("./mlb/pregame/mound/moundPersistence");
+      const { slateDateET } = await import("./utils/dateUtils");
+
+      installMoundPersistence();
+
+      setTimeout(() => {
+        buildMlbMoundRadar().catch((e) =>
+          console.warn("[MLB_PREGAME_MOUND_TARGETS] initial build failed:", e?.message),
+        );
+      }, 100 * 1000);
+
+      setInterval(() => {
+        try {
+          const snap = getMoundSnapshot();
+          const needInitial = !snap || snap.sessionDate !== slateDateET();
+          let nearFirstPitch = false;
+          if (snap) {
+            const now = Date.now();
+            for (const s of Array.from(snap.signals.values())) {
+              if (s.gameStatus === "live") { nearFirstPitch = true; break; }
+              if (!s.startsAt) continue;
+              const t = Date.parse(s.startsAt);
+              if (Number.isFinite(t) && t - now > 0 && t - now < 2 * 60 * 60 * 1000) {
+                nearFirstPitch = true;
+                break;
+              }
+            }
+          }
+          if (needInitial || nearFirstPitch) {
+            buildMlbMoundRadar().catch((e) =>
+              console.warn("[MLB_PREGAME_MOUND_TARGETS] tick build failed:", e?.message),
+            );
+          }
+        } catch (e) {
+          console.warn("[MLB_PREGAME_MOUND_TARGETS] tick error:", (e as Error).message);
+        }
+      }, 15 * 60 * 1000);
+
+      const { gradeMoundOutcomes } = await import("./mlb/pregame/mound/moundShadowOutcomes");
+      setInterval(() => {
+        gradeMoundOutcomes().catch((e) =>
+          console.warn("[MLB_PREGAME_OUTCOME_SETTLED] grade failed:", e?.message),
+        );
+      }, 5 * 60 * 1000);
+
+      console.log("[MLB_PREGAME_MOUND_TARGETS] scheduled builds armed");
+    } catch (err) {
+      console.warn("[MLB_PREGAME_MOUND_TARGETS] boot failed:", (err as Error).message);
+    }
+  })();
+
   // ── NBA Calibration Backfill — boot-time idempotent run ──────────
   // Tags any pre-cutover NBA plays missing the nbaCalV2 marker so the
   // cohort report classifies them correctly. Idempotent: when the table

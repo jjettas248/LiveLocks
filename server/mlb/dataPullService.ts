@@ -167,6 +167,8 @@ interface PitcherSeasonStats {
   inningsPitched: number | null;
   wins: number | null;
   losses: number | null;
+  /** Mound Radar input — season starts, used for Long Leash / avg-IP-per-start projection. */
+  gamesStarted: number | null;
   fetchedAt: number;
 }
 
@@ -223,6 +225,24 @@ interface GameBoxScoreCache {
   fetchedAt: number;
 }
 
+/** Mound Radar settlement input — final pitching line, keyed by pitcherId. */
+export interface GamePitchingBoxScorePitcher {
+  pitcherId: string;
+  pitcherName: string;
+  team: string;
+  strikeOuts: number;
+  outsRecorded: number;
+  baseOnBalls: number;
+  earnedRuns: number;
+  hits: number;
+  homeRuns: number;
+}
+
+interface GamePitchingBoxScoreCache {
+  byPitcherId: Record<string, GamePitchingBoxScorePitcher>;
+  fetchedAt: number;
+}
+
 export interface HRPlayMeta {
   playerId: string;
   playerName: string;
@@ -247,6 +267,8 @@ export const mlbGameCache: {
   weather: Record<string, WeatherCache>;
   bullpen: Record<string, BullpenCache>;
   gameBoxScore: Record<string, GameBoxScoreCache>;
+  /** Mound Radar settlement input — final pitching lines. Populated by syncGameBoxScore. */
+  gamePitchingBoxScore: Record<string, GamePitchingBoxScoreCache>;
   hrPlays: Record<string, HRPlaysCache>;
 } = {
   gameState: {},
@@ -255,6 +277,7 @@ export const mlbGameCache: {
   weather: {},
   bullpen: {},
   gameBoxScore: {},
+  gamePitchingBoxScore: {},
   hrPlays: {},
 };
 
@@ -539,6 +562,10 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
     const boxTeams = data?.liveData?.boxscore?.teams ?? {};
     const gameDataTeams = data?.gameData?.teams ?? {};
     const byPlayerId: Record<string, GameBoxScorePlayer> = {};
+    // Mound Radar settlement — parsed from the same already-fetched payload,
+    // zero extra network calls. `p.stats.pitching` sits alongside the batting
+    // block read below but was never ingested anywhere in the codebase before.
+    const byPitcherId: Record<string, GamePitchingBoxScorePitcher> = {};
 
     for (const side of ["home", "away"] as const) {
       const team = boxTeams[side];
@@ -547,30 +574,50 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
 
       for (const [key, pdata] of Object.entries(team.players)) {
         const p = pdata as any;
-        const batting = p?.stats?.batting;
-        if (!batting) continue;
         const pid = key.replace("ID", "");
-        const hits = safeNum(batting.hits) ?? 0;
-        const doubles = safeNum(batting.doubles) ?? 0;
-        const triples = safeNum(batting.triples) ?? 0;
-        const hr = safeNum(batting.homeRuns) ?? 0;
-        const singles = hits - doubles - triples - hr;
-        const tb = singles + doubles * 2 + triples * 3 + hr * 4;
-        byPlayerId[pid] = {
-          playerId: pid,
-          playerName: p?.person?.fullName ?? pid,
-          team: teamAbbrev,
-          hits,
-          hr,
-          ab: safeNum(batting.atBats) ?? 0,
-          bb: safeNum(batting.baseOnBalls) ?? 0,
-          rbi: safeNum(batting.rbi) ?? 0,
-          so: safeNum(batting.strikeOuts) ?? 0,
-          tb,
-          runs: safeNum(batting.runs) ?? 0,
-        };
+
+        const batting = p?.stats?.batting;
+        if (batting) {
+          const hits = safeNum(batting.hits) ?? 0;
+          const doubles = safeNum(batting.doubles) ?? 0;
+          const triples = safeNum(batting.triples) ?? 0;
+          const hr = safeNum(batting.homeRuns) ?? 0;
+          const singles = hits - doubles - triples - hr;
+          const tb = singles + doubles * 2 + triples * 3 + hr * 4;
+          byPlayerId[pid] = {
+            playerId: pid,
+            playerName: p?.person?.fullName ?? pid,
+            team: teamAbbrev,
+            hits,
+            hr,
+            ab: safeNum(batting.atBats) ?? 0,
+            bb: safeNum(batting.baseOnBalls) ?? 0,
+            rbi: safeNum(batting.rbi) ?? 0,
+            so: safeNum(batting.strikeOuts) ?? 0,
+            tb,
+            runs: safeNum(batting.runs) ?? 0,
+          };
+        }
+
+        const pitching = p?.stats?.pitching;
+        if (pitching) {
+          const outsRecorded = Math.round((parseBaseballInnings(pitching.inningsPitched) ?? 0) * 3);
+          byPitcherId[pid] = {
+            pitcherId: pid,
+            pitcherName: p?.person?.fullName ?? pid,
+            team: teamAbbrev,
+            strikeOuts: safeNum(pitching.strikeOuts) ?? 0,
+            outsRecorded,
+            baseOnBalls: safeNum(pitching.baseOnBalls) ?? 0,
+            earnedRuns: safeNum(pitching.earnedRuns) ?? 0,
+            hits: safeNum(pitching.hits) ?? 0,
+            homeRuns: safeNum(pitching.homeRuns) ?? 0,
+          };
+        }
       }
     }
+
+    mlbGameCache.gamePitchingBoxScore[gameId] = { byPitcherId, fetchedAt: Date.now() };
 
     if (Object.keys(byPlayerId).length === 0) {
       try {
@@ -1089,13 +1136,25 @@ export async function syncPitcherContext(statsPk: string, cacheKey?: string): Pr
 
 // ── fetchPitcherRecentStarts ──────────────────────────────────────────────────
 // Gap 3: fetch last 3 starts for a pitcher to derive pre-game fatigue context.
-// Returns null fields on any failure so callers are never blocked.
-async function fetchPitcherRecentStarts(pitcherId: string): Promise<{
+// Returns null fields on any failure so callers are never blocked. Exported
+// (in addition to the live pitcherContext consumer below) so the Mound Radar
+// can read the same recent-start data for Recent K Form / Recent IP Stability
+// / Blow-Up Risk — a generic data-source read, not shared scoring logic.
+export async function fetchPitcherRecentStarts(pitcherId: string): Promise<{
   lastStartPitchCount: number | null;
   daysSinceLastStart: number | null;
   last3StartERA: number | null;
+  /** Mound Radar input — last 3 starts' K counts, most recent first. */
+  last3StartStrikeouts: number[] | null;
+  /** Mound Radar input — last 3 starts' innings pitched, most recent first. */
+  last3StartInningsPitched: number[] | null;
+  /** Mound Radar input — stddev of last-3-start IP (lower = more stable workload). */
+  ipVarianceLast3: number | null;
 }> {
-  const empty = { lastStartPitchCount: null, daysSinceLastStart: null, last3StartERA: null };
+  const empty = {
+    lastStartPitchCount: null, daysSinceLastStart: null, last3StartERA: null,
+    last3StartStrikeouts: null, last3StartInningsPitched: null, ipVarianceLast3: null,
+  };
   try {
     const currentYear = new Date().getFullYear();
     const url = `https://statsapi.mlb.com/api/v1/people/${pitcherId}/stats?stats=gameLog&season=${currentYear}&group=pitching`;
@@ -1122,13 +1181,30 @@ async function fetchPitcherRecentStarts(pitcherId: string): Promise<{
 
     const recent3 = starts.slice(0, 3);
     let totalER = 0, totalIP = 0;
+    const ipValues: number[] = [];
+    const kValues: number[] = [];
     for (const s of recent3) {
       totalER += safeNum(s.stat?.earnedRuns) ?? 0;
-      totalIP += parseBaseballInnings(s.stat?.inningsPitched) ?? 0;
+      const ip = parseBaseballInnings(s.stat?.inningsPitched) ?? 0;
+      totalIP += ip;
+      ipValues.push(ip);
+      kValues.push(safeNum(s.stat?.strikeOuts) ?? 0);
     }
     const last3StartERA = totalIP > 0 ? parseFloat(((totalER / totalIP) * 9).toFixed(2)) : null;
 
-    return { lastStartPitchCount, daysSinceLastStart, last3StartERA };
+    let ipVarianceLast3: number | null = null;
+    if (ipValues.length >= 2) {
+      const mean = ipValues.reduce((a, b) => a + b, 0) / ipValues.length;
+      const variance = ipValues.reduce((a, b) => a + (b - mean) ** 2, 0) / ipValues.length;
+      ipVarianceLast3 = parseFloat(Math.sqrt(variance).toFixed(2));
+    }
+
+    return {
+      lastStartPitchCount, daysSinceLastStart, last3StartERA,
+      last3StartStrikeouts: kValues.length > 0 ? kValues : null,
+      last3StartInningsPitched: ipValues.length > 0 ? ipValues : null,
+      ipVarianceLast3,
+    };
   } catch {
     return empty;
   }
@@ -1147,11 +1223,26 @@ const pitcherSplitsCache = new Map<string, { data: PitcherHandednessSplits; fetc
 const batterSplitsCache = new Map<string, { data: BatterHandednessSplits; fetchedAt: number }>();
 const SPLITS_TTL = 24 * 60 * 60 * 1000;
 
-export async function fetchPitcherHandednessSplits(pitcherId: string): Promise<PitcherHandednessSplits | null> {
-  const empty: PitcherHandednessSplits = { eraVsLHB: null, eraVsRHB: null, hrPer9VsLHB: null, hrPer9VsRHB: null };
+/**
+ * Additive widening of PitcherHandednessSplits with K-rate-by-hand for the
+ * Mound Radar's "Platoon K Advantage" driver. Declared locally (not added to
+ * the shared server/mlb/types.ts interface) so the live engine's type stays
+ * untouched — all existing callers of fetchPitcherHandednessSplits keep
+ * working unchanged since these are additive fields on the same fetch.
+ */
+export interface PitcherKHandSplits extends PitcherHandednessSplits {
+  kRateVsLHB: number | null;
+  kRateVsRHB: number | null;
+}
+
+export async function fetchPitcherHandednessSplits(pitcherId: string): Promise<PitcherKHandSplits | null> {
+  const empty: PitcherKHandSplits = {
+    eraVsLHB: null, eraVsRHB: null, hrPer9VsLHB: null, hrPer9VsRHB: null,
+    kRateVsLHB: null, kRateVsRHB: null,
+  };
   if (!pitcherId) return null;
   const cached = pitcherSplitsCache.get(pitcherId);
-  if (cached && Date.now() - cached.fetchedAt < SPLITS_TTL) return cached.data;
+  if (cached && Date.now() - cached.fetchedAt < SPLITS_TTL) return cached.data as PitcherKHandSplits;
   try {
     const currentYear = new Date().getFullYear();
     const url = `https://statsapi.mlb.com/api/v1/people/${pitcherId}/stats?stats=statSplits&sitCodes=vl,vr&group=pitching&season=${currentYear}&gameType=R`;
@@ -1166,10 +1257,15 @@ export async function fetchPitcherHandednessSplits(pitcherId: string): Promise<P
       const hr = safeNum(stat.homeRuns);
       const ip = parseBaseballInnings(stat.inningsPitched);
       const hrPer9 = ip != null && ip > 0 && hr != null ? parseFloat(((hr / ip) * 9).toFixed(2)) : null;
+      const battersFaced = safeNum(stat.battersFaced);
+      const so = safeNum(stat.strikeOuts);
+      const kRate = battersFaced != null && battersFaced > 0 && so != null
+        ? parseFloat((so / battersFaced).toFixed(3))
+        : null;
       const isLeft = code === "vl" || desc.includes("left");
       const isRight = code === "vr" || desc.includes("right");
-      if (isLeft) { result.eraVsLHB = era; result.hrPer9VsLHB = hrPer9; }
-      else if (isRight) { result.eraVsRHB = era; result.hrPer9VsRHB = hrPer9; }
+      if (isLeft) { result.eraVsLHB = era; result.hrPer9VsLHB = hrPer9; result.kRateVsLHB = kRate; }
+      else if (isRight) { result.eraVsRHB = era; result.hrPer9VsRHB = hrPer9; result.kRateVsRHB = kRate; }
     }
     pitcherSplitsCache.set(pitcherId, { data: result, fetchedAt: Date.now() });
     console.log(`[HR_RADAR_SPLITS] pitcher=${pitcherId} eraVsLHB=${result.eraVsLHB} eraVsRHB=${result.eraVsRHB} hrPer9VsLHB=${result.hrPer9VsLHB} hrPer9VsRHB=${result.hrPer9VsRHB}`);
@@ -1434,7 +1530,7 @@ export async function syncPitcherSeasonStats(pitcherId: string): Promise<void> {
       if (!cached) {
         mlbPlayerCache.pitcherSeasonStats[pitcherId] = {
           era: null, whip: null, kPer9: null, bbPer9: null,
-          inningsPitched: null, wins: null, losses: null,
+          inningsPitched: null, wins: null, losses: null, gamesStarted: null,
           fetchedAt: Date.now(),
         };
       } else {
@@ -1458,6 +1554,7 @@ export async function syncPitcherSeasonStats(pitcherId: string): Promise<void> {
       inningsPitched: ip,
       wins: safeNum(stat.wins),
       losses: safeNum(stat.losses),
+      gamesStarted: safeNum(stat.gamesStarted),
       fetchedAt: Date.now(),
     };
 

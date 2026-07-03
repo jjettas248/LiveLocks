@@ -159,7 +159,7 @@ export function SportTabs({
           {(
             [
               { key: "hr_radar", label: "HR Radar" },
-              { key: "pregame_power", label: "Pre-Game Power" },
+              { key: "pregame_power", label: "Pre-Game" },
               // Action Feed (live_feed) hidden for now — re-add this entry to restore.
             ] as const
           ).map((tab) => (

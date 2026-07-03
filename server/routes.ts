@@ -753,6 +753,78 @@ export async function registerRoutes(
     registerPregameRadarStatsRoutes(app, { requireMLBAccess, requireAdmin });
   }
 
+  // ── MLB Pre-Game Hub — The Plate + The Mound (additive) ─────────────────────
+  // The Plate delegates to the existing, untouched Pre-Game Power Radar above.
+  // The Mound is the new pitcher-facing engine (server/mlb/pregame/mound/**).
+  // Neither existing pregame route above is modified by this block.
+  app.get("/api/mlb/pregame-hub", requireMLBAccess, async (_req, res) => {
+    try {
+      const { buildPregameHubResponse } = await import("./mlb/pregame/pregameHubService");
+      const resp = await buildPregameHubResponse();
+      return res.json(resp);
+    } catch (err) {
+      console.error("[mlb/pregame-hub]", err);
+      return res.status(500).json({ error: "Failed to fetch pre-game hub" });
+    }
+  });
+
+  // Public: mound-only response — mirrors /api/mlb/pregame-power-radar's shape
+  // family for direct debugging/parity.
+  app.get("/api/mlb/mound-power-radar", requireMLBAccess, async (_req, res) => {
+    try {
+      const { getMoundRadarSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarService");
+      const { buildMoundResponse } = await import("./mlb/pregame/mound/diagnostics");
+      const { todayET } = await import("./utils/dateUtils");
+      const { snapshot, source } = await getMoundRadarSnapshot();
+      if (!snapshot) {
+        return res.json({
+          date: todayET(), buildId: "", generatedAt: "", source, gamesScanned: 0,
+          signals: [], diagnostics: { starterCoverage: 0, weatherCoverage: 0, pitcherCoverage: 0, lineupCoverage: 0, totalPitchersEvaluated: 0, publicSignals: 0, suppressedSignals: 0, topSuppressionReasons: [] },
+        });
+      }
+      const signals = Array.from(snapshot.signals.values());
+      const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+        gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
+        ...snapshot.coverage,
+      }, false);
+      return res.json(resp);
+    } catch (err) {
+      console.error("[mlb/mound-power-radar]", err);
+      return res.status(500).json({ error: "Failed to fetch mound power radar" });
+    }
+  });
+
+  // Admin debug: includes suppressed rows + full diagnostics — mirrors the
+  // Plate debug route above.
+  app.get("/api/admin/mlb/mound-power-radar/debug", requireAdmin, async (_req, res) => {
+    try {
+      const { getMoundRadarSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarService");
+      const { buildMoundResponse } = await import("./mlb/pregame/mound/diagnostics");
+      const { todayET } = await import("./utils/dateUtils");
+      const { snapshot, source } = await getMoundRadarSnapshot();
+      if (!snapshot) {
+        return res.json({
+          date: todayET(), buildId: "", generatedAt: "", source, gamesScanned: 0,
+          signals: [], diagnostics: { starterCoverage: 0, weatherCoverage: 0, pitcherCoverage: 0, lineupCoverage: 0, totalPitchersEvaluated: 0, publicSignals: 0, suppressedSignals: 0, topSuppressionReasons: [] },
+        });
+      }
+      const signals = Array.from(snapshot.signals.values());
+      const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+        gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
+        ...snapshot.coverage,
+      }, true);
+      return res.json(resp);
+    } catch (err) {
+      console.error("[admin/mlb/mound-power-radar/debug]", err);
+      return res.status(500).json({ error: "Failed to fetch mound power radar debug" });
+    }
+  });
+
+  {
+    const { registerMoundRadarStatsRoutes } = await import("./mlb/pregame/mound/moundStatsRoutes");
+    registerMoundRadarStatsRoutes(app, { requireMLBAccess, requireAdmin });
+  }
+
   // HR Radar precision/recall instrumentation (Recommendation #4). Read-only.
   // ?windowMs=N to change the lookback; ?includeRecords=1 for per-signal rows.
   app.get("/api/admin/mlb-hr-radar-shadow", requireAdmin, async (req, res) => {
