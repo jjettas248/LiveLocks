@@ -19,7 +19,7 @@ import {
   updateStartingLineups,
   updateStartingPitchers,
 } from "../../rosterService";
-import { getVenueParkFactors, isVenueIndoors } from "../../dataSources";
+import { getVenueParkFactors, isVenueIndoors, fetchBaseballSavantData } from "../../dataSources";
 import {
   fetchPitcherHandednessSplits,
   fetchPitcherRecentStarts,
@@ -167,17 +167,19 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           (starter.team === game.homeTeam ? game.awayTeam : game.homeTeam);
 
         // ── Gather inputs (each guarded — degrade to neutral on failure) ────
-        // Three independent network calls, no data dependency between them —
-        // run concurrently rather than paying 3x the round-trip latency per
+        // Four independent network calls, no data dependency between them —
+        // run concurrently rather than paying 4x the round-trip latency per
         // starter across a full slate's ~30 probable starters.
-        const [, handSplitsResult, recentStartsResult] = await Promise.allSettled([
+        const [, handSplitsResult, recentStartsResult, savantResult] = await Promise.allSettled([
           syncPitcherSeasonStats(starter.pitcherId),
           fetchPitcherHandednessSplits(starter.pitcherId),
           fetchPitcherRecentStarts(starter.pitcherId),
+          fetchBaseballSavantData(starter.pitcherId, game.gameId),
         ]);
         const seasonStats = mlbPlayerCache.pitcherSeasonStats[starter.pitcherId] ?? null;
         const handSplits = handSplitsResult.status === "fulfilled" ? handSplitsResult.value : null;
         const recentStarts = recentStartsResult.status === "fulfilled" ? recentStartsResult.value : null;
+        const savant = savantResult.status === "fulfilled" ? savantResult.value : null;
 
         const pitcherKnown = true; // starter itself is always known here
         const avgInningsPerStart =
@@ -207,6 +209,9 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         const pitcherSkill = computePitcherSkill({
           pitcherKnown,
           kPer9: seasonStats?.kPer9 ?? null,
+          swStrPct: savant?.pitcherSwStrPct ?? null,
+          cswPct: savant?.pitcherCswPct ?? null,
+          missesBatsFamily: savant?.pitcherMissesBatsFamily ?? null,
         });
         if (pitcherSkill.available) pitcherWithSkill++;
 
@@ -397,6 +402,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
               pitcherSeasonStats: seasonStats != null,
               pitcherHandednessSplits: handSplits != null,
               pitcherRecentStarts: recentStarts != null,
+              pitcherStuffMetrics: savant?.pitcherSwStrPct != null || savant?.pitcherCswPct != null,
               park: parkFactors != null,
               weather: weatherAvailable,
             },

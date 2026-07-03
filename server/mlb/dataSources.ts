@@ -40,6 +40,15 @@ export interface BaseballSavantData {
   toppedPct: number | null;
   // Season max exit velocity (mph) — power/soft-gate input.
   maxEV: number | null;
+  // Mound Radar v2 — pitcher "stuff" metrics (swinging strike / called+
+  // swinging strike rate, whiff% by pitch family), from the same per-pitch
+  // pitcher CSV already fetched for pitchMixPct/avgFastballVelocity above.
+  // Null/empty when the pitcher CSV is unavailable or below sample floor —
+  // never fabricated.
+  pitcherSwStrPct: number | null;
+  pitcherCswPct: number | null;
+  pitcherWhiffPctByFamily: Partial<Record<"fastball" | "breaking" | "offspeed", number>>;
+  pitcherMissesBatsFamily: { family: "fastball" | "breaking" | "offspeed"; whiffPct: number; usagePct: number } | null;
 }
 
 // Cache for Savant data (updated infrequently — season stats)
@@ -68,6 +77,88 @@ const SAVANT_SWING_DESC = new Set([
 const SAVANT_WHIFF_DESC = new Set([
   "swinging_strike", "swinging_strike_blocked", "missed_bunt",
 ]);
+const SAVANT_CALLED_STRIKE_DESC = new Set(["called_strike"]);
+
+// Sample floor for season-level rate stats (SwStr%/CSW%) — below this, a
+// small-sample rate is more noise than signal, so the caller should treat it
+// as unavailable rather than publish a misleading number.
+const MIN_PITCHES_FOR_PITCHER_RATE = 30;
+// Sample floor for a per-pitch-family whiff% (mirrors the batter aggregator's
+// `swings >= 10` floor above).
+const MIN_SWINGS_FOR_FAMILY_WHIFF = 10;
+// A pitch family only counts as "misses bats" when it's both a real part of
+// the arsenal (usage floor) and genuinely elite at generating whiffs — a
+// show-me pitch thrown 3% of the time with a small-sample 50% whiff% isn't
+// a real driver.
+const MISSES_BATS_MIN_USAGE_PCT = 15;
+const MISSES_BATS_MIN_WHIFF_PCT = 30;
+
+// Pitcher "stuff" aggregates from the same per-pitch Statcast CSV used for
+// avgFastballVelocity/spin/pitchMixPct above. Pure over already-fetched rows
+// (no I/O) — mirrors aggregateBatterPitchAndContact's pattern for the
+// pitcher side. Feeds Mound Radar's pitcherSkill.ts component (SwStr%/CSW%/
+// Pitch Mix Misses Bats) — these fields were declared but always null in v1.
+interface PitcherStuffAgg {
+  swStrPct: number | null;
+  cswPct: number | null;
+  whiffPctByFamily: Partial<Record<"fastball" | "breaking" | "offspeed", number>>;
+  /** The single pitch family that both anchors the arsenal AND misses bats, if any. */
+  missesBatsFamily: { family: "fastball" | "breaking" | "offspeed"; whiffPct: number; usagePct: number } | null;
+}
+
+export function aggregatePitcherStuffMetrics(rows: Array<Record<string, string>>): PitcherStuffAgg {
+  type Fam = "fastball" | "breaking" | "offspeed";
+  const fam: Record<Fam, { pitches: number; swings: number; whiffs: number }> = {
+    fastball: { pitches: 0, swings: 0, whiffs: 0 },
+    breaking: { pitches: 0, swings: 0, whiffs: 0 },
+    offspeed: { pitches: 0, swings: 0, whiffs: 0 },
+  };
+  let totalPitches = 0;
+  let totalSwStr = 0;
+  let totalCalledOrSwStr = 0;
+
+  for (const row of rows) {
+    const desc = (row["description"] ?? "").trim().toLowerCase();
+    if (!desc) continue;
+    totalPitches++;
+
+    const isWhiff = SAVANT_WHIFF_DESC.has(desc);
+    const isSwing = SAVANT_SWING_DESC.has(desc);
+    if (isWhiff) totalSwStr++;
+    if (isWhiff || SAVANT_CALLED_STRIKE_DESC.has(desc)) totalCalledOrSwStr++;
+
+    const family = getPitchFamily(row["pitch_type"]);
+    if (family === "other") continue;
+    fam[family].pitches++;
+    if (isSwing) {
+      fam[family].swings++;
+      if (isWhiff) fam[family].whiffs++;
+    }
+  }
+
+  const swStrPct = totalPitches >= MIN_PITCHES_FOR_PITCHER_RATE ? parseFloat(((totalSwStr / totalPitches) * 100).toFixed(1)) : null;
+  const cswPct = totalPitches >= MIN_PITCHES_FOR_PITCHER_RATE ? parseFloat(((totalCalledOrSwStr / totalPitches) * 100).toFixed(1)) : null;
+
+  const families: Fam[] = ["fastball", "breaking", "offspeed"];
+  const whiffPctByFamily: PitcherStuffAgg["whiffPctByFamily"] = {};
+  let missesBatsFamily: PitcherStuffAgg["missesBatsFamily"] = null;
+  for (const f of families) {
+    const acc = fam[f];
+    if (acc.swings < MIN_SWINGS_FOR_FAMILY_WHIFF) continue;
+    const whiffPct = parseFloat(((acc.whiffs / acc.swings) * 100).toFixed(1));
+    whiffPctByFamily[f] = whiffPct;
+    const usagePct = totalPitches > 0 ? parseFloat(((acc.pitches / totalPitches) * 100).toFixed(1)) : 0;
+    if (
+      usagePct >= MISSES_BATS_MIN_USAGE_PCT &&
+      whiffPct >= MISSES_BATS_MIN_WHIFF_PCT &&
+      (!missesBatsFamily || whiffPct > missesBatsFamily.whiffPct)
+    ) {
+      missesBatsFamily = { family: f, whiffPct, usagePct };
+    }
+  }
+
+  return { swStrPct, cswPct, whiffPctByFamily, missesBatsFamily };
+}
 
 export function aggregateBatterPitchAndContact(
   rows: Array<Record<string, string>>,
@@ -329,6 +420,10 @@ export async function fetchBaseballSavantData(
     batterPitchSplits: null,
     toppedPct: null,
     maxEV: null,
+    pitcherSwStrPct: null,
+    pitcherCswPct: null,
+    pitcherWhiffPctByFamily: {},
+    pitcherMissesBatsFamily: null,
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -359,6 +454,10 @@ export async function fetchBaseballSavantData(
   let batterPitchSplits: PitchTypeBatterSplit[] | null = null;
   let toppedPct: number | null = null;
   let maxEV: number | null = null;
+  let pitcherSwStrPct: number | null = null;
+  let pitcherCswPct: number | null = null;
+  let pitcherWhiffPctByFamily: BaseballSavantData["pitcherWhiffPctByFamily"] = {};
+  let pitcherMissesBatsFamily: BaseballSavantData["pitcherMissesBatsFamily"] = null;
 
   try {
     const currentYear = new Date().getFullYear();
@@ -554,6 +653,15 @@ export async function fetchBaseballSavantData(
           pitchMixPct.breaking = parseFloat(((brCount / totalP) * 100).toFixed(1));
           pitchMixPct.offspeed = parseFloat(((osCount / totalP) * 100).toFixed(1));
         }
+
+        // v2 — pitcher "stuff" metrics (SwStr%/CSW%/whiff-by-family), same
+        // rows, no extra fetch. See aggregatePitcherStuffMetrics for the
+        // sample-floor/threshold discipline.
+        const stuff = aggregatePitcherStuffMetrics(rows);
+        pitcherSwStrPct = stuff.swStrPct;
+        pitcherCswPct = stuff.cswPct;
+        pitcherWhiffPctByFamily = stuff.whiffPctByFamily;
+        pitcherMissesBatsFamily = stuff.missesBatsFamily;
       }
     } else {
       console.warn("[Savant] Pitcher CSV fetch failed");
@@ -581,6 +689,10 @@ export async function fetchBaseballSavantData(
       batterPitchSplits,
       toppedPct,
       maxEV,
+      pitcherSwStrPct,
+      pitcherCswPct,
+      pitcherWhiffPctByFamily,
+      pitcherMissesBatsFamily,
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });

@@ -1,10 +1,12 @@
 // Mound Radar Component — Pitcher Skill (weight 0.28).
 //
-// v1 real signal: season K/9 (real, syncPitcherSeasonStats). SwStr%/CSW%/
-// pitch-mix-misses-bats have no data source in the codebase today (would
-// require extending the Savant per-pitch pitcher CSV fetch) — they render
-// `available:false` in v1 rather than being fabricated. Follow-up work can
-// wire them in without touching this component's shape.
+// v2: SwStr%/CSW%/Pitch Mix Misses Bats are now real, sourced from
+// aggregatePitcherStuffMetrics() (server/mlb/dataSources.ts) over the same
+// per-pitch Savant CSV already fetched for pitchMixPct/avgFastballVelocity —
+// no new external integration, just a new aggregation over existing rows.
+// Season K/9 remains the other real signal (syncPitcherSeasonStats). Each
+// input independently degrades to unavailable (never fabricated) below its
+// own sample floor — see aggregatePitcherStuffMetrics's MIN_* constants.
 //
 // Independent from pregamePowerRadar/batterPowerProfile.ts — no shared
 // weights, no shared driver logic.
@@ -15,10 +17,17 @@ import { lin, weightedAvg, round1 } from "./scoreUtils";
 export interface PitcherSkillInputs {
   pitcherKnown: boolean;
   kPer9: number | null;
-  // Reserved for a future Savant-CSV extension — always null in v1.
-  swStrPct?: number | null;
-  cswPct?: number | null;
+  swStrPct: number | null;
+  cswPct: number | null;
+  /** The single pitch family that both anchors the arsenal AND misses bats, if any. */
+  missesBatsFamily: { family: "fastball" | "breaking" | "offspeed"; whiffPct: number; usagePct: number } | null;
 }
+
+const PITCH_FAMILY_LABEL: Record<"fastball" | "breaking" | "offspeed", string> = {
+  fastball: "Fastball",
+  breaking: "Breaking Ball",
+  offspeed: "Offspeed",
+};
 
 export function computePitcherSkill(inputs: PitcherSkillInputs): ComponentScore {
   const drivers: MoundDriver[] = [];
@@ -54,10 +63,36 @@ export function computePitcherSkill(inputs: PitcherSkillInputs): ComponentScore 
     });
   }
   if (sSwStr != null && sSwStr >= 7) {
-    drivers.push({ key: "ps_swstr", label: "Pitcher High SwStr%", direction: "positive", weight: Math.round(sSwStr * 10) });
+    drivers.push({
+      key: "ps_swstr",
+      label: "Pitcher High SwStr%",
+      direction: "positive",
+      weight: Math.round(sSwStr * 10),
+      evidence: `SwStr% ${round1(inputs.swStrPct ?? 0)}`,
+    });
   }
   if (sCsw != null && sCsw >= 7) {
-    drivers.push({ key: "ps_csw", label: "Pitcher High CSW%", direction: "positive", weight: Math.round(sCsw * 10) });
+    drivers.push({
+      key: "ps_csw",
+      label: "Pitcher High CSW%",
+      direction: "positive",
+      weight: Math.round(sCsw * 10),
+      evidence: `CSW% ${round1(inputs.cswPct ?? 0)}`,
+    });
+  }
+  // Distinct from SwStr%/CSW% (season-wide rates) — this flags a SPECIFIC
+  // pitch in the arsenal that's both heavily used and elite at missing bats,
+  // which SwStr%/CSW% alone don't surface (a pitcher can have a mediocre
+  // overall SwStr% while still having one true wipeout pitch).
+  if (inputs.missesBatsFamily) {
+    const { family, whiffPct, usagePct } = inputs.missesBatsFamily;
+    drivers.push({
+      key: "ps_misses_bats",
+      label: "Pitch Mix Misses Bats",
+      direction: "positive",
+      weight: Math.round(whiffPct * 2),
+      evidence: `${PITCH_FAMILY_LABEL[family]} — ${round1(whiffPct)}% whiff on ${round1(usagePct)}% usage`,
+    });
   }
   if (sK != null && sK <= 3) {
     drivers.push({ key: "ps_low_k9", label: "Below-Average K Rate", direction: "negative", weight: 30, evidence: `K/9 ${round1(inputs.kPer9 ?? 0)}` });

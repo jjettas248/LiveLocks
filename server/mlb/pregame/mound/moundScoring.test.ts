@@ -70,13 +70,35 @@ ok(classifyMoundTier(7.3, 5.0, 5.5) === "strong", "7.3 without skill≥7 → cap
 ok(classifyMoundTier(8.8, 7.0, 6.0) === "nuclear", "8.8 with full gates → nuclear");
 
 // ── Component scorer: pitcher skill unavailable when pitcher unknown ─────────
-const psUnknown = computePitcherSkill({ pitcherKnown: false, kPer9: null });
+const psUnknown = computePitcherSkill({ pitcherKnown: false, kPer9: null, swStrPct: null, cswPct: null, missesBatsFamily: null });
 ok(!psUnknown.available, "pitcherKnown=false → unavailable");
 ok(psUnknown.drivers.length === 0, "unavailable → no drivers");
 
-const psKnown = computePitcherSkill({ pitcherKnown: true, kPer9: 11.5 });
+const psKnown = computePitcherSkill({ pitcherKnown: true, kPer9: 11.5, swStrPct: null, cswPct: null, missesBatsFamily: null });
 ok(psKnown.available, "high K/9 → available");
 ok(psKnown.drivers.some((d) => d.key === "ps_k9"), "high K/9 → Pitcher High K% driver");
+
+// ── v2: SwStr%/CSW% now real, from aggregatePitcherStuffMetrics ──────────────
+const psStuffMetrics = computePitcherSkill({
+  pitcherKnown: true, kPer9: 9.5, swStrPct: 15.0, cswPct: 32.0, missesBatsFamily: null,
+});
+ok(psStuffMetrics.drivers.some((d) => d.key === "ps_swstr"), "high SwStr% → Pitcher High SwStr% driver");
+ok(psStuffMetrics.drivers.some((d) => d.key === "ps_csw"), "high CSW% → Pitcher High CSW% driver");
+
+// ── v2: Pitch Mix Misses Bats fires only when a family clears usage+whiff floors ──
+const psMissesBats = computePitcherSkill({
+  pitcherKnown: true, kPer9: 9.0, swStrPct: null, cswPct: null,
+  missesBatsFamily: { family: "breaking", whiffPct: 42.5, usagePct: 30 },
+});
+const missesBatsDriver = psMissesBats.drivers.find((d) => d.key === "ps_misses_bats");
+ok(missesBatsDriver !== undefined, "missesBatsFamily set → Pitch Mix Misses Bats driver present");
+ok(missesBatsDriver?.label === "Pitch Mix Misses Bats", "driver label is exactly 'Pitch Mix Misses Bats'");
+ok(missesBatsDriver?.evidence?.includes("Breaking Ball") ?? false, `evidence names the pitch family (got "${missesBatsDriver?.evidence}")`);
+
+const psNoMissesBats = computePitcherSkill({
+  pitcherKnown: true, kPer9: 9.0, swStrPct: null, cswPct: null, missesBatsFamily: null,
+});
+ok(!psNoMissesBats.drivers.some((d) => d.key === "ps_misses_bats"), "missesBatsFamily null → no Pitch Mix Misses Bats driver");
 
 // ── Component scorer: workload unavailable when pitcher unknown ──────────────
 const wlUnknown = computeWorkload({

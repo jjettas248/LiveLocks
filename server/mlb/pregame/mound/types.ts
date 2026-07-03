@@ -105,6 +105,8 @@ export interface MoundDiagnostics {
     pitcherSeasonStats: boolean;
     pitcherHandednessSplits: boolean;
     pitcherRecentStarts: boolean;
+    /** v2 — Savant SwStr%/CSW%/whiff-by-family (aggregatePitcherStuffMetrics). */
+    pitcherStuffMetrics: boolean;
     park: boolean;
     weather: boolean;
   };
