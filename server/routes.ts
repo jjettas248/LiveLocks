@@ -624,6 +624,43 @@ export async function registerRoutes(
     }
   });
 
+  // Admin one-off: repair pregame_power_radar_signals rows whose sessionDate
+  // is off from the game's actual slate day (pre-slateDateET()-alignment
+  // bug). Defaults to a dry-run plan; pass ?apply=true to write. Safe to
+  // re-run — idempotent on rows already correctly stamped.
+  app.post("/api/admin/mlb/pregame-power-radar/repair-slate-dates", requireAdmin, async (req, res) => {
+    try {
+      const { runSlateDateRepair } = await import("./mlb/pregamePowerRadar/slateDateRepairRunner");
+      const apply = req.query.apply === "true";
+      const result = await runSlateDateRepair(apply);
+      return res.json(result);
+    } catch (err: any) {
+      console.error("[admin/mlb/pregame-power-radar/repair-slate-dates]", err);
+      return res.status(500).json({ error: "Failed to run slate-date repair", detail: err?.message });
+    }
+  });
+
+  // Admin one-off: regrade final-game pregame targets whose outcome was
+  // wiped by the pre-fix graded-outcome-clobbering bug (see
+  // historicalRegradeRunner.ts). Defaults to a dry-run plan; pass
+  // ?apply=true to write. ?dates=YYYY-MM-DD,YYYY-MM-DD is required.
+  app.post("/api/admin/mlb/pregame-power-radar/regrade-history", requireAdmin, async (req, res) => {
+    try {
+      const datesParam = String(req.query.dates ?? "");
+      const dates = datesParam.split(",").map((d) => d.trim()).filter(Boolean);
+      if (dates.length === 0) {
+        return res.status(400).json({ error: "Provide ?dates=YYYY-MM-DD,YYYY-MM-DD" });
+      }
+      const { runHistoricalRegrade } = await import("./mlb/pregamePowerRadar/historicalRegradeRunner");
+      const apply = req.query.apply === "true";
+      const result = await runHistoricalRegrade(dates, apply);
+      return res.json(result);
+    } catch (err: any) {
+      console.error("[admin/mlb/pregame-power-radar/regrade-history]", err);
+      return res.status(500).json({ error: "Failed to run historical regrade", detail: err?.message });
+    }
+  });
+
   // Public: confirmed-lineup, non-suppressed targets for today's slate.
   app.get("/api/mlb/pregame-power-radar", requireMLBAccess, async (_req, res) => {
     try {
