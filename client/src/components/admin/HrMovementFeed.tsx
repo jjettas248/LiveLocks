@@ -31,7 +31,12 @@ const STAGE_LABELS: Record<string, string> = {
 
 function stageLabel(stage: string): string {
   if (!stage) return "—";
-  return STAGE_LABELS[stage] ?? stage.charAt(0).toUpperCase() + stage.slice(1).toLowerCase();
+  if (STAGE_LABELS[stage]) return STAGE_LABELS[stage];
+  // Pre-game board tiers (e.g. "Power Watch") arrive already human-formatted
+  // as `previousStage` — only reformat genuine raw all-caps engine tokens so
+  // multi-word tier labels don't get their trailing words lowercased.
+  if (stage !== stage.toUpperCase()) return stage;
+  return stage.charAt(0).toUpperCase() + stage.slice(1).toLowerCase();
 }
 
 function stageColor(stage: string): string {

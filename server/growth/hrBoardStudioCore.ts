@@ -63,6 +63,29 @@ const SECTION_RANK: Record<string, number> = {
   INACTIVE: -1,
 };
 
+// Live HR Radar section tokens are internal engine vocabulary. Everything
+// user-facing (ladder, movement feed, admin dashboard) renders the
+// betting-actionable playability language instead (see shared/hrRadarStage.ts:
+// FIRE→Attack, READY→Playable, BUILD→Lean, WATCH→Watchlist). Generated social
+// copy must speak the SAME language — never leak a raw section token into a
+// post. Unrecognized tokens (e.g. pregame board tier labels like "Power
+// Watch") pass through unchanged.
+const SECTION_COPY_LABEL: Record<string, string> = {
+  FIRE: "Attack",
+  READY: "Playable",
+  BUILD: "Lean",
+  WATCH: "Watchlist",
+  CASHED: "Cashed",
+  MISSED: "Missed",
+  "MODEL REVIEW": "Model Review",
+  EXPIRED: "Expired",
+  INACTIVE: "Inactive",
+};
+
+function sectionCopyLabel(raw: string): string {
+  return SECTION_COPY_LABEL[raw] ?? raw;
+}
+
 const BRAND = "LiveLocks HR Power Board" as const;
 
 // ── Brand + traction tags ──────────────────────────────────────────────────────
@@ -543,7 +566,7 @@ export function buildContentPack(
         ? `${header}\n\n${movers
             .map(
               (m) =>
-                `${m.player} (${m.team}): ${m.previousStage} → ${m.currentStage}${
+                `${m.player} (${m.team}): ${sectionCopyLabel(m.previousStage)} → ${sectionCopyLabel(m.currentStage)}${
                   m.pregameRank ? ` · was #${m.pregameRank} pre-game` : ""
                 }`,
             )
@@ -561,7 +584,7 @@ export function buildContentPack(
           rows: movers.map((m) => ({
             player: m.player,
             team: m.team,
-            stage: `${m.previousStage} → ${m.currentStage}`,
+            stage: `${sectionCopyLabel(m.previousStage)} → ${sectionCopyLabel(m.currentStage)}`,
             score: m.currentScore ?? undefined,
           })),
           footer: "Live movement from the pre-game board",
@@ -583,31 +606,32 @@ export function buildContentPack(
   {
     const hot = movements.filter((m) => m.currentStage === "READY" || m.currentStage === "FIRE");
     const top1 = hot[0] ?? null;
+    const top1Label = top1 ? sectionCopyLabel(top1.currentStage) : null;
     const body = top1
-      ? `${top1.currentStage} 🔥\n\n${top1.player} (${top1.team}) just hit ${top1.currentStage}${
+      ? `${top1Label} 🔥\n\n${top1.player} (${top1.team}) just hit ${top1Label}${
           top1.pregameRank ? ` — was #${top1.pregameRank} on the pre-game board` : ""
         }.${top1.topDriver ? `\nDriver: ${top1.topDriver}` : ""}`
-      : "No READY/FIRE yet today. Watching the live board.";
+      : "No Playable/Attack yet today. Watching the live board.";
     assets.push(
       makeAsset({
         assetType: "ready_fire_alert",
-        title: top1 ? `${top1.currentStage} — ${top1.player}` : "Ready/Fire Alert",
+        title: top1 ? `${top1Label} — ${top1.player}` : "Ready/Fire Alert",
         rawBody: body,
         imagePayload: {
           template: "movement",
-          title: top1 ? `${top1.currentStage}: ${top1.player}` : "Ready/Fire",
+          title: top1 ? `${top1Label}: ${top1.player}` : "Ready/Fire",
           subtitle: top1 ? `${top1.team} · ${top1.game}` : date,
           rows: hot.slice(0, 5).map((m) => ({
             player: m.player,
             team: m.team,
-            stage: m.currentStage,
+            stage: sectionCopyLabel(m.currentStage),
             score: m.currentScore ?? undefined,
           })),
-          footer: "Live READY/FIRE movement",
+          footer: "Live Playable/Attack movement",
           brand: BRAND,
           accent: "Ready / Fire",
         },
-        recommendedTiming: "Live — the moment a player reaches READY/FIRE",
+        recommendedTiming: "Live — the moment a player reaches Playable/Attack",
         sourcePlayerIds: hot.map((m) => m.playerId),
         sourceSignalIds: hot.map((m) => m.signalId),
         ctaVariant: "follow_for_movement",
@@ -670,7 +694,7 @@ export function buildRecap(
               (m) =>
                 `${m.player} (${m.team})${
                   m.pregameRank ? ` — #${m.pregameRank} pre-game` : ""
-                } → ${m.previousStage} → ${m.currentStage} → HR`,
+                } → ${sectionCopyLabel(m.previousStage)} → ${sectionCopyLabel(m.currentStage)} → HR`,
             )
             .join("\n")}`
         : "No HRs off the board today. Posting the full record either way — proof works both ways.";
@@ -730,7 +754,7 @@ export function buildRecap(
           rows: nearMiss.slice(0, 6).map((m) => ({
             player: m.player,
             team: m.team,
-            stage: m.currentStage,
+            stage: sectionCopyLabel(m.currentStage),
             score: m.currentScore ?? undefined,
           })),
           footer: "Transparency · not betting advice",

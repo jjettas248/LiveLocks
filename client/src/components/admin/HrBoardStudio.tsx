@@ -20,6 +20,23 @@ import {
   type HrRecapResponse,
 } from "@shared/hrBoardStudio";
 
+/** Today's MLB slate date in ET, with the same 6am-ET rollover the server's
+ * todayET()/slateDateET() use, so the recap date picker defaults to the slate
+ * that's actually live — not the UTC calendar date. */
+function slateDateET(): string {
+  const now = new Date();
+  const hourET = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      hour12: false,
+    }).format(now),
+  ) % 24;
+  const d = new Date(now);
+  if (hourET < 6) d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
 function authHeaders(json = false): Record<string, string> {
   const token = getAuthToken();
   const h: Record<string, string> = {};
@@ -91,8 +108,7 @@ export function HrBoardStudio() {
   const [recap, setRecap] = useState<HrRecapResponse | null>(null);
   const [generatingPack, setGeneratingPack] = useState(false);
   const [generatingRecap, setGeneratingRecap] = useState(false);
-  const today = new Date().toISOString().slice(0, 10);
-  const [recapDate, setRecapDate] = useState(today);
+  const [recapDate, setRecapDate] = useState(slateDateET);
 
   // Log the admin view once per mount.
   useEffect(() => {
