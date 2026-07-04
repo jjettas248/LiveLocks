@@ -49,7 +49,8 @@ function liveBridge(signal: PregamePowerSignal): {
  * plate-appearance detail. `canonicalHit` is an optional inning fallback drawn
  * from the live HR Radar canonical store.
  */
-function resolveOutcome(
+/** Exported for reuse by the historical pregame-radar regrade script (server/scripts/regradePregameRadarHistory.ts). */
+export function resolveOutcome(
   signal: PregamePowerSignal,
   canonicalHit?: { hitInning: number | null; hitHalf: string | null } | null,
 ): PregameOutcome | null {

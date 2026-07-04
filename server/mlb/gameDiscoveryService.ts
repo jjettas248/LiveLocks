@@ -63,14 +63,15 @@ const ESPN_TO_MLB_ABBR: Record<string, string> = {
   // SF, WSH, TB: Stats API uses same abbreviation as ESPN — no mapping needed
 };
 
-function normalizeAbbr(abbr: string): string {
+/** Exported for reuse by the historical pregame-radar regrade script (server/scripts/regradePregameRadarHistory.ts). */
+export function normalizeAbbr(abbr: string): string {
   return ESPN_TO_MLB_ABBR[abbr] ?? abbr;
 }
 
 // ── Fetch MLB Stats gamePk map for today ──────────────────────────────────────
 // Returns a map keyed by "awayAbbr|homeAbbr" (normalized) → MlbScheduleEntry[]
 // Array value supports doubleheaders (same teams, same day, different times)
-interface MlbScheduleEntry {
+export interface MlbScheduleEntry {
   gamePk: string;
   gameTime: string;   // ISO datetime
   gameNumber: number; // 1 or 2 for doubleheaders
@@ -88,7 +89,8 @@ function yesterdayDateStrMlb(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbScheduleEntry[]>> {
+/** Exported for reuse by the historical pregame-radar regrade script (server/scripts/regradePregameRadarHistory.ts). */
+export async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbScheduleEntry[]>> {
   const pkMap = new Map<string, MlbScheduleEntry[]>();
 
   function ingestSchedule(data: any): void {
