@@ -120,6 +120,11 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
   let lineupConfirmedCount = 0;
   let createdPublicEligible = 0;
   let suppressedCount = 0;
+  // score10 for confirmed-lineup pitchers only — the population the publish
+  // gate actually evaluates. Distribution logged at build-complete so a
+  // future "why is this empty" pass can read the answer instead of
+  // re-deriving it from the scoring formula by hand.
+  const confirmedLineupScores: number[] = [];
 
   try {
     const games = await discoverTodaysGames();
@@ -312,6 +317,8 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           },
         );
 
+        if (opposingLineupConfirmed) confirmedLineupScores.push(scoring.score10);
+
         console.log(
           `[MLB_PREGAME_MOUND_SCORE] pitcher=${starter.pitcherId} skill=${pitcherSkill.score10} opp=${opponentKProfile.score10} ` +
             `workload=${workload.score10} runEnv=${runEnv.score10} recent=${recentForm.score10} risk=${risk.riskPenalty} score10=${scoring.score10}`,
@@ -449,6 +456,22 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
     `[MLB_PREGAME_MOUND_TARGETS] build complete buildId=${buildId} games=${gamesScanned} ` +
       `pitchers=${pitchersEvaluated} public=${createdPublicEligible} suppressed=${suppressedCount}`,
   );
+
+  // Distribution over confirmed-lineup pitchers only — the population the
+  // publish gate actually evaluates — so a future "why is this empty" pass
+  // can read the answer in one log line instead of re-deriving it from the
+  // scoring formula by hand.
+  if (confirmedLineupScores.length > 0) {
+    const sorted = confirmedLineupScores.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 0 ? round2((sorted[mid - 1] + sorted[mid]) / 2) : sorted[mid];
+    const max = sorted[sorted.length - 1];
+    const clearing = (min: number) => sorted.filter((s) => s >= min).length;
+    console.log(
+      `[MLB_PREGAME_MOUND_SCORE_DIST] buildId=${buildId} confirmedLineupPitchers=${sorted.length} ` +
+        `median=${median} max=${max} clearing5.0=${clearing(5.0)} clearing5.5=${clearing(5.5)} clearing6.0=${clearing(6.0)}`,
+    );
+  }
 
   if (buildSink) {
     try {

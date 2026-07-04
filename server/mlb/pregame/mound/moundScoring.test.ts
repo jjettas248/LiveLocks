@@ -63,8 +63,18 @@ ok(r4.score10 <= 3.9, `unconfirmed starter caps at 3.9 (got ${r4.score10})`);
 
 // ── Tier classification ───────────────────────────────────────────────────────
 ok(classifyMoundTier(3.9, 5, 5) === "track", "3.9 → track");
-ok(classifyMoundTier(5.9, 5, 5) === "watch", "5.9 → watch");
-ok(classifyMoundTier(MOUND_PUBLISH_MIN_SCORE, 5, 5) === "strong", "6.0 → strong");
+ok(
+  classifyMoundTier(MOUND_PUBLISH_MIN_SCORE - 0.1, 5, 5) === "watch",
+  `just under MOUND_PUBLISH_MIN_SCORE (${MOUND_PUBLISH_MIN_SCORE - 0.1}) → watch`,
+);
+ok(
+  classifyMoundTier(MOUND_PUBLISH_MIN_SCORE, 5, 5) === "strong",
+  `MOUND_PUBLISH_MIN_SCORE (${MOUND_PUBLISH_MIN_SCORE}) → strong`,
+);
+// Regression: calibration fix — a score that cleared only "watch" under the
+// old 6.0 bar must now clear "strong" under the recalibrated 5.5 bar (see
+// scoring.ts's MOUND_PUBLISH_MIN_SCORE comment for the league-average math).
+ok(classifyMoundTier(5.7, 5, 5) === "strong", "5.7 (below old 6.0 bar, above new 5.5 bar) → strong");
 ok(classifyMoundTier(7.3, 7.0, 5.5) === "elite", "7.3 with skill≥7 workload≥5.5 → elite");
 ok(classifyMoundTier(7.3, 5.0, 5.5) === "strong", "7.3 without skill≥7 → capped at strong");
 ok(classifyMoundTier(8.8, 7.0, 6.0) === "nuclear", "8.8 with full gates → nuclear");

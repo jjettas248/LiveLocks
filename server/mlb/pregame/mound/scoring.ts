@@ -46,7 +46,15 @@ export interface MoundScoringResult {
   suppressedReasons: string[];
 }
 
-export const MOUND_PUBLISH_MIN_SCORE = 6.0;
+// 5.5, not 6.0: pitcherSkillScore's and opponentKProfileScore's lin() scales
+// (pitcherSkill.ts, opponentKProfile.ts) both place true league-average
+// performance well below the scale midpoint (~4.2/10 and ~2.9/10
+// respectively at league-average K/9 and platoon K rate), and
+// opponentKProfileScore + runEnvironmentScore (36% combined weight) sit at a
+// neutral 5 on any day without an extreme platoon/park/weather edge. At 6.0
+// this bar required near-top-of-league performance on nearly every axis
+// simultaneously, leaving it un-clearable on an ordinary slate.
+export const MOUND_PUBLISH_MIN_SCORE = 5.5;
 
 export const MOUND_COMPONENT_WEIGHTS = {
   pitcherSkill: 0.28,
