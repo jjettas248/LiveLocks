@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, Landmark } from "lucide-react";
 import { PregameHistoryDrawer } from "./PregameHistoryDrawer";
+import { PregameRadarRecord } from "./PregameWinCard";
 
 type Tier = "track" | "watch" | "power_watch" | "strong" | "elite" | "nuclear";
 type Market = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
@@ -261,6 +262,8 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
           </button>
         ))}
       </div>
+
+      <PregameRadarRecord />
 
       {isLoading && !data && (
         <Card className="p-6 text-center text-sm text-muted-foreground">Loading pre-game targets…</Card>
