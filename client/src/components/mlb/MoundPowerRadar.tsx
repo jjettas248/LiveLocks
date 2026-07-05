@@ -10,7 +10,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper } from "lucide-react";
+import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, ChevronDown, ChevronUp, Check } from "lucide-react";
 import { MoundRadarRecord } from "./MoundWinCard";
 
 type Tier = "track" | "watch" | "strong" | "elite" | "nuclear";
@@ -49,10 +49,27 @@ interface MoundOutcome {
   finalOutsRecorded?: number | null;
 }
 
+// Diagnostics carried by the server-side MoundSignal (see
+// server/mlb/pregame/mound/types.ts MoundDiagnostics) and already returned
+// verbatim by the public API — surfaced here for the expanded detail view
+// only. Display-only: never re-derived, never fed back into score10.
+interface MoundDiagnosticsView {
+  pitcherSkillScore: number | null;
+  opponentKProfileScore: number | null;
+  workloadScore: number | null;
+  runEnvironmentScore: number | null;
+  recentFormScore: number | null;
+  marketFitScore: number | null;
+  riskPenalty: number;
+  dataCoverageScore: number;
+  appliedWarnings: string[];
+}
+
 interface MoundSignal {
   signalId: string;
   gameId: string;
   startsAt: string | null;
+  pitcherId: string;
   pitcherName: string;
   team: string;
   opponent: string;
@@ -73,6 +90,7 @@ interface MoundSignal {
   becameLiveReady?: boolean;
   becameLiveFire?: boolean;
   outcomes?: MoundOutcome | null;
+  diagnostics: MoundDiagnosticsView;
 }
 
 interface MoundRadarResponse {
@@ -260,6 +278,7 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
         }));
 
   const slug = s.pitcherName.replace(/\s+/g, "-").toLowerCase();
+  const [expanded, setExpanded] = useState(false);
 
   return (
     <Card
@@ -270,6 +289,14 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
       }}
       data-testid={`card-mound-${slug}`}
     >
+      <div
+        className="cursor-pointer"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
+      >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
@@ -355,6 +382,28 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
           ))}
         </div>
       )}
+      </div>
+
+      <div className="flex items-center justify-end mt-2 pt-1.5 border-t border-border/20" onClick={(e) => e.stopPropagation()}>
+        <button
+          data-testid={`button-expand-mound-${slug}`}
+          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          {expanded ? "Less" : "Expand Details"}
+        </button>
+      </div>
+
+      {expanded && (
+        <div
+          className="mt-2 pt-2.5 border-t border-border/20 animate-in slide-in-from-top-1 duration-200"
+          onClick={(e) => e.stopPropagation()}
+          data-testid={`mound-expanded-${slug}`}
+        >
+          <MoundExpandedDetail signal={s} />
+        </div>
+      )}
     </Card>
   );
 }
@@ -404,6 +453,168 @@ function RunEnvironmentRow({ park }: { park?: ParkContext | null }) {
           {seg}
         </span>
       ))}
+    </div>
+  );
+}
+
+// ── Expanded detail view (click-to-expand) ──────────────────────────────────
+// Everything below renders ONLY inside the expanded block — the collapsed
+// card above is untouched. All values are server-stamped (diagnostics /
+// drivers already on MoundSignal); nothing here re-derives score10 or tier.
+// Kept as its own copy (not shared with PregamePowerRadar.tsx) per this
+// file's header comment: no shared card markup with the Plate board.
+
+function PitcherAvatar({ id, name, size = 40 }: { id: string; name: string; size?: number }) {
+  const [errored, setErrored] = useState(false);
+  const initials = name.split(/\s+/).map((p) => p[0]).slice(0, 2).join("").toUpperCase();
+  const testSlug = name.replace(/\s+/g, "-").toLowerCase();
+
+  if (!id || errored) {
+    return (
+      <div
+        className="rounded-full bg-secondary/60 border border-border/40 flex items-center justify-center font-bold text-muted-foreground shrink-0"
+        style={{ width: size, height: size, fontSize: size * 0.36 }}
+        data-testid={`mound-avatar-initials-${testSlug}`}
+      >
+        {initials}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={`https://midfield.mlbstatic.com/v1/people/${id}/spots/120`}
+      alt={name}
+      onError={() => setErrored(true)}
+      className="rounded-full object-cover border border-border/40 shrink-0"
+      style={{ width: size, height: size }}
+      data-testid={`mound-avatar-photo-${testSlug}`}
+    />
+  );
+}
+
+function MoundSetupMeter({ score10, tier }: { score10: number; tier: Tier }) {
+  const style = TIER_STYLE[tier];
+  const pct = Math.max(0, Math.min(100, (score10 / 10) * 100));
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[9px] font-bold uppercase tracking-wider">
+        <span className="text-muted-foreground">Setup Meter</span>
+        <span style={{ color: style.color }}>{style.label}</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{ width: `${pct}%`, background: `linear-gradient(90deg, #38bdf8, ${style.color})` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function moundComponentBarColor(v: number): string {
+  if (v >= 7) return "#22c55e";
+  if (v >= 5) return "#eab308";
+  return "#71717a";
+}
+
+function MoundComponentBar({ label, value }: { label: string; value: number }) {
+  const pct = Math.max(0, Math.min(100, (value / 10) * 100));
+  const color = moundComponentBarColor(value);
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[9px] text-muted-foreground truncate">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <div className="w-16 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+        </div>
+        <span className="text-[8px] font-bold tabular-nums w-6 text-right" style={{ color }}>{value.toFixed(1)}</span>
+      </div>
+    </div>
+  );
+}
+
+function moundCoverageLabel(v: number): { label: string; color: string } {
+  if (v >= 0.8) return { label: "High", color: "#22c55e" };
+  if (v >= 0.6) return { label: "Medium", color: "#eab308" };
+  return { label: "Low", color: "#ef4444" };
+}
+
+const MOUND_COMPONENT_LABELS: Array<{ key: keyof MoundDiagnosticsView; label: string }> = [
+  { key: "pitcherSkillScore", label: "Pitcher Skill" },
+  { key: "opponentKProfileScore", label: "Opponent K Profile" },
+  { key: "workloadScore", label: "Workload" },
+  { key: "runEnvironmentScore", label: "Run Environment" },
+  { key: "recentFormScore", label: "Recent Form" },
+  { key: "marketFitScore", label: "Market Fit" },
+];
+
+function MoundExpandedDetail({ signal: s }: { signal: MoundSignal }) {
+  const diag = s.diagnostics;
+  const allPositives = s.drivers.filter((d) => d.direction === "positive");
+  const coverage = moundCoverageLabel(diag.dataCoverageScore);
+  const components = MOUND_COMPONENT_LABELS
+    .map(({ key, label }) => ({ label, value: diag[key] as number | null | undefined }))
+    .filter((c): c is { label: string; value: number } => c.value != null);
+
+  return (
+    <div className="space-y-2.5">
+      <div className="flex items-center gap-2.5">
+        <PitcherAvatar id={s.pitcherId} name={s.pitcherName} />
+        <div className="flex-1 min-w-0">
+          <MoundSetupMeter score10={s.score10} tier={s.tier} />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between text-[9px]">
+        <span className="text-muted-foreground uppercase tracking-wider font-bold">Data Coverage</span>
+        <span className="font-semibold" style={{ color: coverage.color }}>{coverage.label}</span>
+      </div>
+
+      {components.length > 0 && (
+        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Setup Breakdown</div>
+          {components.map((c) => (
+            <MoundComponentBar key={c.label} label={c.label} value={c.value} />
+          ))}
+          {diag.riskPenalty > 0 && (
+            <div className="flex items-center justify-between gap-2 pt-1 mt-1 border-t border-border/20">
+              <span className="text-[9px] text-muted-foreground truncate">Risk Penalty</span>
+              <span className="text-[8px] font-bold tabular-nums text-rose-400">-{diag.riskPenalty.toFixed(1)}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {allPositives.length > 0 && (
+        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Why We Like This Arm</div>
+          <ul className="space-y-1">
+            {allPositives.map((d) => (
+              <li key={d.key} className="flex items-start gap-1.5 text-[10px] text-foreground/90 leading-snug">
+                <Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
+                <span>
+                  {d.label}
+                  {d.evidence ? <span className="text-muted-foreground"> — {d.evidence}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {diag.appliedWarnings.length > 0 && (
+        <div className="flex items-start gap-1.5 flex-wrap">
+          {diag.appliedWarnings.map((t) => (
+            <span
+              key={t}
+              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/20"
+            >
+              <ShieldAlert className="w-3 h-3" /> {t}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
