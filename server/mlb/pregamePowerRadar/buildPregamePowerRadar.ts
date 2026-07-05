@@ -193,6 +193,30 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
       const gamePk = game.gamePk ?? null;
       if (!gamePk) {
         console.log(`[PREGAME_POWER_RADAR_GAME_SCANNED] game=${game.gameId} skipped — no gamePk`);
+        // A transient MLB Stats API failure can leave gamePk unresolved for a
+        // cycle even after this game was already built (see fetchMlbGamePkMap).
+        // Without this, the bare `continue` above ran before this game's
+        // dropped-batter carry-forward — the only thing that preserves
+        // already-graded HR winners across rebuilds — ever got a chance to
+        // run, silently wiping the whole game's signals (winners included)
+        // from the board for the rest of the day. Treat the whole game as
+        // "every batter dropped from the lineup" so it reuses that same
+        // preservation path.
+        const carriedOver = carryForwardDroppedFromLineup(
+          game.gameId,
+          new Set(),
+          prevSignalsByGame.get(game.gameId) ?? [],
+          gameStatus,
+          firstPitchLockEligible,
+          new Date().toISOString(),
+          buildId,
+        );
+        for (const carried of carriedOver) {
+          signals.set(carried.signalId, carried);
+          console.log(
+            `[PREGAME_POWER_RADAR_SIGNAL_CARRIED] ${carried.signalId} ${carried.batterName} game gamePk unresolved this cycle — preserved (status=${carried.status})`,
+          );
+        }
         continue;
       }
 
