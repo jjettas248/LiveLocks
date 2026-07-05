@@ -8,9 +8,91 @@
 // The only rendering surface for wins is the Win History drawer
 // (PregameHistoryDrawer.tsx), which reuses PregameWinCard below.
 
+import { useQuery } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { Card } from "@/components/ui/card";
-import { Flame, Target } from "lucide-react";
-import type { PregameRadarWinItem } from "@shared/pregameRadarWin";
+import { Flame, Target, Trophy } from "lucide-react";
+import type { PregameRadarPublicStats, PregameRadarWinItem } from "@shared/pregameRadarWin";
+
+function slateDateET(): string {
+  const now = new Date();
+  const hourET = Number(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      hour12: false,
+    }).format(now),
+  ) % 24;
+  const d = new Date(now);
+  if (hourET < 6) d.setDate(d.getDate() - 1);
+  return d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+}
+
+/**
+ * Pregame Radar Record banner — "{wins} Wins Today · {firstAb} First-AB
+ * Cashes · {flagged} Flagged Before First Pitch". Mirrors MoundRadarRecord
+ * (MoundWinCard.tsx). Hidden until there is something to show (no zero-state
+ * shouting "0 wins").
+ */
+export function PregameRadarRecord() {
+  const { data } = useQuery<PregameRadarPublicStats>({
+    queryKey: ["/api/mlb/pregame-radar/record", slateDateET()],
+    queryFn: () => apiRequest("GET", "/api/mlb/pregame-radar/record").then((r) => r.json()),
+    refetchInterval: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  if (!data || data.flaggedBeforeFirstPitchToday === 0) return null;
+
+  return (
+    <Card className="p-3 bg-emerald-500/10 border-emerald-400/30" data-testid="pregame-radar-record">
+      <div className="flex items-center gap-2 mb-1.5">
+        <Trophy className="w-4 h-4 text-emerald-300" />
+        <span className="text-sm font-bold text-emerald-200">Plate Radar Record</span>
+      </div>
+      <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+        <RecordStat value={data.pregameWinsToday} label="Wins Today" testid="pregame-record-wins-today" />
+        <RecordStat
+          value={data.firstAbPregameWinsToday}
+          label="First-AB Cashes"
+          testid="pregame-record-first-ab-today"
+        />
+        <RecordStat
+          value={data.flaggedBeforeFirstPitchToday}
+          label="Flagged Before First Pitch"
+          testid="pregame-record-flagged-today"
+        />
+        <RecordStat
+          value={data.pregameWinsLast7Days}
+          label="Wins (7d)"
+          testid="pregame-record-wins-7d"
+          muted
+        />
+      </div>
+    </Card>
+  );
+}
+
+function RecordStat({
+  value,
+  label,
+  testid,
+  muted = false,
+}: {
+  value: number;
+  label: string;
+  testid: string;
+  muted?: boolean;
+}) {
+  return (
+    <div className={muted ? "opacity-70" : undefined}>
+      <span className="font-bold text-emerald-100" data-testid={testid}>
+        {value}
+      </span>{" "}
+      <span className="text-muted-foreground">{label}</span>
+    </div>
+  );
+}
 
 function inningText(win: PregameRadarWinItem): string | null {
   if (win.hrInning == null) return null;
