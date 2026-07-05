@@ -21,20 +21,37 @@ import {
 } from "@shared/hrBoardStudio";
 
 /** Today's MLB slate date in ET, with the same 6am-ET rollover the server's
- * todayET()/slateDateET() use, so the recap date picker defaults to the slate
- * that's actually live — not the UTC calendar date. */
+ * slateDateET() (server/utils/dateUtils.ts) uses, so the recap date picker
+ * defaults to the slate that's actually live — not the UTC calendar date.
+ * Builds the previous day from the ET year/month/day parts directly (mirrors
+ * the server implementation) rather than mutating a local Date: subtracting
+ * a calendar day via the admin's local timezone and re-formatting in ET can
+ * land on the wrong date when the local zone's DST calendar/offset differs
+ * from New York's around a DST transition. */
 function slateDateET(): string {
-  const now = new Date();
-  const hourET = Number(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      hour12: false,
-    }).format(now),
-  ) % 24;
-  const d = new Date(now);
-  if (hourET < 6) d.setDate(d.getDate() - 1);
-  return d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  let year = get("year");
+  let month = get("month");
+  let day = get("day");
+  const hour = get("hour") % 24; // some ICU builds render midnight as "24"
+
+  if (hour < 6) {
+    const prevDay = new Date(Date.UTC(year, month - 1, day));
+    prevDay.setUTCDate(prevDay.getUTCDate() - 1);
+    year = prevDay.getUTCFullYear();
+    month = prevDay.getUTCMonth() + 1;
+    day = prevDay.getUTCDate();
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 function authHeaders(json = false): Record<string, string> {
