@@ -9,7 +9,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, Landmark } from "lucide-react";
+import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, Landmark, ChevronDown, ChevronUp, Check } from "lucide-react";
 import { PregameHistoryDrawer } from "./PregameHistoryDrawer";
 import { PregameRadarRecord } from "./PregameWinCard";
 
@@ -82,13 +82,37 @@ interface PregameOutcome {
   hrHalf?: "top" | "bottom" | null;
 }
 
+// Diagnostics carried by the server-side PregamePowerSignal (see
+// server/mlb/pregamePowerRadar/types.ts PregamePowerDiagnostics) and already
+// returned verbatim by the public API — surfaced here for the expanded detail
+// view only. Display-only: never re-derived, never fed back into score10.
+interface PregameDiagnostics {
+  batterPowerScore: number | null;
+  pitcherVulnerabilityScore: number | null;
+  matchupFitScore: number | null;
+  parkWeatherScore: number | null;
+  lineupOpportunityScore: number | null;
+  nearHrRecentFormScore?: number | null;
+  dataCoverageScore: number;
+  warningTags: string[];
+  bvpAvailable: boolean;
+  bvpScore: number | null;
+  bvpSampleSize: number | null;
+  bvpDirection: "positive" | "neutral" | "negative";
+  pitcherOrderSplitDirection: "vulnerable" | "neutral" | "suppressive" | "unavailable";
+  batterOrderSplitDirection: "strong" | "neutral" | "weak" | "unavailable";
+  batterCurrentOrderSlot: number | null;
+}
+
 interface PregameSignal {
   signalId: string;
   gameId: string;
   startsAt: string | null;
+  batterId: string;
   batterName: string;
   team: string;
   opponent: string;
+  pitcherId: string | null;
   pitcherName: string | null;
   battingOrderSlot: number | null;
   handednessMatchup: string | null;
@@ -108,6 +132,7 @@ interface PregameSignal {
   becameLiveReady?: boolean;
   becameLiveFire?: boolean;
   outcomes?: PregameOutcome | null;
+  diagnostics: PregameDiagnostics;
 }
 
 const SPORTSBOOK_LABELS: Record<string, string> = {
@@ -295,6 +320,8 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const positives = s.drivers.filter((d) => d.direction === "positive").slice(0, 4);
   const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
+  const [expanded, setExpanded] = useState(false);
+  const slug = s.batterName.replace(/\s+/g, "-").toLowerCase();
 
   // Cashed HR — purely visual flip to a green "win" treatment. Server-stamped
   // outcome only (outcomes.hitHr); the card never derives win/loss itself.
@@ -323,8 +350,16 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
         boxShadow: hitHr ? `0 0 22px rgba(16,185,129,0.45)` : `0 0 14px ${style.glow}`,
         borderColor: hitHr ? cashedColor + "99" : style.color + "55",
       }}
-      data-testid={`card-pregame-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}
+      data-testid={`card-pregame-${slug}`}
     >
+      <div
+        className="cursor-pointer"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setExpanded(!expanded); } }}
+      >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
@@ -443,6 +478,28 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
           ))}
         </div>
       )}
+      </div>
+
+      <div className="flex items-center justify-end mt-2 pt-1.5 border-t border-border/20" onClick={(e) => e.stopPropagation()}>
+        <button
+          data-testid={`button-expand-pregame-${slug}`}
+          className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          {expanded ? "Less" : "Expand Details"}
+        </button>
+      </div>
+
+      {expanded && (
+        <div
+          className="mt-2 pt-2.5 border-t border-border/20 animate-in slide-in-from-top-1 duration-200"
+          onClick={(e) => e.stopPropagation()}
+          data-testid={`pregame-expanded-${slug}`}
+        >
+          <PregameExpandedDetail signal={s} />
+        </div>
+      )}
     </Card>
   );
 }
@@ -546,6 +603,199 @@ function PlayerParkWindFitRow({ fit, batterName }: { fit?: PlayerParkWindFit | n
           {fit.windDirectionLabel ?? "Wind"}
           {fit.windSpeedMph != null ? ` ${Math.round(fit.windSpeedMph)} mph` : ""}
         </span>
+      )}
+    </div>
+  );
+}
+
+// ── Expanded detail view (click-to-expand) ──────────────────────────────────
+// Everything below renders ONLY inside the expanded block — the collapsed
+// card above is untouched. All values are server-stamped (diagnostics /
+// drivers already on PregameSignal); nothing here re-derives score10 or tier.
+
+function PlayerAvatar({ id, name, size = 40 }: { id: string | null; name: string; size?: number }) {
+  const [errored, setErrored] = useState(false);
+  const initials = name.split(/\s+/).map((p) => p[0]).slice(0, 2).join("").toUpperCase();
+  const testSlug = name.replace(/\s+/g, "-").toLowerCase();
+
+  if (!id || errored) {
+    return (
+      <div
+        className="rounded-full bg-secondary/60 border border-border/40 flex items-center justify-center font-bold text-muted-foreground shrink-0"
+        style={{ width: size, height: size, fontSize: size * 0.36 }}
+        data-testid={`avatar-initials-${testSlug}`}
+      >
+        {initials}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={`https://midfield.mlbstatic.com/v1/people/${id}/spots/120`}
+      alt={name}
+      onError={() => setErrored(true)}
+      className="rounded-full object-cover border border-border/40 shrink-0"
+      style={{ width: size, height: size }}
+      data-testid={`avatar-photo-${testSlug}`}
+    />
+  );
+}
+
+function SetupMeter({ score10, tier }: { score10: number; tier: Tier }) {
+  const style = TIER_STYLE[tier];
+  const pct = Math.max(0, Math.min(100, (score10 / 10) * 100));
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[9px] font-bold uppercase tracking-wider">
+        <span className="text-muted-foreground">Setup Meter</span>
+        <span style={{ color: style.color }}>{style.label}</span>
+      </div>
+      <div className="h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+        <div
+          className="h-full rounded-full transition-all"
+          style={{ width: `${pct}%`, background: `linear-gradient(90deg, #38bdf8, ${style.color})` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function componentBarColor(v: number): string {
+  if (v >= 7) return "#22c55e";
+  if (v >= 5) return "#eab308";
+  return "#71717a";
+}
+
+function ComponentBar({ label, value }: { label: string; value: number }) {
+  const pct = Math.max(0, Math.min(100, (value / 10) * 100));
+  const color = componentBarColor(value);
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[9px] text-muted-foreground truncate">{label}</span>
+      <div className="flex items-center gap-1.5">
+        <div className="w-16 h-1.5 rounded-full bg-secondary/60 overflow-hidden">
+          <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, backgroundColor: color }} />
+        </div>
+        <span className="text-[8px] font-bold tabular-nums w-6 text-right" style={{ color }}>{value.toFixed(1)}</span>
+      </div>
+    </div>
+  );
+}
+
+function coverageLabel(v: number): { label: string; color: string } {
+  if (v >= 0.8) return { label: "High", color: "#22c55e" };
+  if (v >= 0.6) return { label: "Medium", color: "#eab308" };
+  return { label: "Low", color: "#ef4444" };
+}
+
+const COMPONENT_LABELS: Array<{ key: keyof PregameDiagnostics; label: string }> = [
+  { key: "batterPowerScore", label: "Batter Power" },
+  { key: "pitcherVulnerabilityScore", label: "Pitcher Vulnerability" },
+  { key: "matchupFitScore", label: "Matchup Fit" },
+  { key: "parkWeatherScore", label: "Park & Weather" },
+  { key: "lineupOpportunityScore", label: "Lineup Opportunity" },
+  { key: "nearHrRecentFormScore", label: "Near-HR Recent Form" },
+];
+
+function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
+  const diag = s.diagnostics;
+  const allPositives = s.drivers.filter((d) => d.direction === "positive");
+  const coverage = coverageLabel(diag.dataCoverageScore);
+  const components = COMPONENT_LABELS
+    .map(({ key, label }) => ({ label, value: diag[key] as number | null | undefined }))
+    .filter((c): c is { label: string; value: number } => c.value != null);
+  const hasMatchupContext =
+    diag.bvpAvailable ||
+    diag.pitcherOrderSplitDirection !== "unavailable" ||
+    diag.batterOrderSplitDirection !== "unavailable";
+
+  return (
+    <div className="space-y-2.5">
+      <div className="flex items-center gap-2.5">
+        <PlayerAvatar id={s.batterId} name={s.batterName} />
+        <div className="flex-1 min-w-0">
+          <SetupMeter score10={s.score10} tier={s.tier} />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between text-[9px]">
+        <span className="text-muted-foreground uppercase tracking-wider font-bold">Data Coverage</span>
+        <span className="font-semibold" style={{ color: coverage.color }}>{coverage.label}</span>
+      </div>
+
+      {components.length > 0 && (
+        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Setup Breakdown</div>
+          {components.map((c) => (
+            <ComponentBar key={c.label} label={c.label} value={c.value} />
+          ))}
+        </div>
+      )}
+
+      {allPositives.length > 0 && (
+        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Why We Like Him</div>
+          <ul className="space-y-1">
+            {allPositives.map((d) => (
+              <li key={d.key} className="flex items-start gap-1.5 text-[10px] text-foreground/90 leading-snug">
+                <Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
+                <span>
+                  {d.label}
+                  {d.evidence ? <span className="text-muted-foreground"> — {d.evidence}</span> : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {hasMatchupContext && (
+        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1 text-[10px]">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Matchup Context</div>
+          {diag.bvpAvailable && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">BvP History</span>
+              <span
+                className="font-semibold capitalize"
+                style={{
+                  color:
+                    diag.bvpDirection === "positive" ? "#22c55e" : diag.bvpDirection === "negative" ? "#ef4444" : "#a1a1aa",
+                }}
+              >
+                {diag.bvpDirection}
+                {diag.bvpSampleSize != null ? ` (${diag.bvpSampleSize} AB)` : ""}
+              </span>
+            </div>
+          )}
+          {diag.pitcherOrderSplitDirection !== "unavailable" && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Pitcher vs Slot</span>
+              <span className="font-semibold capitalize">{diag.pitcherOrderSplitDirection}</span>
+            </div>
+          )}
+          {diag.batterOrderSplitDirection !== "unavailable" && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">
+                Batter From Slot{diag.batterCurrentOrderSlot != null ? ` #${diag.batterCurrentOrderSlot}` : ""}
+              </span>
+              <span className="font-semibold capitalize">{diag.batterOrderSplitDirection}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {diag.warningTags.length > 0 && (
+        <div className="flex items-start gap-1.5 flex-wrap">
+          {diag.warningTags.map((t) => (
+            <span
+              key={t}
+              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/20"
+            >
+              <ShieldAlert className="w-3 h-3" /> {t}
+            </span>
+          ))}
+        </div>
       )}
     </div>
   );
