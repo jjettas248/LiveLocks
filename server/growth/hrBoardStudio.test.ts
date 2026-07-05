@@ -274,6 +274,20 @@ const FULL_BOARD: PregamePowerSignal[] = [
     pack.assets[4].assetType === "ready_fire_alert" && pack.assets[4].sourcePlayerIds.includes("2"),
   );
   check("every asset carries an image payload + timing", pack.assets.every((a) => !!a.imagePayload && !!a.recommendedTiming));
+
+  // Generated copy must speak the SAME playability vocabulary as the rest of
+  // the product (Attack/Playable/Lean/Watchlist) — never the raw internal
+  // section tokens (FIRE/READY/BUILD/WATCH).
+  check(
+    "ready/fire alert copy uses playability language, not raw tokens",
+    pack.assets[4].body.includes("Playable") && !/\bREADY\b/.test(pack.assets[4].body),
+  );
+  const movementAlert = pack.assets.find((a) => a.assetType === "movement_alert")!;
+  check(
+    "movement alert copy uses playability language, not raw tokens",
+    movementAlert.body.includes("Playable") &&
+      !/\bREADY\b|\bFIRE\b|\bBUILD\b|\bWATCH\b/.test(movementAlert.body),
+  );
 }
 
 // ── 6. Recap — no HRs ─────────────────────────────────────────────────────────
