@@ -540,13 +540,17 @@ function moundCoverageLabel(v: number): { label: string; color: string } {
   return { label: "Low", color: "#ef4444" };
 }
 
+// marketFitScore intentionally omitted: the server currently stamps it as a
+// hardcoded 0 placeholder (server/mlb/pregame/mound/buildMlbMoundRadar.ts) —
+// that scorer isn't implemented yet, so rendering it here would show a
+// misleading "Market Fit 0.0" row that contradicts the real market-setup
+// chips. Re-add once the server computes a real score.
 const MOUND_COMPONENT_LABELS: Array<{ key: keyof MoundDiagnosticsView; label: string }> = [
   { key: "pitcherSkillScore", label: "Pitcher Skill" },
   { key: "opponentKProfileScore", label: "Opponent K Profile" },
   { key: "workloadScore", label: "Workload" },
   { key: "runEnvironmentScore", label: "Run Environment" },
   { key: "recentFormScore", label: "Recent Form" },
-  { key: "marketFitScore", label: "Market Fit" },
 ];
 
 function MoundExpandedDetail({ signal: s }: { signal: MoundSignal }) {
