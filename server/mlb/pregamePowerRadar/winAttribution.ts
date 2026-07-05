@@ -218,16 +218,21 @@ export function buildDailyPregameWins(signals: PregamePowerSignal[]): {
   firstAbPregameWins: PregameRadarWinItem[];
 } {
   // Rank assignment uses the full flagged board (publicly-flagged targets),
-  // not just winners, so a win's rank reflects where it sat pre-game.
-  const flagged = signals
-    .filter((s) => s.outcomes?.outcome === "pregame_win" && s.outcomes?.userVisible === true)
+  // not just winners, so a win's rank reflects where it sat pre-game — a
+  // calibration miss or internal (unflagged) win scored between two public
+  // wins must still occupy its board position.
+  const flaggedBoard = signals
+    .filter((s) => s.everPubliclyFlagged)
     .slice()
     .sort((a, b) => b.score10 - a.score10);
 
   const rankBySignalId = new Map<string, number>();
-  flagged.forEach((s, i) => rankBySignalId.set(s.signalId, i + 1));
+  flaggedBoard.forEach((s, i) => rankBySignalId.set(s.signalId, i + 1));
 
-  const wins = flagged
+  const wins = signals
+    .filter((s) => s.outcomes?.outcome === "pregame_win" && s.outcomes?.userVisible === true)
+    .slice()
+    .sort((a, b) => b.score10 - a.score10)
     .map((s) => buildPregameRadarWinItem(s, rankBySignalId.get(s.signalId) ?? null))
     .filter((w): w is PregameRadarWinItem => w != null);
 

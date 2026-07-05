@@ -105,6 +105,7 @@ function makeSignal(over: {
   score10: number;
   outcome?: PregameOutcome;
   batterName?: string;
+  everPubliclyFlagged?: boolean;
 }): PregamePowerSignal {
   return {
     signalId: over.signalId,
@@ -150,7 +151,9 @@ function makeSignal(over: {
     suppressed: false,
     suppressedReasons: [],
     outcomes: over.outcome ?? null,
-    everPubliclyFlagged: false,
+    // A userVisible win implies the target was publicly flagged pre-game;
+    // callers may override for the flagged-but-missed / unflagged-win cases.
+    everPubliclyFlagged: over.everPubliclyFlagged ?? over.outcome?.userVisible === true,
     becameLiveReady: false,
     becameLiveFire: false,
     convertedLiveAt: null,
@@ -188,6 +191,10 @@ const missSig = makeSignal({
   signalId: "s-miss",
   score10: 8.0,
   outcome: { hitHr: false, outcome: "calibration_miss", userVisible: false },
+  // Flagged pre-game (score sits between the two public wins below) so the
+  // buildDailyPregameWins rank-order test can prove misses still occupy a
+  // board slot rather than being skipped over.
+  everPubliclyFlagged: true,
 });
 ok(buildPregameRadarWinItem(missSig, 3) === null, "calibration_miss → no public item");
 
@@ -199,12 +206,20 @@ const internalSig = makeSignal({
 ok(buildPregameRadarWinItem(internalSig, 4) === null, "internal (unflagged) win → no public item");
 
 // ── buildDailyPregameWins — grouping + rank order ─────────────────────────────
+// Board by score desc: s-first (9.1, flagged) > s-miss (8.0, flagged, missed)
+// > s-later (7.5, flagged). s-internal (8.0, unflagged) never enters the board.
+// Rank must come from the FULL flagged board, not just the winners, so
+// s-later's true rank is 3 (behind the intervening flagged miss) — never 2.
 const grouped = buildDailyPregameWins([laterSig, firstAbSig, missSig, internalSig]);
 ok(grouped.pregameRadarWins.length === 2, "only userVisible wins grouped (miss + internal excluded)");
 ok(grouped.firstAbPregameWins.length === 1, "first-AB subset isolated");
 ok(grouped.firstAbPregameWins[0].signalId === "s-first", "first-AB subset is the first-AB win");
 ok(grouped.pregameRadarWins[0].signalId === "s-first", "wins ranked by pregame score desc");
-ok(grouped.pregameRadarWins[0].pregameRank === 1 && grouped.pregameRadarWins[1].pregameRank === 2, "ranks assigned by score order");
+ok(grouped.pregameRadarWins[0].pregameRank === 1, "top win ranks #1 on the flagged board");
+ok(
+  grouped.pregameRadarWins[1].pregameRank === 3,
+  "later win's rank reflects its position on the FULL flagged board (behind an intervening flagged miss), not just among winners",
+);
 
 // ── buildPregameRadarWinItem — canonical date attribution ─────────────────
 // sessionDate is authoritative (already slateDateET()-stamped at build time);
