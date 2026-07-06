@@ -24,6 +24,8 @@ import {
   fetchPitcherHandednessSplits,
   fetchPitcherRecentStarts,
   syncPitcherSeasonStats,
+  syncPitcherMultiYearStats,
+  syncBvPMatchup,
   syncWeather,
   mlbGameCache,
   mlbPlayerCache,
@@ -46,7 +48,8 @@ import { computeRecentForm } from "./recentForm";
 import { computeRiskDrivers } from "./riskDrivers";
 import { computeMarketTags } from "./marketTagger";
 import { composeMoundScore } from "./scoring";
-import { projectedStrikeoutsFromKPer9 } from "./scoreUtils";
+import { projectedStrikeoutsFromKPer9, weightedPlatoonKRate } from "./scoreUtils";
+import { computeMatchupAdjustedStrikeouts } from "./matchupAdjustedKs";
 import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState } from "./moundGradedStateCarry";
 import {
@@ -186,19 +189,40 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           (starter.team === game.homeTeam ? game.awayTeam : game.homeTeam);
 
         // ── Gather inputs (each guarded — degrade to neutral on failure) ────
-        // Four independent network calls, no data dependency between them —
-        // run concurrently rather than paying 4x the round-trip latency per
-        // starter across a full slate's ~30 probable starters.
-        const [, handSplitsResult, recentStartsResult, savantResult] = await Promise.allSettled([
+        // Independent network calls, no data dependency between them — run
+        // concurrently rather than paying Nx the round-trip latency per
+        // starter across a full slate's ~30 probable starters. BvP entries
+        // are one sync per confirmed opposing-lineup batter — shares the
+        // same cache the Plate/batter engine populates, so it's a no-op
+        // re-fetch when already warm from that side.
+        const bvpBatterIds = opposingLineupConfirmed ? opposingLineup.map((l) => l.playerId) : [];
+        const [, , handSplitsResult, recentStartsResult, savantResult] = await Promise.allSettled([
           syncPitcherSeasonStats(starter.pitcherId),
+          syncPitcherMultiYearStats(starter.pitcherId),
           fetchPitcherHandednessSplits(starter.pitcherId),
           fetchPitcherRecentStarts(starter.pitcherId),
           fetchBaseballSavantData(starter.pitcherId, game.gameId),
+          ...bvpBatterIds.map((batterId) => syncBvPMatchup(batterId, starter.pitcherId)),
         ]);
         const seasonStats = mlbPlayerCache.pitcherSeasonStats[starter.pitcherId] ?? null;
+        const priorSeasonsKPer9 = mlbPlayerCache.pitcherMultiYearStats[starter.pitcherId]?.priorSeasonsKPer9 ?? [];
         const handSplits = handSplitsResult.status === "fulfilled" ? handSplitsResult.value : null;
         const recentStarts = recentStartsResult.status === "fulfilled" ? recentStartsResult.value : null;
         const savant = savantResult.status === "fulfilled" ? savantResult.value : null;
+
+        // Aggregate BvP across today's confirmed opposing lineup vs this
+        // starter — read-only cache aggregation, no additional I/O (the
+        // syncs above already populated it). Never fabricated: a batter
+        // with no BvP history simply contributes 0/0.
+        let bvpTotalAtBats = 0;
+        let bvpTotalStrikeouts = 0;
+        for (const batterId of bvpBatterIds) {
+          const bvp = mlbPlayerCache.bvpMatchups[`${batterId}_vs_${starter.pitcherId}`];
+          if (bvp) {
+            bvpTotalAtBats += bvp.atBats;
+            bvpTotalStrikeouts += bvp.strikeouts;
+          }
+        }
 
         // Cache-only display enrichment — never a live fetch on the build's
         // critical path (same rationale as oddsEventId above). On a cache
@@ -287,6 +311,28 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           seasonKPer9: seasonStats?.kPer9 ?? null,
           last3StartStrikeouts: recentStarts?.last3StartStrikeouts ?? null,
           last3StartERA: recentStarts?.last3StartERA ?? null,
+        });
+
+        // Display-only enrichment of projectedStrikeouts — never feeds
+        // score10/tier/drivers/market selection, and never touches
+        // moundOutcomeAttribution.ts's settlement baseline (that stays
+        // anchored to projectedStrikeoutsFromKPer9 alone). Reuses the same
+        // platoon-K-rate weighting opponentKProfile.ts derives for its own
+        // score10, plus real BvP/multi-year/run-environment/recent-form
+        // inputs already gathered above.
+        const matchupAdjustedStrikeouts = computeMatchupAdjustedStrikeouts({
+          kPer9: seasonStats?.kPer9 ?? null,
+          priorSeasonsKPer9,
+          avgInningsPerStart,
+          platoonKRate: opposingLineupConfirmed
+            ? weightedPlatoonKRate(handSplits?.kRateVsLHB ?? null, handSplits?.kRateVsRHB ?? null, { left, right, switchHit })
+            : null,
+          opposingLineupConfirmed,
+          runEnvironmentScore10: runEnv.available ? runEnv.score10 : null,
+          runEnvironmentAvailable: runEnv.available,
+          last3StartStrikeouts: recentStarts?.last3StartStrikeouts ?? null,
+          bvpTotalAtBats,
+          bvpTotalStrikeouts,
         });
 
         const risk = computeRiskDrivers({
@@ -407,6 +453,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           isPregameTarget: true,
           marketEdgeContext,
           projectedStrikeouts,
+          matchupAdjustedStrikeouts,
           status: isLocked ? "locked" : "active",
           suppressed: scoring.suppressed,
           suppressedReasons: scoring.suppressedReasons,

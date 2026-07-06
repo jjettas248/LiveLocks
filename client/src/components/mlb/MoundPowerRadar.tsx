@@ -104,7 +104,10 @@ interface MoundSignal {
   outcomes?: MoundOutcome | null;
   diagnostics: MoundDiagnosticsView;
   marketEdgeContext?: MoundMarketEdgeContext | null;
+  /** Settlement baseline — decides mound_win/mound_calibration_miss. */
   projectedStrikeouts?: number | null;
+  /** Display-only enrichment (multi-year K/9 + opponent/BvP/park/recent-form) — never used for grading. */
+  matchupAdjustedStrikeouts?: number | null;
 }
 
 interface MoundRadarResponse {
@@ -412,7 +415,11 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
       </div>
 
       <RunEnvironmentRow park={s.parkContext} />
-      <StrikeoutLineRow projectedStrikeouts={s.projectedStrikeouts} edge={s.marketEdgeContext} />
+      <StrikeoutLineRow
+        projectedStrikeouts={s.projectedStrikeouts}
+        matchupAdjustedStrikeouts={s.matchupAdjustedStrikeouts}
+        edge={s.marketEdgeContext}
+      />
 
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         {marketSetups.map((setup) => (
@@ -486,31 +493,45 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
 // Server-computed strikeout line context (see server MoundSignal). Omitted
 // entirely when neither value is available — never a placeholder, matching
 // this file's "missing data degrades to omitted" convention.
+//
+// Projected Ks = the settlement baseline (decides mound_win/mound_calibration_miss).
+// Matchup Adj. Ks = a richer, separately-computed context number for user
+// insight only — never used for grading. Always shown as a distinct line
+// so the two are never confused.
 function StrikeoutLineRow({
   projectedStrikeouts,
+  matchupAdjustedStrikeouts,
   edge,
 }: {
   projectedStrikeouts?: number | null;
+  matchupAdjustedStrikeouts?: number | null;
   edge?: MoundMarketEdgeContext | null;
 }) {
-  if (projectedStrikeouts == null && !edge) return null;
+  if (projectedStrikeouts == null && matchupAdjustedStrikeouts == null && !edge) return null;
 
   return (
-    <div className="flex items-center gap-1.5 mt-1.5 text-[11px] flex-wrap" data-testid="mound-strikeout-line">
-      {projectedStrikeouts != null && (
-        <span className="text-muted-foreground">
-          🎯 Projected Ks <span className="font-semibold text-foreground">{projectedStrikeouts.toFixed(1)}</span>
-        </span>
-      )}
-      {projectedStrikeouts != null && edge && <span className="opacity-40">·</span>}
-      {edge && edge.line != null && (
-        <span className="text-muted-foreground">
-          Best Line{" "}
-          <span className="font-semibold text-foreground">
-            O{edge.line} {edge.odds != null ? formatAmericanOdds(edge.odds) : ""}
+    <div className="flex flex-col gap-0.5 mt-1.5 text-[11px]" data-testid="mound-strikeout-line">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {projectedStrikeouts != null && (
+          <span className="text-muted-foreground">
+            🎯 Projected Ks <span className="font-semibold text-foreground">{projectedStrikeouts.toFixed(1)}</span>
           </span>
-          {edge.sportsbook ? ` · ${edge.sportsbook}` : ""}
-        </span>
+        )}
+        {projectedStrikeouts != null && edge && <span className="opacity-40">·</span>}
+        {edge && edge.line != null && (
+          <span className="text-muted-foreground">
+            Best Line{" "}
+            <span className="font-semibold text-foreground">
+              O{edge.line} {edge.odds != null ? formatAmericanOdds(edge.odds) : ""}
+            </span>
+            {edge.sportsbook ? ` · ${edge.sportsbook}` : ""}
+          </span>
+        )}
+      </div>
+      {matchupAdjustedStrikeouts != null && (
+        <div className="text-muted-foreground" data-testid="mound-matchup-adjusted-ks">
+          📈 Matchup Adj. Ks <span className="font-semibold text-foreground">{matchupAdjustedStrikeouts.toFixed(1)}</span>
+        </div>
       )}
     </div>
   );

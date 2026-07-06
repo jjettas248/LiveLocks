@@ -168,8 +168,10 @@ export interface MoundSignal {
 
   /** Best-available real sportsbook line for pitcher_strikeouts, when posted. Null pregame before books post a line — never fabricated. */
   marketEdgeContext: MoundMarketEdgeContext | null;
-  /** Data-derived strikeout projection: projectedStrikeoutsFromKPer9(kPer9) (scoreUtils.ts) — the identical function moundOutcomeAttribution.ts calls for the win/loss settlement baseline, so this can never drift from the number that decides a mound_win. Null when kPer9 is unavailable. */
+  /** Data-derived strikeout projection: projectedStrikeoutsFromKPer9(kPer9) (scoreUtils.ts) — the identical function moundOutcomeAttribution.ts calls for the win/loss settlement baseline, so this can never drift from the number that decides a mound_win. Null when kPer9 is unavailable. THE SETTLEMENT BASELINE — never enrich this field itself. */
   projectedStrikeouts: number | null;
+  /** Display-only enrichment (matchupAdjustedKs.ts): blends current + prior-2-season K/9, opponent lineup platoon K-rate, aggregate BvP, run environment, and recent-start K trend. Never feeds score10/tier/drivers/market selection and never used by moundOutcomeAttribution.ts's settlement logic — projectedStrikeouts above remains the sole grading baseline. Null when kPer9 is unavailable. */
+  matchupAdjustedStrikeouts: number | null;
 
   status: MoundSignalStatus;
   suppressed: boolean;
