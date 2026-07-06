@@ -18,10 +18,25 @@ export function HrRadarRecordBanner() {
   });
 
   if (!data) return null;
-  const cashedToday = data.counts.cashed;
+
+  // A `called_hit` outcome is intentionally kept in its pre-hit live section
+  // (attackNow/ready/building/watch) until the inning advances, so a cash
+  // that just happened this inning has `counts.cashed === 0` and doesn't yet
+  // appear in `sections.cashed` — scan every section's `outcome` field
+  // (set verbatim server-side, unaffected by which section the row sits in)
+  // rather than only the cashed bucket, or a same-inning cash would hide.
+  const allEntries = [
+    ...data.sections.attackNow,
+    ...(data.sections.ready ?? []),
+    ...data.sections.building,
+    ...data.sections.watch,
+    ...data.sections.cashed,
+  ];
+  const cashedEntries = allEntries.filter((e) => e.outcome === "called_hit");
+  const cashedToday = cashedEntries.length;
   if (cashedToday === 0) return null;
 
-  const earlyCallsToday = data.sections.cashed.filter((e) => e.alertPath === "early").length;
+  const earlyCallsToday = cashedEntries.filter((e) => e.alertPath === "early").length;
   const liveNow =
     data.counts.attackNow + data.counts.building + data.counts.watch + (data.counts.ready ?? 0);
 
