@@ -6,13 +6,14 @@ import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, AlertTriangle, RefreshCw, Eraser, X, ArrowRight, Clock, DollarSign, Share2, Target } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
-import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryActionPct, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
+import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
 import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, mapHrRadarRowToDisplayState, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 import { type HrRadarBadge } from "@shared/hrRadarStage";
 import { buildHrRadarCardViewModel, buildDriverChips, selectTopPriority, topPriorityReasonLabel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
 import { HrRadarFullLadderTable } from "@/components/mlb/hr-radar/HrRadarFullLadderTable";
+import { HrRadarRecordBanner } from "@/components/mlb/hr-radar/HrRadarRecordBanner";
 import { hrTierTheme, TierRail, tierFromLadderSection, badgeToneClasses } from "@/components/mlb/hrRadarVisuals";
 
 // ── Signal-first inning pill (LiveLocks MLB UX Phase 1) ───────────────
@@ -504,7 +505,7 @@ export interface CardProps {
  * Shows initial → current → peak as positioned dots on a thin track.
  * Pure presentational; takes already-clamped 0-10 values.
  */
-function HeatingUpMeter({
+export function HeatingUpMeter({
   initial,
   current,
   peak,
@@ -598,45 +599,6 @@ function hrBreakdownBar(pct: number, isHrProb = false): string {
 }
 
 /**
- * Compact always-visible HR breakdown strip — tiny labelled bars in one row.
- * Reads the GATED canonical breakdown builder (hrRadarDisplayState): the
- * HR-chance bar is the only percent and only when calibrated; every other
- * metric renders on the /10 scale, so a raw readiness/score (e.g. 95) can never
- * surface as "95%". Renders nothing when fewer than 2 metrics are present.
- */
-function HrBreakdownStrip({ entry }: { entry: HrRadarLadderEntry }) {
-  const bars = buildHrRadarBreakdownBars(entry as unknown as HrRadarRowInput);
-  if (bars.length < 2) return null;
-  return (
-    <div className="mt-2" data-testid={`strip-hr-breakdown-${entry.playerId}`}>
-      <div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground/70 mb-1">
-        Signal breakdown
-      </div>
-      <div
-        className="grid gap-2"
-        style={{ gridTemplateColumns: `repeat(${bars.length}, minmax(0, 1fr))` }}
-      >
-        {bars.map((bar) => {
-          const color = hrBreakdownBar(bar.magnitude, bar.isHrProb);
-          const valueText = formatBreakdownBarValue(bar);
-          return (
-            <div key={bar.key} className="flex flex-col gap-0.5 min-w-0" title={`${bar.label} ${valueText}`}>
-              <div className="flex items-center justify-between gap-1">
-                <span className="text-[9px] text-muted-foreground tracking-wide">{bar.short}</span>
-                <span className="text-[9px] font-bold tabular-nums" style={{ color }}>{valueText}</span>
-              </div>
-              <div className="h-1.5 rounded-full bg-secondary/60 overflow-hidden">
-                <div className="h-full rounded-full" style={{ width: `${bar.magnitude}%`, backgroundColor: color }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-/**
  * Pregame "why" driver chips — verbatim server-stamped power-profile drivers
  * (e.g. "Hitter park", "Elite xISO", "Slot 2"). Renders nothing when absent.
  */
@@ -697,13 +659,6 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
     : momentum === "cooling_off" ? { glyph: "↓", color: "text-orange-400" }
     : momentum === "holding_strong" ? { glyph: "→", color: "text-amber-400" }
     : null;
-  // Fire and Ready share the high-conviction "HR Max Window" visual treatment,
-  // but ONLY Fire is an official, graded call (officialSignalStage="fire" /
-  // displayRecordEligible). Ready is high-conviction watch context and never
-  // counts toward the official record. They are distinct ladder stages
-  // (Track → Build → Ready → Fire); "HR Max Window" is a contextual badge on
-  // these two, not a stage of its own.
-  const isAttack = section === "attackNow" || section === "ready";
   // Goldmaster Phase 5 — derive live vs resolved mode. Resolved cards must
   // never carry "next AB" copy or any live-only verbiage.
   // HR Radar Final-Game Reconciliation — Phase 5: a card whose game is
@@ -758,7 +713,6 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
   // When it is not a plausible calibrated probability, the card falls back to
   // the tier-banded /10 strength below.
   const hrChancePct = deriveCalibratedHrChancePct(entry as unknown as HrRadarRowInput);
-  const actionPct = hrEntryActionPct(entry);
   const actionScore10 = hrEntryActionScore10(entry);
   // Sanitize every server-stamped reason string through the same user-safety
   // gate the bullet list uses, so a raw engine/FSM code (e.g.
@@ -975,14 +929,6 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
               {primaryReason}
             </p>
           )}
-          {!isResolved && whyNotTopWindow && (
-            <p
-              className="text-[11px] text-muted-foreground leading-snug mb-0.5"
-              data-testid={`text-why-not-top-${entry.playerId}`}
-            >
-              {whyNotTopWindow}
-            </p>
-          )}
           {/* HR Radar contract: `detected` is frozen first-detection inning;
               never substitute `signalInning` or `scoreIncreaseInning` here. */}
           <div className="flex items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground flex-wrap">
@@ -1147,28 +1093,6 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
         </div>
       </div>
 
-      {/* Window strength — tier-banded actionability bar. Mapped server-side so
-          WATCHING ≤54%, ALMOST 55-69%, TOP WINDOW ≥70% — a lower tier can never
-          visually outrank a higher one. This is NOT the true HR chance %. */}
-      {!isResolved && actionPct != null && (
-        <div className="mt-2" data-testid={`window-strength-${entry.playerId}`}>
-          <div className="flex justify-between text-[10px] text-muted-foreground mb-1">
-            <span>Window strength</span>
-            {/* Render the tier-banded strength on the /10 scale — NOT a "%".
-                Only a calibrated HR probability may render a percent. */}
-            <span data-testid={`text-window-strength-${entry.playerId}`}>
-              {(actionScore10 ?? actionPct / 10).toFixed(1)}/10
-            </span>
-          </div>
-          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-            <div
-              className={`h-full rounded-full ${isAttack ? "bg-red-400" : section === "building" ? "bg-amber-400" : "bg-blue-400"}`}
-              style={{ width: `${actionPct}%` }}
-            />
-          </div>
-        </div>
-      )}
-
       {/* Task #121 Step 5 — cashed cards: "Called T{d} → Hit T{h}" arc with
           inning delta + Statcast (EV / dist / LA / pitch) row when verified. */}
       {section === "cashed" && (detected || hit) && (
@@ -1255,39 +1179,14 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
           {cleanSummary}
         </p>
       )}
-      {/* Goldmaster Phase 4-7 — for live rows, render the canonical
-          stageExplanation as a single-line summary (server is the source of
-          truth). Then list the deduplicated headline + supporting reasons.
-          Pregame zero-AB rows show the pregame headline only — no contact
-          bullets. */}
-      {!isResolved && cleanStageExplanation && cleanStageExplanation !== primaryReason && (
-        <p
-          className="mt-2 text-[11px] text-foreground/70 leading-snug"
-          data-testid={`text-stage-explanation-${entry.playerId}`}
-        >
-          {cleanStageExplanation}
-        </p>
-      )}
-      {!isResolved && reasonsForRender.length > 0 && (
-        <ul className="mt-2 space-y-0.5" data-testid={`list-why-now-${entry.playerId}`}>
-          {reasonsForRender.slice(0, 3).map((r, i) => (
-            <li key={i} className="text-[11px] text-foreground/70 flex gap-1">
-              <span className="text-muted-foreground">•</span>
-              <span className="truncate">{r}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Always-visible HR breakdown (moved up from the expand). Pregame driver
-          chips explain a seeded score; the mini 4-metric strip shows the live
-          formation/readiness/HR%/pitcher-vuln at a glance; the compact
-          trajectory shows initial → current · peak without expanding. Full
-          versions remain inside the tap-to-expand detail below. */}
+      {/* Always-visible: pregame driver chips (only representation of a seeded
+          score pre-contact) and the single compact trajectory line. The full
+          HR breakdown bars, the stage explanation, and the supporting-reason
+          bullets moved into the tap-to-expand Details below — they duplicated
+          numbers/text already shown here or in the primary reason line. */}
       {!isResolved && (
         <>
           <PregameDriverChips entry={entry} />
-          <HrBreakdownStrip entry={entry} />
           {score10 != null && initial10 != null && peak10 != null && (
             isPregameOnly ? (
               // Pregame seed: a prior has no initial→current→peak journey, so
@@ -1346,6 +1245,31 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
             <span>{abChip ?? "Details"}</span>
           </CollapsibleTrigger>
           <CollapsibleContent className="mt-2 space-y-2">
+            {/* Supporting reasoning beyond the always-on primary reason line:
+                why this isn't yet the top window, the canonical stage
+                explanation (when it says something the primary reason
+                doesn't), and the deduplicated headline + supporting reasons. */}
+            {whyNotTopWindow && (
+              <p className="text-[11px] text-muted-foreground leading-snug" data-testid={`text-why-not-top-${entry.playerId}`}>
+                {whyNotTopWindow}
+              </p>
+            )}
+            {cleanStageExplanation && cleanStageExplanation !== primaryReason && (
+              <p className="text-[11px] text-foreground/70 leading-snug" data-testid={`text-stage-explanation-${entry.playerId}`}>
+                {cleanStageExplanation}
+              </p>
+            )}
+            {reasonsForRender.length > 0 && (
+              <ul className="space-y-0.5" data-testid={`list-why-now-${entry.playerId}`}>
+                {reasonsForRender.slice(0, 3).map((r, i) => (
+                  <li key={i} className="text-[11px] text-foreground/70 flex gap-1">
+                    <span className="text-muted-foreground">•</span>
+                    <span className="truncate">{r}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
             {recentABs.length > 0 && <AbLogRows abs={recentABs} />}
 
             {/* Momentum label detail (the compact trajectory + heating meter are
@@ -1362,8 +1286,8 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
               </div>
             )}
 
-            {/* HR Breakdown — full labelled 4-bar panel (shares buildHrRadarBreakdownBars
-                with the always-on compact strip so the two can't disagree). */}
+            {/* HR Breakdown — full labelled bar panel, the sole rendering of
+                buildHrRadarBreakdownBars (no compact duplicate above the fold). */}
             {(() => {
               // GATED breakdown (hrRadarDisplayState): HR-chance is the only
               // percent and only when calibrated; all other metrics render /10,
@@ -1962,6 +1886,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           </Button>
         </div>
       </div>
+      <HrRadarRecordBanner />
       {/* Section count summary — sticky so the radar state is always visible
           while scrolling through the sections. Only shows non-zero counts. */}
       {counts.total > 0 && (

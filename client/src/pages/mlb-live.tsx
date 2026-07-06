@@ -7,7 +7,8 @@ import { TopLiveOpportunities } from "@/components/mlb/TopLiveOpportunities";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
 import { LiveFeed } from "@/components/mlb/LiveFeed";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
-import { HrRadarLadder, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+import { HrRadarLadder, HeatingUpMeter, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+import { hrTierTheme, tierFromPlayabilityStatus } from "@/components/mlb/hrRadarVisuals";
 import { PregameHub } from "@/components/mlb/pregame/PregameHub";
 import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
@@ -22,7 +23,7 @@ import { EmptyState } from "@/components/sports/EmptyState";
 import { LiveIndicator } from "@/components/common/LiveIndicator";
 import { Radio, Target, RefreshCw, Calculator, Loader2, Flame, Zap, Trophy, Eye, ChevronDown, ChevronUp, Bell, Activity, X, BarChart3, Plus, ExternalLink, TrendingUp, TrendingDown, Clock, CheckCircle2, Calendar } from "lucide-react";
 import {
-  radarScoreToTier, launchAngleLabel, formatMlbDisplayValue,
+  launchAngleLabel, formatMlbDisplayValue,
   liveScoreToGrade,
   mapMlbSignalToUi,
   type HrRadarCardUi,
@@ -242,20 +243,6 @@ function formatOdds(n: number): string {
   return n > 0 ? `+${n}` : String(n);
 }
 
-function BuildScoreMeter({ score, size = "sm" }: { score: number; size?: "sm" | "lg" }) {
-  const pct = Math.min((score / 10) * 100, 100);
-  const color = score >= 7 ? "bg-red-500" : score >= 5 ? "bg-orange-500" : score >= 3.5 ? "bg-yellow-500" : "bg-zinc-500";
-  const h = size === "lg" ? "h-2" : "h-1.5";
-  return (
-    <div className="flex items-center gap-1.5 flex-1 min-w-0">
-      <div className={`flex-1 ${h} rounded-full bg-zinc-800 overflow-hidden`}>
-        <div className={`${h} rounded-full ${color} transition-all duration-700`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className={`text-[10px] font-bold tabular-nums ${score >= 7 ? "text-red-400" : score >= 5 ? "text-orange-400" : score >= 3.5 ? "text-yellow-400" : "text-zinc-400"}`}>{score.toFixed(1)}</span>
-    </div>
-  );
-}
-
 
 function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; gameId: string; onClose: () => void }) {
   const { data, isLoading, error } = useQuery<{ alert: any; analyze: any; source?: string; partial?: boolean }>({
@@ -305,14 +292,14 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   // Goldmaster Phase 1 — single 0-100 wire scale. The server normalizes
   // initial/current/peak to the canonical 0-100 readiness scale at CREATE
   // time. The client renders these values DIRECTLY as 0-100 with no /10 mix.
-  // The legacy radarScoreToTier / BuildScoreMeter consumers are calibrated on
-  // a 0-10 build-score scale, so we derive a separate `tierBasis` value (=
-  // currentScore/10) ONLY for those legacy controls.
   const initialScore = parseFloat(alert.initialReadinessScore ?? "0");
   const currentScore = parseFloat(alert.currentReadinessScore ?? "0");
   const peakScore = parseFloat(alert.peakReadinessScore ?? "0");
-  const tierBasis = currentScore / 10;
-  const tier = radarScoreToTier(tierBasis);
+  // Same shared heat-tier ramp the ladder/Quick Decide use (hrRadarVisuals.tsx),
+  // keyed off the server-stamped playabilityStatus rather than a separately
+  // re-derived score→tier lookup, so this modal's color can never diverge from
+  // the card's for the same signal.
+  const t = hrTierTheme(tierFromPlayabilityStatus((alert as any).playabilityStatus, alert.status === "hit"));
   // Goldmaster RESTORE — USER-FACING 10-point score derived from canonical
   // 0-100 readiness (one decimal). The 0-100 numbers remain available as a
   // small admin/debug sub-row for power users.
@@ -389,36 +376,30 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
               Limited analysis available — live game data is no longer cached for this play.
             </div>
           )}
-          {/* Goldmaster RESTORE — Initial / Current / Peak rendered on the
-              single USER-FACING 0.0-10.0 scale (one decimal). The redundant
-              0-100 readiness sub-row was removed for clarity; the harness
-              still validates against the 0-100 canonical scale on the wire. */}
-          <div className="grid grid-cols-3 gap-3">
-            <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
-              <div className="text-[9px] text-muted-foreground">Initial</div>
-              <div className="text-sm font-bold text-foreground" data-testid="text-signal-score-10-initial">
-                {initial10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
-              </div>
+          {/* Single trajectory representation (initial → current · peak +
+              HeatingUpMeter) — the same widget the Full Ladder card uses, so
+              there is exactly one trajectory design across the feature
+              instead of a separate three-tile + progress-bar rendering. */}
+          <div className="flex items-center justify-between gap-3 px-1">
+            <div className="flex items-baseline gap-1.5 font-mono">
+              <span className="text-xs text-muted-foreground" data-testid="text-signal-score-10-initial">
+                {initial10.toFixed(1)}
+              </span>
+              <span className="text-muted-foreground">→</span>
+              <span className="text-xl font-extrabold" style={{ color: t.hex }} data-testid="text-signal-score-10-current">
+                {current10.toFixed(1)}
+              </span>
+              <span className="text-[10px] text-muted-foreground/60">
+                /10 · peak <span data-testid="text-signal-score-10-peak">{peak10.toFixed(1)}</span>
+              </span>
             </div>
-            <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
-              <div className="text-[9px] text-muted-foreground">Current</div>
-              <div className="text-sm font-bold" style={{ color: tier.color }} data-testid="text-signal-score-10-current">
-                {current10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
-              </div>
-            </div>
-            <div className="text-center p-2 rounded-lg bg-muted/20 border border-border/20">
-              <div className="text-[9px] text-muted-foreground">Peak</div>
-              <div className="text-sm font-bold text-foreground" data-testid="text-signal-score-10-peak">
-                {peak10.toFixed(1)}<span className="text-[9px] text-muted-foreground"> / 10</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Heat progress bar — BuildScoreMeter is calibrated on a 0-10
-              build-score scale, so feed it tierBasis (= currentScore/10).
-              The visible numbers above remain on the canonical 0-100 scale. */}
-          <div className="px-1">
-            <BuildScoreMeter score={tierBasis} size="lg" />
+            <HeatingUpMeter
+              initial={initial10}
+              current={current10}
+              peak={peak10}
+              playerId={alert.playerId ?? "analyze"}
+              isPregame={isNoAbsYet}
+            />
           </div>
 
           {convictionBadge && (

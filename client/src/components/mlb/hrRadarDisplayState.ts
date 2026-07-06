@@ -365,11 +365,19 @@ const NEXT_ESCALATION: Record<CanonicalUserStage, string | null> = {
   resolved: null,
 };
 
-const ACTION_STRENGTH_LABEL: Record<CanonicalUserStage, string> = {
+// Shared with HR_PUBLIC_STAGE_LABEL (hrRadarViewModel.ts) — the one vocabulary
+// for the four live stages. Kept here (not re-derived) so there is exactly one
+// definition; the two consumers only diverge on how they label a resolved row
+// (this module: one "Resolved" bucket; the public ladder: split cashed/missed).
+export const LIVE_STAGE_LABEL: Record<"track" | "build" | "ready" | "fire", string> = {
   fire: "Attack",
   ready: "Playable",
   build: "Lean",
   track: "Watchlist",
+};
+
+const ACTION_STRENGTH_LABEL: Record<CanonicalUserStage, string> = {
+  ...LIVE_STAGE_LABEL,
   resolved: "Resolved",
 };
 
