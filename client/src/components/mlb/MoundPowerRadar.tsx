@@ -321,7 +321,12 @@ function MoundCard({ signal: s, showFade = false }: { signal: MoundSignal; showF
   const positives = s.drivers.filter((d) => d.direction === "positive").slice(0, 4);
   const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
-  const isFade = showFade && s.tier === "track";
+  // "track" is also assigned when composeMoundScore caps a row for missing
+  // data (e.g. pitcherSkillScore unavailable forces a 3.9 cap regardless of
+  // the real composite) — require real pitcher-skill data behind the score
+  // before calling it a genuine weak-matchup Fade Candidate, not a
+  // missing-data artifact.
+  const isFade = showFade && s.tier === "track" && s.diagnostics.pitcherSkillScore != null;
 
   const cashed = s.outcomes?.outcome === "mound_win" && s.outcomes?.userVisible === true;
   const cashedColor = "#10b981";

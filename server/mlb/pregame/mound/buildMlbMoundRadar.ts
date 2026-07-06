@@ -29,7 +29,8 @@ import {
   mlbPlayerCache,
 } from "../../dataPullService";
 import { classifyPitcherArchetype } from "../../archetypes";
-import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../../../oddsService";
+import { resolveMLBOddsEventId, resolveMLBOddsEventIdFromCache, getMLBPlayerOdds } from "../../../oddsService";
+import { readOddsSnapshot } from "../../../odds/oddsCache";
 import type {
   MoundSignal,
   MoundGameStatus,
@@ -163,13 +164,14 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
       const starters = [homeStarter, awayStarter].filter((p): p is NonNullable<typeof p> => !!p);
       if (starters.length > 0) starterGames++;
 
-      // Resolved once per game (shared by both starters) — degrades to null
-      // on any failure, in which case marketEdgeContext just stays null below.
-      let oddsEventId: string | null = null;
-      try {
-        oddsEventId = await resolveMLBOddsEventId(game.homeTeam, game.awayTeam);
-      } catch {
-        oddsEventId = null;
+      // Cache-only — never a live fetch on the build's critical path. This
+      // builder also produces the curated Targets feed, so a slow/degraded
+      // Odds API must never stall the whole Mound rebuild. On a cache miss,
+      // kick a background resolve (not awaited) to warm the cache for the
+      // NEXT build cycle instead.
+      let oddsEventId: string | null = resolveMLBOddsEventIdFromCache(game.homeTeam, game.awayTeam);
+      if (!oddsEventId) {
+        resolveMLBOddsEventId(game.homeTeam, game.awayTeam).catch(() => {});
       }
 
       for (const starter of starters) {
@@ -183,22 +185,31 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           (starter.team === game.homeTeam ? game.awayTeam : game.homeTeam);
 
         // ── Gather inputs (each guarded — degrade to neutral on failure) ────
-        // Five independent network calls, no data dependency between them —
-        // run concurrently rather than paying 5x the round-trip latency per
+        // Four independent network calls, no data dependency between them —
+        // run concurrently rather than paying 4x the round-trip latency per
         // starter across a full slate's ~30 probable starters.
-        const [, handSplitsResult, recentStartsResult, savantResult, strikeoutOddsResult] = await Promise.allSettled([
+        const [, handSplitsResult, recentStartsResult, savantResult] = await Promise.allSettled([
           syncPitcherSeasonStats(starter.pitcherId),
           fetchPitcherHandednessSplits(starter.pitcherId),
           fetchPitcherRecentStarts(starter.pitcherId),
           fetchBaseballSavantData(starter.pitcherId, game.gameId),
-          oddsEventId ? getMLBPlayerOdds(oddsEventId, starter.pitcherName, "pitcher_strikeouts", false) : Promise.resolve(null),
         ]);
         const seasonStats = mlbPlayerCache.pitcherSeasonStats[starter.pitcherId] ?? null;
         const handSplits = handSplitsResult.status === "fulfilled" ? handSplitsResult.value : null;
         const recentStarts = recentStartsResult.status === "fulfilled" ? recentStartsResult.value : null;
         const savant = savantResult.status === "fulfilled" ? savantResult.value : null;
-        const strikeoutOdds = strikeoutOddsResult.status === "fulfilled" ? strikeoutOddsResult.value : null;
-        const marketEdgeContext = buildMoundMarketEdgeContext(strikeoutOdds, Date.now());
+
+        // Cache-only display enrichment — never a live fetch on the build's
+        // critical path (same rationale as oddsEventId above). On a cache
+        // miss, warm the cache in the background for the NEXT build cycle
+        // rather than blocking this one.
+        const strikeoutSnap = oddsEventId
+          ? readOddsSnapshot({ sport: "mlb", eventId: oddsEventId, market: "pitcher_strikeouts", player: starter.pitcherName, isLive: false, allowStale: true })
+          : null;
+        const marketEdgeContext = buildMoundMarketEdgeContext(strikeoutSnap?.books ?? null, strikeoutSnap?.fetchedAt ?? Date.now());
+        if (oddsEventId && !strikeoutSnap) {
+          getMLBPlayerOdds(oddsEventId, starter.pitcherName, "pitcher_strikeouts", false).catch(() => {});
+        }
 
         const pitcherKnown = true; // starter itself is always known here
         const avgInningsPerStart =
