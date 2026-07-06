@@ -8,6 +8,17 @@
  * path) is only user-stage READY — high-watch context, never an official call —
  * and must NOT pollute the official HR record.
  *
+ * Precision restructure (2026-07): `reachedFireCommitment`'s logic itself is
+ * UNCHANGED in this pass (still `alertPath === "fast_promote_elite" ||
+ * peakConversionProbability >= FIRE_BET_NOW_CONV_THRESHOLD`) — it becomes
+ * correspondingly less noisy automatically because FAST_PROMOTE_ELITE itself
+ * now requires 3 independent signals (elite barrel + collapsing/favorable
+ * pitcher + a second, genuinely distinct dangerous contact) before
+ * evaluateHRAlert.ts ever emits that alertPath at all — see evaluateHRAlert.ts.
+ * This suite tests the grading proxy in isolation via hardcoded alertPath
+ * strings, so it doesn't need fixture changes to stay correct; it documents
+ * the composition that consumes evaluateHRAlert.ts's (now stricter) output.
+ *
  * Run: npx tsx server/mlb/hrRadarFireOnlyGrading.test.ts
  */
 

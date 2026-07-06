@@ -502,75 +502,6 @@ function computeLEIComponent(input: MLBPropInput): number {
   );
 }
 
-function computeHrLEIComponent(input: MLBPropInput): number {
-  const lei = input.liveInterpretation;
-  if (!lei) return 50;
-  const contactPart  = Math.min(100, (lei.contactScore        / 0.20) * 100);
-  const nearHrPart   = Math.min(100, (lei.nearHrScore         / 0.15) * 100);
-  const momentumPart = Math.min(100, (lei.momentumScore       / 0.10) * 100);
-  const fatiguePart  = Math.min(100, (lei.pitcherFatigueScore / 0.15) * 100);
-  const veloDropPart = Math.min(100, (lei.veloDropScore       / 0.10) * 100);
-  return clamp(
-    0.40 * nearHrPart + 0.30 * fatiguePart + 0.15 * veloDropPart +
-    0.10 * contactPart + 0.05 * momentumPart,
-    0, 100
-  );
-}
-
-function computeHrMatchupComponent(input: MLBPropInput, output: MLBPropOutput): number {
-  let score = 50;
-
-  const bvp = input.bvpHistory;
-  if (bvp && bvp.atBats >= 5) {
-    const bvpHrRate = (bvp.homeRuns ?? 0) / bvp.atBats;
-    if (bvpHrRate >= 0.10) score += 25;
-    else if (bvpHrRate >= 0.05) score += 15;
-    else if (bvpHrRate > 0) score += 7;
-    const bvpAvg = bvp.avg ?? 0;
-    if (bvpAvg >= 0.350) score += 8;
-    else if (bvpAvg >= 0.300) score += 4;
-    else if (bvpAvg < 0.150 && bvp.atBats >= 10) score -= 10;
-  }
-
-  const kPer9 = input.pitcher?.kPer9;
-  if (kPer9 != null) {
-    if (kPer9 >= 11.0) score -= 18;
-    else if (kPer9 >= 9.0) score -= 10;
-    else if (kPer9 <= 6.0) score += 12;
-    else if (kPer9 <= 7.5) score += 6;
-  }
-
-  const bbPer9 = input.pitcher?.bbPer9;
-  if (bbPer9 != null) {
-    if (bbPer9 >= 4.5) score += 14;
-    else if (bbPer9 >= 3.5) score += 8;
-    else if (bbPer9 <= 1.5) score -= 6;
-  }
-
-  // Low fastball spin = flat trajectory = easier to barrel
-  const spin = input.pitcher?.avgFastballSpin;
-  if (spin != null) {
-    if (spin < 2100) score += 12;
-    else if (spin < 2200) score += 6;
-    else if (spin > 2450) score -= 8;
-  }
-
-  const pa = output.pitcherAnalysis;
-  if (pa) {
-    if (pa.stuff >= 80 && pa.swingMiss >= 75) score -= 14;
-    else if (pa.stuff >= 70 && pa.swingMiss >= 65) score -= 7;
-    else if (pa.stuff <= 45) score += 10;
-  }
-
-  if (input.pitcher?.era != null) {
-    if (input.pitcher.era >= 5.0) score += 8;
-    else if (input.pitcher.era >= 4.0) score += 4;
-    else if (input.pitcher.era <= 2.5) score -= 8;
-  }
-
-  return clamp(score, 0, 100);
-}
-
 function computeParkWeatherComponent(input: MLBPropInput): number {
   let score = 50;
   if (input.weatherPark?.parkFactor != null) {
@@ -591,6 +522,11 @@ function computeParkWeatherComponent(input: MLBPropInput): number {
   return clamp(score, 0, 100);
 }
 
+// Precision restructure (2026-07): this function's isHRMarket branch has been
+// removed — computeSignalScoreByFamily now routes market === "home_runs" to
+// computeHrRadarSignalComposite before this is ever called, and this is the
+// only call site, so the branch was permanently dead here. This function now
+// only runs for hits/total_bases/hrr/batter_strikeouts.
 export function scoreBatterOverSignal(
   input: MLBPropInput,
   output: MLBPropOutput
@@ -604,45 +540,16 @@ export function scoreBatterOverSignal(
   const prob = computeProbabilityComponent(output.calibratedProbability);
   const proj = computeProjectionComponent(output.projection, output.bookLine, output.market, output.recommendedSide);
 
-  const isHRMarket = output.market === "home_runs";
-  const pitchMixMatchup = isHRMarket ? computePitchMixMatchupScore(input) : 50;       // Gap 1
-  const hrTiming = isHRMarket ? computeHrTimingComponent(input) : 50;                 // Gap 2
-  const entryFatigue = isHRMarket ? computePitcherEntryFatigueScore(input) : 50;      // Gap 3
-  const handednessSplits = isHRMarket ? computeHandednessSplitsScore(input) : 50;     // Gaps 4 & 5
-  const lineupSlotHR = isHRMarket ? computeLineupSlotHRScore(input) : 50;             // Gap 6
-  const powerProfile = isHRMarket ? computePowerProfileScore(input) : 50;             // Gaps 7–9
-
-  // HR-specific overrides: replace generic components with HR-targeted ones
-  const leiScore  = isHRMarket ? computeHrLEIComponent(input)            : lei;
-  const hrMatchup = isHRMarket ? computeHrMatchupComponent(input, output) : matchup;
-  const hrForm    = isHRMarket ? computeRecentFormScore(input)            : form;
-
-  const baseTotal = isHRMarket
-    ? Math.round(
-        0.08 * hrForm +           // L7/L15 HR-rate trend + OPS
-        0.13 * hrMatchup +        // BvP HR history, K/9, BB/9, spin, stuff
-        0.06 * parkWeather +
-        0.13 * leiScore +         // nearHr 40%, fatigue 30%, veloDrop 15%
-        0.05 * opportunity +
-        0.07 * eventBoost +
-        0.09 * pitchMixMatchup +
-        0.06 * hrTiming +
-        0.04 * entryFatigue +
-        0.08 * handednessSplits + // pitcher HR/9 by batter hand + batter HR rate
-        0.12 * powerProfile +     // now includes barrel, hardHit, xBA, xSLG, learnedHr
-        0.05 * lineupSlotHR +
-        0.04 * prob
-      )
-    : Math.round(
-        0.15 * form +
-        0.20 * matchup +
-        0.10 * parkWeather +
-        0.25 * lei +
-        0.10 * opportunity +
-        0.10 * eventBoost +
-        0.05 * prob +
-        0.05 * proj
-      );
+  const baseTotal = Math.round(
+    0.15 * form +
+    0.20 * matchup +
+    0.10 * parkWeather +
+    0.25 * lei +
+    0.10 * opportunity +
+    0.10 * eventBoost +
+    0.05 * prob +
+    0.05 * proj
+  );
 
   const total = clamp(baseTotal, 0, 100);
 
@@ -656,9 +563,9 @@ export function scoreBatterOverSignal(
   return {
     probability: Math.round(prob),
     projection: Math.round(proj),
-    liveContext: Math.round(leiScore),
-    matchup: isHRMarket ? Math.round(handednessSplits) : Math.round(matchup),
-    form:    isHRMarket ? Math.round(hrTiming)          : Math.round(form),
+    liveContext: Math.round(lei),
+    matchup: Math.round(matchup),
+    form: Math.round(form),
     opportunity: Math.round(opportunity),
     marketReliability: Math.round(parkWeather),
     priceValidation: 50,
@@ -719,7 +626,7 @@ export function scoreUnderSignal(
 // Gap 2: HR timing score from abSinceLastHR regression-to-rate.
 // When a power hitter is overdue (ABs since last HR >> personal avg AB/HR),
 // their per-game HR probability rises as regression to mean pulls them back.
-// Score 0–100, used in scoreHRRadar and scoreBatterOverSignal for HR market.
+// Score 0–100, used in computeHrRadarSignalComposite (the HR market composite).
 function computeHrTimingComponent(input: MLBPropInput): number {
   const trend = input.hrTrend;
   if (!trend) return 50;
@@ -741,7 +648,7 @@ function computeHrTimingComponent(input: MLBPropInput): number {
 
 // Gap 1: pitch mix × handedness score for signal scoring layer.
 // Mirrors the multiplier logic in hrConversionModel but returns a 0–100
-// score for weighting in SignalScoreBreakdown. Used in scoreHRRadar.
+// score for weighting in SignalScoreBreakdown. Used in computeHrRadarSignalComposite.
 function computePitchMixMatchupScore(input: MLBPropInput): number {
   const pitchMix = input.pitcher?.pitchMix;
   if (!pitchMix || pitchMix.length === 0) return 50;
@@ -1020,7 +927,36 @@ function computeIbbRespectScore(input: MLBPropInput): number {
   return clamp(score, 0, 100);
 }
 
-export function scoreHRRadar(
+// Precision restructure (2026-07) — the single canonical HR tier ladder.
+// Previously two live composites derived confidenceTier with DIFFERENT
+// thresholds (scoreBatterOverSignal's HR branch used 80/68/55/42; the old
+// scoreHRRadar used 80/65/50/35), and a third hardcoded copy of the GENERIC
+// non-HR ladder (85/70/55/40) was used to re-derive confidenceTier after the
+// HR Watch +3/+6 bump in liveGameOrchestrator.ts — a plain bug, since that
+// bump only ever runs for market === "home_runs". This is now the one HR
+// ladder; SOLID is pinned at 55 (not 50 or 42) because deriveSignalTags'
+// "HR WATCH" gate and deriveFeedTags' "hr_radar" gate both hardcode
+// `total >= 55` and must not silently shift when reading from this ladder.
+export function deriveHrConfidenceTier(total: number): SignalConfidenceTier {
+  if (total >= 80) return "ELITE";
+  if (total >= 65) return "STRONG";
+  if (total >= 55) return "SOLID";
+  if (total >= 35) return "WATCHLIST";
+  return "NO_SIGNAL";
+}
+
+// Precision restructure (2026-07) — consolidates what used to be two separate
+// live in-game HR composites (scoreBatterOverSignal's isHRMarket branch and
+// scoreHRRadar) scoring the same "will this batter homer" question with two
+// different weight sets and two different tier ladders, feeding two
+// different downstream labels off the same signal row. This is now the one
+// composite: shared Phase-2.5 components computed once, the more directly
+// contact-evidence-driven nearHrScore/contactScore/pitcherVuln/recentForm/
+// ibbRespect formulas (better suited to a precision-first mandate than the
+// old leiScore/hrMatchup/hrForm blocks they replace), plus eventBoost and
+// prob folded in from the retired scoreBatterOverSignal HR branch (the old
+// scoreHRRadar omitted both entirely, losing real information).
+export function computeHrRadarSignalComposite(
   input: MLBPropInput,
   output: MLBPropOutput
 ): SignalScoreBreakdown {
@@ -1083,6 +1019,8 @@ export function scoreHRRadar(
 
   const parkWeather = computeParkWeatherComponent(input);
   const opportunity = computeOpportunityComponent(input);
+  const eventBoost = computeEventBoostComponent(input, output);         // folded in from scoreBatterOverSignal
+  const prob = computeProbabilityComponent(output.calibratedProbability); // folded in from scoreBatterOverSignal
   const pitchMixMatchup = computePitchMixMatchupScore(input);            // Gap 1
   const hrTiming = computeHrTimingComponent(input);                      // Gap 2
   const entryFatigue = computePitcherEntryFatigueScore(input);           // Gap 3
@@ -1093,40 +1031,36 @@ export function scoreHRRadar(
   const ibbRespect = computeIbbRespectScore(input);                      // IBB feared-slugger
 
   const baseTotal = Math.round(
-    0.17 * nearHrScore +
-    0.16 * contactScore +
-    0.11 * pitcherVuln +
-    0.09 * pitchMixMatchup +
-    0.07 * hrTiming +
-    0.07 * entryFatigue +
-    0.06 * handednessSplits +
-    0.07 * powerProfile +
-    0.06 * parkWeather +
+    0.16 * nearHrScore +
+    0.15 * contactScore +
+    0.10 * pitcherVuln +
+    0.08 * pitchMixMatchup +
+    0.06 * hrTiming +
+    0.06 * entryFatigue +
+    0.05 * handednessSplits +
+    0.06 * powerProfile +
+    0.05 * parkWeather +
     0.03 * lineupSlotHR +
     0.03 * opportunity +
-    0.05 * recentForm +
-    0.03 * ibbRespect
+    0.04 * recentForm +
+    0.03 * ibbRespect +
+    0.05 * eventBoost +
+    0.05 * prob
   );
 
   const total = clamp(baseTotal, 0, 100);
-
-  let confidenceTier: SignalConfidenceTier;
-  if (total >= 80) confidenceTier = "ELITE";
-  else if (total >= 65) confidenceTier = "STRONG";
-  else if (total >= 50) confidenceTier = "SOLID";
-  else if (total >= 35) confidenceTier = "WATCHLIST";
-  else confidenceTier = "NO_SIGNAL";
+  const confidenceTier = deriveHrConfidenceTier(total);
 
   return {
-    probability:       Math.round(nearHrScore),
+    probability:       Math.round(prob),
     projection:        Math.round(contactScore),
-    liveContext:       Math.round(pitcherVuln),
-    matchup:           Math.round(pitchMixMatchup),
+    liveContext:       Math.round(nearHrScore),
+    matchup:           Math.round(handednessSplits),
     form:              Math.round(hrTiming),
     opportunity:       Math.round(opportunity),
     marketReliability: Math.round(parkWeather),
     priceValidation:   Math.round(powerProfile),
-    eventBoost:        Math.round(entryFatigue),
+    eventBoost:        Math.round(eventBoost),
     total,
     confidenceTier,
   };
@@ -1136,6 +1070,12 @@ export function computeSignalScoreByFamily(
   input: MLBPropInput,
   output: MLBPropOutput
 ): SignalScoreBreakdown {
+  // Precision restructure (2026-07): home_runs is routed to the single
+  // consolidated HR composite before the batter_over family check — see
+  // computeHrRadarSignalComposite. scoreBatterOverSignal's isHRMarket branch
+  // is now dead for this market and has been removed.
+  if (output.market === "home_runs") return computeHrRadarSignalComposite(input, output);
+
   const family = getMarketFamily(output.market, output.recommendedSide);
 
   if (family === "batter_over") return scoreBatterOverSignal(input, output);

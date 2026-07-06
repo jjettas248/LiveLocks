@@ -238,6 +238,17 @@ export function reachedHrMaxWindowPeak(args: {
 //      alert's diagnosticsSnapshot.scoreContract, so this is read-only at grade
 //      time — no new write path, no schema change.
 //
+// Precision restructure (2026-07): branch 1 is much stricter than it used to
+// be. FAST_PROMOTE_ELITE now requires 3 independent signals (elite barrel +
+// collapsing/favorable pitcher + a second, genuinely distinct dangerous
+// contact — see evaluateHRAlert.ts) before it fires at all, so this OR-branch
+// is correspondingly less noisy without any change to its own logic. If a
+// future miss-payload diagnostic pass shows `fired_miss` rows still
+// clustering on alertPath === "fast_promote_elite", the next iteration should
+// consider requiring peakConversionProbability >= FIRE_BET_NOW_CONV_THRESHOLD
+// as an additional AND condition here rather than an OR — not done in this
+// pass; needs real post-deploy data first.
+//
 // Pure. Conservative on missing data: an unknown peak conversion (null) scores
 // 0 and only the FAST_PROMOTE_ELITE path can still qualify, so a row with no
 // FIRE evidence is never counted as an official miss.

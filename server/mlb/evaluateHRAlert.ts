@@ -4,6 +4,29 @@ import { computeHRConversionProbability, type HRConversionInput, type HRConversi
 import { runPowerPriorShadow } from "./powerPrior";
 import type { MLBBatterArchetype } from "./archetypes";
 import type { PitchMixEntry } from "./types";
+import { DEEP_FLY_DISTANCE } from "./hrThresholds";
+
+// ── Precision restructure (2026-07) — genuine dangerous-contact corroboration ──
+// The prior `dangerousSecondaryCount = factors.hardHits + factors.deepFlyouts`
+// double-counted a single swing: `classified` has exactly one entry per prior
+// AB (see HRSignalBuilder.ts), and `hardHits`/`deepFlyouts` are two INDEPENDENT
+// filters over that same array — a single barrel with EV>=95 satisfies both
+// "isBarrel" (making `barrels>=1` true) AND "exitVelocity>=95" (making
+// `hardHits>=1` true, since barrels require EV well above the 95mph hard-hit
+// floor), so `barrels>=1 && dangerousSecondaryCount>=1` could fire off ONE
+// swing, not two. This helper instead counts DISTINCT classified contacts
+// (array elements, each already one-per-AB) matching the danger predicate, so
+// a swing that's simultaneously a barrel and a hard-hit only counts once.
+export function countDistinctDangerousContacts(classified: ClassifiedContact[]): number {
+  return classified.filter(c => {
+    if (c.isBarrel === true) return true;
+    if (c.exitVelocity != null && c.exitVelocity >= 95) return true;
+    const isOut = c.outcome === "out" || c.outcome === "other";
+    if (!isOut) return false;
+    if (c.distance != null) return c.distance >= DEEP_FLY_DISTANCE && (c.launchAngle ?? 0) >= 20;
+    return (c.launchAngle ?? 0) >= 20 && (c.exitVelocity ?? 0) >= 95;
+  }).length;
+}
 
 export type HRAlertLevel = "ALERT" | "WATCH" | null;
 export type HRSignalState = "PEAK" | "BUILDING" | "FORMATION" | "COOLDOWN" | null;
@@ -601,10 +624,18 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
   // Detection-immutability is preserved: detectedInning is set to the same
   // `inning` the rest of this evaluator uses; downstream storage freezes
   // the first detected inning at CREATE time.
+  // Precision restructure (2026-07): raised EV≥100/dist≥380 → EV≥103/dist≥395
+  // for FAST_PROMOTE_ELITE's own elite-barrel bar (see below) — this is the
+  // one FAST_PROMOTE path allowed to bypass sustain/peak-currency gating
+  // downstream, so its own evidentiary bar is raised accordingly.
   const eliteBarrelHit = classified.some(
-    c => c.exitVelocity != null && c.exitVelocity >= 100 && c.distance != null && c.distance >= 380
+    c => c.exitVelocity != null && c.exitVelocity >= 103 && c.distance != null && c.distance >= 395
   );
-  const dangerousSecondaryCount = factors.hardHits + factors.deepFlyouts;
+  // Precision restructure (2026-07): distinct-contact corroboration, fixing
+  // the double-count bug where a single barrel swing (EV comfortably above
+  // the 95mph hard-hit floor) satisfied both "barrel" and "secondary danger"
+  // from the identical event. See countDistinctDangerousContacts above.
+  const distinctDangerousContactCount = countDistinctDangerousContacts(classified);
 
   // ── User spec (2026-04-30) — minimum thresholds that form a "good HR
   // attempt": EV ≥ 95, bat speed ≥ 70 mph, xBA ≥ ~0.400. Three new
@@ -624,67 +655,97 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
   const factorsMaxXBA = factors.maxXBA;
   const factorsBatSpeedMph = factors.batSpeedMph;
 
-  // Tier 4-pre-A — Single elite HR-shaped contact alone → ATTACK.
-  // The legacy BARREL_PLUS path required a barrel AND a hard-hit/deep-fly
-  // secondary, which missed the Brady/Spencer cases (one elite ball, one
-  // weak topped grounder). One ball with EV≥98, LA 22-36, dist≥360 IS the
-  // minimum threshold per spec.
+  // Tier 4-pre-A — Single elite HR-shaped contact alone → ATTACK, IF corroborated.
+  // Precision restructure (2026-07): a lone elite contact used to reach Attack
+  // with zero corroboration at all — the weakest-evidenced branch despite the
+  // highest tier. Now requires a genuinely separate signal: either a second
+  // distinct dangerous contact (>=2, NOT >=1 — the elite event itself already
+  // satisfies "1" trivially), a second HR-shaped/missed-HR event, or strong
+  // pitcher/park context. Without one of those, this downgrades to Building
+  // instead of Attack.
   if (
     factors.eliteHrCount >= 1 &&
     fastPromoteVetoOk &&
+    softVetoes.length === 0 &&
     (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
   ) {
+    const corroborated = hrShapedCount >= 2 ||
+      missedHrCount >= 1 ||
+      distinctDangerousContactCount >= 2 ||
+      pitcherFavorable ||
+      envFavorable;
     const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_SINGLE_ELITE", softVetoes.length, convProb);
-    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} SINGLE_ELITE eliteHr=${factors.eliteHrCount} softVetoes=${softVetoes.length} → officialAlert`);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} SINGLE_ELITE eliteHr=${factors.eliteHrCount} corroborated=${corroborated} softVetoes=${softVetoes.length} → ${corroborated ? "officialAlert" : "prepare"}`);
     return {
       level: "ALERT",
       triggerReason: `FAST_PROMOTE:single_elite_hr_contact`,
-      signalState: "PEAK",
-      decision: "BET_NOW",
+      signalState: corroborated ? "PEAK" : "BUILDING",
+      decision: corroborated ? "BET_NOW" : "PREPARE",
       confidenceScore: conf,
-      formattedReason: `Elite HR-shaped contact already in this game (conv ${convPct}). Promoting to Attack on minimum-threshold spec.`,
+      formattedReason: corroborated
+        ? `Elite HR-shaped contact already in this game, corroborated (conv ${convPct}). Promoting to Attack.`
+        : `Elite HR-shaped contact already in this game, but uncorroborated (conv ${convPct}). Promoting to Building only.`,
       detectedInning: inning,
-      alertTier: "officialAlert",
+      alertTier: corroborated ? "officialAlert" : "prepare",
       diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_SINGLE_ELITE", positiveFactors: [...positiveFactors, `${factors.eliteHrCount} elite HR contact`] },
     };
   }
 
-  // Tier 4-pre-B — Barrel + meaningful xBA evidence → ATTACK.
-  // Per spec, xBA in the .400+ range is a "good HR attempt" indicator.
-  // This catches the Soto-style game where one PA was a barrel (101.1
-  // mph BRL, xBA .550) and another was a near-barrel (100.4 mph, xBA
-  // .750). The legacy BARREL_PLUS gate counted the second PA as
-  // dangerous only if EV≥95 AND it was tracked as a hardHit; xBA gives
-  // us a quality signal even when distance falls just short.
+  // Tier 4-pre-B — Barrel + meaningful xBA evidence → ATTACK, IF corroborated.
+  // Per spec, xBA in the .400+ range is a "good HR attempt" indicator. But the
+  // xBA reading is usually the SAME swing as the barrel (xBA is a per-AB
+  // value), so barrel+xBA alone is really one signal read two ways.
+  // Precision restructure (2026-07): require a genuinely separate
+  // corroborator before this reaches Attack; otherwise it downgrades to
+  // Building.
+  // Codex review fix: this base gate (`barrels>=1 && maxXBA>=0.400`) is NOT
+  // scoped to a single contactClass — unlike FAST_PROMOTE_SINGLE_ELITE's
+  // `eliteHrCount>=1` gate, where `eliteHrContact`/`missedHrContact` are
+  // mutually-exclusive classes so `missedHrCount>=1` necessarily refers to a
+  // different swing. Here, the SAME swing that is a barrel with high xBA can
+  // also independently be classified `missedHrContact` (common for
+  // near-miss barrels), so `missedHrCount>=1` could be satisfied by the
+  // identical event — not a real second signal. Do not use missedHrCount as
+  // a corroborator for this branch; only hrShapedCount>=2 (inherently 2
+  // distinct classified events), distinctDangerousContactCount>=2 (also
+  // distinct-swing-aware), or pitcher/park context (unrelated to contact
+  // classification, so never double-counts the same swing) are safe here.
   if (
     factors.barrels >= 1 &&
     factorsMaxXBA != null && factorsMaxXBA >= 0.400 &&
     fastPromoteVetoOk &&
     (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
   ) {
+    const corroborated = hrShapedCount >= 2 ||
+      distinctDangerousContactCount >= 2 ||
+      pitcherFavorable ||
+      envFavorable;
     const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_BARREL_XBA", softVetoes.length, convProb);
-    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_XBA barrels=${factors.barrels} maxXBA=${factorsMaxXBA.toFixed(3)} softVetoes=${softVetoes.length} → officialAlert`);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_XBA barrels=${factors.barrels} maxXBA=${factorsMaxXBA.toFixed(3)} corroborated=${corroborated} softVetoes=${softVetoes.length} → ${corroborated ? "officialAlert" : "prepare"}`);
     return {
       level: "ALERT",
       triggerReason: `FAST_PROMOTE:barrel_xba_${factorsMaxXBA.toFixed(2)}`,
-      signalState: "PEAK",
-      decision: "BET_NOW",
+      signalState: corroborated ? "PEAK" : "BUILDING",
+      decision: corroborated ? "BET_NOW" : "PREPARE",
       confidenceScore: conf,
-      formattedReason: `Barrel contact plus a high-xBA at-bat (max xBA ${factorsMaxXBA.toFixed(3)}, conv ${convPct}). Promoting to Attack on contact quality.`,
+      formattedReason: corroborated
+        ? `Barrel contact plus a high-xBA at-bat, corroborated (max xBA ${factorsMaxXBA.toFixed(3)}, conv ${convPct}). Promoting to Attack.`
+        : `Barrel contact plus a high-xBA at-bat, but uncorroborated (max xBA ${factorsMaxXBA.toFixed(3)}, conv ${convPct}). Promoting to Building only.`,
       detectedInning: inning,
-      alertTier: "officialAlert",
+      alertTier: corroborated ? "officialAlert" : "prepare",
       diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_XBA", positiveFactors: [...positiveFactors, `barrel + xBA ${factorsMaxXBA.toFixed(3)}`] },
     };
   }
 
   // Tier 4-pre-C — Barrel + decent bat speed → Building.
-  // Bat speed ≥ 70 mph is the user-spec minimum; combined with a real
-  // barrel that's enough to elevate to Building (one tier below Attack)
-  // even without a second damaging contact event.
+  // Precision restructure (2026-07) hygiene: bat-speed floor raised 70→72mph
+  // and soft-veto tolerance dropped to 0 (was the shared 1-veto tolerance).
+  // Already capped at Building/prepare — never reaches officialAlert — so
+  // this is a minor tightening, not a tier change.
   if (
     factors.barrels >= 1 &&
-    factorsBatSpeedMph != null && factorsBatSpeedMph >= 70 &&
-    fastPromoteVetoOk &&
+    factorsBatSpeedMph != null && factorsBatSpeedMph >= 72 &&
+    softVetoes.length === 0 &&
     (convProb === null || convProb >= HR_CONVERSION_WATCH_MIN)
   ) {
     const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_BARREL_BATSPEED", softVetoes.length, convProb);
@@ -702,85 +763,105 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
     };
   }
 
-  // Tier 4-pre-D — EV ≥ 95 + xBA ≥ .400 (no barrel required) → ATTACK.
-  // Direct encoding of the user spec ("EV ≥ 95 is good, xBA in .400+ is
-  // good — these form minimum thresholds for a good HR attempt").
-  // Catches scorched line drives and high-xBA contact that miss the
-  // barrel definition by launch angle alone — e.g. a 100 mph ball at
-  // 12° (.700 xBA, line drive) or 96 mph at 40° (.450 xBA, deep fly).
-  // The barrel-gated tiers above (BARREL_XBA, BARREL_BATSPEED) won't
-  // fire on these because there's no formal barrel; this tier closes
-  // that gap.
+  // Tier 4-pre-D — EV + xBA (no barrel required) → ATTACK, IF corroborated.
+  // This was the loosest officialAlert branch in the file: no formal barrel
+  // required at all, just two thresholds a single non-barrel batted ball can
+  // satisfy alone (a scorched line drive or a deep fly with no barrel LA).
+  // Precision restructure (2026-07): raised maxEV 95→100 and maxXBA
+  // 0.400→0.550, AND require a genuinely separate corroborator (a second
+  // distinct dangerous contact >=2, a second HR-shaped event, or strong
+  // pitcher/park context) before reaching Attack — otherwise downgrade to
+  // Building. A single elite non-barrel swing, however hard, is no longer
+  // enough on its own.
   const factorsMaxEV = factors.maxEV;
   if (
-    factorsMaxEV != null && factorsMaxEV >= 95 &&
-    factorsMaxXBA != null && factorsMaxXBA >= 0.400 &&
+    factorsMaxEV != null && factorsMaxEV >= 100 &&
+    factorsMaxXBA != null && factorsMaxXBA >= 0.550 &&
     fastPromoteVetoOk &&
     (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
   ) {
+    const corroborated = hrShapedCount >= 2 ||
+      distinctDangerousContactCount >= 2 ||
+      pitcherFavorable ||
+      envFavorable;
     const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_EV_XBA", softVetoes.length, convProb);
-    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} EV_XBA maxEV=${factorsMaxEV} maxXBA=${factorsMaxXBA.toFixed(3)} softVetoes=${softVetoes.length} → officialAlert`);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} EV_XBA maxEV=${factorsMaxEV} maxXBA=${factorsMaxXBA.toFixed(3)} corroborated=${corroborated} softVetoes=${softVetoes.length} → ${corroborated ? "officialAlert" : "prepare"}`);
     return {
       level: "ALERT",
       triggerReason: `FAST_PROMOTE:ev_xba_${factorsMaxEV}_${factorsMaxXBA.toFixed(2)}`,
-      signalState: "PEAK",
-      decision: "BET_NOW",
+      signalState: corroborated ? "PEAK" : "BUILDING",
+      decision: corroborated ? "BET_NOW" : "PREPARE",
       confidenceScore: conf,
-      formattedReason: `Hard contact (${factorsMaxEV}mph) plus high-xBA at-bat (max xBA ${factorsMaxXBA.toFixed(3)}, conv ${convPct}). Promoting to Attack on minimum-threshold spec.`,
+      formattedReason: corroborated
+        ? `Hard contact plus high-xBA at-bat, corroborated (${factorsMaxEV}mph, max xBA ${factorsMaxXBA.toFixed(3)}, conv ${convPct}). Promoting to Attack.`
+        : `Hard contact plus high-xBA at-bat, but uncorroborated (${factorsMaxEV}mph, max xBA ${factorsMaxXBA.toFixed(3)}, conv ${convPct}). Promoting to Building only.`,
       detectedInning: inning,
-      alertTier: "officialAlert",
+      alertTier: corroborated ? "officialAlert" : "prepare",
       diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_EV_XBA", positiveFactors: [...positiveFactors, `EV ${factorsMaxEV}mph + xBA ${factorsMaxXBA.toFixed(3)}`] },
     };
   }
 
-  // Tier 4a — Elite barrel (EV≥105, dist≥400) + collapsing pitcher → ATTACK.
-  // Spec is unambiguous: this is the strongest in-game contact signal we
-  // recognize and it must always emit officialAlert (Attack stage). The
-  // conversion gate is the OFFICIAL min — we do not downgrade this tier
-  // to Building on borderline conv probabilities.
+  // Tier 4a — Elite barrel (EV≥103, dist≥395) + collapsing pitcher + a second
+  // genuinely distinct dangerous contact → ATTACK.
+  // This is the ONLY alert path registered in PATH_PROMOTES_TO_FIRE
+  // (hrRadarUserStage.ts) — the sole branch allowed to bypass the
+  // sustain-tick / peak-currency gating downstream entirely. Precision
+  // restructure (2026-07): since it retains that bypass privilege, its own
+  // bar is raised to 3 independent signals — elite barrel (raised EV/dist),
+  // pitcher vulnerability, AND a second distinct dangerous contact
+  // (distinctDangerousContactCount >= 2, NOT >= 1 — the elite barrel itself
+  // already satisfies "1" trivially). Previously this fired on 2 signals
+  // (barrel + collapsing pitcher) alone.
   if (
     factors.barrels >= 1 &&
     eliteBarrelHit &&
     input.isPitcherCollapsing === true &&
+    distinctDangerousContactCount >= 2 &&
     softVetoes.length === 0 &&
     (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
   ) {
     const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_ELITE", softVetoes.length, convProb);
-    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} ELITE_BARREL_COLLAPSE barrels=${factors.barrels} eliteHit=true collapsing=true → officialAlert`);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} ELITE_BARREL_COLLAPSE barrels=${factors.barrels} eliteHit=true collapsing=true distinctDanger=${distinctDangerousContactCount} → officialAlert`);
     return {
       level: "ALERT",
       triggerReason: `FAST_PROMOTE:eliteBarrel_collapsing`,
       signalState: "PEAK",
       decision: "BET_NOW",
       confidenceScore: conf,
-      formattedReason: `Elite barrel contact against a fading pitcher (conv ${convPct}). Punching through to Attack Now.`,
+      formattedReason: `Elite barrel contact against a fading pitcher, plus a second distinct dangerous contact (conv ${convPct}). Punching through to Attack Now.`,
       detectedInning: inning,
       alertTier: "officialAlert",
-      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_ELITE", positiveFactors: [...positiveFactors, "elite barrel + collapsing pitcher"] },
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_ELITE", positiveFactors: [...positiveFactors, "elite barrel + collapsing pitcher + second dangerous contact"] },
     };
   }
 
-  // Tier 4b — Barrel + ANY second dangerous contact → ATTACK.
-  // Per spec this is officialAlert: a real barrel plus any other hard-hit /
-  // deep-fly event is a two-event danger pattern that warrants Attack.
+  // Tier 4b — Barrel + a GENUINELY SEPARATE second dangerous contact → ATTACK.
+  // Precision restructure (2026-07) — bug fix: this used to gate on
+  // `factors.hardHits + factors.deepFlyouts >= 1`, which double-counted a
+  // single barrel swing (EV comfortably above the hard-hit floor) as both
+  // "the barrel" and "the secondary danger" from the SAME event. Now requires
+  // `distinctDangerousContactCount >= 2` — two genuinely separate swings —
+  // before reaching Attack. With only one dangerous contact, this falls
+  // through to the legacy gates below (which may still cap it at Building
+  // via BARREL_CTX/2HH, or reject it entirely).
   if (
     factors.barrels >= 1 &&
-    dangerousSecondaryCount >= 1 &&
+    distinctDangerousContactCount >= 2 &&
     softVetoes.length === 0 &&
     (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
   ) {
     const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_BARREL_PLUS", softVetoes.length, convProb);
-    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_PLUS barrels=${factors.barrels} secondary=${dangerousSecondaryCount} → officialAlert`);
+    console.log(`[HR_FAST_PROMOTE] ${input.playerName} game=${input.gameId} BARREL_PLUS barrels=${factors.barrels} distinctDanger=${distinctDangerousContactCount} → officialAlert`);
     return {
       level: "ALERT",
-      triggerReason: `FAST_PROMOTE:barrel_plus_${dangerousSecondaryCount}danger`,
+      triggerReason: `FAST_PROMOTE:barrel_plus_${distinctDangerousContactCount}danger`,
       signalState: "PEAK",
       decision: "BET_NOW",
       confidenceScore: conf,
-      formattedReason: `Barrel plus a second dangerous contact (conv ${convPct}). Promoting to Attack on contact pattern.`,
+      formattedReason: `Barrel plus a second, distinct dangerous contact (conv ${convPct}). Promoting to Attack on contact pattern.`,
       detectedInning: inning,
       alertTier: "officialAlert",
-      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_PLUS", positiveFactors: [...positiveFactors, `barrel + ${dangerousSecondaryCount} dangerous contact`] },
+      diagnostics: { ...baseDiagnostics, alertPath: "FAST_PROMOTE_BARREL_PLUS", positiveFactors: [...positiveFactors, `barrel + ${distinctDangerousContactCount} distinct dangerous contacts`] },
     };
   }
 
@@ -852,19 +933,20 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
     };
   }
 
-  // Fix B — conviction-bridge. A high-conviction, high-score profile with at
-  // least one HR-shaped contact can reach the HR Max Window even without a
-  // textbook barrel or a second HR-shaped ball: convProb at the official floor
-  // (0.12), a strong build score, and HR-shaped contact. Closes the "high
-  // conviction + high score + no barrel ⇒ permanently stuck at building" gap.
+  // Fix B — conviction-bridge. A high-conviction, high-score profile with
+  // HR-shaped contact can reach the HR Max Window even without a textbook
+  // barrel: convProb at the official floor, a strong build score, and
+  // HR-shaped contact. Closes the "high conviction + high score + no barrel
+  // ⇒ permanently stuck at building" gap.
+  // Precision restructure (2026-07): raised totalHrShaped >= 1 → >= 2 to
+  // match the same 2-event bar the legacy PATH_A below already requires —
+  // a single HR-shaped event was too easily satisfied by one swing.
   // Additive — no-op unless every gate clears; Phase 1.5 caps still bind the
-  // per-PA rate upstream. NOTE: the 8.5 build-score floor is intentionally
-  // conservative (never over-fires a counted cash) and should be re-validated /
-  // tuned against live fixtures once replayable game data is available.
+  // per-PA rate upstream.
   if (
     convProb !== null && convProb >= HR_CONVERSION_OFFICIAL_MIN &&
     hrBuildScore >= 8.5 &&
-    totalHrShaped >= 1 &&
+    totalHrShaped >= 2 &&
     softVetoes.length === 0
   ) {
     const conf = computeConfidence(hrBuildScore, factors, "FAST_PROMOTE_CONVICTION_BRIDGE", softVetoes.length, convProb);

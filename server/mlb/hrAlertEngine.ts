@@ -269,8 +269,13 @@ const STALE_PA_HALF_LIFE_MINUTES = 8;
 //   * PROMOTE_SUSTAIN_TICKS — an up-rank promotion to `ready` must persist this
 //     many consecutive ticks before the mapper emits it, so a single noisy tick
 //     can't flap the ladder.
+// Precision restructure (2026-07): raised 2 → 3. The READY→FIRE gate in
+// hrRadarUserStage.ts is being tightened at the same time; without also
+// raising this WATCH/BUILD→READY gate, rows would still flood into READY
+// quickly and inflate the ready_only_miss bucket instead of the fired_miss
+// bucket — same false-positive volume, just relabeled.
 const FADE_VULN_THRESHOLD = 78;
-const PROMOTE_SUSTAIN_TICKS = 2;
+const PROMOTE_SUSTAIN_TICKS = 3;
 
 function computeDecayFactor(
   minutesSinceDetection: number,
