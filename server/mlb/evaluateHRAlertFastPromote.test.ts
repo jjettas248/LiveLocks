@@ -170,14 +170,33 @@ assert("FAST_PROMOTE_BARREL_XBA: barrel + xBA alone does NOT reach officialAlert
   barrelXbaUncorroborated.alertTier !== "officialAlert",
   `alertTier=${barrelXbaUncorroborated.alertTier} alertPath=${barrelXbaUncorroborated.diagnostics.alertPath}`);
 
-const barrelXbaCorroborated = evaluateHRAlert(baseInput({
+// Codex review fix: missedHrCount is NOT a valid corroborator for this
+// branch, because its base gate (barrels>=1 && maxXBA>=0.400) is not scoped
+// to a contactClass — the SAME swing that's a barrel with high xBA can also
+// independently be classified missedHrContact (common for near-miss
+// barrels), so missedHrCount>=1 can be satisfied by that identical event,
+// not a second one. Simulate exactly that: one contact, isBarrel+high xBA,
+// AND factors.missedHrCount=1 (as if this one swing was classified
+// missedHrContact) — must NOT reach officialAlert on missedHrCount alone.
+const barrelXbaSameSwingMissedHr = evaluateHRAlert(baseInput({
   factors: defaultFactors({
     barrels: 1, hardHits: 1, maxXBA: 0.55, missedHrCount: 1,
+    qualifiedEVMean: 100, maxDistance: 380,
+    contactClasses: [eliteBarrelContact],
+  }),
+}));
+assert("FAST_PROMOTE_BARREL_XBA: missedHrCount>=1 from the SAME swing does NOT corroborate",
+  barrelXbaSameSwingMissedHr.alertTier !== "officialAlert",
+  `alertTier=${barrelXbaSameSwingMissedHr.alertTier} alertPath=${barrelXbaSameSwingMissedHr.diagnostics.alertPath}`);
+
+const barrelXbaCorroborated = evaluateHRAlert(baseInput({
+  factors: defaultFactors({
+    barrels: 1, hardHits: 1, maxXBA: 0.55, hrShapedCount: 2,
     qualifiedEVMean: 100, maxDistance: 380,
     contactClasses: [eliteBarrelContact, secondDangerousContact],
   }),
 }));
-eq("FAST_PROMOTE_BARREL_XBA: corroborated by missedHrCount>=1 → officialAlert",
+eq("FAST_PROMOTE_BARREL_XBA: corroborated by a genuinely distinct second HR-shaped event → officialAlert",
   barrelXbaCorroborated.alertTier, "officialAlert");
 
 // FAST_PROMOTE_EV_XBA — hard EV + high xBA, no barrel, no corroborator.

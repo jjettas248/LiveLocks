@@ -696,9 +696,20 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
   // xBA reading is usually the SAME swing as the barrel (xBA is a per-AB
   // value), so barrel+xBA alone is really one signal read two ways.
   // Precision restructure (2026-07): require a genuinely separate
-  // corroborator — a second distinct dangerous contact (>=2, not >=1), a
-  // second HR-shaped/missed-HR event, or strong pitcher/park context —
-  // before this reaches Attack; otherwise it downgrades to Building.
+  // corroborator before this reaches Attack; otherwise it downgrades to
+  // Building.
+  // Codex review fix: this base gate (`barrels>=1 && maxXBA>=0.400`) is NOT
+  // scoped to a single contactClass — unlike FAST_PROMOTE_SINGLE_ELITE's
+  // `eliteHrCount>=1` gate, where `eliteHrContact`/`missedHrContact` are
+  // mutually-exclusive classes so `missedHrCount>=1` necessarily refers to a
+  // different swing. Here, the SAME swing that is a barrel with high xBA can
+  // also independently be classified `missedHrContact` (common for
+  // near-miss barrels), so `missedHrCount>=1` could be satisfied by the
+  // identical event — not a real second signal. Do not use missedHrCount as
+  // a corroborator for this branch; only hrShapedCount>=2 (inherently 2
+  // distinct classified events), distinctDangerousContactCount>=2 (also
+  // distinct-swing-aware), or pitcher/park context (unrelated to contact
+  // classification, so never double-counts the same swing) are safe here.
   if (
     factors.barrels >= 1 &&
     factorsMaxXBA != null && factorsMaxXBA >= 0.400 &&
@@ -706,7 +717,6 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
     (convProb === null || convProb >= HR_CONVERSION_OFFICIAL_MIN)
   ) {
     const corroborated = hrShapedCount >= 2 ||
-      missedHrCount >= 1 ||
       distinctDangerousContactCount >= 2 ||
       pitcherFavorable ||
       envFavorable;
