@@ -651,6 +651,25 @@ app.use((req, res, next) => {
         );
       }, 5 * 60 * 1000);
 
+      // Visibility backfill sweep — self-healing across restarts/deploys.
+      // `everPubliclyFlagged` freezes at grading time; if a deploy in between
+      // two boots ever mis-derives it (as the Jul 2 grading-drift bug did),
+      // requiring someone to remember to hit the admin backfill endpoint per
+      // affected slate day is exactly how the win-history drawer kept coming
+      // up empty across updates. Run the sweep once per boot over the same
+      // lookback window the drawer displays (PregameHistoryDrawer's
+      // HISTORY_DAYS) so any such drift self-corrects on the very next deploy
+      // instead of needing manual intervention. Deferred well past the
+      // initial build (90s) so today's slate has a fresh in-memory snapshot
+      // to merge against first.
+      setTimeout(() => {
+        import("./mlb/pregamePowerRadar/pregameVisibilityBackfill")
+          .then(({ backfillPregameWinVisibilityRange }) => backfillPregameWinVisibilityRange(21))
+          .catch((e) =>
+            console.warn("[PREGAME_RADAR_VISIBILITY_BACKFILL] boot sweep failed:", e?.message),
+          );
+      }, 3 * 60 * 1000);
+
       console.log("[PREGAME_POWER_RADAR_BOOT] scheduled builds armed");
     } catch (err) {
       console.warn("[PREGAME_POWER_RADAR_BOOT] failed:", (err as Error).message);
