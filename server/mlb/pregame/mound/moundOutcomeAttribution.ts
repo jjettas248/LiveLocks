@@ -24,7 +24,7 @@ import {
 } from "../../../../shared/moundRadarWin";
 import { formatPlainDateLabel } from "../../../../shared/dateLabel";
 import { toEtDateKey, toEtTimeLabel } from "../../../utils/dateUtils";
-import { round1, seasonKPer9ToPerStartExpectation } from "./scoreUtils";
+import { round1, projectedStrikeoutsFromKPer9 } from "./scoreUtils";
 
 export interface MoundOutcomeAttributionInput {
   primaryMarket: "pitcher_strikeouts" | "pitcher_outs";
@@ -44,7 +44,7 @@ export interface MoundOutcomeAttributionResult {
 /** Season-baseline per-start expectation for the given primary market. */
 function seasonBaseline(input: MoundOutcomeAttributionInput): number | null {
   if (input.primaryMarket === "pitcher_strikeouts") {
-    return input.seasonKPer9 != null ? round1(seasonKPer9ToPerStartExpectation(input.seasonKPer9)) : null;
+    return projectedStrikeoutsFromKPer9(input.seasonKPer9);
   }
   return input.seasonAvgInningsPerStart != null ? round1(input.seasonAvgInningsPerStart * 3) : null;
 }

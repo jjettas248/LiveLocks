@@ -58,3 +58,14 @@ export function weightedAvg(
 export function seasonKPer9ToPerStartExpectation(seasonKPer9: number): number {
   return seasonKPer9 * (6 / 9);
 }
+
+/**
+ * Rounded, nullable per-start strikeout expectation — the actual shared call
+ * site for both the Mound card's displayed "Projected Ks" (buildMlbMoundRadar.ts)
+ * and the win/loss settlement baseline (moundOutcomeAttribution.ts), so the
+ * two are computed by calling the identical function, not just the identical
+ * formula.
+ */
+export function projectedStrikeoutsFromKPer9(seasonKPer9: number | null | undefined): number | null {
+  return seasonKPer9 != null ? round1(seasonKPer9ToPerStartExpectation(seasonKPer9)) : null;
+}

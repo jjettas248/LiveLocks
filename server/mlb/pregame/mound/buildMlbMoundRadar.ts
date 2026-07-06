@@ -46,6 +46,7 @@ import { computeRecentForm } from "./recentForm";
 import { computeRiskDrivers } from "./riskDrivers";
 import { computeMarketTags } from "./marketTagger";
 import { composeMoundScore } from "./scoring";
+import { projectedStrikeoutsFromKPer9 } from "./scoreUtils";
 import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState } from "./moundGradedStateCarry";
 import {
@@ -216,10 +217,11 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           seasonStats?.gamesStarted != null && seasonStats.gamesStarted > 0 && seasonStats?.inningsPitched != null
             ? seasonStats.inningsPitched / seasonStats.gamesStarted
             : null;
-        const projectedStrikeouts =
-          seasonStats?.kPer9 != null && avgInningsPerStart != null
-            ? round2((seasonStats.kPer9 * avgInningsPerStart) / 9)
-            : null;
+        // Calls the same shared function as moundOutcomeAttribution.ts's
+        // settlement baseline (scoreUtils.ts) — the displayed projection and
+        // the number that decides win/loss grading must never be able to
+        // drift apart.
+        const projectedStrikeouts = projectedStrikeoutsFromKPer9(seasonStats?.kPer9);
 
         const archetype = classifyPitcherArchetype({
           era: seasonStats?.era ?? null,
