@@ -72,6 +72,15 @@ export interface MoundMarketSetup {
   isPrimary: boolean;
 }
 
+/** Best-available sportsbook line for pitcher_strikeouts. Mirrors PregameMarketEdgeContext's shape but is its own type. Display-only — never feeds score10/tier. */
+export interface MoundMarketEdgeContext {
+  line?: number;
+  odds?: number;
+  impliedProbability?: number;
+  sportsbook?: string;
+  oddsUpdatedAt?: string;
+}
+
 export interface MoundDiagnostics {
   pitcherSkillScore: number | null;
   opponentKProfileScore: number | null;
@@ -156,6 +165,11 @@ export interface MoundSignal {
   hasMarketLine: boolean;
   isOfficialPlay: false;
   isPregameTarget: true;
+
+  /** Best-available real sportsbook line for pitcher_strikeouts, when posted. Null pregame before books post a line — never fabricated. */
+  marketEdgeContext: MoundMarketEdgeContext | null;
+  /** Data-derived strikeout projection: kPer9 * avgInningsPerStart / 9. Null when either input is unavailable. */
+  projectedStrikeouts: number | null;
 
   status: MoundSignalStatus;
   suppressed: boolean;

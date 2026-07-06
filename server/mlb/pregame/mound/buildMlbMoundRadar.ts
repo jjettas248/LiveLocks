@@ -29,6 +29,8 @@ import {
   mlbPlayerCache,
 } from "../../dataPullService";
 import { classifyPitcherArchetype } from "../../archetypes";
+import { resolveMLBOddsEventId, resolveMLBOddsEventIdFromCache, getMLBPlayerOdds } from "../../../oddsService";
+import { readOddsSnapshot } from "../../../odds/oddsCache";
 import type {
   MoundSignal,
   MoundGameStatus,
@@ -44,6 +46,7 @@ import { computeRecentForm } from "./recentForm";
 import { computeRiskDrivers } from "./riskDrivers";
 import { computeMarketTags } from "./marketTagger";
 import { composeMoundScore } from "./scoring";
+import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState } from "./moundGradedStateCarry";
 import {
   getMoundSnapshot,
@@ -161,6 +164,16 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
       const starters = [homeStarter, awayStarter].filter((p): p is NonNullable<typeof p> => !!p);
       if (starters.length > 0) starterGames++;
 
+      // Cache-only — never a live fetch on the build's critical path. This
+      // builder also produces the curated Targets feed, so a slow/degraded
+      // Odds API must never stall the whole Mound rebuild. On a cache miss,
+      // kick a background resolve (not awaited) to warm the cache for the
+      // NEXT build cycle instead.
+      let oddsEventId: string | null = resolveMLBOddsEventIdFromCache(game.homeTeam, game.awayTeam);
+      if (!oddsEventId) {
+        resolveMLBOddsEventId(game.homeTeam, game.awayTeam).catch(() => {});
+      }
+
       for (const starter of starters) {
         pitchersEvaluated++;
         const opposingLineup = lineup.filter((l) => l.team !== starter.team);
@@ -186,10 +199,26 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         const recentStarts = recentStartsResult.status === "fulfilled" ? recentStartsResult.value : null;
         const savant = savantResult.status === "fulfilled" ? savantResult.value : null;
 
+        // Cache-only display enrichment — never a live fetch on the build's
+        // critical path (same rationale as oddsEventId above). On a cache
+        // miss, warm the cache in the background for the NEXT build cycle
+        // rather than blocking this one.
+        const strikeoutSnap = oddsEventId
+          ? readOddsSnapshot({ sport: "mlb", eventId: oddsEventId, market: "pitcher_strikeouts", player: starter.pitcherName, isLive: false, allowStale: true })
+          : null;
+        const marketEdgeContext = buildMoundMarketEdgeContext(strikeoutSnap?.books ?? null, strikeoutSnap?.fetchedAt ?? Date.now());
+        if (oddsEventId && !strikeoutSnap) {
+          getMLBPlayerOdds(oddsEventId, starter.pitcherName, "pitcher_strikeouts", false).catch(() => {});
+        }
+
         const pitcherKnown = true; // starter itself is always known here
         const avgInningsPerStart =
           seasonStats?.gamesStarted != null && seasonStats.gamesStarted > 0 && seasonStats?.inningsPitched != null
             ? seasonStats.inningsPitched / seasonStats.gamesStarted
+            : null;
+        const projectedStrikeouts =
+          seasonStats?.kPer9 != null && avgInningsPerStart != null
+            ? round2((seasonStats.kPer9 * avgInningsPerStart) / 9)
             : null;
 
         const archetype = classifyPitcherArchetype({
@@ -374,6 +403,8 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           hasMarketLine: false,
           isOfficialPlay: false,
           isPregameTarget: true,
+          marketEdgeContext,
+          projectedStrikeouts,
           status: isLocked ? "locked" : "active",
           suppressed: scoring.suppressed,
           suppressedReasons: scoring.suppressedReasons,

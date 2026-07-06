@@ -794,6 +794,38 @@ export async function registerRoutes(
     }
   });
 
+  // Public: every probable starter for today's slate, unfiltered by the
+  // curated-pick gate above (same underlying signals, includeSuppressed=true).
+  // "The Mound"'s curated Targets feed intentionally only surfaces pitchers
+  // clearing a strict quality gate (confirmed opposing lineup + score
+  // threshold + tier) — on an ordinary day that's 0-2 pitchers. This route
+  // lets the client show every probable starter for the day (with market
+  // odds/projection context) without touching that gate or its win-record
+  // semantics.
+  app.get("/api/mlb/mound-power-radar/all-starters", requireMLBAccess, async (_req, res) => {
+    try {
+      const { getMoundRadarSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarService");
+      const { buildMoundResponse } = await import("./mlb/pregame/mound/diagnostics");
+      const { todayET } = await import("./utils/dateUtils");
+      const { snapshot, source } = await getMoundRadarSnapshot();
+      if (!snapshot) {
+        return res.json({
+          date: todayET(), buildId: "", generatedAt: "", source, gamesScanned: 0,
+          signals: [], diagnostics: { starterCoverage: 0, weatherCoverage: 0, pitcherCoverage: 0, lineupCoverage: 0, totalPitchersEvaluated: 0, publicSignals: 0, suppressedSignals: 0, topSuppressionReasons: [] },
+        });
+      }
+      const signals = Array.from(snapshot.signals.values());
+      const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
+        gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
+        ...snapshot.coverage,
+      }, true);
+      return res.json(resp);
+    } catch (err) {
+      console.error("[mlb/mound-power-radar/all-starters]", err);
+      return res.status(500).json({ error: "Failed to fetch mound power radar all-starters" });
+    }
+  });
+
   // Admin debug: includes suppressed rows + full diagnostics — mirrors the
   // Plate debug route above.
   app.get("/api/admin/mlb/mound-power-radar/debug", requireAdmin, async (_req, res) => {
