@@ -91,9 +91,29 @@ export async function backfillPregameWinVisibility(
   // Merge: prefer the in-memory (possibly freshly-rebuilt) copy when present
   // for today, otherwise fall back to the persisted row reconstructed via
   // rowToSignal — this is the only representation available for a past day.
-  const candidates: PregamePowerSignal[] = rows.map(
-    (r) => snapshotSignalsById.get(r.signalId) ?? rowToSignal(r),
-  );
+  //
+  // A post-restart rebuild always mints a fresh copy with status!=="graded"
+  // and outcomes:null (see buildPregamePowerRadar), even when the DB row is
+  // the only place the shadow grader's already-graded pregame_win outcome
+  // lives (grading persists straight to the DB per-signal; it doesn't wait
+  // for the next full rebuild). Picking the snapshot copy outright would
+  // silently turn that persisted win back into an ungraded candidate and
+  // skip it below — so when the snapshot copy is ungraded but the DB row
+  // isn't, carry the row's outcome/status/flag onto the snapshot copy
+  // (mirrors uniqueBySignalId's merge in statsService.ts).
+  const candidates: PregamePowerSignal[] = rows.map((r) => {
+    const inMemory = snapshotSignalsById.get(r.signalId);
+    if (!inMemory) return rowToSignal(r);
+    if (r.outcomes && r.status === "graded" && (!inMemory.outcomes || inMemory.status !== "graded")) {
+      return {
+        ...inMemory,
+        status: r.status,
+        outcomes: r.outcomes as PregamePowerSignal["outcomes"],
+        everPubliclyFlagged: inMemory.everPubliclyFlagged || r.everPubliclyFlagged,
+      };
+    }
+    return inMemory;
+  });
   // Include any in-memory-only signals for today (e.g. a batter graded this
   // tick but not yet reflected in the DB read above).
   if (isToday) {
