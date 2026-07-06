@@ -32,11 +32,9 @@ export function HrRadarRecordBanner() {
     ...data.sections.watch,
     ...data.sections.cashed,
   ];
-  const cashedEntries = allEntries.filter((e) => e.outcome === "called_hit");
-  const cashedToday = cashedEntries.length;
+  const cashedToday = allEntries.filter((e) => e.outcome === "called_hit").length;
   if (cashedToday === 0) return null;
 
-  const earlyCallsToday = cashedEntries.filter((e) => e.alertPath === "early").length;
   const liveNow =
     data.counts.attackNow + data.counts.building + data.counts.watch + (data.counts.ready ?? 0);
 
@@ -48,9 +46,6 @@ export function HrRadarRecordBanner() {
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
         <RecordStat value={cashedToday} label="Cashed Today" testid="hr-record-cashed-today" />
-        {earlyCallsToday > 0 && (
-          <RecordStat value={earlyCallsToday} label="Early Calls" testid="hr-record-early-today" />
-        )}
         {liveNow > 0 && <RecordStat value={liveNow} label="Live Now" testid="hr-record-live-now" muted />}
       </div>
     </Card>

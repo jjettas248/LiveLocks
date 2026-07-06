@@ -7,7 +7,7 @@ import { ChevronDown, ChevronRight, Flame, Zap, Eye, Trophy, XCircle, Plus, Aler
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { AbLogRows, abChipSummary, type AbRow } from "@/components/mlb/AbLogRows";
 import { hrEntryCurrentScore10, hrEntryInitialScore10, hrEntryPeakScore10, hrEntryActionScore10 } from "@/components/mlb/hrRadarScore";
-import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, mapHrRadarRowToDisplayState, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
+import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdownBarValue, isPregameOnlyRow, mapHrRadarRowToDisplayState, LIVE_STAGE_LABEL, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 import { type HrRadarBadge } from "@shared/hrRadarStage";
@@ -425,21 +425,23 @@ function deadOutcomeLabel(status: string): { label: string; color: string } {
   }
 }
 
+// Grading status → the same four live-stage keys LIVE_STAGE_LABEL covers, so
+// this reuses the one vocabulary definition instead of a fifth hardcoded copy.
+const CASHED_TIER_STAGE: Record<string, keyof typeof LIVE_STAGE_LABEL> = {
+  called_hit_attack: "fire",
+  called_hit_ready: "ready",
+  called_hit_build: "build",
+  called_hit_watch: "track",
+};
+
 /**
  * Phase 4 — pre-HR detection tier label for cashed rows. Returns null for
  * legacy untiered `called_hit` (renders as plain "Cashed") and for
  * non-called statuses. Mirrors `getCashedFromTierLabel` on the server.
  */
-function cashedFromTierLabel(
-  status: string | null | undefined,
-): "Attack" | "Playable" | "Lean" | "Watchlist" | null {
-  switch (status) {
-    case "called_hit_attack": return "Attack";
-    case "called_hit_ready": return "Playable";
-    case "called_hit_build": return "Lean";
-    case "called_hit_watch": return "Watchlist";
-    default: return null;
-  }
+function cashedFromTierLabel(status: string | null | undefined): string | null {
+  const stage = status ? CASHED_TIER_STAGE[status] : undefined;
+  return stage ? LIVE_STAGE_LABEL[stage] : null;
 }
 
 /**
