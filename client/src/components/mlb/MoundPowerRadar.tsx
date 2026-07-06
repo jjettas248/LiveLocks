@@ -74,6 +74,7 @@ interface MoundDiagnosticsView {
   riskPenalty: number;
   dataCoverageScore: number;
   appliedWarnings: string[];
+  rawInputsAvailable: { pitcherSeasonStats: boolean };
 }
 
 interface MoundSignal {
@@ -192,17 +193,24 @@ function formatAmericanOdds(odds: number): string {
 // derivation. Fade = "track" tier with real pitcher-skill data behind it
 // (rules out a data-missing artifact masquerading as a genuine weak
 // matchup). Follow = strong/elite/nuclear tiers that also clear the same
-// data-quality bar the old curated Targets feed required (confirmed
-// opposing lineup + real data coverage) — composeMoundScore's caps only
-// ever push a score down, and missing pitcher-skill/unconfirmed-starter
-// already force a sub-5.5 cap, so no further guard is needed on those two
+// data-quality bar the old curated Targets feed's wasPubliclyFlaggedMound
+// gate required: confirmed opposing lineup, real data coverage, AND real
+// season stats behind the pitcher's skill score. That last check matters
+// because pitcherSkillScore can be "available" (and dataCoverageScore high
+// enough) from Savant stuff metrics (SwStr%/CSW%) alone, with no season K/9
+// on file — moundOutcomeAttribution.ts's settlement baseline (and this
+// card's "Projected Ks" line) both require seasonKPer9, so without it there
+// is nothing to grade an Over against. composeMoundScore's caps only ever
+// push a score down, and missing pitcher-skill/unconfirmed-starter already
+// force a sub-5.5 cap, so no further guard is needed on those two
 // dimensions for Follow.
 function moundDirection(s: MoundSignal): "fade" | "follow" | null {
   if (s.tier === "track" && s.diagnostics.pitcherSkillScore != null) return "fade";
   if (
     (s.tier === "strong" || s.tier === "elite" || s.tier === "nuclear") &&
     s.diagnostics.dataCoverageScore >= 0.6 &&
-    s.opposingLineupConfirmed
+    s.opposingLineupConfirmed &&
+    s.diagnostics.rawInputsAvailable.pitcherSeasonStats === true
   ) {
     return "follow";
   }
