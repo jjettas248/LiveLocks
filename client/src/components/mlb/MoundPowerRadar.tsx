@@ -49,6 +49,17 @@ interface MoundOutcome {
   finalOutsRecorded?: number | null;
 }
 
+// Best-available real sportsbook line for pitcher_strikeouts, when posted.
+// Mirrors server MoundMarketEdgeContext verbatim — display-only, never fed
+// back into score10/tier.
+interface MoundMarketEdgeContext {
+  line?: number;
+  odds?: number;
+  impliedProbability?: number;
+  sportsbook?: string;
+  oddsUpdatedAt?: string;
+}
+
 // Diagnostics carried by the server-side MoundSignal (see
 // server/mlb/pregame/mound/types.ts MoundDiagnostics) and already returned
 // verbatim by the public API — surfaced here for the expanded detail view
@@ -91,6 +102,8 @@ interface MoundSignal {
   becameLiveFire?: boolean;
   outcomes?: MoundOutcome | null;
   diagnostics: MoundDiagnosticsView;
+  marketEdgeContext?: MoundMarketEdgeContext | null;
+  projectedStrikeouts?: number | null;
 }
 
 interface MoundRadarResponse {
@@ -167,18 +180,25 @@ function hasDriver(s: MoundSignal, predicate: (d: MoundDriver) => boolean): bool
   return s.drivers.some((d) => d.direction === "positive" && predicate(d));
 }
 
+function formatAmericanOdds(odds: number): string {
+  return odds > 0 ? `+${odds}` : `${odds}`;
+}
+
+type MoundView = "targets" | "all";
+
 export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: string | null } = {}) {
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [view, setView] = useState<MoundView>("targets");
 
   const { data, isLoading } = useQuery<MoundRadarResponse>({
-    queryKey: ["/api/mlb/mound-power-radar"],
+    queryKey: view === "all" ? ["/api/mlb/mound-power-radar/all-starters"] : ["/api/mlb/mound-power-radar"],
     refetchInterval: 30_000,
     placeholderData: (prev) => prev,
   });
 
   const signals = useMemo(() => {
-    const all = data?.signals ?? [];
-    return all.filter((s) => {
+    const allSignals = data?.signals ?? [];
+    const filtered = allSignals.filter((s) => {
       if (selectedGameId && s.gameId !== selectedGameId) return false;
       switch (filter) {
         case "strikeouts": return s.marketTags.includes("pitcher_strikeouts");
@@ -193,7 +213,15 @@ export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: st
         default: return true;
       }
     });
-  }, [data, filter, selectedGameId]);
+    if (view !== "all") return filtered;
+    // All Starters: today's full slate reads naturally in first-pitch order,
+    // not ranked by score10 (the curated Targets feed's sort).
+    return filtered.slice().sort((a, b) => {
+      const ta = a.startsAt ? Date.parse(a.startsAt) : Infinity;
+      const tb = b.startsAt ? Date.parse(b.startsAt) : Infinity;
+      return ta - tb;
+    });
+  }, [data, filter, selectedGameId, view]);
 
   return (
     <div className="space-y-3" data-testid="section-mound-radar">
@@ -209,10 +237,30 @@ export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: st
         </div>
         {data && (
           <div className="text-[11px] text-muted-foreground text-right">
-            <div>{data.diagnostics.publicSignals} targets · {data.gamesScanned} games</div>
+            <div>
+              {view === "all" ? data.signals.length : data.diagnostics.publicSignals}{" "}
+              {view === "all" ? "starters" : "targets"} · {data.gamesScanned} games
+            </div>
             <div className="opacity-70">source: {data.source}</div>
           </div>
         )}
+      </div>
+
+      <div className="flex gap-1.5">
+        {(["targets", "all"] as const).map((v) => (
+          <button
+            key={v}
+            data-testid={`mound-view-${v}`}
+            onClick={() => setView(v)}
+            className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all border ${
+              view === v
+                ? "bg-sky-500/20 border-sky-400/40 text-sky-200"
+                : "bg-secondary/40 border-border/50 text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {v === "targets" ? "Targets" : "All Starters"}
+          </button>
+        ))}
       </div>
 
       <div className="flex gap-1.5 flex-wrap">
@@ -243,29 +291,41 @@ export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: st
           <Target className="w-8 h-8 mx-auto mb-2 text-muted-foreground/50" />
           <p className="text-sm font-medium">Waiting for probable starters.</p>
           <p className="text-xs text-muted-foreground mt-1">
-            Targets appear once probable starters are announced and a setup qualifies.
+            {view === "all"
+              ? "Starters appear once today's probable pitchers are announced."
+              : "Targets appear once probable starters are announced and a setup qualifies."}
           </p>
         </Card>
       )}
 
       <div className="grid gap-2.5">
         {signals.map((s) => (
-          <MoundCard key={s.signalId} signal={s} />
+          <MoundCard key={s.signalId} signal={s} showFade={view === "all"} />
         ))}
       </div>
     </div>
   );
 }
 
-function MoundCard({ signal: s }: { signal: MoundSignal }) {
+// "Fade Candidate" is a presentation-only re-label of the existing "track"
+// tier (score10 < 4.0) — already the composite of weak pitcherSkill/
+// opponentKProfile/workload scores (scoring.ts). No new threshold or score
+// is introduced here; only shown in the All Starters view, never on the
+// curated Targets feed.
+const FADE_COLOR = "#f43f5e";
+const FADE_GLOW = "rgba(244,63,94,0.28)";
+
+function MoundCard({ signal: s, showFade = false }: { signal: MoundSignal; showFade?: boolean }) {
   const style = TIER_STYLE[s.tier];
   const TierIcon = s.tier === "nuclear" || s.tier === "elite" ? Flame : s.tier === "strong" ? Zap : Target;
   const positives = s.drivers.filter((d) => d.direction === "positive").slice(0, 4);
   const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
+  const isFade = showFade && s.tier === "track";
 
   const cashed = s.outcomes?.outcome === "mound_win" && s.outcomes?.userVisible === true;
   const cashedColor = "#10b981";
+  const accentColor = cashed ? cashedColor : isFade ? FADE_COLOR : style.color;
 
   const marketSetups: MarketSetup[] =
     s.marketSetups && s.marketSetups.length > 0
@@ -284,8 +344,8 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
     <Card
       className={`p-3.5 transition-colors duration-500 ${cashed ? "bg-emerald-500/10" : ""}`}
       style={{
-        boxShadow: cashed ? `0 0 22px rgba(16,185,129,0.45)` : `0 0 14px ${style.glow}`,
-        borderColor: cashed ? cashedColor + "99" : style.color + "55",
+        boxShadow: cashed ? `0 0 22px rgba(16,185,129,0.45)` : `0 0 14px ${isFade ? FADE_GLOW : style.glow}`,
+        borderColor: cashed ? cashedColor + "99" : accentColor + "55",
       }}
       data-testid={`card-mound-${slug}`}
     >
@@ -324,20 +384,21 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
           </div>
         </div>
         <div className="text-right shrink-0">
-          <div className="text-xl font-extrabold tabular-nums" style={{ color: cashed ? cashedColor : style.color }}>
+          <div className="text-xl font-extrabold tabular-nums" style={{ color: accentColor }}>
             {s.score10.toFixed(1)}
           </div>
           <div
             className="inline-flex items-center gap-1 text-[10px] font-semibold"
-            style={{ color: cashed ? cashedColor : style.color }}
+            style={{ color: accentColor }}
           >
-            {cashed ? <PartyPopper className="w-3 h-3" /> : <TierIcon className="w-3 h-3" />}
-            {cashed ? "Cashed" : style.label}
+            {cashed ? <PartyPopper className="w-3 h-3" /> : isFade ? <ShieldAlert className="w-3 h-3" /> : <TierIcon className="w-3 h-3" />}
+            {cashed ? "Cashed" : isFade ? "Fade Candidate" : style.label}
           </div>
         </div>
       </div>
 
       <RunEnvironmentRow park={s.parkContext} />
+      <StrikeoutLineRow projectedStrikeouts={s.projectedStrikeouts} edge={s.marketEdgeContext} />
 
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         {marketSetups.map((setup) => (
@@ -405,6 +466,39 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
         </div>
       )}
     </Card>
+  );
+}
+
+// Server-computed strikeout line context (see server MoundSignal). Omitted
+// entirely when neither value is available — never a placeholder, matching
+// this file's "missing data degrades to omitted" convention.
+function StrikeoutLineRow({
+  projectedStrikeouts,
+  edge,
+}: {
+  projectedStrikeouts?: number | null;
+  edge?: MoundMarketEdgeContext | null;
+}) {
+  if (projectedStrikeouts == null && !edge) return null;
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1.5 text-[11px] flex-wrap" data-testid="mound-strikeout-line">
+      {projectedStrikeouts != null && (
+        <span className="text-muted-foreground">
+          🎯 Projected Ks <span className="font-semibold text-foreground">{projectedStrikeouts.toFixed(1)}</span>
+        </span>
+      )}
+      {projectedStrikeouts != null && edge && <span className="opacity-40">·</span>}
+      {edge && edge.line != null && (
+        <span className="text-muted-foreground">
+          Best Line{" "}
+          <span className="font-semibold text-foreground">
+            O{edge.line} {edge.odds != null ? formatAmericanOdds(edge.odds) : ""}
+          </span>
+          {edge.sportsbook ? ` · ${edge.sportsbook}` : ""}
+        </span>
+      )}
+    </div>
   );
 }
 

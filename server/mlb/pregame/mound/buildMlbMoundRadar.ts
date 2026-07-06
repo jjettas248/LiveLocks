@@ -29,6 +29,7 @@ import {
   mlbPlayerCache,
 } from "../../dataPullService";
 import { classifyPitcherArchetype } from "../../archetypes";
+import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../../../oddsService";
 import type {
   MoundSignal,
   MoundGameStatus,
@@ -44,6 +45,7 @@ import { computeRecentForm } from "./recentForm";
 import { computeRiskDrivers } from "./riskDrivers";
 import { computeMarketTags } from "./marketTagger";
 import { composeMoundScore } from "./scoring";
+import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState } from "./moundGradedStateCarry";
 import {
   getMoundSnapshot,
@@ -161,6 +163,15 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
       const starters = [homeStarter, awayStarter].filter((p): p is NonNullable<typeof p> => !!p);
       if (starters.length > 0) starterGames++;
 
+      // Resolved once per game (shared by both starters) — degrades to null
+      // on any failure, in which case marketEdgeContext just stays null below.
+      let oddsEventId: string | null = null;
+      try {
+        oddsEventId = await resolveMLBOddsEventId(game.homeTeam, game.awayTeam);
+      } catch {
+        oddsEventId = null;
+      }
+
       for (const starter of starters) {
         pitchersEvaluated++;
         const opposingLineup = lineup.filter((l) => l.team !== starter.team);
@@ -172,24 +183,31 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           (starter.team === game.homeTeam ? game.awayTeam : game.homeTeam);
 
         // ── Gather inputs (each guarded — degrade to neutral on failure) ────
-        // Four independent network calls, no data dependency between them —
-        // run concurrently rather than paying 4x the round-trip latency per
+        // Five independent network calls, no data dependency between them —
+        // run concurrently rather than paying 5x the round-trip latency per
         // starter across a full slate's ~30 probable starters.
-        const [, handSplitsResult, recentStartsResult, savantResult] = await Promise.allSettled([
+        const [, handSplitsResult, recentStartsResult, savantResult, strikeoutOddsResult] = await Promise.allSettled([
           syncPitcherSeasonStats(starter.pitcherId),
           fetchPitcherHandednessSplits(starter.pitcherId),
           fetchPitcherRecentStarts(starter.pitcherId),
           fetchBaseballSavantData(starter.pitcherId, game.gameId),
+          oddsEventId ? getMLBPlayerOdds(oddsEventId, starter.pitcherName, "pitcher_strikeouts", false) : Promise.resolve(null),
         ]);
         const seasonStats = mlbPlayerCache.pitcherSeasonStats[starter.pitcherId] ?? null;
         const handSplits = handSplitsResult.status === "fulfilled" ? handSplitsResult.value : null;
         const recentStarts = recentStartsResult.status === "fulfilled" ? recentStartsResult.value : null;
         const savant = savantResult.status === "fulfilled" ? savantResult.value : null;
+        const strikeoutOdds = strikeoutOddsResult.status === "fulfilled" ? strikeoutOddsResult.value : null;
+        const marketEdgeContext = buildMoundMarketEdgeContext(strikeoutOdds, Date.now());
 
         const pitcherKnown = true; // starter itself is always known here
         const avgInningsPerStart =
           seasonStats?.gamesStarted != null && seasonStats.gamesStarted > 0 && seasonStats?.inningsPitched != null
             ? seasonStats.inningsPitched / seasonStats.gamesStarted
+            : null;
+        const projectedStrikeouts =
+          seasonStats?.kPer9 != null && avgInningsPerStart != null
+            ? round2((seasonStats.kPer9 * avgInningsPerStart) / 9)
             : null;
 
         const archetype = classifyPitcherArchetype({
@@ -374,6 +392,8 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           hasMarketLine: false,
           isOfficialPlay: false,
           isPregameTarget: true,
+          marketEdgeContext,
+          projectedStrikeouts,
           status: isLocked ? "locked" : "active",
           suppressed: scoring.suppressed,
           suppressedReasons: scoring.suppressedReasons,

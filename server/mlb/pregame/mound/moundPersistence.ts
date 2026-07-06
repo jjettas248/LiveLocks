@@ -108,6 +108,11 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     becameLiveFire: r.becameLiveFire,
     convertedLiveAt: r.convertedLiveAt ? new Date(r.convertedLiveAt).toISOString() : null,
     diagnostics: r.diagnostics as MoundSignal["diagnostics"],
+    // Not persisted (presentation-only, like Plate's marketEdgeContext) —
+    // DB-reconstructed signals never have a live odds fetch/projection to
+    // restore, so these stay null rather than fabricated.
+    marketEdgeContext: null,
+    projectedStrikeouts: null,
   };
 }
 
