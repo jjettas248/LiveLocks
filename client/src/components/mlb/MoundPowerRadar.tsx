@@ -74,6 +74,7 @@ interface MoundDiagnosticsView {
   riskPenalty: number;
   dataCoverageScore: number;
   appliedWarnings: string[];
+  rawInputsAvailable: { pitcherSeasonStats: boolean };
 }
 
 interface MoundSignal {
@@ -161,7 +162,9 @@ type FilterKey =
   | "long_leash"
   | "weak_lineup"
   | "run_suppression"
-  | "risk";
+  | "risk"
+  | "follow"
+  | "fade";
 
 const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: "all", label: "All" },
@@ -174,6 +177,8 @@ const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: "weak_lineup", label: "Weak Lineup" },
   { key: "run_suppression", label: "Run Suppression" },
   { key: "risk", label: "Risk Warnings" },
+  { key: "follow", label: "Follow (Over)" },
+  { key: "fade", label: "Fade (Under)" },
 ];
 
 function hasDriver(s: MoundSignal, predicate: (d: MoundDriver) => boolean): boolean {
@@ -184,21 +189,49 @@ function formatAmericanOdds(odds: number): string {
   return odds > 0 ? `+${odds}` : `${odds}`;
 }
 
-type MoundView = "targets" | "all";
+// Presentation-only re-label of existing tier bands — no new score/tier
+// derivation. Fade = "track" tier with real pitcher-skill data behind it
+// (rules out a data-missing artifact masquerading as a genuine weak
+// matchup). Follow = strong/elite/nuclear tiers that also clear the same
+// data-quality bar the old curated Targets feed's wasPubliclyFlaggedMound
+// gate required: confirmed opposing lineup, real data coverage, AND real
+// season stats behind the pitcher's skill score. That last check matters
+// because pitcherSkillScore can be "available" (and dataCoverageScore high
+// enough) from Savant stuff metrics (SwStr%/CSW%) alone, with no season K/9
+// on file — moundOutcomeAttribution.ts's settlement baseline (and this
+// card's "Projected Ks" line) both require seasonKPer9, so without it there
+// is nothing to grade an Over against. composeMoundScore's caps only ever
+// push a score down, and missing pitcher-skill/unconfirmed-starter already
+// force a sub-5.5 cap, so no further guard is needed on those two
+// dimensions for Follow.
+function moundDirection(s: MoundSignal): "fade" | "follow" | null {
+  if (s.tier === "track" && s.diagnostics.pitcherSkillScore != null) return "fade";
+  if (
+    (s.tier === "strong" || s.tier === "elite" || s.tier === "nuclear") &&
+    s.diagnostics.dataCoverageScore >= 0.6 &&
+    s.opposingLineupConfirmed &&
+    s.diagnostics.rawInputsAvailable.pitcherSeasonStats === true
+  ) {
+    return "follow";
+  }
+  return null;
+}
 
 export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: string | null } = {}) {
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [view, setView] = useState<MoundView>("targets");
 
   const { data, isLoading } = useQuery<MoundRadarResponse>({
-    queryKey: view === "all" ? ["/api/mlb/mound-power-radar/all-starters"] : ["/api/mlb/mound-power-radar"],
+    queryKey: ["/api/mlb/mound-power-radar/all-starters"],
     refetchInterval: 30_000,
     placeholderData: (prev) => prev,
   });
 
   const signals = useMemo(() => {
     const allSignals = data?.signals ?? [];
-    const filtered = allSignals.filter((s) => {
+    // Server (buildMoundResponse) already sorts by score10 descending — kept
+    // as-is so Follow candidates and Fade candidates sit at the two visual
+    // ends of this single unified list.
+    return allSignals.filter((s) => {
       if (selectedGameId && s.gameId !== selectedGameId) return false;
       switch (filter) {
         case "strikeouts": return s.marketTags.includes("pitcher_strikeouts");
@@ -210,18 +243,12 @@ export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: st
         case "weak_lineup": return hasDriver(s, (d) => d.key === "okp_platoon");
         case "run_suppression": return hasDriver(s, (d) => d.key.startsWith("re_"));
         case "risk": return s.drivers.some((d) => d.direction === "negative");
+        case "follow": return moundDirection(s) === "follow";
+        case "fade": return moundDirection(s) === "fade";
         default: return true;
       }
     });
-    if (view !== "all") return filtered;
-    // All Starters: today's full slate reads naturally in first-pitch order,
-    // not ranked by score10 (the curated Targets feed's sort).
-    return filtered.slice().sort((a, b) => {
-      const ta = a.startsAt ? Date.parse(a.startsAt) : Infinity;
-      const tb = b.startsAt ? Date.parse(b.startsAt) : Infinity;
-      return ta - tb;
-    });
-  }, [data, filter, selectedGameId, view]);
+  }, [data, filter, selectedGameId]);
 
   return (
     <div className="space-y-3" data-testid="section-mound-radar">
@@ -238,29 +265,11 @@ export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: st
         {data && (
           <div className="text-[11px] text-muted-foreground text-right">
             <div>
-              {view === "all" ? data.signals.length : data.diagnostics.publicSignals}{" "}
-              {view === "all" ? "starters" : "targets"} · {data.gamesScanned} games
+              {data.signals.length} starters · {data.diagnostics.publicSignals} curated · {data.gamesScanned} games
             </div>
             <div className="opacity-70">source: {data.source}</div>
           </div>
         )}
-      </div>
-
-      <div className="flex gap-1.5">
-        {(["targets", "all"] as const).map((v) => (
-          <button
-            key={v}
-            data-testid={`mound-view-${v}`}
-            onClick={() => setView(v)}
-            className={`px-3 py-1 rounded-full text-[11px] font-bold transition-all border ${
-              view === v
-                ? "bg-sky-500/20 border-sky-400/40 text-sky-200"
-                : "bg-secondary/40 border-border/50 text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {v === "targets" ? "Targets" : "All Starters"}
-          </button>
-        ))}
       </div>
 
       <div className="flex gap-1.5 flex-wrap">
@@ -291,42 +300,33 @@ export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: st
           <Target className="w-8 h-8 mx-auto mb-2 text-muted-foreground/50" />
           <p className="text-sm font-medium">Waiting for probable starters.</p>
           <p className="text-xs text-muted-foreground mt-1">
-            {view === "all"
-              ? "Starters appear once today's probable pitchers are announced."
-              : "Targets appear once probable starters are announced and a setup qualifies."}
+            Starters appear once today's probable pitchers are announced.
           </p>
         </Card>
       )}
 
       <div className="grid gap-2.5">
         {signals.map((s) => (
-          <MoundCard key={s.signalId} signal={s} showFade={view === "all"} />
+          <MoundCard key={s.signalId} signal={s} />
         ))}
       </div>
     </div>
   );
 }
 
-// "Fade Candidate" is a presentation-only re-label of the existing "track"
-// tier (score10 < 4.0) — already the composite of weak pitcherSkill/
-// opponentKProfile/workload scores (scoring.ts). No new threshold or score
-// is introduced here; only shown in the All Starters view, never on the
-// curated Targets feed.
 const FADE_COLOR = "#f43f5e";
 const FADE_GLOW = "rgba(244,63,94,0.28)";
+const FOLLOW_COLOR = "#34d399";
 
-function MoundCard({ signal: s, showFade = false }: { signal: MoundSignal; showFade?: boolean }) {
+function MoundCard({ signal: s }: { signal: MoundSignal }) {
   const style = TIER_STYLE[s.tier];
   const TierIcon = s.tier === "nuclear" || s.tier === "elite" ? Flame : s.tier === "strong" ? Zap : Target;
   const positives = s.drivers.filter((d) => d.direction === "positive").slice(0, 4);
   const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
-  // "track" is also assigned when composeMoundScore caps a row for missing
-  // data (e.g. pitcherSkillScore unavailable forces a 3.9 cap regardless of
-  // the real composite) — require real pitcher-skill data behind the score
-  // before calling it a genuine weak-matchup Fade Candidate, not a
-  // missing-data artifact.
-  const isFade = showFade && s.tier === "track" && s.diagnostics.pitcherSkillScore != null;
+  const direction = moundDirection(s);
+  const isFade = direction === "fade";
+  const isFollow = direction === "follow";
 
   const cashed = s.outcomes?.outcome === "mound_win" && s.outcomes?.userVisible === true;
   const cashedColor = "#10b981";
@@ -399,6 +399,15 @@ function MoundCard({ signal: s, showFade = false }: { signal: MoundSignal; showF
             {cashed ? <PartyPopper className="w-3 h-3" /> : isFade ? <ShieldAlert className="w-3 h-3" /> : <TierIcon className="w-3 h-3" />}
             {cashed ? "Cashed" : isFade ? "Fade Candidate" : style.label}
           </div>
+          {!cashed && (isFade || isFollow) && (
+            <div
+              className="text-[9px] font-bold mt-0.5"
+              style={{ color: isFade ? FADE_COLOR : FOLLOW_COLOR }}
+              data-testid={`mound-direction-${isFade ? "fade" : "follow"}`}
+            >
+              {isFade ? "▼ Fade (Under)" : "▲ Follow (Over)"}
+            </div>
+          )}
         </div>
       </div>
 

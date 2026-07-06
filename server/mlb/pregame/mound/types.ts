@@ -168,7 +168,7 @@ export interface MoundSignal {
 
   /** Best-available real sportsbook line for pitcher_strikeouts, when posted. Null pregame before books post a line — never fabricated. */
   marketEdgeContext: MoundMarketEdgeContext | null;
-  /** Data-derived strikeout projection: kPer9 * avgInningsPerStart / 9. Null when either input is unavailable. */
+  /** Data-derived strikeout projection: projectedStrikeoutsFromKPer9(kPer9) (scoreUtils.ts) — the identical function moundOutcomeAttribution.ts calls for the win/loss settlement baseline, so this can never drift from the number that decides a mound_win. Null when kPer9 is unavailable. */
   projectedStrikeouts: number | null;
 
   status: MoundSignalStatus;
