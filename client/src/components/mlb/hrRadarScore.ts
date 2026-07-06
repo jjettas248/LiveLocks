@@ -63,10 +63,6 @@ export function hrEntryHrChancePct(entry: HrRadarLadderEntry): number | null {
   return formatStampedNumber(entry?.displayHrChancePct, 0, 100, 0);
 }
 
-export function hrEntryActionPct(entry: HrRadarLadderEntry): number | null {
-  return formatStampedNumber(entry?.displayActionPct, 0, 100, 0);
-}
-
 export function hrEntryActionScore10(entry: HrRadarLadderEntry): number | null {
   return formatStampedNumber(entry?.displayActionScore10, 0, 10, 1);
 }

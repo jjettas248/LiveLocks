@@ -155,6 +155,22 @@ export function tierFromUserSection(section: string): HrHeatTier {
   }
 }
 
+// The analyze modal's alert row carries the server-stamped `playabilityStatus`
+// (watchlist/lean/playable/attack/resolved) rather than a ladder SectionKey or
+// HrRadarUserSection — same underlying vocabulary, different field name. This
+// keeps the modal's color on the same shared ramp as the ladder/Quick Decide
+// instead of a separately-derived score→tier lookup.
+export function tierFromPlayabilityStatus(status: string | null | undefined, isHit: boolean): HrHeatTier {
+  switch (status) {
+    case "attack": return "fire";
+    case "playable": return "ready";
+    case "lean": return "build";
+    case "watchlist": return "track";
+    case "resolved": return isHit ? "cashed" : "missed";
+    default: return "track";
+  }
+}
+
 export function tierFromLadderSection(sectionKey: string): HrHeatTier {
   switch (sectionKey) {
     case "attackNow": return "fire";

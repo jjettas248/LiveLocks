@@ -12,6 +12,7 @@
 import type { HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
 import {
   mapHrRadarRowToDisplayState,
+  LIVE_STAGE_LABEL,
   type HrRadarRowInput,
   type CanonicalUserStage,
 } from "@/components/mlb/hrRadarDisplayState";
@@ -279,10 +280,7 @@ export function buildHrRadarCardViewModel(
  *  official calls; the ladder reads as betting guidance, not internal
  *  engine jargon. */
 export const HR_PUBLIC_STAGE_LABEL: Record<HrPublicStage, string> = {
-  track: "Watchlist",
-  build: "Lean",
-  ready: "Playable",
-  fire: "Attack",
+  ...LIVE_STAGE_LABEL,
   cashed: "Cashed",
   missed: "Missed",
 };

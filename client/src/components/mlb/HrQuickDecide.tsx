@@ -20,6 +20,7 @@ import {
 import { HrRadarHeroCard } from "@/components/mlb/hr-radar/HrRadarHeroCard";
 import { HrRadarDecisionQueue } from "@/components/mlb/hr-radar/HrRadarDecisionQueue";
 import { HrRadarRecentHitsStrip } from "@/components/mlb/hr-radar/HrRadarRecentHitsStrip";
+import { HrRadarRecordBanner } from "@/components/mlb/hr-radar/HrRadarRecordBanner";
 import {
   HrRadarStageToastHost,
   detectStageMovements,
@@ -240,6 +241,8 @@ export function HrQuickDecide({ onAddToSlip, onSwitchToLadder }: HrQuickDecidePr
           )}
         </div>
       </div>
+
+      <HrRadarRecordBanner />
 
       {/* Hot Seat hero — the one play to look at right now. */}
       {hero ? (
