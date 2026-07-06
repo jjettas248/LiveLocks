@@ -1,11 +1,18 @@
-import { getStripeSync, getUncachableStripeClient } from "./stripeClient";
+import { getUncachableStripeClient } from "./stripeClient";
 import { storage } from "./storage";
 import { sendProWelcomeEmail, sendAllSportsWelcomeEmail, sendPaymentIssueEmail, sendChurnEmail } from "./email";
 import { resolveTierFromSubscription } from "./utils/resolveTier";
 
+// Thrown when STRIPE_WEBHOOK_SECRET is unset — the route handler maps this to a 500
+// so a missing Railway env var fails loudly instead of falling back to an unverified payload.
+export class WebhookConfigError extends Error {}
+// Thrown when official Stripe signature verification fails — mapped to a 400.
+export class WebhookSignatureError extends Error {}
+
 const HANDLED_EVENTS = new Set([
   "checkout.session.completed",
   "invoice.payment_succeeded",
+  "invoice.payment_failed",
   "customer.subscription.created",
   "customer.subscription.updated",
   "customer.subscription.deleted",
@@ -79,13 +86,19 @@ async function syncSubscriptionToDb(stripe: any, subscriptionId: string): Promis
     if (sub.status === "past_due" || sub.status === "unpaid") {
       const issueUser = await storage.getUserByStripeCustomerId(customerId);
       if (issueUser) {
+        const alreadyFlagged = issueUser.subscriptionStatus === "past_due" || issueUser.subscriptionStatus === "unpaid";
         await storage.setUserSubscriptionTier(issueUser.id, null);
         // Pass 3 — record lifecycle status alongside the existing revoke (additive).
         await syncLifecycleFromSubscription(issueUser, sub).catch((err) =>
           console.warn("[LIFECYCLE] past_due sync failed:", err?.message ?? err)
         );
-        sendPaymentIssueEmail(issueUser.email).catch(console.error);
-        console.log("[PLAN UPDATE]", { userId: issueUser.id, status: sub.status, action: "access_revoked" });
+        // invoice.payment_failed and customer.subscription.updated commonly fire together
+        // for the same failed charge — only email on the first transition into a
+        // payment-issue state, not on every overlapping/duplicate event.
+        if (!alreadyFlagged) {
+          sendPaymentIssueEmail(issueUser.email).catch(console.error);
+        }
+        console.log("[PLAN UPDATE]", { userId: issueUser.id, status: sub.status, action: "access_revoked", emailSent: !alreadyFlagged });
       }
     }
     return;
@@ -140,33 +153,28 @@ export class WebhookHandlers {
       );
     }
 
-    const sync = await getStripeSync();
-    await sync.processWebhook(payload, signature);
-
-    let event: any;
+    // Official Stripe SDK verification only. stripe-replit-sync's own processWebhook()
+    // used to run here too, verifying against either its own config secret (never set)
+    // or a DB-stored "managed webhook" secret left over from the old Replit deployment —
+    // a second, independent trust path that goes stale after a domain migration.
+    // STRIPE_WEBHOOK_SECRET is now the sole source of truth.
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (webhookSecret) {
-      try {
-        const stripe = await getUncachableStripeClient();
-        event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
-      } catch (parseErr: any) {
-        console.error("[webhook] Failed to construct event:", parseErr.message);
-        return;
-      }
-    } else {
-      try {
-        event = JSON.parse(payload.toString());
-      } catch (parseErr: any) {
-        console.error("[webhook] Failed to parse event payload:", parseErr.message);
-        return;
-      }
-      if (!event?.id || !event?.type) {
-        console.error("[webhook] Parsed payload missing id or type — skipping");
-        return;
-      }
+    if (!webhookSecret) {
+      throw new WebhookConfigError("STRIPE_WEBHOOK_SECRET is not configured");
     }
 
-    if (!HANDLED_EVENTS.has(event.type)) return;
+    let event: any;
+    try {
+      const stripe = await getUncachableStripeClient();
+      event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+    } catch (err: any) {
+      throw new WebhookSignatureError(err.message || "Signature verification failed");
+    }
+
+    if (!HANDLED_EVENTS.has(event.type)) {
+      console.log("[STRIPE EVENT] ignoring unhandled type", { type: event.type, id: event.id });
+      return;
+    }
 
     const alreadyProcessed = await storage.hasProcessedStripeEvent(event.id);
     if (alreadyProcessed) {
@@ -225,6 +233,24 @@ export class WebhookHandlers {
         const subscriptionId = typeof invoice?.subscription === "string" ? invoice.subscription : "";
         if (subscriptionId) {
           await syncSubscriptionToDb(stripe, subscriptionId);
+        }
+      } else if (event.type === "invoice.payment_failed") {
+        const invoice = event.data?.object;
+        const subscriptionId = typeof invoice?.subscription === "string" ? invoice.subscription : "";
+        const customerId = typeof invoice?.customer === "string" ? invoice.customer : "";
+        console.log("[invoice.payment_failed]", { subscriptionId, customerId, invoiceId: invoice?.id });
+        if (subscriptionId) {
+          // Reuses the same past_due/unpaid revocation path as customer.subscription.updated;
+          // the email-dedupe guard in syncSubscriptionToDb prevents a double send when both
+          // events fire for the same failed charge.
+          await syncSubscriptionToDb(stripe, subscriptionId);
+        } else if (customerId) {
+          const user = await storage.getUserByStripeCustomerId(customerId);
+          if (!user) {
+            console.warn("[invoice.payment_failed] No user mapped for customerId — skipping", { customerId });
+          }
+        } else {
+          console.warn("[invoice.payment_failed] Invoice missing subscription/customer id — skipping");
         }
       } else if (
         event.type === "customer.subscription.created" ||

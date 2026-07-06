@@ -54,17 +54,12 @@ async function initStripe() {
     await runMigrations({ databaseUrl });
     console.log("[stripe] Migrations done");
 
+    // Webhook signature verification is handled entirely by the official Stripe SDK in
+    // webhookHandlers.ts via STRIPE_WEBHOOK_SECRET — this app no longer creates or manages
+    // a stripe-replit-sync "managed webhook" destination at boot (that mechanism stored its
+    // own signing secret in a DB table, independent of and inconsistent with our env var).
+    // Register/verify the live endpoint manually in the Stripe Dashboard (see PRD.md).
     const stripeSync = await getStripeSync();
-
-    const domains = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.RAILWAY_PUBLIC_DOMAIN;
-    if (domains) {
-      const webhookBaseUrl = `https://${domains}`;
-      await stripeSync.findOrCreateManagedWebhook(`${webhookBaseUrl}/api/stripe/webhook`);
-      console.log("[stripe] Webhook configured");
-    } else {
-      console.log("[stripe] No public domain env var found — register the webhook manually in the Stripe Dashboard (see PRD.md)");
-    }
-
     stripeSync.syncBackfill()
       .then(() => console.log("[stripe] Backfill complete"))
       .catch((err: any) => console.error("[stripe] Backfill error:", err.message));
@@ -80,12 +75,20 @@ app.post(
     const signature = req.headers["stripe-signature"];
     if (!signature) return res.status(400).json({ error: "Missing stripe-signature" });
 
+    const { WebhookHandlers, WebhookConfigError, WebhookSignatureError } = await import("./webhookHandlers");
     try {
-      const { WebhookHandlers } = await import("./webhookHandlers");
       const sig = Array.isArray(signature) ? signature[0] : signature;
       await WebhookHandlers.processWebhook(req.body as Buffer, sig);
       res.status(200).json({ received: true });
     } catch (err: any) {
+      if (err instanceof WebhookConfigError) {
+        console.error("[stripe] Webhook config error:", err.message);
+        return res.status(500).json({ error: "Webhook not configured" });
+      }
+      if (err instanceof WebhookSignatureError) {
+        console.error("[stripe] Webhook signature error:", err.message);
+        return res.status(400).json({ error: "Invalid signature" });
+      }
       console.error("[stripe] Webhook error:", err.message);
       res.status(400).json({ error: "Webhook processing error" });
     }
