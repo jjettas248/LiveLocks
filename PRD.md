@@ -605,7 +605,7 @@ Three lightweight filters run after calibration and before the result is returne
 | POST | `/api/auth/login` | Login by email or phone |
 | GET | `/api/auth/verify-email` | Verify email token |
 | POST | `/api/webhooks/twilio` | SMS STOP opt-out handler |
-| POST | `/api/webhooks/stripe` | Stripe event handler |
+| POST | `/api/stripe/webhook` | Stripe event handler |
 
 ### Authenticated (any logged-in user)
 
@@ -720,7 +720,7 @@ Three lightweight filters run after calibration and before the result is returne
 - **Line already cleared**: If a player's current stat has already exceeded the prop line at halftime (e.g., player has 20 points with a 17.5-point line), that play is skipped as not actionable.
 - **Free play counter**: Only increments on successful calculate responses — errors do not consume plays. Resets daily at midnight UTC.
 - **Stripe price IDs**: Configured via environment variables, not hardcoded. Must match the live Stripe account.
-- **Stripe webhooks**: Must be registered in Stripe Dashboard pointing to `https://<domain>/api/webhooks/stripe`.
+- **Stripe webhooks**: Must be registered in Stripe Dashboard pointing to `https://<domain>/api/stripe/webhook`.
 - **Live signals cache**: The `/api/live-signals/:gameId` endpoint caches results for 90 seconds to avoid repeated odds API calls while the box score refreshes every 2 minutes.
 - **Alert deduplication**: NBA alerts use an in-memory fingerprint `playerName|statType|line` per server session. NCAAB halftime alerts use a per-gameId set with a daily reset.
 - **Email verification**: Users who haven't verified their email receive reminder emails. Auto-login is triggered after successful verification.

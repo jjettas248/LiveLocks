@@ -56,11 +56,13 @@ async function initStripe() {
 
     const stripeSync = await getStripeSync();
 
-    const domains = process.env.REPLIT_DOMAINS?.split(",")[0];
+    const domains = process.env.REPLIT_DOMAINS?.split(",")[0] || process.env.RAILWAY_PUBLIC_DOMAIN;
     if (domains) {
       const webhookBaseUrl = `https://${domains}`;
       await stripeSync.findOrCreateManagedWebhook(`${webhookBaseUrl}/api/stripe/webhook`);
       console.log("[stripe] Webhook configured");
+    } else {
+      console.log("[stripe] No public domain env var found — register the webhook manually in the Stripe Dashboard (see PRD.md)");
     }
 
     stripeSync.syncBackfill()

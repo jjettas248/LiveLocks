@@ -3,6 +3,18 @@ import Stripe from 'stripe';
 let connectionSettings: any;
 
 async function getCredentials() {
+  // Railway is the production home for this app now — Stripe credentials come
+  // from Railway environment variables (STRIPE_SECRET_KEY). The Replit
+  // Connector path below is retained only as a fallback for local Replit dev
+  // environments that never had STRIPE_SECRET_KEY configured.
+  const envSecretKey = process.env.STRIPE_SECRET_KEY;
+  if (envSecretKey) {
+    return {
+      publishableKey: process.env.VITE_STRIPE_PUBLISHABLE_KEY || process.env.STRIPE_PUBLISHABLE_KEY || "",
+      secretKey: envSecretKey,
+    };
+  }
+
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
     ? 'repl ' + process.env.REPL_IDENTITY
@@ -11,7 +23,7 @@ async function getCredentials() {
       : null;
 
   if (!xReplitToken) {
-    throw new Error('X-Replit-Token not found for repl/depl');
+    throw new Error('Stripe is not configured: set STRIPE_SECRET_KEY (Railway) or run inside a Replit environment with the Stripe connector installed.');
   }
 
   const connectorName = 'stripe';
