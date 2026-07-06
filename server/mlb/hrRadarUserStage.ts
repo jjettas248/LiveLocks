@@ -92,6 +92,21 @@ const PATH_PROMOTES_TO_FIRE: Record<string, true> = {
   FAST_PROMOTE_ELITE: true,
 };
 
+// Shared predicate for the FAST_PROMOTE_ELITE "fire bypass" — the only alert
+// path allowed to skip the sustain-tick / peak-currency gates entirely. Post
+// precision-restructure (2026-07), FAST_PROMOTE_ELITE requires 3 independent
+// signals (elite barrel + collapsing/favorable pitcher + a second, genuinely
+// distinct dangerous contact) before it fires at all, so that evidence is
+// itself fresh and high-conviction enough to justify skipping the wait.
+// Used identically at both call sites (mapToUserStage's Step 2 and
+// maybePromoteReadyToFire's secondary fast-path) so the two can't silently
+// drift out of sync the way they previously did ("actionable" only vs.
+// "live" or "actionable"). Expects `alertPath` upper-cased and `signalState`
+// lower-cased, matching each call site's own normalization.
+function isFireBypassEligible(alertPath: string, signalState: string): boolean {
+  return !!PATH_PROMOTES_TO_FIRE[alertPath] && signalState === "actionable";
+}
+
 // Module-scope set so the drift-guard log only fires once per unknown path
 // per process (avoids log spam every poll cycle).
 const loggedUnknownPaths = new Set<string>();
@@ -183,7 +198,7 @@ export function mapToUserStage(input: {
   // collapse order. READY can now exist as a real lifecycle state.
 
   // Step 2 — explicit FIRE path confirmation.
-  if (state === "actionable" && PATH_PROMOTES_TO_FIRE[alertPath]) {
+  if (isFireBypassEligible(alertPath, state)) {
     return emitTrace(trace, "fire", "path_promotes_fire");
   }
 
@@ -563,10 +578,14 @@ export interface ReadyToFireContext {
 // + peak-staleness cliff.
 // Hit-rate tightening (2026-06): 2 ticks let brief conviction blips fire. Lift
 // to 3 so the model must hold top conviction longer before a card commits.
-// Frequency rebalance (2026-07): 3 ticks made FIRE too rare in practice — back
-// off to 2. The contact-driver requirement below still blocks a bare conviction
-// blip with no real bat evidence, so this isn't a full revert of the tightening.
-const READY_TO_FIRE_SUSTAIN_TICKS = 2;
+// Frequency rebalance (2026-07): 3 ticks made FIRE too rare in practice — backed
+// off to 2, which (combined with the FAST_PROMOTE_* false-positive flood) helped
+// produce a ~7% real-world hit rate (181 calls / 13 HRs).
+// Precision restructure (2026-07): reverting the frequency rebalance and going
+// further — 4 ticks required. This module only governs the display-only user
+// stage ladder, not the officialAlert/graded-call gate itself (that's tightened
+// separately in evaluateHRAlert.ts), so we can afford to be strict here.
+const READY_TO_FIRE_SUSTAIN_TICKS = 4;
 
 // Fire Gate A — peak currency (2026-06 false-call reduction). FIRE must reflect
 // CURRENT contact conviction, never a stale peak the card is merely riding. The
@@ -577,10 +596,12 @@ const READY_TO_FIRE_SUSTAIN_TICKS = 2;
 // fabricates a block from missing data. The FAST_PROMOTE_ELITE fast-path (Rule
 // B) bypasses this — an elite barrel is itself the fresh, current evidence.
 // Frequency rebalance (2026-07): 0.85 required near-zero decay off peak, which
-// combined with the sustain-tick gate made FIRE nearly unreachable. Loosened to
-// 0.75 — still requires the card to be close to its best form, just not razor-
-// fresh.
-const FIRE_PEAK_CURRENCY_RATIO = 0.75;
+// combined with the sustain-tick gate made FIRE nearly unreachable — loosened to
+// 0.75.
+// Precision restructure (2026-07): reverting and going further — 0.90. Current
+// readiness must stay within 10% of its own peak, not 25%, so FIRE tracks the
+// card's best moment rather than coasting on a stale high-water mark.
+const FIRE_PEAK_CURRENCY_RATIO = 0.90;
 
 /**
  * Promote a READY user stage to FIRE when the model holds sustained top
@@ -597,7 +618,10 @@ const FIRE_PEAK_CURRENCY_RATIO = 0.75;
  *     or pitcher-collapse-only row can't fire — tangible bat evidence required)
  *
  * Secondary fast-path (engine conviction path):
- *   - alertPath ∈ PATH_PROMOTES_TO_FIRE AND signalState ∈ {live, actionable}
+ *   - isFireBypassEligible(alertPath, signalState) — alertPath ∈
+ *     PATH_PROMOTES_TO_FIRE AND signalState === "actionable" (shared with the
+ *     Step-2 bypass in mapToUserStage; "live" was dropped as too weak a state
+ *     to justify skipping the sustain/currency gates).
  *
  * Diagnostics:
  *   - Promotion → `[HR_RADAR_READY_TO_FIRE]` JSON line incl. matched rule + drivers.
@@ -639,8 +663,8 @@ export function maybePromoteReadyToFire(
   const peakIsCurrent = peakCurrency >= FIRE_PEAK_CURRENCY_RATIO;
 
   let rule: string | null = null;
-  if (PATH_PROMOTES_TO_FIRE[path] && (sig === "live" || sig === "actionable")) {
-    rule = "path_promotes_fire_live_or_actionable";
+  if (isFireBypassEligible(path, sig)) {
+    rule = "path_promotes_fire_actionable";
   } else if (dyn === "BET_NOW" && canonical === "attack" && sustained && hasContactDriver && peakIsCurrent) {
     rule = "betnow_attack_sustained_contact_driver";
   }
@@ -689,8 +713,8 @@ export function maybePromoteReadyToFire(
     }
     if (!PATH_PROMOTES_TO_FIRE[path]) {
       reasons.push("path_not_in_promotes_fire");
-    } else if (sig !== "live" && sig !== "actionable") {
-      reasons.push("path_promotes_fire_but_signal_state_not_live_or_actionable");
+    } else if (!isFireBypassEligible(path, sig)) {
+      reasons.push("path_promotes_fire_but_signal_state_not_actionable");
     }
     console.log(
       `[HR_RADAR_FIRE_BLOCKED] ` + JSON.stringify({

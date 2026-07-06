@@ -44,7 +44,7 @@ import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from 
 import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { getCanonicalSidedProbability } from "./probabilityEngine";
-import { computeSignalScore, computeSignalScoreByFamily, scoreHRRadar, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier } from "./signalScore";
+import { computeSignalScore, computeSignalScoreByFamily, deriveHrConfidenceTier, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier, type SignalScoreBreakdown } from "./signalScore";
 import { detectNearHrContact, detectNearHrContactPeak } from "./nearHrContact";
 import { upsertCanonicalHrRadarState, getCanonicalHrRadarState } from "./hrRadarCanonicalStore";
 import type { HrRadarLifecycleEvent } from "./hrRadarStateMachine";
@@ -2175,10 +2175,13 @@ export class LiveGameOrchestrator {
 
     const scoreBreakdown = computeSignalScoreByFamily(input, output);
 
-    let hrRadarResult: ReturnType<typeof scoreHRRadar> | null = null;
-    if (output.market === "home_runs") {
-      hrRadarResult = scoreHRRadar(input, output);
-    }
+    // Precision restructure (2026-07): scoreHRRadar was a second, independently
+    // weighted HR composite computed in parallel with scoreBreakdown (itself
+    // computeHrRadarSignalComposite's output for this market) — two different
+    // weight sets scoring the same signal row. Now consolidated into one
+    // composite; scoreBreakdown already IS the HR-specific result for this
+    // market, so hrRadarResult just aliases it instead of recomputing.
+    const hrRadarResult: SignalScoreBreakdown | null = output.market === "home_runs" ? scoreBreakdown : null;
 
     // [MLB Phase 2.5] Engine-owned HR Watch detection on the player's last AB.
     // Pure detector — no probability touch. When triggered, we (a) lower the
@@ -2498,9 +2501,16 @@ export class LiveGameOrchestrator {
     }
 
     if (output.market === "home_runs" && hrRadarResult) {
-      if (hrRadarResult.total >= 80) signalMode = "hr_elite";
-      else if (hrRadarResult.total >= 65) signalMode = "hr_strong";
-      else if (hrRadarResult.total >= 50) signalMode = "hr_heating_up";
+      // Precision restructure (2026-07): this used to compare hrRadarResult.total
+      // against a THIRD independent threshold ladder (80/65/50), separate from
+      // both scoreBreakdown's confidenceTier ladder and the generic ladder the
+      // HR Watch bump below used to (wrongly) re-derive against. hrRadarResult
+      // and scoreBreakdown are now the same object for this market, so map
+      // directly off the one canonical confidenceTier instead of a duplicate
+      // set of magic numbers.
+      if (scoreBreakdown.confidenceTier === "ELITE") signalMode = "hr_elite";
+      else if (scoreBreakdown.confidenceTier === "STRONG") signalMode = "hr_strong";
+      else if (scoreBreakdown.confidenceTier === "SOLID") signalMode = "hr_heating_up";
       else if (hrRadarResult.total >= HR_WATCH_GATE) signalMode = "hr_watch";
     }
 
@@ -2565,13 +2575,14 @@ export class LiveGameOrchestrator {
         const oldTotal = scoreBreakdown.total;
         const newTotal = Math.max(0, Math.min(100, oldTotal + bump));
         scoreBreakdown.total = newTotal;
-        // Re-derive confidenceTier per existing thresholds (signalScore.ts:
-        // 85=ELITE / 70=STRONG / 55=SOLID / 40=WATCHLIST / else NO_SIGNAL).
-        if (newTotal >= 85) scoreBreakdown.confidenceTier = "ELITE";
-        else if (newTotal >= 70) scoreBreakdown.confidenceTier = "STRONG";
-        else if (newTotal >= 55) scoreBreakdown.confidenceTier = "SOLID";
-        else if (newTotal >= 40) scoreBreakdown.confidenceTier = "WATCHLIST";
-        else scoreBreakdown.confidenceTier = "NO_SIGNAL";
+        // Precision restructure (2026-07) — bug fix: this used to re-derive
+        // confidenceTier against the GENERIC non-HR ladder (85/70/55/40, i.e.
+        // computeSignalScore's thresholds), even though this block only ever
+        // runs for market === "home_runs" and scoreBreakdown here is always
+        // the HR-specific composite (computeHrRadarSignalComposite's output).
+        // Use the correct HR-specific ladder via the shared helper so this
+        // and the composite itself can never drift apart again.
+        scoreBreakdown.confidenceTier = deriveHrConfidenceTier(newTotal);
         try {
           // Phase 1 STEP 2 — enriched score-bump diagnostic so an audit can
           // tell WHICH AB triggered the lean/watch and which drivers were

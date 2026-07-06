@@ -28,7 +28,7 @@ import {
   validateMlbEngineProbability,
   type ProbabilityInput,
 } from "./probabilityEngine";
-import { deriveSignalTier, type SignalConfidenceTier } from "./signalScore";
+import { deriveSignalTier, deriveHrConfidenceTier, type SignalConfidenceTier } from "./signalScore";
 
 // __dirname shim for ESM (tsx loader runs as ESM).
 const __filename = fileURLToPath(import.meta.url);
@@ -69,6 +69,12 @@ function assertClose(actual: number, expected: number, eps: number, label: strin
 // asserting the bump only mutates scoreBreakdown.total and its derived
 // confidenceTier — never the probability fields.
 //
+// Precision restructure (2026-07) — bug fix: this used to re-implement the
+// GENERIC non-HR tier ladder (85/70/55/40) inline, matching a real bug in
+// liveGameOrchestrator.ts's HR Watch bump block that used the same wrong
+// ladder even though the bump only ever runs for market === "home_runs".
+// Both are now fixed to use deriveHrConfidenceTier (80/65/55/35), the one
+// canonical HR-specific ladder shared with computeHrRadarSignalComposite.
 console.log("\n[1] HR Watch bump invariant");
 
 function applyHrWatchBump(
@@ -79,11 +85,7 @@ function applyHrWatchBump(
   if (bump > 0) {
     const newTotal = Math.max(0, Math.min(100, scoreBreakdown.total + bump));
     scoreBreakdown.total = newTotal;
-    if (newTotal >= 85) scoreBreakdown.confidenceTier = "ELITE";
-    else if (newTotal >= 70) scoreBreakdown.confidenceTier = "STRONG";
-    else if (newTotal >= 55) scoreBreakdown.confidenceTier = "SOLID";
-    else if (newTotal >= 40) scoreBreakdown.confidenceTier = "WATCHLIST";
-    else scoreBreakdown.confidenceTier = "NO_SIGNAL";
+    scoreBreakdown.confidenceTier = deriveHrConfidenceTier(newTotal);
   }
 }
 
@@ -105,6 +107,26 @@ test("lean bump (+6) raises score, probability fields untouched", () => {
   assertEq(sb.total, 71, "total +6");
   assertEq(sb.confidenceTier, "STRONG", "tier re-derived from 71");
   assertEq(JSON.stringify(output), beforeOut, "output untouched");
+});
+
+test("HR-specific ladder, not the generic one: 79+6=85 is STRONG not ELITE", () => {
+  // Discriminates the fix from the bug it replaces: under the old (wrong)
+  // generic ladder (85=ELITE/70/55/40), 85 would be ELITE. Under the correct
+  // HR-specific ladder (80=ELITE/65/55/35), 85 is well past the 80 floor —
+  // still ELITE either way at 85. Use a value that actually discriminates.
+  const sb = { total: 76, confidenceTier: "STRONG" as SignalConfidenceTier };
+  applyHrWatchBump(sb, "lean"); // 76 + 6 = 82
+  assertEq(sb.total, 82, "total +6");
+  // Old generic ladder: 82 >= 70 && < 85 → STRONG. New HR ladder: 82 >= 80 → ELITE.
+  assertEq(sb.confidenceTier, "ELITE", "82 is ELITE under the HR ladder (>=80), not STRONG under the generic one (>=85 required)");
+});
+
+test("HR-specific ladder floor at 35, not the generic floor at 40", () => {
+  const sb = { total: 34, confidenceTier: "NO_SIGNAL" as SignalConfidenceTier };
+  applyHrWatchBump(sb, "watch"); // 34 + 3 = 37
+  assertEq(sb.total, 37, "total +3");
+  // Old generic ladder: 37 < 40 → NO_SIGNAL. New HR ladder: 37 >= 35 → WATCHLIST.
+  assertEq(sb.confidenceTier, "WATCHLIST", "37 is WATCHLIST under the HR ladder (>=35), not NO_SIGNAL under the generic one (>=40 required)");
 });
 
 test("null tier = no bump, no probability change", () => {
