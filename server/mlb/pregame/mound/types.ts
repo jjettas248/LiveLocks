@@ -68,7 +68,8 @@ export interface MoundParkContext {
 export interface MoundMarketSetup {
   market: MoundMarket;
   setupScore: number;
-  setupLabel: "Elite" | "Strong" | "Solid" | "Watch";
+  /** Exactly 3 grades — see marketTagger.ts's marketSetupLabel(). No "Solid"/"Watch" middle ground. */
+  setupLabel: "Elite" | "Strong" | "Weak";
   isPrimary: boolean;
 }
 

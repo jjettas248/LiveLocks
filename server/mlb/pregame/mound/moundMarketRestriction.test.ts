@@ -59,11 +59,12 @@ ok(kHeavy.primaryMarket === "pitcher_strikeouts", "high K-market strength → pi
 const outsHeavy = computeMarketTags({ pitcherSkillScore: 3, opponentKProfileScore: 3, workloadScore: 9 });
 ok(outsHeavy.primaryMarket === "pitcher_outs", "high workload strength → pitcher_outs primary");
 
-// ── marketSetupLabel is a pure classification, no I/O ─────────────────────────
+// ── marketSetupLabel is a pure classification, no I/O — exactly 3 grades ────
+// (no "Solid"/"Watch" middle ground: below the Strong bar is Weak, period)
 ok(marketSetupLabel(9.0) === "Elite", "9.0 → Elite");
 ok(marketSetupLabel(7.5) === "Strong", "7.5 → Strong");
-ok(marketSetupLabel(6.0) === "Solid", "6.0 → Solid");
-ok(marketSetupLabel(3.0) === "Watch", "3.0 → Watch");
+ok(marketSetupLabel(6.0) === "Weak", "6.0 → Weak (below the 7.0 Strong bar)");
+ok(marketSetupLabel(3.0) === "Weak", "3.0 → Weak");
 
 console.log(`\nmoundMarketRestriction.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

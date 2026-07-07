@@ -20,11 +20,13 @@ export interface MarketTagResult {
   marketSetups: MoundMarketSetup[];
 }
 
-export function marketSetupLabel(score10: number): "Elite" | "Strong" | "Solid" | "Watch" {
+// Exactly three grades — no "Solid"/"Watch" middle ground. A pitcher's
+// Ks-market or Outs-market setup is either a real Strong/Elite win
+// candidate, or it's Weak. Below 7.0 is Weak, full stop.
+export function marketSetupLabel(score10: number): "Elite" | "Strong" | "Weak" {
   if (score10 >= 8.5) return "Elite";
   if (score10 >= 7.0) return "Strong";
-  if (score10 >= 5.5) return "Solid";
-  return "Watch";
+  return "Weak";
 }
 
 export function computeMarketTags(inputs: MarketTagInputs): MarketTagResult {

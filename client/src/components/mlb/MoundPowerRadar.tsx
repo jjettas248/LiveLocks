@@ -23,7 +23,7 @@ interface MoundDriver {
   evidence?: string;
 }
 
-type SetupLabel = "Elite" | "Strong" | "Solid" | "Watch";
+type SetupLabel = "Elite" | "Strong" | "Weak";
 
 interface MarketSetup {
   market: Market;
