@@ -48,6 +48,21 @@ export function deriveSignalTier(confidenceTier: SignalConfidenceTier | string |
   }
 }
 
+// Volume-problem follow-up (2026-07): computeSignalScore and scoreUnderSignal
+// each hardcoded an identical 85/70/55/40 tier ladder independently — not a
+// bug (both already agree), but a duplication risk: tweaking one "for the
+// generic case" could silently leave the other stale. Consolidated into one
+// shared helper, mirroring the deriveHrConfidenceTier pattern used for the HR
+// composite. Zero behavior change — both call sites already produced these
+// exact thresholds.
+export function deriveNonHrConfidenceTier(total: number): SignalConfidenceTier {
+  if (total >= 85) return "ELITE";
+  if (total >= 70) return "STRONG";
+  if (total >= 55) return "SOLID";
+  if (total >= 40) return "WATCHLIST";
+  return "NO_SIGNAL";
+}
+
 export interface SignalScoreBreakdown {
   probability: number;
   projection: number;
@@ -322,12 +337,7 @@ export function computeSignalScore(
 
   const total = clamp(baseTotal, 0, 100);
 
-  let confidenceTier: SignalConfidenceTier;
-  if (total >= 85) confidenceTier = "ELITE";
-  else if (total >= 70) confidenceTier = "STRONG";
-  else if (total >= 55) confidenceTier = "SOLID";
-  else if (total >= 40) confidenceTier = "WATCHLIST";
-  else confidenceTier = "NO_SIGNAL";
+  const confidenceTier: SignalConfidenceTier = deriveNonHrConfidenceTier(total);
 
   return {
     probability: Math.round(prob),
@@ -601,12 +611,7 @@ export function scoreUnderSignal(
 
   const total = clamp(baseTotal, 0, 100);
 
-  let confidenceTier: SignalConfidenceTier;
-  if (total >= 85) confidenceTier = "ELITE";
-  else if (total >= 70) confidenceTier = "STRONG";
-  else if (total >= 55) confidenceTier = "SOLID";
-  else if (total >= 40) confidenceTier = "WATCHLIST";
-  else confidenceTier = "NO_SIGNAL";
+  const confidenceTier: SignalConfidenceTier = deriveNonHrConfidenceTier(total);
 
   return {
     probability: Math.round(prob),

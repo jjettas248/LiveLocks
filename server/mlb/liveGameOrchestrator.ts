@@ -44,7 +44,7 @@ import type { MLBPropInput, MLBPropOutput, MLBMarket, MLBQualifiedSignal } from 
 import { MARKET_QUALIFY_FLOOR, ALL_MLB_MARKETS } from "./types";
 import { runIntegrityFirewall, logFirewallResult } from "./integrityFirewall";
 import { getCanonicalSidedProbability } from "./probabilityEngine";
-import { computeSignalScore, computeSignalScoreByFamily, deriveHrConfidenceTier, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier, type SignalScoreBreakdown } from "./signalScore";
+import { computeSignalScoreByFamily, deriveHrConfidenceTier, deriveSignalTags, deriveFeedTags, deriveGameCardTags, isPlayerGlowEligible, derivePitcherSignals, computeFullOpportunityScore, computeLiveOpportunityScore, getMarketFamily, deriveSignalTier, type SignalScoreBreakdown } from "./signalScore";
 import { detectNearHrContact, detectNearHrContactPeak } from "./nearHrContact";
 import { upsertCanonicalHrRadarState, getCanonicalHrRadarState } from "./hrRadarCanonicalStore";
 import type { HrRadarLifecycleEvent } from "./hrRadarStateMachine";
@@ -2944,7 +2944,18 @@ export class LiveGameOrchestrator {
       : output.calibratedProbabilityUnder;
     if (!Number.isFinite(sideProbability) || sideProbability <= 0) return null;
 
-    const scoreBreakdown = computeSignalScore(input, output);
+    // Precision restructure follow-up (2026-07): this used to call the
+    // un-routed generic computeSignalScore() directly, which meant any
+    // HR-market signal that failed the main qualification gate and dropped
+    // into this watch/fallback tier was scored by the generic 85/70/55/40
+    // composite instead of computeHrRadarSignalComposite — ignoring
+    // nearHrScore/contactScore/pitcherVuln/hrTiming/powerProfile entirely.
+    // computeSignalScoreByFamily correctly routes home_runs (and the other
+    // batter_over/under markets) to their family-specific composites, and
+    // falls through to computeSignalScore for anything else — so this is a
+    // behavior fix only for markets that have a dedicated composite, not a
+    // regression for the rest.
+    const scoreBreakdown = computeSignalScoreByFamily(input, output);
     const signalTags = deriveSignalTags(input, output, scoreBreakdown);
     // HR Radar audit fix #4 — same HR-resolved guard as the qualified path.
     const isHrResolvedPlayerWatch = output.market === "home_runs" &&

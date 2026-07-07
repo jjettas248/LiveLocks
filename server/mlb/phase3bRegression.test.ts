@@ -28,7 +28,14 @@ import {
   validateMlbEngineProbability,
   type ProbabilityInput,
 } from "./probabilityEngine";
-import { deriveSignalTier, deriveHrConfidenceTier, type SignalConfidenceTier } from "./signalScore";
+import {
+  deriveSignalTier,
+  deriveHrConfidenceTier,
+  computeSignalScoreByFamily,
+  computeHrRadarSignalComposite,
+  type SignalConfidenceTier,
+} from "./signalScore";
+import type { MLBPropInput, MLBPropOutput } from "./types";
 
 // __dirname shim for ESM (tsx loader runs as ESM).
 const __filename = fileURLToPath(import.meta.url);
@@ -364,6 +371,109 @@ test("server/nba and server/ncaab directory listings exist (sanity) and are not 
     const stat = fs.statSync(ncaabDir);
     assertTrue(stat.isDirectory(), "server/ncaab is a directory");
   }
+});
+
+// ── Test 9: buildWatchSignal HR routing fix ─────────────────────────────────
+//
+// Volume-problem follow-up (2026-07): liveGameOrchestrator.ts's buildWatchSignal
+// (the fallback path used whenever the main qualification gate returns null)
+// used to call the un-routed generic computeSignalScore() directly, even for
+// market === "home_runs" rows. That meant any HR-market signal that failed the
+// main gate and dropped into the watch tier was scored by the generic
+// composite/ladder (85/70/55/40) instead of computeHrRadarSignalComposite —
+// ignoring nearHrScore/contactScore/pitcherVuln/hrTiming/powerProfile entirely.
+// Fixed by switching that call site to computeSignalScoreByFamily, which
+// correctly routes home_runs to the HR-specific composite. This test locks in
+// that routing at the exported-function level (the level buildWatchSignal
+// itself calls into), so it doesn't need to reach into the orchestrator's
+// private method or its heavy constructor dependencies.
+console.log("\n[9] buildWatchSignal HR routing fix");
+
+function makeMinimalMlbPropInput(overrides: Partial<MLBPropInput> = {}): MLBPropInput {
+  return {
+    playerId: "p1", playerName: "Test Batter", team: "TST", opponent: "OPP", gameId: "g1",
+    market: "home_runs", bookLine: 0.5, overOdds: -120, underOdds: 100,
+    seasonAvg: 0.260, plateAppearances: 400, atBats: 350, currentStatValue: 0,
+    remainingPA: 2, remainingAB: 2, completedAB: 2, inning: 5, isTopInning: false,
+    batterHand: "R",
+    contactQuality: {
+      exitVelocity: 95, launchAngle: 22, hitDistance: 380,
+      hardHitRateSeason: 0.42, barrelRateProxySeason: 0.10,
+      avgBatSpeed: 72, avgSwingLength: 7.2,
+      priorABResults: [], xBA: 0.35, xSLG: 0.480,
+    },
+    pitcher: {
+      pitchCount: 60, timesThrough: 2, era: 4.2, whip: 1.25, kPer9: 8.5, bbPer9: 3.0,
+      managerLeashShort: false, isPitcherCollapsing: false, pitchMix: [], throws: "R",
+    },
+    lineup: {
+      battingOrderSlot: 4, orderTurnoverProximity: 0.5,
+      lineupSectionStrength: "neutral", hittersAheadOnBase: 0, pocketWeakness: null,
+    },
+    weatherPark: {
+      parkFactor: 1.0, temperature: 72, windSpeed: 5, windDirection: "calm",
+      humidity: 50, isIndoors: false, parkHistoryFactor: null,
+    },
+    bullpen: {
+      bullpenEra: 4.0, bullpenUsageLastThreeDays: 40, isTopRelieverAvailable: true,
+    },
+    ...overrides,
+  };
+}
+
+function makeMinimalMlbPropOutput(overrides: Partial<MLBPropOutput> = {}): MLBPropOutput {
+  return {
+    market: "home_runs", playerId: "p1", playerName: "Test Batter", gameId: "g1",
+    projection: 0.30, bookLine: 0.5, overOdds: -120, underOdds: 100,
+    modifiers: {
+      liveForm: 0, pitcher: 0, pitchType: 0, weatherPark: 0, lineup: 0, bullpen: 0,
+      parkHistory: 0, handednessMatchup: 0, bvpHistory: 0, pocketWeakness: 0,
+      liveEvent: 0, total: 0,
+    },
+    projectionLog: {
+      baseProjection: 0.30, liveFormAdjustment: 0, pitcherAdjustment: 0,
+      pitchTypeAdjustment: 0, weatherParkAdjustment: 0, lineupAdjustment: 0,
+      bullpenAdjustment: 0, parkHistoryAdjustment: 0, handednessMatchupAdjustment: 0,
+      bvpHistoryAdjustment: 0, pocketWeaknessAdjustment: 0, liveEventAdjustment: 0,
+      finalCappedAdjustment: 0, rawProbability: 12, calibratedProbability: 12,
+    },
+    rawProbabilityOver: 12, rawProbabilityUnder: 88,
+    calibratedProbabilityOver: 12, calibratedProbabilityUnder: 88,
+    rawProbability: 12, calibratedProbability: 12, edge: 0,
+    recommendedSide: "OVER", confidenceTier: "LEAN",
+    mode: "standard", completedAB: 2, twoABRuleSatisfied: true,
+    expectedHits: null, remainingPA: 2, adjustedHitRate: null, bookImplied: null,
+    isExperimental: false, suppressed: false, suppressionReason: null,
+    explanationBullets: [], warnings: [],
+    engineGeneratedAt: 0, oddsUpdatedAt: 0, projectionUpdatedAt: 0,
+    sportsbook: null, isDerivedLine: false, signalTimestamp: 0,
+    formIndicator: "neutral", formScore: 50, evPct: 0,
+    contextScore: 50, matchupTag: null,
+    ...overrides,
+  };
+}
+
+test("computeSignalScoreByFamily routes home_runs to computeHrRadarSignalComposite (the fix buildWatchSignal now relies on)", () => {
+  const input = makeMinimalMlbPropInput();
+  const output = makeMinimalMlbPropOutput();
+  const viaFamily = computeSignalScoreByFamily(input, output);
+  const viaComposite = computeHrRadarSignalComposite(input, output);
+  assertEq(viaFamily.total, viaComposite.total, "same total as the HR-specific composite");
+  assertEq(viaFamily.confidenceTier, viaComposite.confidenceTier, "same confidenceTier as the HR-specific composite");
+});
+
+test("the routed result's confidenceTier is consistent with deriveHrConfidenceTier's ladder (80/65/55/35), not the generic 85/70/55/40", () => {
+  const input = makeMinimalMlbPropInput();
+  const output = makeMinimalMlbPropOutput();
+  const result = computeSignalScoreByFamily(input, output);
+  assertEq(result.confidenceTier, deriveHrConfidenceTier(result.total), "confidenceTier matches the HR ladder for this total");
+});
+
+test("non-HR markets are unaffected by the fix (computeSignalScoreByFamily still falls through correctly for pitcher_strikeouts)", () => {
+  const input = makeMinimalMlbPropInput({ market: "pitcher_strikeouts" });
+  const output = makeMinimalMlbPropOutput({ market: "pitcher_strikeouts", recommendedSide: "UNDER" });
+  const result = computeSignalScoreByFamily(input, output);
+  assertTrue(typeof result.total === "number" && result.total >= 0 && result.total <= 100, "still produces a valid 0-100 total for a non-HR market");
 });
 
 // ── Summary ────────────────────────────────────────────────────────────────
