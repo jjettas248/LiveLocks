@@ -4,8 +4,12 @@
 //   • Live bridge (read-only): cross-references the live HR canonical store to
 //     mark whether a target later became live Ready / Fire. Never mutates the
 //     live engine — pure reads via getCanonicalHrRadarState.
-//   • Shadow outcomes: when a game is final and a box score is available, records
-//     hit HR / total bases / hit / RBI on the target's own row.
+//   • Shadow outcomes: grades a target as soon as the box score confirms a HR
+//     (live or final — mlbGameCache's box score is refreshed every 6-15s for
+//     an actively-polled live game, so a win doesn't sit waiting for the whole
+//     game to end). A miss (calibration_miss) still requires the game to be
+//     final, since "no HR" can't be declared while the batter has plate
+//     appearances left.
 //
 // Writes ONLY to the pre-game store + pregame tables. Never persisted_plays /
 // ROI / official W-L. Labels stay "pregame target hit rate" — a proxy, not
@@ -136,10 +140,17 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
       console.log(`[PREGAME_POWER_RADAR_BRIDGE] ${signal.signalId} ready=${bridge.becameLiveReady} fire=${bridge.becameLiveFire}`);
     }
 
-    // ── Shadow outcome + win attribution on final games ───────────────────────
-    if (signal.gameStatus === "final" && signal.status !== "graded") {
+    // ── Shadow outcome + win attribution ──────────────────────────────────────
+    // A HR is graded the moment the box score confirms it — mlbGameCache's box
+    // score is kept fresh every 6-15s for a live-tracked live game (far inside
+    // this function's own 5-minute tick), so waiting for the whole game to
+    // reach "final" only delayed a real win by however long the game had left
+    // to play, sometimes hours. Only a *miss* (calibration_miss) genuinely
+    // needs the game to be over — you can't call "no HR" while the batter
+    // still has plate appearances left.
+    if (signal.status !== "graded") {
       const outcome = resolveOutcome(signal, canonicalHits.get(`${signal.gameId}|${signal.batterId}`));
-      if (outcome) {
+      if (outcome && (outcome.hitHr === true || signal.gameStatus === "final")) {
         signal.outcomes = outcome;
         signal.status = "graded";
         changed = true;
