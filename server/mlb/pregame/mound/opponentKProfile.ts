@@ -11,7 +11,7 @@
 // render `available:false` in v1 rather than being fabricated.
 
 import type { ComponentScore, MoundDriver } from "./types";
-import { lin, weightedAvg, round1 } from "./scoreUtils";
+import { lin, weightedAvg, round1, weightedPlatoonKRate } from "./scoreUtils";
 
 export interface OpponentKProfileInputs {
   pitcherKnown: boolean;
@@ -31,24 +31,9 @@ export function computeOpponentKProfile(inputs: OpponentKProfileInputs): Compone
     return { score10: 5, available: false, drivers, warnings };
   }
 
-  const comp = inputs.opposingLineupHandedness;
-  let platoonKRate: number | null = null;
-  if (comp && inputs.opposingLineupConfirmed && (inputs.kRateVsLHB != null || inputs.kRateVsRHB != null)) {
-    const total = comp.left + comp.right + comp.switchHit;
-    if (total > 0) {
-      // Switch hitters bat opposite the pitcher's throwing hand in aggregate —
-      // approximate with a 50/50 split across the two known rates when both exist.
-      const lWeight = comp.left + comp.switchHit / 2;
-      const rWeight = comp.right + comp.switchHit / 2;
-      const lRate = inputs.kRateVsLHB;
-      const rRate = inputs.kRateVsRHB;
-      if (lRate != null && rRate != null) {
-        platoonKRate = (lRate * lWeight + rRate * rWeight) / total;
-      } else {
-        platoonKRate = lRate ?? rRate;
-      }
-    }
-  }
+  const platoonKRate = inputs.opposingLineupConfirmed
+    ? weightedPlatoonKRate(inputs.kRateVsLHB, inputs.kRateVsRHB, inputs.opposingLineupHandedness)
+    : null;
 
   const sPlatoon = platoonKRate != null ? lin(platoonKRate, 0.18, 0.32) : null;
 

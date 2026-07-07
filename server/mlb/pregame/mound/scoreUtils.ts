@@ -69,3 +69,29 @@ export function seasonKPer9ToPerStartExpectation(seasonKPer9: number): number {
 export function projectedStrikeoutsFromKPer9(seasonKPer9: number | null | undefined): number | null {
   return seasonKPer9 != null ? round1(seasonKPer9ToPerStartExpectation(seasonKPer9)) : null;
 }
+
+/**
+ * Lineup-weighted platoon strikeout rate for a pitcher — the pitcher's own
+ * K-rate split by opposing-batter handedness, weighted by the confirmed
+ * opposing lineup's L/R/S composition. Extracted so opponentKProfile.ts's
+ * score10 component and matchupAdjustedKs.ts's display-only projection both
+ * derive this number from one place rather than duplicating the weighting
+ * math. Switch hitters bat opposite the pitcher's throwing hand in
+ * aggregate — approximated with a 50/50 split across the two known rates
+ * when both exist.
+ */
+export function weightedPlatoonKRate(
+  kRateVsLHB: number | null,
+  kRateVsRHB: number | null,
+  handedness: { left: number; right: number; switchHit: number } | null,
+): number | null {
+  if (!handedness || (kRateVsLHB == null && kRateVsRHB == null)) return null;
+  const total = handedness.left + handedness.right + handedness.switchHit;
+  if (total <= 0) return null;
+  const lWeight = handedness.left + handedness.switchHit / 2;
+  const rWeight = handedness.right + handedness.switchHit / 2;
+  if (kRateVsLHB != null && kRateVsRHB != null) {
+    return (kRateVsLHB * lWeight + kRateVsRHB * rWeight) / total;
+  }
+  return kRateVsLHB ?? kRateVsRHB;
+}

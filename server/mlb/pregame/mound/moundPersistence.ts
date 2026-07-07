@@ -113,6 +113,7 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     // restore, so these stay null rather than fabricated.
     marketEdgeContext: null,
     projectedStrikeouts: null,
+    matchupAdjustedStrikeouts: null,
   };
 }
 

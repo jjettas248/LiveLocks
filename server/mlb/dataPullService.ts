@@ -172,6 +172,21 @@ interface PitcherSeasonStats {
   fetchedAt: number;
 }
 
+/**
+ * Prior-season K/9 history (current season excluded — that's PitcherSeasonStats).
+ * Mound Radar input for matchupAdjustedKs.ts's multi-year baseline blend.
+ * A season only counts if it clears a minimum innings-pitched floor (avoids a
+ * few relief innings or an injury-shortened season skewing the blend) — a
+ * year that doesn't clear it, or that fails to fetch, is `null`, never
+ * fabricated as 0 or league-average, and never simply omitted (that would
+ * shift a real year-2 value into the year-1 slot and misweight it).
+ */
+interface PitcherMultiYearStats {
+  /** Prior seasons' K/9, positionally aligned [year-1, year-2] — null where that year is disqualified or failed to fetch. Never compacted. */
+  priorSeasonsKPer9: (number | null)[];
+  fetchedAt: number;
+}
+
 interface BatterRollingStats {
   last7: { avg: number | null; ops: number | null; slg: number | null; games: number };
   last15: { avg: number | null; ops: number | null; slg: number | null; games: number };
@@ -283,6 +298,7 @@ export const mlbGameCache: {
 
 export const mlbPlayerCache: {
   pitcherSeasonStats: Record<string, PitcherSeasonStats>;
+  pitcherMultiYearStats: Record<string, PitcherMultiYearStats>;
   batterRollingStats: Record<string, BatterRollingStats>;
   batterOrderSplits: Record<string, BatterOrderSplitsData>;
   bvpMatchups: Record<string, BvPMatchupStats>;
@@ -294,6 +310,7 @@ export const mlbPlayerCache: {
   pitcherOrderSplits: Record<string, PitcherOrderSplitsData>;
 } = {
   pitcherSeasonStats: {},
+  pitcherMultiYearStats: {},
   batterRollingStats: {},
   batterOrderSplits: {},
   bvpMatchups: {},
@@ -321,6 +338,11 @@ interface BatterOrderSplitsData {
 }
 
 const PITCHER_SEASON_TTL = 30 * 60 * 1000;
+// Prior seasons never change once final — long TTL, matches SPLITS_TTL's
+// "moves slowly" rationale rather than PITCHER_SEASON_TTL's in-progress one.
+const PITCHER_MULTI_YEAR_TTL = 24 * 60 * 60 * 1000;
+/** A prior season only counts toward the multi-year blend at this IP floor. */
+const PITCHER_MULTI_YEAR_MIN_IP = 20;
 const BATTER_ROLLING_TTL = 20 * 60 * 1000;
 const BATTER_ORDER_SPLITS_TTL = 6 * 60 * 60 * 1000; // lineup-slot history moves slowly
 const BVP_TTL = 60 * 60 * 1000;
@@ -1569,6 +1591,51 @@ export async function syncPitcherSeasonStats(pitcherId: string): Promise<void> {
     console.log(`[MLB pull] syncPitcherSeasonStats: pitcher ${pitcherId} — ERA=${stat.era} WHIP=${stat.whip} K/9=${kPer9} BB/9=${bbPer9}`);
   } catch (err: any) {
     console.error(`[MLB pull] syncPitcherSeasonStats(${pitcherId}) error:`, err.message);
+    if (cached) cached.fetchedAt = Date.now();
+  }
+}
+
+// ── syncPitcherMultiYearStats ────────────────────────────────────────────────
+// Prior-season K/9 (current season excluded — syncPitcherSeasonStats owns
+// that). Mound Radar input only, feeding matchupAdjustedKs.ts's multi-year
+// baseline blend — never the settlement-baseline projectedStrikeouts.
+export async function syncPitcherMultiYearStats(pitcherId: string): Promise<void> {
+  if (!pitcherId || pitcherId === "unknown") return;
+
+  const cached = mlbPlayerCache.pitcherMultiYearStats[pitcherId];
+  if (cached && Date.now() - cached.fetchedAt < PITCHER_MULTI_YEAR_TTL) return;
+
+  try {
+    const currentYear = new Date().getFullYear();
+    const priorYears = [currentYear - 1, currentYear - 2];
+    const results = await Promise.allSettled(
+      priorYears.map((year) =>
+        fetchJson(`https://statsapi.mlb.com/api/v1/people/${pitcherId}/stats?stats=season&season=${year}&group=pitching`),
+      ),
+    );
+
+    // Positionally aligned with priorYears ([year-1, year-2]) — a disqualified
+    // or failed year pushes `null` rather than being omitted. Omitting it would
+    // compact the array and silently shift a real year-2 value into the
+    // year-1 slot, applying blendKPer9()'s heavier year-1 weight to what is
+    // actually two-year-old data.
+    const priorSeasonsKPer9: (number | null)[] = [];
+    for (const result of results) {
+      if (result.status !== "fulfilled") { priorSeasonsKPer9.push(null); continue; }
+      const stat = result.value.stats?.[0]?.splits?.[0]?.stat;
+      if (!stat) { priorSeasonsKPer9.push(null); continue; }
+      const ip = parseBaseballInnings(stat.inningsPitched);
+      const so = safeNum(stat.strikeOuts) ?? 0;
+      const kPer9 = safeNum(stat.strikeoutsPer9Inn) ?? (ip && ip > 0 ? parseFloat(((so / ip) * 9).toFixed(2)) : null);
+      // Below the IP floor (a handful of relief innings, an injury-shortened
+      // season) → null, not counted as a full-weight year.
+      priorSeasonsKPer9.push(kPer9 != null && ip != null && ip >= PITCHER_MULTI_YEAR_MIN_IP ? kPer9 : null);
+    }
+
+    mlbPlayerCache.pitcherMultiYearStats[pitcherId] = { priorSeasonsKPer9, fetchedAt: Date.now() };
+    console.log(`[MLB pull] syncPitcherMultiYearStats: pitcher ${pitcherId} — prior K/9 [${priorSeasonsKPer9.join(", ")}]`);
+  } catch (err: any) {
+    console.error(`[MLB pull] syncPitcherMultiYearStats(${pitcherId}) error:`, err.message);
     if (cached) cached.fetchedAt = Date.now();
   }
 }
