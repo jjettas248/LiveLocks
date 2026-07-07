@@ -15,7 +15,7 @@ import { createServer } from "http";
 import * as nodeFs from "node:fs";
 import * as nodePath from "node:path";
 import { runMigrations } from "stripe-replit-sync";
-import { getStripeSync } from "./stripeClient";
+import { getStripeSync, getStripeEnvStatus } from "./stripeClient";
 import cron from "node-cron";
 import { db, pool } from "./db";
 import { users } from "@shared/schema";
@@ -44,6 +44,11 @@ declare module "http" {
 }
 
 async function initStripe() {
+  // Safe config diagnostics — booleans and key-prefix categories only, never the
+  // secret values themselves. Logged unconditionally at boot so a misconfigured
+  // Railway deploy is visible in the logs immediately, independent of DB state.
+  console.log("[STRIPE_CONFIG_DIAG]", getStripeEnvStatus());
+
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     console.warn("[stripe] DATABASE_URL not set, skipping Stripe init");

@@ -2,15 +2,59 @@ import Stripe from 'stripe';
 
 let connectionSettings: any;
 
+// Canonical production env vars (Railway). STRIPE_ELITE_PRICE_ID is not and has never
+// been used by this codebase — STRIPE_ALL_SPORTS_PRICE_ID is the sole canonical name for
+// the elite/all-sports tier's price ID. No alias is needed unless one is introduced later.
+export interface StripeEnvStatus {
+  hasSecretKey: boolean;
+  secretKeyPrefix: "sk_live" | "sk_test" | "other" | "missing";
+  hasWebhookSecret: boolean;
+  webhookSecretPrefix: "whsec" | "other" | "missing";
+  hasProPrice: boolean;
+  hasAllSportsPrice: boolean;
+}
+
+export function getStripeEnvStatus(): StripeEnvStatus {
+  const secretKey = process.env.STRIPE_SECRET_KEY?.trim() || "";
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET?.trim() || "";
+  const proPrice = process.env.STRIPE_PRO_PRICE_ID?.trim() || "";
+  const allSportsPrice = process.env.STRIPE_ALL_SPORTS_PRICE_ID?.trim() || "";
+
+  const secretKeyPrefix: StripeEnvStatus["secretKeyPrefix"] = !secretKey
+    ? "missing"
+    : secretKey.startsWith("sk_live")
+      ? "sk_live"
+      : secretKey.startsWith("sk_test")
+        ? "sk_test"
+        : "other";
+
+  const webhookSecretPrefix: StripeEnvStatus["webhookSecretPrefix"] = !webhookSecret
+    ? "missing"
+    : webhookSecret.startsWith("whsec")
+      ? "whsec"
+      : "other";
+
+  return {
+    hasSecretKey: !!secretKey,
+    secretKeyPrefix,
+    hasWebhookSecret: !!webhookSecret,
+    webhookSecretPrefix,
+    hasProPrice: !!proPrice,
+    hasAllSportsPrice: !!allSportsPrice,
+  };
+}
+
 async function getCredentials() {
   // Railway is the production home for this app now — Stripe credentials come
   // from Railway environment variables (STRIPE_SECRET_KEY). The Replit
   // Connector path below is retained only as a fallback for local Replit dev
   // environments that never had STRIPE_SECRET_KEY configured.
-  const envSecretKey = process.env.STRIPE_SECRET_KEY;
+  // Trimmed defensively: a stray trailing newline/space pasted into Railway's
+  // variable editor would otherwise silently pass as a non-empty value here.
+  const envSecretKey = process.env.STRIPE_SECRET_KEY?.trim();
   if (envSecretKey) {
     return {
-      publishableKey: process.env.VITE_STRIPE_PUBLISHABLE_KEY || process.env.STRIPE_PUBLISHABLE_KEY || "",
+      publishableKey: process.env.VITE_STRIPE_PUBLISHABLE_KEY?.trim() || process.env.STRIPE_PUBLISHABLE_KEY?.trim() || "",
       secretKey: envSecretKey,
     };
   }
@@ -23,7 +67,13 @@ async function getCredentials() {
       : null;
 
   if (!xReplitToken) {
-    throw new Error('Stripe is not configured: set STRIPE_SECRET_KEY (Railway) or run inside a Replit environment with the Stripe connector installed.');
+    throw new Error(
+      'Stripe is not configured: STRIPE_SECRET_KEY is missing or empty in this running process. ' +
+      'Most likely causes: (1) STRIPE_SECRET_KEY was not added to this Railway service\'s Variables, ' +
+      '(2) it was added to a different Railway environment (e.g. staging) than the one currently serving requests, or ' +
+      '(3) it was added but the service has not been redeployed since — Railway only picks up new/changed variables on the next deploy. ' +
+      'Check GET /api/admin/stripe/config-status to confirm what this running process currently sees.'
+    );
   }
 
   const connectorName = 'stripe';

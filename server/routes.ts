@@ -1052,6 +1052,39 @@ export async function registerRoutes(
     }
   });
 
+  // ── Admin: Stripe config status — env var presence only, never secret values ──
+  app.get("/api/admin/stripe/config-status", requireAdmin, async (_req, res) => {
+    try {
+      const { getStripeEnvStatus } = await import("./stripeClient");
+      const status = getStripeEnvStatus();
+
+      const secretKeyMode: "live" | "test" | "missing" | "unknown" =
+        status.secretKeyPrefix === "sk_live" ? "live"
+        : status.secretKeyPrefix === "sk_test" ? "test"
+        : status.secretKeyPrefix === "missing" ? "missing"
+        : "unknown";
+
+      const missing: string[] = [];
+      if (!status.hasSecretKey) missing.push("STRIPE_SECRET_KEY");
+      if (!status.hasWebhookSecret) missing.push("STRIPE_WEBHOOK_SECRET");
+      if (!status.hasProPrice) missing.push("STRIPE_PRO_PRICE_ID");
+      if (!status.hasAllSportsPrice) missing.push("STRIPE_ALL_SPORTS_PRICE_ID");
+
+      return res.json({
+        configured: status.hasSecretKey && status.hasWebhookSecret,
+        hasSecretKey: status.hasSecretKey,
+        secretKeyMode,
+        hasWebhookSecret: status.hasWebhookSecret,
+        hasProPrice: status.hasProPrice,
+        hasAllSportsPrice: status.hasAllSportsPrice,
+        missing,
+      });
+    } catch (err: any) {
+      console.error("[admin/stripe/config-status]", err.message);
+      return res.status(500).json({ error: "Failed to read Stripe config status" });
+    }
+  });
+
   // ── Admin: Debug user Stripe state ──────────────────────────────────────────
   app.get("/api/admin/debug-user/:id", requireAdmin, async (req, res) => {
     try {
