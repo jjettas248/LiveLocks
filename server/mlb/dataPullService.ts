@@ -176,13 +176,14 @@ interface PitcherSeasonStats {
  * Prior-season K/9 history (current season excluded — that's PitcherSeasonStats).
  * Mound Radar input for matchupAdjustedKs.ts's multi-year baseline blend.
  * A season only counts if it clears a minimum innings-pitched floor (avoids a
- * few relief innings or an injury-shortened season skewing the blend) — years
- * that don't clear it, or that 404/fail to fetch, are simply omitted rather
- * than fabricated as 0 or league-average.
+ * few relief innings or an injury-shortened season skewing the blend) — a
+ * year that doesn't clear it, or that fails to fetch, is `null`, never
+ * fabricated as 0 or league-average, and never simply omitted (that would
+ * shift a real year-2 value into the year-1 slot and misweight it).
  */
 interface PitcherMultiYearStats {
-  /** Prior seasons' K/9, most-recent-first. Only includes seasons with >=20 IP. */
-  priorSeasonsKPer9: number[];
+  /** Prior seasons' K/9, positionally aligned [year-1, year-2] — null where that year is disqualified or failed to fetch. Never compacted. */
+  priorSeasonsKPer9: (number | null)[];
   fetchedAt: number;
 }
 
@@ -1613,17 +1614,22 @@ export async function syncPitcherMultiYearStats(pitcherId: string): Promise<void
       ),
     );
 
-    const priorSeasonsKPer9: number[] = [];
+    // Positionally aligned with priorYears ([year-1, year-2]) — a disqualified
+    // or failed year pushes `null` rather than being omitted. Omitting it would
+    // compact the array and silently shift a real year-2 value into the
+    // year-1 slot, applying blendKPer9()'s heavier year-1 weight to what is
+    // actually two-year-old data.
+    const priorSeasonsKPer9: (number | null)[] = [];
     for (const result of results) {
-      if (result.status !== "fulfilled") continue;
+      if (result.status !== "fulfilled") { priorSeasonsKPer9.push(null); continue; }
       const stat = result.value.stats?.[0]?.splits?.[0]?.stat;
-      if (!stat) continue;
+      if (!stat) { priorSeasonsKPer9.push(null); continue; }
       const ip = parseBaseballInnings(stat.inningsPitched);
       const so = safeNum(stat.strikeOuts) ?? 0;
       const kPer9 = safeNum(stat.strikeoutsPer9Inn) ?? (ip && ip > 0 ? parseFloat(((so / ip) * 9).toFixed(2)) : null);
-      // Skip seasons below the IP floor rather than counting a handful of
-      // relief innings or an injury-shortened season as a full-weight year.
-      if (kPer9 != null && ip != null && ip >= PITCHER_MULTI_YEAR_MIN_IP) priorSeasonsKPer9.push(kPer9);
+      // Below the IP floor (a handful of relief innings, an injury-shortened
+      // season) → null, not counted as a full-weight year.
+      priorSeasonsKPer9.push(kPer9 != null && ip != null && ip >= PITCHER_MULTI_YEAR_MIN_IP ? kPer9 : null);
     }
 
     mlbPlayerCache.pitcherMultiYearStats[pitcherId] = { priorSeasonsKPer9, fetchedAt: Date.now() };

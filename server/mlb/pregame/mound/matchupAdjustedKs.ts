@@ -49,8 +49,8 @@ const OVERALL_MAX_MULT = 1.4;
 
 export interface MatchupAdjustedKsInputs {
   kPer9: number | null;
-  /** Prior seasons' K/9, most-recent-first (from PitcherMultiYearStats). Enrichment only — never a substitute for a missing current-season kPer9. */
-  priorSeasonsKPer9: number[];
+  /** Prior seasons' K/9, positionally aligned [year-1, year-2] (from PitcherMultiYearStats) — null where that year is disqualified/missing, never compacted. Enrichment only — never a substitute for a missing current-season kPer9. */
+  priorSeasonsKPer9: (number | null)[];
   avgInningsPerStart: number | null;
   /** Lineup-weighted platoon K-rate — pass the same value opponentKProfile.ts derives via weightedPlatoonKRate(). */
   platoonKRate: number | null;
@@ -64,13 +64,21 @@ export interface MatchupAdjustedKsInputs {
   bvpTotalStrikeouts: number;
 }
 
-/** Marcel-style recency-weighted K/9 blend: current season weighted heaviest, each prior season progressively lighter. Falls back to the current season alone when no prior-season data clears the IP floor. */
-function blendKPer9(kPer9: number, priorSeasonsKPer9: number[]): number {
+/**
+ * Marcel-style recency-weighted K/9 blend: current season weighted heaviest,
+ * each prior season progressively lighter. Falls back to the current season
+ * alone when no prior-season data clears the IP floor. `priorSeasonsKPer9`
+ * MUST stay positionally aligned [year-1, year-2] with `null` for a
+ * disqualified/missing year — a null slot's weight is simply excluded from
+ * the weighted average, never silently reassigned to a different year.
+ */
+function blendKPer9(kPer9: number, priorSeasonsKPer9: (number | null)[]): number {
   const weights = [5, 4, 3]; // [current, year-1, year-2]
-  const values = [kPer9, ...priorSeasonsKPer9].slice(0, weights.length);
+  const values: Array<number | null> = [kPer9, ...priorSeasonsKPer9].slice(0, weights.length);
   let sum = 0;
   let wsum = 0;
   values.forEach((v, i) => {
+    if (v == null) return;
     sum += v * weights[i];
     wsum += weights[i];
   });

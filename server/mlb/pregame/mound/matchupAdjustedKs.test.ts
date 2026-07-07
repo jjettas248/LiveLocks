@@ -59,6 +59,26 @@ const expectedBlendBase = Math.round((blended * (6 / 9)) * 10) / 10;
 ok(withPriorSeasons === expectedBlendBase, `multi-year blend lowers the base toward prior seasons (got ${withPriorSeasons}, expected ${expectedBlendBase})`);
 ok((withPriorSeasons ?? 0) < 6.0, "a weaker multi-year history pulls the projection below the current-season-only value");
 
+// ── Regression: a disqualified year-1 must NOT shift year-2 into year-1's weight ──
+// (Codex review on PR #100: syncPitcherMultiYearStats used to omit a
+// disqualified year entirely, compacting the array and giving year-2 data
+// year-1's heavier weight. priorSeasonsKPer9 must stay positionally aligned
+// [year-1, year-2] with null for a disqualified year.)
+// current=9.0, year-1=null (disqualified), year-2=7.0 → year-2 keeps weight 3:
+// blend = (9*5 + 7*3)/(5+3) = 8.25
+const withSkippedYear1 = computeMatchupAdjustedStrikeouts(
+  baseInputs({ kPer9: 9.0, priorSeasonsKPer9: [null, 7.0], avgInningsPerStart: null }),
+);
+const correctBlend = (9.0 * 5 + 7.0 * 3) / (5 + 3);
+const expectedSkippedYear1Base = Math.round((correctBlend * (6 / 9)) * 10) / 10;
+const buggyBlend = (9.0 * 5 + 7.0 * 4) / (5 + 4); // what it would be if year-2 wrongly got year-1's weight
+const buggyBase = Math.round((buggyBlend * (6 / 9)) * 10) / 10;
+ok(
+  withSkippedYear1 === expectedSkippedYear1Base,
+  `disqualified year-1 (null) does not shift year-2's real value to a heavier weight (got ${withSkippedYear1}, expected ${expectedSkippedYear1Base}, buggy-would-be ${buggyBase})`,
+);
+ok(withSkippedYear1 !== buggyBase, "result must differ from the compacted-array bug's output");
+
 // ── Opponent platoon K-rate modifier: raises/lowers within its cap ───────────
 const aboveAvgOpponent = computeMatchupAdjustedStrikeouts(
   baseInputs({ kPer9: 9.0, avgInningsPerStart: 6.0, opposingLineupConfirmed: true, platoonKRate: 0.30 }), // well above ~0.223 league avg
