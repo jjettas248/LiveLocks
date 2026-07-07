@@ -48,7 +48,7 @@ import { computeMarketTags } from "./marketTagger";
 import { composeMoundScore } from "./scoring";
 import { projectedStrikeoutsFromKPer9 } from "./scoreUtils";
 import { buildMoundMarketEdgeContext } from "./oddsDisplay";
-import { carryForwardMoundGradedState } from "./moundGradedStateCarry";
+import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
 import {
   getMoundSnapshot,
   setMoundSnapshot,
@@ -114,6 +114,17 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
   const prevSnapshot = getMoundSnapshot();
   const prevSignals =
     prevSnapshot && prevSnapshot.sessionDate === sessionDate ? prevSnapshot.signals : null;
+  // Grouped by gameId so a starter dropped from resolution (see
+  // carryForwardDroppedFromMound below) can be found without an O(games ×
+  // prevSignals) scan.
+  const prevSignalsByGame = new Map<string, MoundSignal[]>();
+  if (prevSignals) {
+    for (const s of Array.from(prevSignals.values())) {
+      const list = prevSignalsByGame.get(s.gameId);
+      if (list) list.push(s);
+      else prevSignalsByGame.set(s.gameId, [s]);
+    }
+  }
 
   const signals = new Map<string, MoundSignal>();
   let gamesScanned = 0;
@@ -140,7 +151,30 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
       const firstPitchLockEligible = gameStatus === "scheduled" || gameStatus === "pre";
 
       const gamePk = game.gamePk ?? null;
-      if (!gamePk) continue;
+      if (!gamePk) {
+        // A transient MLB Stats API failure can leave gamePk unresolved for a
+        // cycle even after this game was already built. Without this, a bare
+        // `continue` would drop the whole game's signals — including
+        // already-graded mound_win outcomes — off the board for the rest of
+        // the day. Treat it as "every starter dropped from resolution" so it
+        // reuses the same preservation path.
+        const carriedOver = carryForwardDroppedFromMound(
+          game.gameId,
+          new Set(),
+          prevSignalsByGame.get(game.gameId) ?? [],
+          gameStatus,
+          firstPitchLockEligible,
+          new Date().toISOString(),
+          buildId,
+        );
+        for (const carried of carriedOver) {
+          signals.set(carried.signalId, carried);
+          console.log(
+            `[MLB_PREGAME_MOUND_SIGNAL_CARRIED] ${carried.signalId} ${carried.pitcherName} game gamePk unresolved this cycle — preserved (status=${carried.status})`,
+          );
+        }
+        continue;
+      }
 
       try {
         await Promise.all([
@@ -459,6 +493,28 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           createdPublicEligible++;
           console.log(`[MLB_PREGAME_MOUND_DRIVER_BUILD] ${signalId} ${starter.pitcherName} ${scoring.tier} score=${scoring.score10} market=${marketTags.primaryMarket}`);
         }
+      }
+
+      // Preserve targets for starters who dropped out of resolution since the
+      // previous build (rotation change, scratch) — carryForwardMoundGradedState
+      // above only runs for starters still resolvable this cycle; without this
+      // pass a dropped starter's signal (including any already-stamped
+      // mound_win outcome) is silently absent from the rebuilt Map.
+      const currentStarterIds = new Set(starters.map((s) => s.pitcherId));
+      const carriedOver = carryForwardDroppedFromMound(
+        game.gameId,
+        currentStarterIds,
+        prevSignalsByGame.get(game.gameId) ?? [],
+        gameStatus,
+        firstPitchLockEligible,
+        new Date().toISOString(),
+        buildId,
+      );
+      for (const carried of carriedOver) {
+        signals.set(carried.signalId, carried);
+        console.log(
+          `[MLB_PREGAME_MOUND_SIGNAL_CARRIED] ${carried.signalId} ${carried.pitcherName} dropped from starter resolution — preserved (status=${carried.status})`,
+        );
       }
     }
   } catch (err: any) {
