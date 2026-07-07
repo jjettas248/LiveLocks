@@ -73,11 +73,28 @@ app.post(
   express.raw({ type: "application/json" }),
   async (req, res) => {
     const signature = req.headers["stripe-signature"];
-    if (!signature) return res.status(400).json({ error: "Missing stripe-signature" });
+    const sig = Array.isArray(signature) ? signature[0] : signature;
+
+    // Temporary diagnostics for the Railway raw-body verification investigation.
+    // Deliberately excludes the secret, the full signature header, and body contents.
+    console.log("[STRIPE_WEBHOOK_DIAG]", {
+      hasSecret: !!process.env.STRIPE_WEBHOOK_SECRET,
+      hasSignature: !!sig,
+      bodyIsBuffer: Buffer.isBuffer(req.body),
+      bodyType: typeof req.body,
+      bodyLength: Buffer.isBuffer(req.body)
+        ? req.body.length
+        : typeof req.body === "string"
+          ? req.body.length
+          : null,
+      contentType: req.headers["content-type"] ?? null,
+      signatureHeaderPrefix: sig ? sig.slice(0, 12) : null,
+    });
+
+    if (!sig) return res.status(400).json({ error: "Missing stripe-signature" });
 
     const { WebhookHandlers, WebhookConfigError, WebhookSignatureError } = await import("./webhookHandlers");
     try {
-      const sig = Array.isArray(signature) ? signature[0] : signature;
       await WebhookHandlers.processWebhook(req.body as Buffer, sig);
       res.status(200).json({ received: true });
     } catch (err: any) {
