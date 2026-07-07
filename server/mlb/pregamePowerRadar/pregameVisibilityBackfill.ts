@@ -1,4 +1,4 @@
-// Pre-Game Power Radar — one-off visibility backfill (admin-triggered).
+// Pre-Game Power Radar — visibility backfill (admin-triggered + auto-on-boot).
 //
 // Before `everPubliclyFlagged` existed, grading stamped `outcomes.userVisible`
 // from a single live evaluation of `wasPubliclyFlaggedPregame` at whatever
@@ -7,17 +7,20 @@
 // baked in permanently if a mutable eligibility field (tier/score/
 // dataCoverageScore/etc., all re-fetched from live data on every rebuild)
 // happened to dip below threshold at that exact instant — hiding a real win
-// from "Wins Today" and the drawer forever, since grading never re-runs.
+// from "Wins Today"/the drawer forever, since grading never re-runs.
 //
-// A legacy row's persisted `everPubliclyFlagged` defaults to false (the
-// column didn't exist before this fix), and this backfill typically runs
-// right after a deploy — i.e. right after a process restart wipes the
-// in-memory OR-accumulator this flag depends on. Relying on a *single* fresh
-// rebuild at that point re-runs the exact same live, drift-prone predicate
-// that caused the original bug, with no better odds of landing on `true`.
+// This was originally a manual, today-only admin action, which left every
+// slate day *before* the fix permanently stuck (nobody could re-run "today's"
+// backfill for a day that already rolled over), and depended on someone
+// remembering to hit the endpoint after each deploy that touched this area —
+// the exact way the drawer's win history kept coming up empty across
+// restarts. `backfillPregameWinVisibilityRange` below removes that manual
+// dependency: it walks every date the drawer can display and self-heals on
+// boot, so a win misclassified by a bug in one deploy gets corrected by the
+// very next process start rather than needing a human to invoke it per date.
 //
-// So this checks TWO independent sources and unhides on either landing
-// eligible:
+// For TODAY specifically we still check two independent sources and unhide
+// on either landing eligible:
 //   1. The DB-persisted `ever_publicly_flagged` column, read directly (no
 //      rebuild). `server/storage.ts`'s upsert OR-merges this column on every
 //      write, so it durably accumulates any "lucky" true evaluation from a
@@ -25,23 +28,22 @@
 //      independent of whatever the in-memory snapshot looks like right now.
 //   2. A forced fresh rebuild — one more live chance under current data, same
 //      as the live card list gets on every request.
-//
-// Scope: only today's slate (the in-memory snapshot / DB rows for
-// `slateDateET()`), matching the "today's already-graded misses" backfill
-// this was built for — it does not reach back into prior slate days.
+// A past slate day has no live data to rebuild, so only source #1 (the
+// persisted column, read straight off each row) applies there.
 //
 // Never creates a new win, never touches calibration misses, and never
-// mutates anything but `outcomes.userVisible` on the in-memory signal + its
-// persisted DB row.
+// mutates anything but `outcomes.userVisible` (+ `everPubliclyFlagged`) on a
+// signal + its persisted DB row.
 //
 // Writes ONLY to the pre-game store + pregame tables. Never persisted_plays /
 // ROI / official W-L.
 
 import { storage } from "../../storage";
-import { slateDateET } from "../../utils/dateUtils";
+import { slateDateET, daysAgoET } from "../../utils/dateUtils";
 import { buildPregamePowerRadar } from "./buildPregamePowerRadar";
 import { getSnapshot } from "./pregamePowerRadarStore";
-import { signalToRow } from "./pregamePersistence";
+import { signalToRow, rowToSignal } from "./pregamePersistence";
+import type { PregamePowerSignal } from "./types";
 
 export interface PregameVisibilityBackfillResult {
   scanned: number;
@@ -49,33 +51,82 @@ export interface PregameVisibilityBackfillResult {
   correctedSignalIds: string[];
 }
 
-/** One-off admin backfill: unhide pregame wins wrongly stamped non-public. */
-export async function backfillPregameWinVisibility(): Promise<PregameVisibilityBackfillResult> {
+/**
+ * Unhide already-graded pregame wins wrongly stamped non-public for a single
+ * slate day. `sessionDate` defaults to today. Only today gets the live-bridge
+ * treatment (in-memory snapshot merge + a forced fresh rebuild) — a past
+ * slate day is corrected from its persisted DB rows alone.
+ */
+export async function backfillPregameWinVisibility(
+  sessionDate: string = slateDateET(),
+): Promise<PregameVisibilityBackfillResult> {
+  const isToday = sessionDate === slateDateET();
+
   // Durable historical read: a direct DB read (no rebuild) so it can never
   // collapse into "just another fresh live recompute" the way a second
   // getRadarSnapshot()/buildPregamePowerRadar() call would on a cold process.
+  let rows: Awaited<ReturnType<typeof storage.getPregamePowerRadarSignalsByDate>> = [];
   const persistedFlagged = new Set<string>();
   try {
-    const rows = await storage.getPregamePowerRadarSignalsByDate(slateDateET());
+    rows = await storage.getPregamePowerRadarSignalsByDate(sessionDate);
     for (const r of rows) {
       if (r.everPubliclyFlagged) persistedFlagged.add(r.signalId);
     }
   } catch (err: any) {
-    console.warn(`[PREGAME_RADAR_VISIBILITY_BACKFILL] persisted read failed:`, err?.message);
+    console.warn(`[PREGAME_RADAR_VISIBILITY_BACKFILL] persisted read failed date=${sessionDate}:`, err?.message);
   }
 
-  // Best-effort: if a build is already in flight or fails, fall back to
-  // whatever snapshot is already in memory rather than throwing.
-  await buildPregamePowerRadar().catch(() => null);
+  // Today only: one more live chance under current data, same as the live
+  // card list gets on every request. Best-effort — a past day can't be
+  // "rebuilt" (no live discovery/lineups exist for it), and a failed/in-flight
+  // build here just falls back to whatever's already in memory.
+  if (isToday) {
+    await buildPregamePowerRadar().catch(() => null);
+  }
+  const snapshot = isToday ? getSnapshot() : null;
+  const snapshotSignalsById = new Map<string, PregamePowerSignal>(
+    snapshot ? Array.from(snapshot.signals.values()).map((s) => [s.signalId, s]) : [],
+  );
 
-  const snapshot = getSnapshot();
-  if (!snapshot) return { scanned: 0, corrected: 0, correctedSignalIds: [] };
+  // Merge: prefer the in-memory (possibly freshly-rebuilt) copy when present
+  // for today, otherwise fall back to the persisted row reconstructed via
+  // rowToSignal — this is the only representation available for a past day.
+  //
+  // A post-restart rebuild always mints a fresh copy with status!=="graded"
+  // and outcomes:null (see buildPregamePowerRadar), even when the DB row is
+  // the only place the shadow grader's already-graded pregame_win outcome
+  // lives (grading persists straight to the DB per-signal; it doesn't wait
+  // for the next full rebuild). Picking the snapshot copy outright would
+  // silently turn that persisted win back into an ungraded candidate and
+  // skip it below — so when the snapshot copy is ungraded but the DB row
+  // isn't, carry the row's outcome/status/flag onto the snapshot copy
+  // (mirrors uniqueBySignalId's merge in statsService.ts).
+  const candidates: PregamePowerSignal[] = rows.map((r) => {
+    const inMemory = snapshotSignalsById.get(r.signalId);
+    if (!inMemory) return rowToSignal(r);
+    if (r.outcomes && r.status === "graded" && (!inMemory.outcomes || inMemory.status !== "graded")) {
+      return {
+        ...inMemory,
+        status: r.status,
+        outcomes: r.outcomes as PregamePowerSignal["outcomes"],
+        everPubliclyFlagged: inMemory.everPubliclyFlagged || r.everPubliclyFlagged,
+      };
+    }
+    return inMemory;
+  });
+  // Include any in-memory-only signals for today (e.g. a batter graded this
+  // tick but not yet reflected in the DB read above).
+  if (isToday) {
+    for (const s of Array.from(snapshotSignalsById.values())) {
+      if (!rows.some((r) => r.signalId === s.signalId)) candidates.push(s);
+    }
+  }
 
   let scanned = 0;
   let corrected = 0;
   const correctedSignalIds: string[] = [];
 
-  for (const signal of Array.from(snapshot.signals.values())) {
+  for (const signal of candidates) {
     if (signal.status !== "graded" || !signal.outcomes) continue;
     scanned++;
 
@@ -87,7 +138,7 @@ export async function backfillPregameWinVisibility(): Promise<PregameVisibilityB
     signal.everPubliclyFlagged = true;
     corrected++;
     correctedSignalIds.push(signal.signalId);
-    console.log(`[PREGAME_RADAR_VISIBILITY_BACKFILL] ${signal.signalId} player=${signal.batterName} unhidden`);
+    console.log(`[PREGAME_RADAR_VISIBILITY_BACKFILL] ${signal.signalId} player=${signal.batterName} date=${sessionDate} unhidden`);
 
     try {
       await storage.upsertPregamePowerRadarSignal(signalToRow(signal));
@@ -97,4 +148,47 @@ export async function backfillPregameWinVisibility(): Promise<PregameVisibilityB
   }
 
   return { scanned, corrected, correctedSignalIds };
+}
+
+export interface PregameVisibilityBackfillRangeResult extends PregameVisibilityBackfillResult {
+  datesScanned: number;
+}
+
+/**
+ * Walk the last `days` ET slate days (matching the win-history drawer's own
+ * lookback window) and backfill each one. Safe to run on every boot: a
+ * signal already corrected on a prior run is a no-op (userVisible already
+ * true), so this never double-corrects or creates a new win.
+ */
+export async function backfillPregameWinVisibilityRange(
+  days: number,
+): Promise<PregameVisibilityBackfillRangeResult> {
+  const clampedDays = Math.max(1, Math.min(60, Math.floor(days)));
+  const total: PregameVisibilityBackfillRangeResult = {
+    scanned: 0,
+    corrected: 0,
+    correctedSignalIds: [],
+    datesScanned: 0,
+  };
+
+  for (let i = 0; i < clampedDays; i++) {
+    const dateET = daysAgoET(i);
+    try {
+      const result = await backfillPregameWinVisibility(dateET);
+      total.scanned += result.scanned;
+      total.corrected += result.corrected;
+      total.correctedSignalIds.push(...result.correctedSignalIds);
+      total.datesScanned++;
+    } catch (err: any) {
+      console.warn(`[PREGAME_RADAR_VISIBILITY_BACKFILL] range date=${dateET} failed:`, err?.message);
+    }
+  }
+
+  if (total.corrected > 0) {
+    console.log(
+      `[PREGAME_RADAR_VISIBILITY_BACKFILL] range complete dates=${total.datesScanned} scanned=${total.scanned} corrected=${total.corrected}`,
+    );
+  }
+
+  return total;
 }

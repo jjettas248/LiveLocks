@@ -608,13 +608,22 @@ export async function registerRoutes(
     }
   });
 
-  // Admin one-off: unhide already-graded pregame wins that were incorrectly
-  // stamped non-public before `everPubliclyFlagged` existed to freeze
-  // eligibility. Never creates a new win — only unhides an existing
-  // `pregame_win` record. Safe to call more than once (idempotent no-op on
-  // signals already corrected).
-  app.post("/api/admin/mlb/pregame-power-radar/backfill-visibility", requireAdmin, async (_req, res) => {
+  // Admin: unhide already-graded pregame wins that were incorrectly stamped
+  // non-public before `everPubliclyFlagged` existed to freeze eligibility.
+  // Never creates a new win — only unhides an existing `pregame_win` record.
+  // Safe to call more than once (idempotent no-op on signals already
+  // corrected). Defaults to today only; pass `?days=N` to sweep the last N
+  // ET slate days (matching the win-history drawer's own lookback window) —
+  // the same sweep this repo now also runs automatically on every boot (see
+  // server/index.ts), so this endpoint is for on-demand/manual re-runs.
+  app.post("/api/admin/mlb/pregame-power-radar/backfill-visibility", requireAdmin, async (req, res) => {
     try {
+      const rawDays = Number(req.query.days);
+      if (Number.isFinite(rawDays) && rawDays > 1) {
+        const { backfillPregameWinVisibilityRange } = await import("./mlb/pregamePowerRadar/pregameVisibilityBackfill");
+        const result = await backfillPregameWinVisibilityRange(rawDays);
+        return res.json(result);
+      }
       const { backfillPregameWinVisibility } = await import("./mlb/pregamePowerRadar/pregameVisibilityBackfill");
       const result = await backfillPregameWinVisibility();
       return res.json(result);
