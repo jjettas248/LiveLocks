@@ -260,6 +260,13 @@ export default function AdminPage() {
     mutationFn: () => apiRequest("POST", "/api/stripe/setup-products"),
   });
 
+  const stripeConfigMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("GET", "/api/admin/stripe/config-status");
+      return res.json();
+    },
+  });
+
   function getNotificationTitle(confidence: number): string | null {
     if (confidence < 80) return null;
     if (confidence >= 85) return "🔒 LiveLocks · High Confidence";
@@ -380,6 +387,19 @@ export default function AdminPage() {
               )}
               Setup Stripe Products
             </button>
+            <button
+              data-testid="button-check-stripe-config"
+              onClick={() => stripeConfigMutation.mutate()}
+              disabled={stripeConfigMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-muted text-foreground text-sm font-semibold disabled:opacity-50 hover:bg-muted/80 transition-colors border border-border"
+            >
+              {stripeConfigMutation.isPending ? (
+                <div className="w-4 h-4 border-2 border-foreground border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Settings className="w-4 h-4" />
+              )}
+              Check Stripe Config
+            </button>
             {setupProductsMutation.isSuccess && (
               <div className="flex items-center gap-2 text-sm text-green-400" data-testid="text-setup-success">
                 <CheckCircle className="w-4 h-4" />
@@ -395,7 +415,35 @@ export default function AdminPage() {
                 <span>Failed: {(setupProductsMutation.error as any)?.message ?? "Unknown error"}</span>
               </div>
             )}
+            {stripeConfigMutation.isError && (
+              <div className="flex items-center gap-2 text-sm text-destructive" data-testid="text-stripe-config-error">
+                <AlertCircle className="w-4 h-4" />
+                <span>Failed: {(stripeConfigMutation.error as any)?.message ?? "Unknown error"}</span>
+              </div>
+            )}
           </div>
+          {stripeConfigMutation.isSuccess && (
+            <div
+              className={`w-full text-sm mt-3 p-3 rounded-lg bg-muted/50 border ${(stripeConfigMutation.data as any)?.configured ? "border-green-400/40" : "border-destructive/40"}`}
+              data-testid="text-stripe-config-result"
+            >
+              <div className={`flex items-center gap-2 font-semibold ${(stripeConfigMutation.data as any)?.configured ? "text-green-400" : "text-destructive"}`}>
+                {(stripeConfigMutation.data as any)?.configured ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
+                <span>{(stripeConfigMutation.data as any)?.configured ? "Stripe is configured" : "Stripe is NOT fully configured"}</span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>Secret key: <span className="text-foreground">{(stripeConfigMutation.data as any)?.secretKeyMode}</span></span>
+                <span>Webhook secret: <span className="text-foreground">{(stripeConfigMutation.data as any)?.hasWebhookSecret ? "present" : "missing"}</span></span>
+                <span>Pro price ID: <span className="text-foreground">{(stripeConfigMutation.data as any)?.hasProPrice ? "present" : "missing"}</span></span>
+                <span>All Sports price ID: <span className="text-foreground">{(stripeConfigMutation.data as any)?.hasAllSportsPrice ? "present" : "missing"}</span></span>
+              </div>
+              {(stripeConfigMutation.data as any)?.missing?.length > 0 && (
+                <div className="mt-2 text-xs text-destructive">
+                  Missing env vars: {(stripeConfigMutation.data as any).missing.join(", ")}
+                </div>
+              )}
+            </div>
+          )}
           <p className="text-xs text-muted-foreground mt-2">
             Creates the Pro ($40/mo) and All Sports ($65/mo) products in your Stripe account if they don't already exist. Run this once after switching to live Stripe keys.
           </p>
