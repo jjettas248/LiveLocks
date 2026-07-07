@@ -10,32 +10,24 @@ import { useMemo, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, ChevronRight, FolderOpen, Trophy } from "lucide-react";
+import { AlertCircle, ChevronDown, ChevronRight, FolderOpen, Trophy } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { PregameWinCard } from "./PregameWinCard";
 import type { PregameRadarPublicStats } from "@shared/pregameRadarWin";
 import { formatPlainDateLabel } from "@shared/dateLabel";
+import { slateDaysAgoET } from "@shared/slateDate";
 
 const HISTORY_DAYS = 21;
 
 /**
- * Distinct ET calendar dates going back from "now", newest first. This drives
- * which slate-day rows the drawer queries — the server's own slateDateET()
- * scoping on each date's data (not this enumeration) is what determines which
- * plays land under which row, so a plain ET calendar-day walk here is safe.
+ * Slate-day (6am-ET rollover) dates going back from "now", newest first.
+ * Must match slateDateET() — the same convention every pregame signal's
+ * sessionDate is stamped with server-side — since the record endpoint does
+ * an exact string match on the requested date. A plain midnight-ET calendar
+ * walk here would query the wrong slate during the 12am-6am ET window.
  */
 function lastNDatesET(n: number): string[] {
-  const fmt = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (let i = 0; out.length < n && i < n + 5; i++) {
-    const key = fmt(new Date(Date.now() - i * 86_400_000));
-    if (!seen.has(key)) {
-      seen.add(key);
-      out.push(key);
-    }
-  }
-  return out;
+  return Array.from({ length: n }, (_, i) => slateDaysAgoET(i));
 }
 
 export function PregameHistoryDrawer() {
@@ -88,6 +80,7 @@ export function PregameHistoryDrawer() {
               const query = results[i];
               const data = query?.data as PregameRadarPublicStats | undefined;
               const wins = data?.pregameWinsToday ?? 0;
+              const failed = Boolean(query?.isError) || data?.degraded === true;
               const isExpanded = expandedDate === date;
               return (
                 <div
@@ -110,6 +103,10 @@ export function PregameHistoryDrawer() {
                     </span>
                     {query?.isLoading ? (
                       <span className="text-[11px] text-muted-foreground">…</span>
+                    ) : failed ? (
+                      <span className="flex items-center gap-1 text-[11px] text-amber-400/80">
+                        <AlertCircle className="w-3 h-3" /> Couldn't load
+                      </span>
                     ) : wins > 0 ? (
                       <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-400/30 gap-1">
                         <Trophy className="w-3 h-3" /> {wins} {wins === 1 ? "Win" : "Wins"}
@@ -120,7 +117,11 @@ export function PregameHistoryDrawer() {
                   </button>
                   {isExpanded && (
                     <div className="px-3 pb-3 space-y-2 bg-secondary/10">
-                      {(data?.topPregameWinPlayers?.length ?? 0) === 0 ? (
+                      {failed ? (
+                        <p className="text-xs text-amber-400/80 py-2">
+                          Couldn't load this day's data.
+                        </p>
+                      ) : (data?.topPregameWinPlayers?.length ?? 0) === 0 ? (
                         <p className="text-xs text-muted-foreground py-2">
                           No pregame radar wins this day.
                         </p>
