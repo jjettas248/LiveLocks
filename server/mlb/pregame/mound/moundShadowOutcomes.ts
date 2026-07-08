@@ -15,7 +15,8 @@ import { mlbGameCache } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
 import { deriveMoundOutcome } from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
-import type { MoundOutcome, MoundSignal } from "./types";
+import type { MoundOutcome, MoundSignal, MoundDiagnostics } from "./types";
+import type { MoundDirection } from "./moundDirection";
 import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
 
 /**
@@ -82,21 +83,29 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
 
   let graded = 0;
 
-  // Rehydrate the durable flags (everPubliclyFlagged/everPubliclyFlaggedFade)
-  // from the DB before grading — both columns are OR-upsert-protected
-  // (storage.ts) so the DB is the authoritative durable source, but the
-  // in-memory snapshot alone can be missing carry-forward history (e.g. a
-  // process restart left this game's first post-restart build with no
-  // prevSignals to OR against). Best-effort: grading still proceeds on
-  // in-memory-only flags if this read fails.
-  let persistedFlags = new Map<string, { everPubliclyFlagged: boolean; everPubliclyFlaggedFade: boolean }>();
+  // Rehydrate durable state from the DB before grading: the two boolean
+  // flags (OR-upsert-protected, storage.ts) AND the stamped moundDirection
+  // (embedded in the persisted diagnostics blob) — the in-memory snapshot
+  // alone can be missing carry-forward history (e.g. a process restart left
+  // this game's first post-restart build with no prevSignals to pin
+  // against, so a fresh rebuild could recompute a DIFFERENT direction than
+  // what was actually shown pre-game). Best-effort: grading still proceeds
+  // on in-memory-only state if this read fails.
+  let persistedState = new Map<string, { everPubliclyFlagged: boolean; everPubliclyFlaggedFade: boolean; moundDirection: MoundDirection }>();
   try {
     const rows = await storage.getMlbMoundRadarSignalsByDate(snapshot.sessionDate);
-    persistedFlags = new Map(
-      rows.map((r) => [r.signalId, { everPubliclyFlagged: r.everPubliclyFlagged, everPubliclyFlaggedFade: r.everPubliclyFlaggedFade }]),
+    persistedState = new Map(
+      rows.map((r) => [
+        r.signalId,
+        {
+          everPubliclyFlagged: r.everPubliclyFlagged,
+          everPubliclyFlaggedFade: r.everPubliclyFlaggedFade,
+          moundDirection: (r.diagnostics as MoundDiagnostics | null)?.moundDirection ?? null,
+        },
+      ]),
     );
   } catch (err: any) {
-    console.warn(`[MLB_PREGAME_OUTCOME_SETTLED] durable-flag rehydration failed date=${snapshot.sessionDate}:`, err?.message ?? err);
+    console.warn(`[MLB_PREGAME_OUTCOME_SETTLED] durable-state rehydration failed date=${snapshot.sessionDate}:`, err?.message ?? err);
   }
 
   for (const signal of Array.from(snapshot.signals.values())) {
@@ -111,12 +120,26 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
     const seasonStats = mlbPlayerCache.pitcherSeasonStats[signal.pitcherId] ?? null;
     const seasonAvgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
 
-    const persisted = persistedFlags.get(signal.signalId);
+    const persisted = persistedState.get(signal.signalId);
+
+    // Pin the persisted direction FIRST (before computing the flags below,
+    // same ordering discipline as carryForwardMoundGradedState's in-memory
+    // sticky-pin) — once a signal was legitimately shown with a direction,
+    // a later rebuild recomputing a different one must not silently flip
+    // which settlement rule it grades against.
+    if (signal.moundDirection !== "fade" && persisted?.moundDirection === "fade" && persisted.everPubliclyFlaggedFade === true) {
+      signal.moundDirection = "fade";
+      signal.diagnostics.moundDirection = "fade";
+    } else if (signal.moundDirection !== "follow" && persisted?.moundDirection === "follow" && persisted.everPubliclyFlagged === true) {
+      signal.moundDirection = "follow";
+      signal.diagnostics.moundDirection = "follow";
+    }
+
     const everPubliclyFlagged = signal.everPubliclyFlagged || (persisted?.everPubliclyFlagged ?? false);
     const everPubliclyFlaggedFade = signal.everPubliclyFlaggedFade || (persisted?.everPubliclyFlaggedFade ?? false);
     // Self-heal the in-memory snapshot too, not just this grading pass — a
     // later re-read of the same in-memory signal (stats service, another
-    // grading tick) should see the rehydrated value as well.
+    // grading tick) should see the rehydrated state as well.
     signal.everPubliclyFlagged = everPubliclyFlagged;
     signal.everPubliclyFlaggedFade = everPubliclyFlaggedFade;
 

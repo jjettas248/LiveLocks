@@ -282,9 +282,13 @@ const gradedWin: MoundOutcome = {
 // legitimate flag forward. Without a pre-first-pitch guard, that first-ever
 // evaluation would flag a Fade candidate using hindsight (final box score)
 // data, even though nothing was ever shown to a user before first pitch.
+// suppressed: true throughout — a REAL track-tier signal is always
+// suppressed under composeMoundScore's Follow-oriented quality bar (score10
+// < 4.0 is always < MOUND_PUBLISH_MIN_SCORE 5.5), so these fixtures must
+// reflect that to actually exercise the realistic case (see test 19 below).
 {
   const fresh = sig({
-    moundDirection: "fade", tier: "track",
+    moundDirection: "fade", tier: "track", suppressed: true,
     gameStatus: "final", firstPitchLockEligible: false,
   });
   carryForwardMoundGradedState(fresh, undefined);
@@ -293,13 +297,25 @@ const gradedWin: MoundOutcome = {
 
 // ── 18. A legitimate pre-first-pitch Fade flag still survives into a live/final rebuild ──
 {
-  const prev = sig({ moundDirection: "fade", everPubliclyFlaggedFade: true, tier: "track" });
+  const prev = sig({ moundDirection: "fade", everPubliclyFlaggedFade: true, tier: "track", suppressed: true });
   const fresh = sig({
-    moundDirection: "fade", tier: "track",
+    moundDirection: "fade", tier: "track", suppressed: true,
     gameStatus: "final", firstPitchLockEligible: false,
   });
   carryForwardMoundGradedState(fresh, prev);
   ok(fresh.everPubliclyFlaggedFade === true, "a Fade flag legitimately set pre-game survives into a post-first-pitch rebuild via the OR carry-forward");
+}
+
+// ── 19. A real (always-suppressed) track-tier Fade signal CAN still be flagged ──
+// Regression (Codex review, PR #105): composeMoundScore suppresses every
+// score below MOUND_PUBLISH_MIN_SCORE (5.5), and "track" tier is DEFINED as
+// score10 < 4.0 — so a real Fade signal is unconditionally suppressed under
+// that Follow-oriented quality bar. wasPubliclyFlaggedMoundFade must NOT
+// check !suppressed, or the Fade flag can never fire for any real signal.
+{
+  const fresh = sig({ moundDirection: "fade", tier: "track", suppressed: true });
+  carryForwardMoundGradedState(fresh, undefined);
+  ok(fresh.everPubliclyFlaggedFade === true, "a real (suppressed) track-tier Fade signal is flagged pre-game — suppressed is never checked for Fade");
 }
 
 console.log(`\nmoundGradedStatePreservation.test: ${passed} passed, ${failed} failed`);
