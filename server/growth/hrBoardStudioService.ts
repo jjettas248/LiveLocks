@@ -14,6 +14,8 @@
 
 import { todayET } from "../utils/dateUtils";
 import { storage } from "../storage";
+import { mlbGameCache } from "../mlb/dataPullService";
+import { normalizeMlbStatus } from "../mlb/liveGameOrchestrator";
 import {
   peekRadarSnapshot,
   getRadarSnapshot,
@@ -74,12 +76,35 @@ function gatherStatesForDate(date: string): CanonicalHrRadarState[] {
   );
 }
 
+/**
+ * gameIds whose game has gone final, per the live game-state cache. Mirrors
+ * the join `server/routes.ts` applies to stamp `isGameFinal` on the public
+ * ladder response (storage.getHrRadarLadder doesn't import the orchestrator's
+ * status normalizer, so callers that read storage directly — like this admin
+ * path — must redo the join or risk promoting a stale final-game signal that
+ * hasn't been graded yet).
+ */
+function computeFinalGameIds(): Set<string> {
+  const finalGameIds = new Set<string>();
+  try {
+    const gameStates = (mlbGameCache as any)?.gameState ?? {};
+    for (const gid of Object.keys(gameStates)) {
+      const raw = (gameStates[gid] as any)?.status ?? (gameStates[gid] as any)?.detailedState ?? "";
+      if (normalizeMlbStatus(String(raw)) === "final") finalGameIds.add(gid);
+    }
+  } catch {
+    // best-effort — treat as no known final games rather than fail the caller.
+  }
+  return finalGameIds;
+}
+
 /** Live HR Radar Attack/Ready entries for `date`, mapped to the shared candidate shape. */
 async function gatherLiveLadderEntries(date: string): Promise<LiveHrRadarEntry[]> {
   const ladder = await storage.getHrRadarLadder(date);
+  const finalGameIds = computeFinalGameIds();
   const live = [...ladder.sections.attackNow, ...(ladder.sections.ready ?? [])];
   return live
-    .filter((e) => e.isGameFinal !== true)
+    .filter((e) => e.isGameFinal !== true && !finalGameIds.has(e.gameId))
     .map((e) => ({
       playerId: e.playerId,
       gameId: e.gameId,

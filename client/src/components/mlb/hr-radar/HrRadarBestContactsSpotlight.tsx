@@ -13,9 +13,22 @@ import { Card } from "@/components/ui/card";
 import { selectBestContacts, type BestContactCandidate } from "@shared/hrRadarBestContacts";
 import { hrTierTheme } from "@/components/mlb/hrRadarVisuals";
 import { hrEntryCurrentScore10, hrEntryHrChancePct } from "@/components/mlb/hrRadarScore";
+import { isPregameOnlyRow, type HrRadarRowInput } from "@/components/mlb/hrRadarDisplayState";
 import { type HrRadarLadderEntry, type HrRadarLadderResponse } from "@/components/mlb/HrRadarLadder";
 
 const SPOTLIGHT_LIMIT = 5;
+
+// During DB-reconcile lag, canonical-only rows from the freshness overlay can
+// carry `displayCurrentScore10`/`currentSignalScore10` but no
+// `currentReadinessScore` yet — falling back to only the raw field would rank
+// a fresh FIRE/READY signal as score 0. Mirror the same display-score
+// fallback chain the ladder/quick-decide cards already trust
+// (hrEntryCurrentScore10) and convert it back to the selector's 0-100 scale.
+function rankingScore(entry: HrRadarLadderEntry): number | null {
+  if (entry.currentReadinessScore != null) return entry.currentReadinessScore;
+  const score10 = hrEntryCurrentScore10(entry);
+  return score10 != null ? score10 * 10 : null;
+}
 
 function toCandidate(entry: HrRadarLadderEntry): BestContactCandidate & { entry: HrRadarLadderEntry } {
   return {
@@ -24,7 +37,7 @@ function toCandidate(entry: HrRadarLadderEntry): BestContactCandidate & { entry:
     playerName: entry.playerName,
     team: entry.team ?? null,
     userStage: entry.userStage ?? null,
-    currentReadinessScore: entry.currentReadinessScore ?? null,
+    currentReadinessScore: rankingScore(entry),
     confidenceTier: entry.confidenceTier ?? null,
     entry,
   };
@@ -42,7 +55,7 @@ export function HrRadarBestContactsSpotlight() {
   const attackNow = data?.sections?.attackNow ?? [];
   const ready = data?.sections?.ready ?? [];
   const candidates = [...attackNow, ...ready]
-    .filter((e) => e.isGameFinal !== true)
+    .filter((e) => e.isGameFinal !== true && !isPregameOnlyRow(e as unknown as HrRadarRowInput))
     .map(toCandidate);
   const picks = selectBestContacts(candidates, SPOTLIGHT_LIMIT);
 
