@@ -13,6 +13,8 @@ import {
   buildContentPack,
   buildMovementFeed,
   buildRecap,
+  buildLiveBestContactsRows,
+  type LiveHrRadarEntry,
 } from "./hrBoardStudioCore";
 import { applyCompliance, scanForBlockedTerms } from "./hrBoardCompliance";
 import {
@@ -401,6 +403,94 @@ const FULL_BOARD: PregamePowerSignal[] = [
     allAssets.every(
       (a) => a.imagePayload.handle === HR_BOARD_BRAND_HANDLE && a.imagePayload.site === HR_BOARD_BRAND_SITE,
     ),
+  );
+}
+
+// ── 9a. buildLiveBestContactsRows — Attack+Ready-only, score ordering, empty-slate ──
+{
+  function liveEntry(overrides: Partial<LiveHrRadarEntry> & { playerId: string }): LiveHrRadarEntry {
+    return {
+      playerId: overrides.playerId,
+      gameId: "G1",
+      playerName: `Live ${overrides.playerId}`,
+      team: "AAA",
+      userStage: "fire",
+      currentReadinessScore: 80,
+      confidenceTier: "ELITE",
+      headlineReason: "Barrel trend",
+      userReasons: ["Barrel trend", "Pitcher fatigue"],
+      ...overrides,
+    };
+  }
+
+  // Attack+Ready-only filter — build/track/resolved excluded.
+  const mixed = [
+    liveEntry({ playerId: "attack", userStage: "fire" }),
+    liveEntry({ playerId: "ready", userStage: "ready" }),
+    liveEntry({ playerId: "lean", userStage: "build" }),
+    liveEntry({ playerId: "watchlist", userStage: "track" }),
+    liveEntry({ playerId: "cashed", userStage: "resolved" }),
+  ];
+  const mixedRows = buildLiveBestContactsRows(mixed, 10);
+  check("live rows: only Attack+Ready survive", mixedRows.length === 2);
+  check(
+    "live rows: exact ids attack,ready survive",
+    mixedRows.every((r) => r.playerId === "attack" || r.playerId === "ready"),
+  );
+
+  // Score ordering — descending, rank assigned 1..N in that order.
+  const byScore = [
+    liveEntry({ playerId: "low", currentReadinessScore: 60, userStage: "ready" }),
+    liveEntry({ playerId: "high", currentReadinessScore: 95, userStage: "fire" }),
+    liveEntry({ playerId: "mid", currentReadinessScore: 75, userStage: "ready" }),
+  ];
+  const scoredRows = buildLiveBestContactsRows(byScore, 10);
+  check(
+    "live rows: sorted by score desc",
+    scoredRows.map((r) => r.playerId).join(",") === "high,mid,low",
+  );
+  check("live rows: rank starts at 1", scoredRows[0].rank === 1 && scoredRows[2].rank === 3);
+  check(
+    "live rows: score is /10 (readiness / 10)",
+    scoredRows[0].score === 9.5,
+  );
+  check(
+    "live rows: stage label maps fire->Attack, ready->Playable",
+    scoredRows[0].stage === "Attack" && scoredRows[1].stage === "Playable",
+  );
+  check(
+    "live rows: drivers carry userReasons verbatim",
+    scoredRows[0].drivers.join(",") === "Barrel trend,Pitcher fatigue",
+  );
+
+  // Empty-slate: builder returns [], and buildContentPack omits the asset
+  // entirely (rather than posting an empty "Best Contacts" post).
+  check("live rows: empty input -> []", buildLiveBestContactsRows([], 5).length === 0);
+
+  const boardRows = buildBoardRows(FULL_BOARD);
+  const movements = buildMovementFeed(boardRows, [
+    mkState({ playerId: "1", lifecycleState: "ready", section: "READY" }),
+  ]);
+  const packNoLive = buildContentPack("2026-06-25", boardRows, movements, {}, []);
+  check(
+    "content pack: no live_best_contacts asset when liveRows is empty",
+    !packNoLive.assets.some((a) => a.assetType === "live_best_contacts"),
+  );
+
+  const packWithLive = buildContentPack("2026-06-25", boardRows, movements, {}, scoredRows);
+  const liveAsset = packWithLive.assets.find((a) => a.assetType === "live_best_contacts");
+  check("content pack: live_best_contacts asset present when liveRows non-empty", !!liveAsset);
+  check(
+    "content pack: live_best_contacts asset is compliance-clean",
+    liveAsset?.complianceStatus === "clean",
+  );
+  check(
+    "content pack: live_best_contacts body has no URL",
+    !!liveAsset && !URL_RE.test(liveAsset.body),
+  );
+  check(
+    "content pack: live_best_contacts carries the ranked players",
+    liveAsset?.sourcePlayerIds.join(",") === "high,mid,low",
   );
 }
 

@@ -23,7 +23,8 @@ export type HrBoardAssetType =
   | "ready_fire_alert"
   | "cashed_proof"
   | "near_miss_transparency"
-  | "postgame_recap";
+  | "postgame_recap"
+  | "live_best_contacts";
 
 export const HR_BOARD_ASSET_LABELS: Record<HrBoardAssetType, string> = {
   daily_board: "Daily Board Post",
@@ -34,6 +35,7 @@ export const HR_BOARD_ASSET_LABELS: Record<HrBoardAssetType, string> = {
   cashed_proof: "Cashed Proof",
   near_miss_transparency: "Near-Miss Transparency",
   postgame_recap: "Postgame Recap",
+  live_best_contacts: "Best Contacts of the Day",
 };
 
 /** Image template families (structured payload for future rendering). */

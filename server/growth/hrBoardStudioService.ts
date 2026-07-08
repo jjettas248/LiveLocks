@@ -13,6 +13,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { todayET } from "../utils/dateUtils";
+import { storage } from "../storage";
+import { mlbGameCache } from "../mlb/dataPullService";
+import { normalizeMlbStatus } from "../mlb/liveGameOrchestrator";
 import {
   peekRadarSnapshot,
   getRadarSnapshot,
@@ -28,10 +31,13 @@ import {
   buildContentPack,
   buildMovementFeed,
   buildRecap,
+  buildLiveBestContactsRows,
   type ContentPackOptions,
+  type LiveHrRadarEntry,
 } from "./hrBoardStudioCore";
 import type {
   HrBoardContentPack,
+  HrBoardRow,
   HrBoardTodayResponse,
   HrMovementRow,
   HrRecapResponse,
@@ -68,6 +74,84 @@ function gatherStatesForDate(date: string): CanonicalHrRadarState[] {
   return getAllCanonicalHrRadarStates().filter(
     (s) => s.sessionDate == null || s.sessionDate === date,
   );
+}
+
+/**
+ * gameIds whose game has gone final, per the live game-state cache. Mirrors
+ * the join `server/routes.ts` applies to stamp `isGameFinal` on the public
+ * ladder response (storage.getHrRadarLadder doesn't import the orchestrator's
+ * status normalizer, so callers that read storage directly — like this admin
+ * path — must redo the join or risk promoting a stale final-game signal that
+ * hasn't been graded yet).
+ */
+function computeFinalGameIds(): Set<string> {
+  const finalGameIds = new Set<string>();
+  try {
+    const gameStates = (mlbGameCache as any)?.gameState ?? {};
+    for (const gid of Object.keys(gameStates)) {
+      const raw = (gameStates[gid] as any)?.status ?? (gameStates[gid] as any)?.detailedState ?? "";
+      if (normalizeMlbStatus(String(raw)) === "final") finalGameIds.add(gid);
+    }
+  } catch {
+    // best-effort — treat as no known final games rather than fail the caller.
+  }
+  return finalGameIds;
+}
+
+/**
+ * Overlay fresher canonical (in-memory) HR Radar state onto the DB ladder —
+ * the same freshness overlay the public `/api/mlb/hr-radar/ladder` route
+ * applies, so a signal just promoted to FIRE/READY in the canonical store
+ * isn't invisible to this admin path during the ~20s DB reconcile lag. Best-
+ * effort: on failure, callers just get the DB ladder as-is.
+ */
+async function applyFreshnessOverlay(ladder: Awaited<ReturnType<typeof storage.getHrRadarLadder>>): Promise<void> {
+  try {
+    const { applyCanonicalFreshnessOverlay } = await import("../mlb/hrRadarFreshnessOverlay");
+    const { getActiveCanonicalHrRadarStates } = await import("../mlb/hrRadarCanonicalStore");
+    applyCanonicalFreshnessOverlay(ladder as any, getActiveCanonicalHrRadarStates(), Date.now());
+  } catch {
+    // best-effort — serve the DB ladder as-is.
+  }
+}
+
+/** Live HR Radar Attack/Ready entries for `date`, mapped to the shared candidate shape. */
+async function gatherLiveLadderEntries(date: string): Promise<LiveHrRadarEntry[]> {
+  const ladder = await storage.getHrRadarLadder(date);
+  await applyFreshnessOverlay(ladder);
+  const finalGameIds = computeFinalGameIds();
+  const live = [...ladder.sections.attackNow, ...(ladder.sections.ready ?? [])];
+  return live
+    .filter(
+      (e) =>
+        e.isGameFinal !== true &&
+        !finalGameIds.has(e.gameId) &&
+        (e.plateAppearancesTracked ?? 0) > 0,
+    )
+    .map((e) => ({
+      playerId: e.playerId,
+      gameId: e.gameId,
+      playerName: e.playerName,
+      team: e.team ?? null,
+      userStage: e.userStage ?? null,
+      currentReadinessScore: e.currentReadinessScore ?? null,
+      confidenceTier: e.confidenceTier ?? null,
+      headlineReason: e.headlineReason ?? null,
+      userReasons: e.userReasons,
+    }));
+}
+
+/** GET /live-best-contacts — today's top live Attack/Ready signals, ranked by composite score. */
+export async function getLiveBestContacts(
+  limit = 5,
+): Promise<{ date: string; generatedAt: string; rows: HrBoardRow[] }> {
+  const date = todayET();
+  const entries = await gatherLiveLadderEntries(date);
+  return {
+    date,
+    generatedAt: new Date().toISOString(),
+    rows: buildLiveBestContactsRows(entries, limit),
+  };
 }
 
 /** GET /today — ranked board rows for today's slate. */
@@ -110,7 +194,9 @@ export async function generateContentPack(opts: ContentPackOptions): Promise<HrB
   const rows = buildBoardRows(signals);
   const states = gatherStatesForDate(date);
   const movements = buildMovementFeed(rows, states);
-  return buildContentPack(date, rows, movements, opts);
+  const liveEntries = await gatherLiveLadderEntries(date);
+  const liveRows = buildLiveBestContactsRows(liveEntries);
+  return buildContentPack(date, rows, movements, opts, liveRows);
 }
 
 /** POST /generate-recap — recap assets for `date` (defaults to today). */
