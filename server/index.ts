@@ -641,7 +641,11 @@ app.use((req, res, next) => {
       setInterval(() => {
         try {
           const snap = getSnapshot();
-          const needInitial = !snap || snap.sessionDate !== slateDateET();
+          // signals.size===0 also counts as "need initial" — belt-and-suspenders
+          // against an empty-board rebuild (see buildPregamePowerRadar's own
+          // discovery guard): if one somehow still slips through, this keeps the
+          // retry loop alive instead of going quiet for the rest of the day.
+          const needInitial = !snap || snap.sessionDate !== slateDateET() || snap.signals.size === 0;
           let nearFirstPitch = false;
           if (snap) {
             const now = Date.now();
@@ -723,7 +727,9 @@ app.use((req, res, next) => {
       setInterval(() => {
         try {
           const snap = getMoundSnapshot();
-          const needInitial = !snap || snap.sessionDate !== slateDateET();
+          // signals.size===0 also counts as "need initial" — mirrors the same
+          // hardening on the Pregame Power Radar tick above.
+          const needInitial = !snap || snap.sessionDate !== slateDateET() || snap.signals.size === 0;
           let nearFirstPitch = false;
           if (snap) {
             const now = Date.now();
