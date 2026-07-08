@@ -23,18 +23,43 @@ function baseInputs(overrides: Partial<MoundDirectionInputs> = {}): MoundDirecti
     dataCoverageScore: 0,
     opposingLineupConfirmed: false,
     pitcherSeasonStatsAvailable: false,
+    primaryMarket: "pitcher_strikeouts",
+    seasonKPer9: null,
+    seasonAvgInningsPerStart: null,
     ...overrides,
   };
 }
 
-// ── Fade: track tier with real pitcher-skill data behind it ─────────────────
+// ── Fade: track tier with real pitcher-skill data AND a gradeable settlement baseline ──
 ok(
-  computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: 4.0 })) === "fade",
-  "track tier + real pitcherSkillScore → fade",
+  computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: 4.0, seasonKPer9: 8.0 })) === "fade",
+  "track tier + real pitcherSkillScore + season K/9 (Ks market) → fade",
 );
 ok(
-  computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: null })) === null,
+  computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: null, seasonKPer9: 8.0 })) === null,
   "track tier WITHOUT pitcherSkillScore → null (data-missing artifact, not a genuine weak matchup)",
+);
+
+// ── Regression: pitcherSkillScore can be Savant-only, with no season K/9 on file ──
+// (Codex review, PR #105.) Without a settlement baseline,
+// moundOutcomeAttribution.ts's deriveMoundOutcome always grades a
+// calibration_miss — a Fade Candidate shown for this pitcher could never
+// actually be graded as a cash.
+ok(
+  computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: 5.0, seasonKPer9: null, primaryMarket: "pitcher_strikeouts" })) === null,
+  "track tier + Savant-only pitcherSkillScore (no season K/9) on the Ks market → null, never an ungradeable Fade",
+);
+ok(
+  computeMoundDirection(
+    baseInputs({ tier: "track", pitcherSkillScore: 5.0, primaryMarket: "pitcher_outs", seasonKPer9: null, seasonAvgInningsPerStart: null }),
+  ) === null,
+  "track tier on the Outs market with no seasonAvgInningsPerStart → null, never an ungradeable Fade",
+);
+ok(
+  computeMoundDirection(
+    baseInputs({ tier: "track", pitcherSkillScore: 5.0, primaryMarket: "pitcher_outs", seasonKPer9: null, seasonAvgInningsPerStart: 6.0 }),
+  ) === "fade",
+  "track tier on the Outs market WITH seasonAvgInningsPerStart (even though seasonKPer9 is null) → fade — the Outs baseline doesn't need K/9",
 );
 
 // ── Follow: strong/elite/nuclear tier clearing the full data-quality bar ────

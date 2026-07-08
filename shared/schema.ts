@@ -1079,6 +1079,13 @@ export const mlbMoundRadarSignals = pgTable("mlb_mound_radar_signals", {
   // discipline as everPubliclyFlagged (see storage.ts) so it survives a
   // server restart even if the in-memory carry-forward chain is lost.
   everPubliclyFlaggedFade: boolean("ever_publicly_flagged_fade").notNull().default(false),
+  // Stamped once at build time (moundDirection.ts) — "fade" | "follow" | null.
+  // Dedicated column (not embedded in diagnostics) because diagnostics is
+  // wholesale-overwritten on every upsert with no merge logic; a value that
+  // must survive an intervening rebuild needs its own sticky-upsert column
+  // (see storage.ts's CASE-based upsert — once "fade" is set, it can never
+  // be overwritten by a later rebuild's differently-recomputed direction).
+  moundDirection: text("mound_direction"),
   becameLiveReady: boolean("became_live_ready").notNull().default(false),
   becameLiveFire: boolean("became_live_fire").notNull().default(false),
   convertedLiveAt: timestamp("converted_live_at"),

@@ -3374,6 +3374,11 @@ export class DatabaseStorage implements IStorage {
           outcomes: sql`COALESCE(excluded.outcomes, ${mlbMoundRadarSignals.outcomes})`,
           everPubliclyFlagged: sql`${mlbMoundRadarSignals.everPubliclyFlagged} OR excluded.ever_publicly_flagged`,
           everPubliclyFlaggedFade: sql`${mlbMoundRadarSignals.everPubliclyFlaggedFade} OR excluded.ever_publicly_flagged_fade`,
+          // Sticky once "fade" — NOT a blanket "once set, never changed":
+          // "follow" and null grade identically in deriveMoundOutcome (only
+          // "fade" flips the settlement comparison), so only "fade" needs to
+          // survive an intervening rebuild's differently-recomputed direction.
+          moundDirection: sql`CASE WHEN ${mlbMoundRadarSignals.moundDirection} = 'fade' THEN 'fade' ELSE excluded.mound_direction END`,
           becameLiveReady: sql`${mlbMoundRadarSignals.becameLiveReady} OR excluded.became_live_ready`,
           becameLiveFire: sql`${mlbMoundRadarSignals.becameLiveFire} OR excluded.became_live_fire`,
           convertedLiveAt: sql`COALESCE(excluded.converted_live_at, ${mlbMoundRadarSignals.convertedLiveAt})`,

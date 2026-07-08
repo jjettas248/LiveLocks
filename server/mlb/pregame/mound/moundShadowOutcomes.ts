@@ -15,7 +15,7 @@ import { mlbGameCache } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
 import { deriveMoundOutcome } from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
-import type { MoundOutcome, MoundSignal, MoundDiagnostics } from "./types";
+import type { MoundOutcome, MoundSignal } from "./types";
 import type { MoundDirection } from "./moundDirection";
 import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
 
@@ -84,13 +84,13 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
   let graded = 0;
 
   // Rehydrate durable state from the DB before grading: the two boolean
-  // flags (OR-upsert-protected, storage.ts) AND the stamped moundDirection
-  // (embedded in the persisted diagnostics blob) — the in-memory snapshot
-  // alone can be missing carry-forward history (e.g. a process restart left
-  // this game's first post-restart build with no prevSignals to pin
-  // against, so a fresh rebuild could recompute a DIFFERENT direction than
-  // what was actually shown pre-game). Best-effort: grading still proceeds
-  // on in-memory-only state if this read fails.
+  // flags AND moundDirection are all OR/sticky-upsert-protected columns
+  // (storage.ts) — the in-memory snapshot alone can be missing carry-forward
+  // history (e.g. a process restart left this game's first post-restart
+  // build with no prevSignals to pin against, so a fresh rebuild could
+  // recompute a DIFFERENT direction than what was actually shown pre-game).
+  // Best-effort: grading still proceeds on in-memory-only state if this
+  // read fails.
   let persistedState = new Map<string, { everPubliclyFlagged: boolean; everPubliclyFlaggedFade: boolean; moundDirection: MoundDirection }>();
   try {
     const rows = await storage.getMlbMoundRadarSignalsByDate(snapshot.sessionDate);
@@ -100,7 +100,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
         {
           everPubliclyFlagged: r.everPubliclyFlagged,
           everPubliclyFlaggedFade: r.everPubliclyFlaggedFade,
-          moundDirection: (r.diagnostics as MoundDiagnostics | null)?.moundDirection ?? null,
+          moundDirection: (r.moundDirection as MoundDirection) ?? null,
         },
       ]),
     );
@@ -129,10 +129,8 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
     // which settlement rule it grades against.
     if (signal.moundDirection !== "fade" && persisted?.moundDirection === "fade" && persisted.everPubliclyFlaggedFade === true) {
       signal.moundDirection = "fade";
-      signal.diagnostics.moundDirection = "fade";
     } else if (signal.moundDirection !== "follow" && persisted?.moundDirection === "follow" && persisted.everPubliclyFlagged === true) {
       signal.moundDirection = "follow";
-      signal.diagnostics.moundDirection = "follow";
     }
 
     const everPubliclyFlagged = signal.everPubliclyFlagged || (persisted?.everPubliclyFlagged ?? false);
@@ -189,6 +187,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
         outcomes: signal.outcomes ?? null,
         everPubliclyFlagged: signal.everPubliclyFlagged,
         everPubliclyFlaggedFade: signal.everPubliclyFlaggedFade,
+        moundDirection: signal.moundDirection,
         becameLiveReady: signal.becameLiveReady,
         becameLiveFire: signal.becameLiveFire,
         convertedLiveAt: signal.convertedLiveAt ? new Date(signal.convertedLiveAt) : null,

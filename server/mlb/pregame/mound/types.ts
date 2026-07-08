@@ -91,8 +91,6 @@ export interface MoundDiagnostics {
   marketFitScore: number | null;
   /** Informational only (contactRisk.ts) — never feeds score10/tier. Null when handedness splits are unavailable. */
   contactRiskScore: number | null;
-  /** Stamped once at build time (moundDirection.ts) — never recomputed at grading time or client-side. See MoundSignal.moundDirection. */
-  moundDirection: import("./moundDirection").MoundDirection;
   riskPenalty: number;
 
   appliedDrivers: string[];
@@ -156,7 +154,7 @@ export interface MoundSignal {
 
   score10: number;
   tier: MoundTier;
-  /** Stamped once at build time (moundDirection.ts), never recomputed at grading time or on the client — the settlement rule (deriveMoundOutcome) grades against exactly this value. Convenience mirror of diagnostics.moundDirection. */
+  /** Stamped once at build time (moundDirection.ts), never recomputed at grading time or on the client — the settlement rule (deriveMoundOutcome) grades against exactly this value. Backed by a dedicated, sticky-once-"fade" DB column (storage.ts) — not embedded in diagnostics, which is wholesale-overwritten on every upsert. */
   moundDirection: import("./moundDirection").MoundDirection;
 
   drivers: MoundDriver[];

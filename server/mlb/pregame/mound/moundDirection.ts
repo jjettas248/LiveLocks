@@ -16,7 +16,7 @@
 // confirmed opposing lineup, real data coverage, AND real season stats
 // behind the pitcher's skill score.
 
-import type { MoundTier } from "./types";
+import type { MoundMarket, MoundTier } from "./types";
 
 export type MoundDirection = "fade" | "follow" | null;
 
@@ -26,10 +26,28 @@ export interface MoundDirectionInputs {
   dataCoverageScore: number;
   opposingLineupConfirmed: boolean;
   pitcherSeasonStatsAvailable: boolean;
+  /** Which market this card's settlement baseline is for — determines which of the two fields below must be non-null for a Fade to be gradeable. */
+  primaryMarket: MoundMarket;
+  /** Same value moundOutcomeAttribution.ts's seasonBaseline() uses for the pitcher_strikeouts market. */
+  seasonKPer9: number | null;
+  /** Same value moundOutcomeAttribution.ts's seasonBaseline() uses for the pitcher_outs market. */
+  seasonAvgInningsPerStart: number | null;
 }
 
 export function computeMoundDirection(inputs: MoundDirectionInputs): MoundDirection {
-  if (inputs.tier === "track" && inputs.pitcherSkillScore != null) return "fade";
+  // pitcherSkillScore can be "available" from Savant stuff metrics
+  // (SwStr%/CSW%) alone, with no season K/9 or gamesStarted/inningsPitched
+  // on file (pitcherSkill.ts). moundOutcomeAttribution.ts's settlement
+  // baseline has no fallback for that case — it always grades a
+  // calibration_miss — so without this check a "Fade Candidate" could be
+  // shown for a pitcher whose fade can never be graded as a cash (Codex
+  // review, PR #105).
+  const hasSettlementBaseline =
+    inputs.primaryMarket === "pitcher_strikeouts"
+      ? inputs.seasonKPer9 != null
+      : inputs.seasonAvgInningsPerStart != null;
+
+  if (inputs.tier === "track" && inputs.pitcherSkillScore != null && hasSettlementBaseline) return "fade";
   if (
     (inputs.tier === "strong" || inputs.tier === "elite" || inputs.tier === "nuclear") &&
     inputs.dataCoverageScore >= 0.6 &&

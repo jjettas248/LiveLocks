@@ -10,6 +10,7 @@ import type {
   MlbMoundRadarSignalRow,
 } from "@shared/schema";
 import type { MoundSignal, MoundMarketSetup } from "./types";
+import type { MoundDirection } from "./moundDirection";
 import { marketSetupLabel } from "./marketTagger";
 import { setMoundBuildSink } from "./buildMlbMoundRadar";
 import { setMoundDbFallback } from "./mlbMoundRadarService";
@@ -49,6 +50,7 @@ export function signalToRow(s: MoundSignal): InsertMlbMoundRadarSignal {
     outcomes: s.outcomes ?? null,
     everPubliclyFlagged: s.everPubliclyFlagged,
     everPubliclyFlaggedFade: s.everPubliclyFlaggedFade,
+    moundDirection: s.moundDirection,
     becameLiveReady: s.becameLiveReady,
     becameLiveFire: s.becameLiveFire,
     convertedLiveAt: s.convertedLiveAt ? new Date(s.convertedLiveAt) : null,
@@ -89,9 +91,9 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     parkContext: null,
     score10: typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number),
     tier: r.tier as MoundSignal["tier"],
-    // Read back out of the persisted diagnostics blob (no dedicated column,
-    // stamped once at build time — never re-derived here).
-    moundDirection: (r.diagnostics as MoundSignal["diagnostics"] | null)?.moundDirection ?? null,
+    // Dedicated, sticky-once-"fade" column (see storage.ts's upsert) —
+    // stamped once at build time, never re-derived here.
+    moundDirection: (r.moundDirection as MoundDirection) ?? null,
     drivers: (r.drivers as MoundSignal["drivers"]) ?? [],
     warnings: (r.warnings as string[]) ?? [],
     tags: [],

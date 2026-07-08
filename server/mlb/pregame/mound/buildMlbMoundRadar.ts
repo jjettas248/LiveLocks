@@ -457,6 +457,9 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           dataCoverageScore: scoring.dataCoverageScore,
           opposingLineupConfirmed,
           pitcherSeasonStatsAvailable: seasonStats != null,
+          primaryMarket: marketTags.primaryMarket,
+          seasonKPer9: seasonStats?.kPer9 ?? null,
+          seasonAvgInningsPerStart: avgInningsPerStart,
         });
 
         console.log(
@@ -535,7 +538,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             recentFormScore: recentForm.available ? recentForm.score10 : null,
             marketFitScore: 0,
             contactRiskScore: contactRisk.available ? contactRisk.score10 : null,
-            moundDirection,
             riskPenalty: risk.riskPenalty,
             appliedDrivers: drivers.filter((d) => d.direction === "positive").map((d) => d.label),
             appliedWarnings: warnings,

@@ -47,7 +47,7 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
     outcomes: null, everPubliclyFlagged: false, everPubliclyFlaggedFade: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
     diagnostics: {
       pitcherSkillScore: 8, opponentKProfileScore: 7, workloadScore: 6, runEnvironmentScore: 6,
-      recentFormScore: 6, marketFitScore: 7, contactRiskScore: 5, moundDirection: null, riskPenalty: 0,
+      recentFormScore: 6, marketFitScore: 7, contactRiskScore: 5, riskPenalty: 0,
       appliedDrivers: [], appliedWarnings: [],
       dataCoverageScore: 0.95, finalScoreBeforeCaps: 7, finalScoreAfterCaps: 7, publicTier: "strong",
       suppressed: false, suppressedReasons: [],
@@ -256,7 +256,6 @@ const gradedWin: MoundOutcome = {
   const fresh = sig({ moundDirection: "follow", tier: "strong" });
   carryForwardMoundGradedState(fresh, prev);
   ok(fresh.moundDirection === "fade", "previously-flagged Fade direction is pinned, not silently flipped to the freshly-recomputed Follow");
-  ok(fresh.diagnostics.moundDirection === "fade", "diagnostics.moundDirection mirror is also pinned");
 }
 
 // ── 15. A publicly-flagged Follow direction is pinned across same-slate rebuilds ──

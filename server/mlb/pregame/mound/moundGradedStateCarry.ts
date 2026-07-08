@@ -24,10 +24,8 @@ export function carryForwardMoundGradedState(
   // so those checks see the (possibly pinned) direction, not the fresh one.
   if (prev.moundDirection === "fade" && prev.everPubliclyFlaggedFade === true) {
     fresh.moundDirection = "fade";
-    fresh.diagnostics.moundDirection = "fade";
   } else if (prev.moundDirection === "follow" && prev.everPubliclyFlagged === true) {
     fresh.moundDirection = "follow";
-    fresh.diagnostics.moundDirection = "follow";
   }
 
   fresh.everPubliclyFlagged = wasPubliclyFlaggedMound(fresh) || prev.everPubliclyFlagged === true;
