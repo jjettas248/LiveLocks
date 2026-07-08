@@ -48,6 +48,7 @@ export function signalToRow(s: MoundSignal): InsertMlbMoundRadarSignal {
     suppressedReasons: s.suppressedReasons,
     outcomes: s.outcomes ?? null,
     everPubliclyFlagged: s.everPubliclyFlagged,
+    everPubliclyFlaggedFade: s.everPubliclyFlaggedFade,
     becameLiveReady: s.becameLiveReady,
     becameLiveFire: s.becameLiveFire,
     convertedLiveAt: s.convertedLiveAt ? new Date(s.convertedLiveAt) : null,
@@ -111,7 +112,7 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     becameLiveFire: r.becameLiveFire,
     convertedLiveAt: r.convertedLiveAt ? new Date(r.convertedLiveAt).toISOString() : null,
     diagnostics: r.diagnostics as MoundSignal["diagnostics"],
-    everPubliclyFlaggedFade: (r.diagnostics as MoundSignal["diagnostics"] | null)?.everPubliclyFlaggedFade ?? false,
+    everPubliclyFlaggedFade: r.everPubliclyFlaggedFade,
     // Not persisted (presentation-only, like Plate's marketEdgeContext) —
     // DB-reconstructed signals never have a live odds fetch/projection to
     // restore, so these stay null rather than fabricated.

@@ -531,7 +531,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             marketFitScore: 0,
             contactRiskScore: contactRisk.available ? contactRisk.score10 : null,
             moundDirection,
-            everPubliclyFlaggedFade: false,
             riskPenalty: risk.riskPenalty,
             appliedDrivers: drivers.filter((d) => d.direction === "positive").map((d) => d.label),
             appliedWarnings: warnings,

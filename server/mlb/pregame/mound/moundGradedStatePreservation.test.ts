@@ -47,7 +47,7 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
     outcomes: null, everPubliclyFlagged: false, everPubliclyFlaggedFade: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
     diagnostics: {
       pitcherSkillScore: 8, opponentKProfileScore: 7, workloadScore: 6, runEnvironmentScore: 6,
-      recentFormScore: 6, marketFitScore: 7, contactRiskScore: 5, moundDirection: null, everPubliclyFlaggedFade: false, riskPenalty: 0,
+      recentFormScore: 6, marketFitScore: 7, contactRiskScore: 5, moundDirection: null, riskPenalty: 0,
       appliedDrivers: [], appliedWarnings: [],
       dataCoverageScore: 0.95, finalScoreBeforeCaps: 7, finalScoreAfterCaps: 7, publicTier: "strong",
       suppressed: false, suppressedReasons: [],
@@ -239,6 +239,40 @@ const gradedWin: MoundOutcome = {
     "g1", new Set(["p2"]), [prev], "pre", true, "2026-07-01T18:00:00.000Z", "b-new",
   );
   ok(preCarry.length === 0, "resolution gap before first pitch (pre) is not carried forward");
+}
+
+// ── 14. A publicly-flagged Fade direction is pinned across same-slate rebuilds ──
+// Regression (Codex review, PR #105): the grader branches on
+// signal.moundDirection, so a later pregame rebuild recomputing a fresh
+// direction (e.g. lineup confirms, tier moves off "track") must not silently
+// flip a signal the UI already showed as "Fade (Under)" into Follow/Over
+// settlement logic.
+{
+  const prev = sig({ moundDirection: "fade", everPubliclyFlaggedFade: true, tier: "track" });
+  // Fresh rebuild recomputes this cycle as "follow" (e.g. tier moved to
+  // "strong" as data firmed up) — sig({})'s defaults (tier: "strong",
+  // everPubliclyFlagged: false) mean the fresh signal's own intrinsic
+  // moundDirection would be "follow" if not pinned.
+  const fresh = sig({ moundDirection: "follow", tier: "strong" });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.moundDirection === "fade", "previously-flagged Fade direction is pinned, not silently flipped to the freshly-recomputed Follow");
+  ok(fresh.diagnostics.moundDirection === "fade", "diagnostics.moundDirection mirror is also pinned");
+}
+
+// ── 15. A publicly-flagged Follow direction is pinned across same-slate rebuilds ──
+{
+  const prev = sig({ moundDirection: "follow", everPubliclyFlagged: true, tier: "strong" });
+  const fresh = sig({ moundDirection: "fade", tier: "track" });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.moundDirection === "follow", "previously-flagged Follow direction is pinned, not silently flipped to the freshly-recomputed Fade");
+}
+
+// ── 16. An UNFLAGGED prior direction is not pinned (never shown publicly, safe to let it move) ──
+{
+  const prev = sig({ moundDirection: "fade", everPubliclyFlaggedFade: false, tier: "track" });
+  const fresh = sig({ moundDirection: "follow", tier: "strong" });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.moundDirection === "follow", "a prior direction that was never publicly flagged is free to move on rebuild");
 }
 
 console.log(`\nmoundGradedStatePreservation.test: ${passed} passed, ${failed} failed`);

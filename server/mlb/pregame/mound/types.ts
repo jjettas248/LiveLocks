@@ -93,8 +93,6 @@ export interface MoundDiagnostics {
   contactRiskScore: number | null;
   /** Stamped once at build time (moundDirection.ts) — never recomputed at grading time or client-side. See MoundSignal.moundDirection. */
   moundDirection: import("./moundDirection").MoundDirection;
-  /** Persisted mirror of MoundSignal.everPubliclyFlaggedFade — embedded here (like moundDirection above) so it round-trips through the already-jsonb diagnostics column with zero DB migration. OR'd-forward across rebuilds, same discipline as everPubliclyFlagged — the Fade-track analog of that field (wasPubliclyFlaggedMound's tierEligible check structurally excludes "track" tier, so Fade signals need their own flagging predicate — see wasPubliclyFlaggedMoundFade in diagnostics.ts). */
-  everPubliclyFlaggedFade: boolean;
   riskPenalty: number;
 
   appliedDrivers: string[];
@@ -188,7 +186,7 @@ export interface MoundSignal {
 
   outcomes?: MoundOutcome | null;
   everPubliclyFlagged: boolean;
-  /** Convenience mirror of diagnostics.everPubliclyFlaggedFade — see that field's doc. */
+  /** Fade-track analog of everPubliclyFlagged above — see wasPubliclyFlaggedMoundFade (diagnostics.ts) for why Fade needs its own flag. Backed by its own dedicated DB column with the same SQL-level OR-upsert durability as everPubliclyFlagged (see storage.ts) — survives a server restart even if the in-memory carry-forward chain is lost. */
   everPubliclyFlaggedFade: boolean;
   becameLiveReady: boolean;
   becameLiveFire: boolean;

@@ -1073,6 +1073,12 @@ export const mlbMoundRadarSignals = pgTable("mlb_mound_radar_signals", {
   suppressedReasons: jsonb("suppressed_reasons").notNull().default([]),
   outcomes: jsonb("outcomes"),
   everPubliclyFlagged: boolean("ever_publicly_flagged").notNull().default(false),
+  // Fade-track analog of everPubliclyFlagged above — wasPubliclyFlaggedMound's
+  // tierEligible check structurally excludes "track" tier, so a Fade
+  // Candidate signal needs its own durable flag. Same SQL-level OR-upsert
+  // discipline as everPubliclyFlagged (see storage.ts) so it survives a
+  // server restart even if the in-memory carry-forward chain is lost.
+  everPubliclyFlaggedFade: boolean("ever_publicly_flagged_fade").notNull().default(false),
   becameLiveReady: boolean("became_live_ready").notNull().default(false),
   becameLiveFire: boolean("became_live_fire").notNull().default(false),
   convertedLiveAt: timestamp("converted_live_at"),

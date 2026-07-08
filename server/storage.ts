@@ -3373,6 +3373,7 @@ export class DatabaseStorage implements IStorage {
           suppressedReasons: row.suppressedReasons,
           outcomes: sql`COALESCE(excluded.outcomes, ${mlbMoundRadarSignals.outcomes})`,
           everPubliclyFlagged: sql`${mlbMoundRadarSignals.everPubliclyFlagged} OR excluded.ever_publicly_flagged`,
+          everPubliclyFlaggedFade: sql`${mlbMoundRadarSignals.everPubliclyFlaggedFade} OR excluded.ever_publicly_flagged_fade`,
           becameLiveReady: sql`${mlbMoundRadarSignals.becameLiveReady} OR excluded.became_live_ready`,
           becameLiveFire: sql`${mlbMoundRadarSignals.becameLiveFire} OR excluded.became_live_fire`,
           convertedLiveAt: sql`COALESCE(excluded.converted_live_at, ${mlbMoundRadarSignals.convertedLiveAt})`,
