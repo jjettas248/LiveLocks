@@ -1,6 +1,9 @@
 // Lineup-released alerts — fires once per game, the first time that game's
-// starting lineup is confirmed AND at least one player in it is a top-of-board
-// Pre-Game Power Radar HR candidate (tier strong/elite/nuclear).
+// starting lineup is confirmed AND at least one player in it is a genuine
+// top-of-board Pre-Game Power Radar HR candidate — reuses the board's own
+// public-visibility predicate (wasPubliclyFlaggedPregame) rather than a
+// bespoke tier check, so an alert never points at a card the board itself
+// hides (e.g. suppressed for insufficient drivers/coverage).
 //
 // Read-only against the Pre-Game Power Radar snapshot: diffs the previous vs.
 // newly-built snapshot to detect the unconfirmed→confirmed transition per
@@ -13,10 +16,9 @@ import { sendPushToUser } from "../pushDelivery";
 import { resolveAccess } from "../utils/access";
 import { slateDateET } from "../utils/dateUtils";
 import { hasAlertFingerprint, recordAlertFingerprint } from "../alertDedupe";
+import { wasPubliclyFlaggedPregame } from "./pregamePowerRadar/diagnostics";
 import type { PregamePowerSnapshot } from "./pregamePowerRadar/pregamePowerRadarStore";
 import type { PregamePowerSignal } from "./pregamePowerRadar/types";
-
-const QUALIFYING_TIERS = new Set(["strong", "elite", "nuclear"]);
 
 // In-memory guard against re-firing within the same process for a game we
 // already alerted this build cycle — the DB fingerprint (below) is the
@@ -42,9 +44,8 @@ export async function checkLineupReleaseAlerts(
 
   const newlyQualifyingByGame = new Map<string, PregamePowerSignal[]>();
   for (const s of Array.from(next.signals.values())) {
-    if (s.lineupStatus !== "confirmed") continue;
     if (previouslyConfirmed.has(s.gameId)) continue; // not a fresh confirmation
-    if (!QUALIFYING_TIERS.has(s.tier)) continue;
+    if (!wasPubliclyFlaggedPregame(s)) continue; // same gate the public board uses
     const list = newlyQualifyingByGame.get(s.gameId) ?? [];
     list.push(s);
     newlyQualifyingByGame.set(s.gameId, list);

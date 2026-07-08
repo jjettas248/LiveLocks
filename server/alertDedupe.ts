@@ -21,7 +21,7 @@ export async function hasAlertFingerprint(fingerprint: string): Promise<boolean>
   }
 }
 
-export async function recordAlertFingerprint(fingerprint: string, userId: number = 0): Promise<void> {
+export async function recordAlertFingerprint(fingerprint: string, userId: number | null = null): Promise<void> {
   try {
     await db.insert(sentAlerts).values({ fingerprint, userId }).onConflictDoNothing();
   } catch {}
