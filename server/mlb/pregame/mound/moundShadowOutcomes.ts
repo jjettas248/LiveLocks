@@ -21,8 +21,21 @@ import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
 /**
  * Resolve final-game pitching-box-score outcome for a target, when available,
  * and stamp the outcome-attribution result (mound_win vs mound_calibration_miss).
+ *
+ * everPubliclyFlagged/everPubliclyFlaggedFade are passed in ALREADY REHYDRATED
+ * from the DB's durable, OR-upsert-protected values (see gradeMoundOutcomes)
+ * rather than read off `signal` directly — the in-memory snapshot alone can
+ * be missing carry-forward history after a process restart (no prevSignals
+ * to OR against on that game's first post-restart build), which would
+ * otherwise silently understamp userVisible for a legitimately-flagged pick.
  */
-function resolveMoundOutcome(signal: MoundSignal, seasonKPer9: number | null, seasonAvgInningsPerStart: number | null): MoundOutcome | null {
+function resolveMoundOutcome(
+  signal: MoundSignal,
+  seasonKPer9: number | null,
+  seasonAvgInningsPerStart: number | null,
+  everPubliclyFlagged: boolean,
+  everPubliclyFlaggedFade: boolean,
+): MoundOutcome | null {
   const box = mlbGameCache.gamePitchingBoxScore[signal.gameId];
   const line = box?.byPitcherId?.[signal.pitcherId];
   if (!line) return null;
@@ -31,7 +44,7 @@ function resolveMoundOutcome(signal: MoundSignal, seasonKPer9: number | null, se
   // structurally excludes "track" tier, so a Fade-direction signal must be
   // checked against its own parallel flag (everPubliclyFlaggedFade) —
   // otherwise a correct Fade call could never become userVisible.
-  const wasPubliclyFlagged = signal.moundDirection === "fade" ? signal.everPubliclyFlaggedFade : signal.everPubliclyFlagged;
+  const wasPubliclyFlagged = signal.moundDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged;
 
   const attribution = deriveMoundOutcome({
     primaryMarket: signal.primaryMarket,
@@ -69,6 +82,23 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
 
   let graded = 0;
 
+  // Rehydrate the durable flags (everPubliclyFlagged/everPubliclyFlaggedFade)
+  // from the DB before grading — both columns are OR-upsert-protected
+  // (storage.ts) so the DB is the authoritative durable source, but the
+  // in-memory snapshot alone can be missing carry-forward history (e.g. a
+  // process restart left this game's first post-restart build with no
+  // prevSignals to OR against). Best-effort: grading still proceeds on
+  // in-memory-only flags if this read fails.
+  let persistedFlags = new Map<string, { everPubliclyFlagged: boolean; everPubliclyFlaggedFade: boolean }>();
+  try {
+    const rows = await storage.getMlbMoundRadarSignalsByDate(snapshot.sessionDate);
+    persistedFlags = new Map(
+      rows.map((r) => [r.signalId, { everPubliclyFlagged: r.everPubliclyFlagged, everPubliclyFlaggedFade: r.everPubliclyFlaggedFade }]),
+    );
+  } catch (err: any) {
+    console.warn(`[MLB_PREGAME_OUTCOME_SETTLED] durable-flag rehydration failed date=${snapshot.sessionDate}:`, err?.message ?? err);
+  }
+
   for (const signal of Array.from(snapshot.signals.values())) {
     if (signal.gameStatus !== "final" || signal.status === "graded") continue;
 
@@ -81,7 +111,16 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
     const seasonStats = mlbPlayerCache.pitcherSeasonStats[signal.pitcherId] ?? null;
     const seasonAvgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
 
-    const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart);
+    const persisted = persistedFlags.get(signal.signalId);
+    const everPubliclyFlagged = signal.everPubliclyFlagged || (persisted?.everPubliclyFlagged ?? false);
+    const everPubliclyFlaggedFade = signal.everPubliclyFlaggedFade || (persisted?.everPubliclyFlaggedFade ?? false);
+    // Self-heal the in-memory snapshot too, not just this grading pass — a
+    // later re-read of the same in-memory signal (stats service, another
+    // grading tick) should see the rehydrated value as well.
+    signal.everPubliclyFlagged = everPubliclyFlagged;
+    signal.everPubliclyFlaggedFade = everPubliclyFlaggedFade;
+
+    const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart, everPubliclyFlagged, everPubliclyFlaggedFade);
     if (!outcome) continue;
 
     signal.outcomes = outcome;
@@ -126,6 +165,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
         suppressedReasons: signal.suppressedReasons,
         outcomes: signal.outcomes ?? null,
         everPubliclyFlagged: signal.everPubliclyFlagged,
+        everPubliclyFlaggedFade: signal.everPubliclyFlaggedFade,
         becameLiveReady: signal.becameLiveReady,
         becameLiveFire: signal.becameLiveFire,
         convertedLiveAt: signal.convertedLiveAt ? new Date(signal.convertedLiveAt) : null,

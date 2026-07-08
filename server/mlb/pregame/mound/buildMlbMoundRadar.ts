@@ -418,7 +418,12 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         } else if (archetype === "quality_starter") {
           drivers.push({ key: "ctx_quality", label: "Strong Pitcher Archetype", direction: "positive", weight: 30 });
         }
-        const positiveDriverCount = drivers.filter((d) => d.direction === "positive").length;
+        // contactRisk's chips (cr_high/cr_low) are informational-only — like
+        // marketSetups, they must never affect suppression/publish gating,
+        // only what's displayed. Excluded here AND in wasPubliclyFlaggedMound
+        // (diagnostics.ts), which independently recomputes this same count
+        // off signal.drivers.
+        const positiveDriverCount = drivers.filter((d) => d.direction === "positive" && !d.key.startsWith("cr_")).length;
 
         const lineupStatus: MoundLineupStatus = opposingLineupConfirmed ? "confirmed" : "unconfirmed";
 

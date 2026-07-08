@@ -11,6 +11,8 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { computeContactRisk, type ContactRiskInputs } from "./contactRisk";
+import { positiveMoundDrivers } from "./diagnostics";
+import type { MoundSignal } from "./types";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -96,6 +98,33 @@ ok(unconfirmed.score10 === high.score10, "unweighted fallback matches the weight
 // ── Isolation guarantee: scoring.ts (score10/tier composite) never references contactRisk ──
 const scoringSrc = readFileSync(join(HERE, "scoring.ts"), "utf8");
 ok(!/contactRisk|computeContactRisk/.test(scoringSrc), "scoring.ts never references contactRisk.ts in any form");
+
+// ── Isolation guarantee: contactRisk's chips never count toward publish/suppression gating ──
+// (Codex review, PR #105.) cr_low/cr_high are informational-only, like
+// marketSetups — they must never inflate positiveMoundDrivers' count, which
+// feeds both composeMoundScore's insufficient_drivers gate and
+// wasPubliclyFlaggedMound's positive-driver-count >= 2 requirement.
+function minimalSignal(drivers: MoundSignal["drivers"]): MoundSignal {
+  return { drivers } as unknown as MoundSignal;
+}
+const oneRealDriverPlusLowContactRisk = minimalSignal([
+  { key: "ps_k9", label: "Pitcher High K%", direction: "positive" },
+  { key: "cr_low", label: "Hit/HR Susceptible: Low", direction: "positive" },
+]);
+ok(
+  positiveMoundDrivers(oneRealDriverPlusLowContactRisk).length === 1,
+  `positiveMoundDrivers excludes the cr_low chip from the count (got ${positiveMoundDrivers(oneRealDriverPlusLowContactRisk).length})`,
+);
+
+const twoRealDrivers = minimalSignal([
+  { key: "ps_k9", label: "Pitcher High K%", direction: "positive" },
+  { key: "wl_leash", label: "Long Leash", direction: "positive" },
+  { key: "cr_low", label: "Hit/HR Susceptible: Low", direction: "positive" },
+]);
+ok(
+  positiveMoundDrivers(twoRealDrivers).length === 2,
+  `positiveMoundDrivers still counts real drivers correctly alongside an excluded cr_ chip (got ${positiveMoundDrivers(twoRealDrivers).length})`,
+);
 
 console.log(`\ncontactRisk.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

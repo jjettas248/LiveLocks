@@ -4,8 +4,13 @@
 import type { MoundSignal, MoundRadarResponse } from "./types";
 import { MOUND_PUBLISH_MIN_SCORE } from "./scoring";
 
+// contactRisk.ts's chips (cr_high/cr_low) are informational-only — like
+// marketSetups, they must never affect suppression/publish gating, only
+// what's displayed on the card. Excluded here (the sole gating use of this
+// count) AND from buildMlbMoundRadar.ts's own positiveDriverCount, which
+// independently computes the same count before it's stamped onto the signal.
 export function positiveMoundDrivers(signal: MoundSignal) {
-  return signal.drivers.filter((d) => d.direction === "positive");
+  return signal.drivers.filter((d) => d.direction === "positive" && !d.key.startsWith("cr_"));
 }
 
 /**
