@@ -70,6 +70,22 @@ export interface UpsertResult {
 
 const _store: Map<string, CanonicalHrRadarState> = new Map();
 
+// ── Promotion hook ───────────────────────────────────────────────────────
+// Optional external subscriber, fired when a player genuinely transitions
+// into "ready" or "fire" (never on idempotent same-state re-observations).
+// Mirrors the setDispatchHook / installPregamePersistence pattern used
+// elsewhere in the codebase so this module stays free of storage/push
+// imports — the real implementation is wired in from server/index.ts.
+export type HrRadarPromotionHook = (
+  state: CanonicalHrRadarState,
+  apply: HrRadarApplyResult,
+) => void | Promise<void>;
+
+let _promotionHook: HrRadarPromotionHook | null = null;
+export function setHrRadarPromotionHook(hook: HrRadarPromotionHook | null): void {
+  _promotionHook = hook;
+}
+
 function keyOf(gameId: string | number, playerId: string | number): string {
   return `${gameId}_${playerId}`;
 }
@@ -234,6 +250,23 @@ export function upsertCanonicalHrRadarState(input: UpsertInput): UpsertResult {
       created: isCreated,
     }),
   );
+
+  // Fire the promotion hook on a genuine upgrade into ready/fire — never on
+  // idempotent same-state re-observations (currentState !== next guards
+  // that) and never on downgrades (DECAY moves state the other direction,
+  // so this only trips going up the ladder).
+  if (_promotionHook && currentState !== next && (next === "ready" || next === "fire")) {
+    try {
+      const result = _promotionHook(merged, apply);
+      if (result && typeof (result as Promise<void>).catch === "function") {
+        (result as Promise<void>).catch((e: Error) =>
+          console.warn("[LL_HR_RADAR_ALERT_HOOK_FAILED]", e.message),
+        );
+      }
+    } catch (e) {
+      console.warn("[LL_HR_RADAR_ALERT_HOOK_FAILED]", (e as Error).message);
+    }
+  }
 
   return { state: merged, apply, created: isCreated };
 }

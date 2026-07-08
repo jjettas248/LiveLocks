@@ -608,6 +608,21 @@ app.use((req, res, next) => {
   // Start MLB live game orchestrator (Phase A — admin-only, fire-and-forget)
   liveOrchestrator.start();
 
+  // ── MLB HR Radar "good play" alerts ───────────────────────────────
+  // Wires a real push dispatch onto HR Radar's canonical lifecycle (the
+  // Ready/Fire board) via its optional promotion hook — additive, never
+  // touches the pure state machine or its persistence layer. Never allowed
+  // to throw past this boundary.
+  (async () => {
+    try {
+      const { setHrRadarPromotionHook } = await import("./mlb/hrRadarCanonicalStore");
+      const { notifyHrRadarPromotion } = await import("./mlb/hrRadarAlertDispatch");
+      setHrRadarPromotionHook(notifyHrRadarPromotion);
+    } catch (e) {
+      console.warn("[LL_HR_RADAR_ALERT_HOOK] wiring failed:", (e as Error).message);
+    }
+  })();
+
   // ── MLB Pre-Game Power Radar — guarded scheduled builds ──────────
   // Additive, confirmed-lineup target radar. NOT a blind all-day cron: an
   // initial slate build runs shortly after boot, then a guarded tick rebuilds
@@ -625,14 +640,31 @@ app.use((req, res, next) => {
       const { installPregamePersistence } = await import(
         "./mlb/pregamePowerRadar/pregamePersistence"
       );
+      const { checkLineupReleaseAlerts } = await import(
+        "./mlb/lineupReleaseAlerts"
+      );
       const { slateDateET } = await import("./utils/dateUtils");
 
       // Wire DB persistence (build sink + DB fallback) before the first build.
       installPregamePersistence();
 
+      // Runs a build and diffs the snapshot before/after so a newly-confirmed
+      // lineup with a top-tier HR candidate fires a "lineups are live" alert.
+      // The alert check is try/catch'd separately so a failure there can
+      // never mask or block the build itself.
+      const runBuildAndCheckLineups = async () => {
+        const prevSnap = getSnapshot();
+        const nextSnap = await buildPregamePowerRadar();
+        try {
+          await checkLineupReleaseAlerts(prevSnap, nextSnap);
+        } catch (e) {
+          console.warn("[LL_LINEUP_ALERT] check failed:", (e as Error).message);
+        }
+      };
+
       // Initial slate build (deferred so rosters/weather can populate first).
       setTimeout(() => {
-        buildPregamePowerRadar().catch((e) =>
+        runBuildAndCheckLineups().catch((e) =>
           console.warn("[PREGAME_POWER_RADAR_BOOT] initial build failed:", e?.message),
         );
       }, 90 * 1000);
@@ -656,7 +688,7 @@ app.use((req, res, next) => {
             }
           }
           if (needInitial || nearFirstPitch) {
-            buildPregamePowerRadar().catch((e) =>
+            runBuildAndCheckLineups().catch((e) =>
               console.warn("[PREGAME_POWER_RADAR_TICK] build failed:", e?.message),
             );
           }
