@@ -224,7 +224,13 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
           gradedAt: signal.status === "graded" ? new Date() : null,
         });
       } catch (err: any) {
-        console.warn(`[PREGAME_POWER_RADAR_GRADED] persist failed ${signal.signalId}:`, err?.message);
+        console.error(`[PREGAME_RADAR_PERSIST_FAILED] ${signal.signalId}`, {
+          sessionDate: signal.sessionDate,
+          gameId: signal.gameId,
+          batterId: signal.batterId,
+          message: err?.message,
+          stack: err?.stack,
+        });
       }
     }
   }

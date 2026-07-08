@@ -50,7 +50,7 @@ export async function loadPregamePowerSignalsByDate(dateET: string): Promise<Pre
     const rows = await storage.getPregamePowerRadarSignalsByDate(dateET);
     return rows.map(rowToSignal);
   } catch (err: any) {
-    console.warn(`[PREGAME_RADAR_STATS_LOAD] failed date=${dateET}:`, err?.message ?? err);
+    console.warn(`[PREGAME_RADAR_STATS_LOAD] failed date=${dateET}:`, err?.message ?? err, err?.stack);
     return [];
   }
 }

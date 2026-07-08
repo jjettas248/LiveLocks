@@ -21,7 +21,7 @@ export function registerPregameRadarStatsRoutes(
       const stats = await getPregameRadarPublicStats(dateET);
       return res.json(stats);
     } catch (err: any) {
-      console.error("[mlb/pregame-radar/record]", err?.message ?? err);
+      console.error("[PREGAME_RADAR_RECORD_ROUTE_FAILED]", err?.message ?? err, err?.stack);
       return res.json({
         dateET: String(req.query.date ?? slateDateET()),
         pregameWinsToday: 0,
@@ -30,6 +30,7 @@ export function registerPregameRadarStatsRoutes(
         firstAbPregameWinsLast7Days: 0,
         flaggedBeforeFirstPitchToday: 0,
         topPregameWinPlayers: [],
+        degraded: true,
       });
     }
   });

@@ -118,6 +118,10 @@ export interface PregameRadarPublicStats {
   firstAbPregameWinsLast7Days: number;
   flaggedBeforeFirstPitchToday: number;
   topPregameWinPlayers: PregameRadarWinItem[];
+  /** True when the server hit an error and returned zeroed fallback stats
+   *  instead of real data — distinguishes "legitimately zero" from "failed
+   *  to load" so clients don't render a false "No wins" state. */
+  degraded?: boolean;
 }
 
 export interface PregameCalibrationBucket {
