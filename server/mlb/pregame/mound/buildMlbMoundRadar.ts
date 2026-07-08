@@ -46,9 +46,11 @@ import { computeWorkload } from "./workload";
 import { computeRunEnvironment } from "./runEnvironment";
 import { computeRecentForm } from "./recentForm";
 import { computeRiskDrivers } from "./riskDrivers";
+import { computeContactRisk } from "./contactRisk";
 import { computeMarketTags } from "./marketTagger";
 import { composeMoundScore } from "./scoring";
-import { projectedStrikeoutsFromKPer9, weightedPlatoonKRate } from "./scoreUtils";
+import { computeMoundDirection } from "./moundDirection";
+import { projectedStrikeoutsFromKPer9, weightedPlatoonKRate, computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMatchupAdjustedStrikeouts } from "./matchupAdjustedKs";
 import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
@@ -271,10 +273,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         }
 
         const pitcherKnown = true; // starter itself is always known here
-        const avgInningsPerStart =
-          seasonStats?.gamesStarted != null && seasonStats.gamesStarted > 0 && seasonStats?.inningsPitched != null
-            ? seasonStats.inningsPitched / seasonStats.gamesStarted
-            : null;
+        const avgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
         // Calls the same shared function as moundOutcomeAttribution.ts's
         // settlement baseline (scoreUtils.ts) — the displayed projection and
         // the number that decides win/loss grading must never be able to
@@ -386,6 +385,19 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           workloadScore: workload.score10,
         });
 
+        // Informational-only, like marketSetups — score10 is NEVER passed
+        // into composeMoundScore/MOUND_COMPONENT_WEIGHTS below, only its
+        // driver chips are folded into signal.drivers.
+        const contactRisk = computeContactRisk({
+          pitcherKnown,
+          opposingLineupConfirmed,
+          hrPer9VsLHB: handSplits?.hrPer9VsLHB ?? null,
+          hrPer9VsRHB: handSplits?.hrPer9VsRHB ?? null,
+          eraVsLHB: handSplits?.eraVsLHB ?? null,
+          eraVsRHB: handSplits?.eraVsRHB ?? null,
+          opposingLineupHandedness: opposingLineupConfirmed ? { left, right, switchHit } : null,
+        });
+
         const drivers: MoundDriver[] = [
           ...pitcherSkill.drivers,
           ...opponentKProfile.drivers,
@@ -393,6 +405,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           ...runEnv.drivers,
           ...recentForm.drivers,
           ...risk.drivers,
+          ...contactRisk.drivers,
         ];
         if (starter) {
           drivers.push({ key: "ctx_confirmed_starter", label: "Confirmed Starter", direction: "positive", weight: 20 });
@@ -429,6 +442,17 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         );
 
         if (opposingLineupConfirmed) confirmedLineupScores.push(scoring.score10);
+
+        // Stamped ONCE, here, at build time — never recomputed at grading
+        // time (moundShadowOutcomes.ts) or on the client. See
+        // moundDirection.ts's discipline comment.
+        const moundDirection = computeMoundDirection({
+          tier: scoring.tier,
+          pitcherSkillScore: pitcherSkill.available ? pitcherSkill.score10 : null,
+          dataCoverageScore: scoring.dataCoverageScore,
+          opposingLineupConfirmed,
+          pitcherSeasonStatsAvailable: seasonStats != null,
+        });
 
         console.log(
           `[MLB_PREGAME_MOUND_SCORE] pitcher=${starter.pitcherId} skill=${pitcherSkill.score10} opp=${opponentKProfile.score10} ` +
@@ -474,6 +498,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           parkContext: runEnv.parkContext,
           score10: scoring.score10,
           tier: scoring.tier,
+          moundDirection,
           drivers,
           warnings,
           tags: [],
@@ -493,6 +518,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           suppressedReasons: scoring.suppressedReasons,
           outcomes: null,
           everPubliclyFlagged: false,
+          everPubliclyFlaggedFade: false,
           becameLiveReady: false,
           becameLiveFire: false,
           convertedLiveAt: null,
@@ -503,6 +529,9 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             runEnvironmentScore: runEnv.available ? runEnv.score10 : null,
             recentFormScore: recentForm.available ? recentForm.score10 : null,
             marketFitScore: 0,
+            contactRiskScore: contactRisk.available ? contactRisk.score10 : null,
+            moundDirection,
+            everPubliclyFlaggedFade: false,
             riskPenalty: risk.riskPenalty,
             appliedDrivers: drivers.filter((d) => d.direction === "positive").map((d) => d.label),
             appliedWarnings: warnings,

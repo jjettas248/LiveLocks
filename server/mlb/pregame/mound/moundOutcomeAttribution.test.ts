@@ -1,7 +1,8 @@
 // Mound Radar — outcome attribution invariants (season-baseline settlement rule).
 // Run: npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts
 
-import { deriveMoundOutcome, buildMoundWinItem, buildDailyMoundWins } from "./moundOutcomeAttribution";
+import { deriveMoundOutcome, buildMoundWinItem, buildMoundFadeWinItem, buildDailyMoundWins } from "./moundOutcomeAttribution";
+import { MOUND_FADE_WIN_LABEL } from "../../../../shared/moundRadarWin";
 import type { MoundSignal } from "./types";
 
 let passed = 0;
@@ -18,6 +19,7 @@ const kWin = deriveMoundOutcome({
   seasonKPer9: 9.0, // baseline = 9.0 * 6/9 = 6.0
   seasonAvgInningsPerStart: null,
   wasPubliclyFlagged: true,
+  moundDirection: "follow",
 });
 ok(kWin.outcome === "mound_win", "8 Ks vs baseline 6.0 → mound_win");
 ok(kWin.userVisible === true, "publicly flagged win → userVisible");
@@ -30,6 +32,7 @@ const kMiss = deriveMoundOutcome({
   seasonKPer9: 9.0,
   seasonAvgInningsPerStart: null,
   wasPubliclyFlagged: true,
+  moundDirection: "follow",
 });
 ok(kMiss.outcome === "mound_calibration_miss", "4 Ks vs baseline 6.0 → calibration_miss");
 ok(kMiss.userVisible === false, "calibration miss is never userVisible");
@@ -42,6 +45,7 @@ const outsWin = deriveMoundOutcome({
   seasonKPer9: null,
   seasonAvgInningsPerStart: 6.0, // baseline = 18 outs
   wasPubliclyFlagged: true,
+  moundDirection: "follow",
 });
 ok(outsWin.outcome === "mound_win", "21 outs vs baseline 18 → mound_win");
 
@@ -53,6 +57,7 @@ const internalWin = deriveMoundOutcome({
   seasonKPer9: 9.0,
   seasonAvgInningsPerStart: null,
   wasPubliclyFlagged: false,
+  moundDirection: "follow",
 });
 ok(internalWin.outcome === "mound_win", "cashed but unflagged → still mound_win");
 ok(internalWin.userVisible === false, "unflagged win is never public");
@@ -65,9 +70,48 @@ const noData = deriveMoundOutcome({
   seasonKPer9: null,
   seasonAvgInningsPerStart: null,
   wasPubliclyFlagged: true,
+  moundDirection: "follow",
 });
 ok(noData.outcome === "mound_calibration_miss", "no data to verify → calibration_miss, never a fabricated win");
 ok(noData.seasonBaselineValue === null, "no season rate → null baseline, not a guessed number");
+
+// ── Fade direction: cashes when actual UNDERSHOOTS the baseline (opposite of Follow) ──
+const fadeWin = deriveMoundOutcome({
+  primaryMarket: "pitcher_strikeouts",
+  finalStrikeouts: 4,
+  finalOutsRecorded: null,
+  seasonKPer9: 9.0, // baseline = 6.0
+  seasonAvgInningsPerStart: null,
+  wasPubliclyFlagged: true,
+  moundDirection: "fade",
+});
+ok(fadeWin.outcome === "mound_fade_win", "Fade + 4 Ks under baseline 6.0 → mound_fade_win");
+ok(fadeWin.userVisible === true, "publicly flagged fade win → userVisible");
+ok(fadeWin.seasonBaselineValue === 6.0, `baseline computed as 6.0 (got ${fadeWin.seasonBaselineValue})`);
+
+// ── Fade direction: the fade call was WRONG (actual met/beat baseline) → never a public loss ──
+const fadeWrong = deriveMoundOutcome({
+  primaryMarket: "pitcher_strikeouts",
+  finalStrikeouts: 8,
+  finalOutsRecorded: null,
+  seasonKPer9: 9.0,
+  seasonAvgInningsPerStart: null,
+  wasPubliclyFlagged: true,
+  moundDirection: "fade",
+});
+ok(fadeWrong.outcome === "mound_calibration_miss", "Fade + 8 Ks over baseline 6.0 (wrong fade call) → calibration_miss, never mound_win");
+
+// ── Fade direction: missing data never fabricates a fade win ────────────────
+const fadeNoData = deriveMoundOutcome({
+  primaryMarket: "pitcher_strikeouts",
+  finalStrikeouts: null,
+  finalOutsRecorded: null,
+  seasonKPer9: null,
+  seasonAvgInningsPerStart: null,
+  wasPubliclyFlagged: true,
+  moundDirection: "fade",
+});
+ok(fadeNoData.outcome === "mound_calibration_miss", "Fade + no data to verify → calibration_miss, never a fabricated fade win");
 
 // ── buildMoundWinItem returns null for non-userVisible outcomes ──────────────
 function baseSignal(overrides: Partial<MoundSignal> = {}): MoundSignal {
@@ -95,6 +139,7 @@ function baseSignal(overrides: Partial<MoundSignal> = {}): MoundSignal {
     parkContext: null,
     score10: 8.0,
     tier: "elite",
+    moundDirection: "follow",
     drivers: [],
     warnings: [],
     tags: [],
@@ -111,6 +156,7 @@ function baseSignal(overrides: Partial<MoundSignal> = {}): MoundSignal {
     suppressedReasons: [],
     outcomes: null,
     everPubliclyFlagged: true,
+    everPubliclyFlaggedFade: false,
     becameLiveReady: false,
     becameLiveFire: false,
     convertedLiveAt: null,
@@ -138,6 +184,22 @@ const s3 = baseSignal({ signalId: "s3", score10: 8.0, outcomes: { outcome: "moun
 const daily = buildDailyMoundWins([s1, s2, s3]);
 ok(daily.moundRadarWins.length === 2, "only the 2 userVisible wins appear");
 ok(daily.moundRadarWins[0].signalId === "s2", "highest score ranked first");
+
+// ── buildMoundFadeWinItem is fully separate from buildMoundWinItem ───────────
+const fadeVisibleWin = baseSignal({
+  moundDirection: "fade", everPubliclyFlaggedFade: true,
+  outcomes: { outcome: "mound_fade_win", userVisible: true },
+});
+ok(buildMoundWinItem(fadeVisibleWin, 1) === null, "a mound_fade_win outcome is never picked up by buildMoundWinItem (Follow-only)");
+const fadeItem = buildMoundFadeWinItem(fadeVisibleWin, 1);
+ok(fadeItem !== null, "userVisible fade win → fade win item built");
+ok(fadeItem?.label === MOUND_FADE_WIN_LABEL, "fade win item uses the distinct MOUND_FADE_WIN_LABEL, never the Follow/Over label");
+
+const followWinNotFade = baseSignal({
+  moundDirection: "follow",
+  outcomes: { outcome: "mound_win", userVisible: true },
+});
+ok(buildMoundFadeWinItem(followWinNotFade, 1) === null, "a mound_win outcome is never picked up by buildMoundFadeWinItem (Fade-only)");
 
 console.log(`\nmoundOutcomeAttribution.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -26,6 +26,11 @@ export function registerMoundRadarStatsRoutes(
         moundWinsLast7Days: 0,
         flaggedBeforeFirstPitchToday: 0,
         topMoundWinPlayers: [],
+        moundFadeWinsToday: 0,
+        fadePropsCashedToday: 0,
+        moundFadeWinsLast7Days: 0,
+        flaggedFadeBeforeFirstPitchToday: 0,
+        topMoundFadeWinPlayers: [],
       });
     }
   });

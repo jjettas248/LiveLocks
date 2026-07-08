@@ -88,6 +88,9 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     parkContext: null,
     score10: typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number),
     tier: r.tier as MoundSignal["tier"],
+    // Read back out of the persisted diagnostics blob (no dedicated column,
+    // stamped once at build time — never re-derived here).
+    moundDirection: (r.diagnostics as MoundSignal["diagnostics"] | null)?.moundDirection ?? null,
     drivers: (r.drivers as MoundSignal["drivers"]) ?? [],
     warnings: (r.warnings as string[]) ?? [],
     tags: [],
@@ -108,6 +111,7 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     becameLiveFire: r.becameLiveFire,
     convertedLiveAt: r.convertedLiveAt ? new Date(r.convertedLiveAt).toISOString() : null,
     diagnostics: r.diagnostics as MoundSignal["diagnostics"],
+    everPubliclyFlaggedFade: (r.diagnostics as MoundSignal["diagnostics"] | null)?.everPubliclyFlaggedFade ?? false,
     // Not persisted (presentation-only, like Plate's marketEdgeContext) —
     // DB-reconstructed signals never have a live odds fetch/projection to
     // restore, so these stay null rather than fabricated.

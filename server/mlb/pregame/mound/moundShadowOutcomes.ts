@@ -14,6 +14,7 @@ import { storage } from "../../../storage";
 import { mlbGameCache } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
 import { deriveMoundOutcome } from "./moundOutcomeAttribution";
+import { computeAvgInningsPerStart } from "./scoreUtils";
 import type { MoundOutcome, MoundSignal } from "./types";
 import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
 
@@ -26,13 +27,22 @@ function resolveMoundOutcome(signal: MoundSignal, seasonKPer9: number | null, se
   const line = box?.byPitcherId?.[signal.pitcherId];
   if (!line) return null;
 
+  // everPubliclyFlagged's underlying predicate (wasPubliclyFlaggedMound)
+  // structurally excludes "track" tier, so a Fade-direction signal must be
+  // checked against its own parallel flag (everPubliclyFlaggedFade) —
+  // otherwise a correct Fade call could never become userVisible.
+  const wasPubliclyFlagged = signal.moundDirection === "fade" ? signal.everPubliclyFlaggedFade : signal.everPubliclyFlagged;
+
   const attribution = deriveMoundOutcome({
     primaryMarket: signal.primaryMarket,
     finalStrikeouts: line.strikeOuts,
     finalOutsRecorded: line.outsRecorded,
     seasonKPer9,
     seasonAvgInningsPerStart,
-    wasPubliclyFlagged: signal.everPubliclyFlagged,
+    wasPubliclyFlagged,
+    // Read as-stamped at build time — never recomputed here (see
+    // moundDirection.ts's discipline comment).
+    moundDirection: signal.moundDirection,
   });
 
   return {
@@ -69,10 +79,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
     // uses current season stats, not a stale build-time snapshot).
     const { mlbPlayerCache } = await import("../../dataPullService");
     const seasonStats = mlbPlayerCache.pitcherSeasonStats[signal.pitcherId] ?? null;
-    const seasonAvgInningsPerStart =
-      seasonStats?.gamesStarted != null && seasonStats.gamesStarted > 0 && seasonStats?.inningsPitched != null
-        ? seasonStats.inningsPitched / seasonStats.gamesStarted
-        : null;
+    const seasonAvgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
 
     const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart);
     if (!outcome) continue;
@@ -142,12 +149,18 @@ export function getMoundCalibrationRecord(): MoundCalibrationRecord {
   let wins = 0;
   let calibrationMisses = 0;
   let internalWins = 0;
+  // Fully separate from wins/internalWins above — never blended.
+  let fadeWins = 0;
+  let internalFadeWins = 0;
 
   for (const s of graded) {
     const o = s.outcomes!;
     if (o.outcome === "mound_win") {
       if (o.userVisible === true) wins++;
       else internalWins++;
+    } else if (o.outcome === "mound_fade_win") {
+      if (o.userVisible === true) fadeWins++;
+      else internalFadeWins++;
     } else if (o.outcome === "mound_calibration_miss") {
       calibrationMisses++;
     }
@@ -159,6 +172,8 @@ export function getMoundCalibrationRecord(): MoundCalibrationRecord {
     wins,
     calibrationMisses,
     internalWins,
+    fadeWins,
+    internalFadeWins,
     totalGraded: graded.length,
     winRate: publicGraded > 0 ? Math.round((wins / publicGraded) * 1000) / 10 : null,
   };

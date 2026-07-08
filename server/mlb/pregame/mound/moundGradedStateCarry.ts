@@ -2,7 +2,7 @@
 // Mirrors pregamePowerRadar/gradedStateCarry.ts's role for pitcher signals.
 
 import type { MoundGameStatus, MoundSignal } from "./types";
-import { wasPubliclyFlaggedMound } from "./diagnostics";
+import { wasPubliclyFlaggedMound, wasPubliclyFlaggedMoundFade } from "./diagnostics";
 
 export function carryForwardMoundGradedState(
   fresh: MoundSignal,
@@ -10,10 +10,14 @@ export function carryForwardMoundGradedState(
 ): MoundSignal {
   if (!prev || prev.sessionDate !== fresh.sessionDate) {
     fresh.everPubliclyFlagged = wasPubliclyFlaggedMound(fresh);
+    fresh.everPubliclyFlaggedFade = wasPubliclyFlaggedMoundFade(fresh);
+    fresh.diagnostics.everPubliclyFlaggedFade = fresh.everPubliclyFlaggedFade;
     return fresh;
   }
 
   fresh.everPubliclyFlagged = wasPubliclyFlaggedMound(fresh) || prev.everPubliclyFlagged === true;
+  fresh.everPubliclyFlaggedFade = wasPubliclyFlaggedMoundFade(fresh) || prev.everPubliclyFlaggedFade === true;
+  fresh.diagnostics.everPubliclyFlaggedFade = fresh.everPubliclyFlaggedFade;
   if (prev.outcomes && !fresh.outcomes) {
     fresh.outcomes = prev.outcomes;
     if (prev.status === "graded") fresh.status = "graded";

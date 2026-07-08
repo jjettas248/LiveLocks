@@ -28,6 +28,24 @@ export function wasPubliclyFlaggedMound(signal: MoundSignal): boolean {
   );
 }
 
+/**
+ * Fade-track analog of wasPubliclyFlaggedMound — that predicate's tierEligible
+ * check (strong/elite/nuclear only) structurally excludes "track" tier, so a
+ * Fade Candidate signal can never satisfy it. "Was this shown as a Fade
+ * Candidate before first pitch?" is exactly the same condition that gates the
+ * "Fade Candidate" badge everywhere else (moundDirection === "fade"), plus
+ * the same non-suppressed/non-official/pregame-target guards
+ * wasPubliclyFlaggedMound applies.
+ */
+export function wasPubliclyFlaggedMoundFade(signal: MoundSignal): boolean {
+  return (
+    signal.moundDirection === "fade" &&
+    signal.isOfficialPlay === false &&
+    signal.isPregameTarget === true &&
+    !signal.suppressed
+  );
+}
+
 /** Final public-visibility predicate. Mirrors isPublicPregameSignal's structure. */
 export function isPublicMoundSignal(signal: MoundSignal): boolean {
   const flaggedNow = wasPubliclyFlaggedMound(signal);

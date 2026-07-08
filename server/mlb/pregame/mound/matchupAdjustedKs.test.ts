@@ -13,6 +13,7 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { computeMatchupAdjustedStrikeouts, type MatchupAdjustedKsInputs } from "./matchupAdjustedKs";
+import { computeAvgInningsPerStart } from "./scoreUtils";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -140,6 +141,27 @@ const maxedOut = computeMatchupAdjustedStrikeouts(
   }),
 );
 ok((maxedOut ?? 0) <= 6.0 * 1.4 + 0.05, `stacking every favorable modifier still respects the overall clamp (got ${maxedOut})`);
+
+// ── Regression: swingman/call-up with relief innings inflating raw IP/GS ────
+// 20 relief IP + 12 start IP over 2 starts = 32 total IP / 2 GS = 16.0 raw
+// avgInningsPerStart (real per-start average ~6). Unclamped, this used to
+// blow past matchupAdjustedKs.ts's OWN clamp band (base*1.4) because the
+// clamp is self-referential against an already-wrong base — with
+// blendedKPer9≈9.15 (Projected Ks 6.1) and raw avgInningsPerStart≈27.5, base
+// ≈ 27.5 and base*1.4 ≈ 38.5, matching the observed real-world outlier
+// (Matchup Adj. Ks 37.7 for a Projected Ks 6.1 pitcher) almost exactly.
+const swingmanRaw = computeAvgInningsPerStart(2, 32);
+ok(swingmanRaw !== null && swingmanRaw <= 8.0, `swingman raw ratio (16.0) is clamped to the realistic band (got ${swingmanRaw})`);
+
+const extremeSwingmanRaw = computeAvgInningsPerStart(1, 27.5);
+ok(extremeSwingmanRaw !== null && extremeSwingmanRaw <= 8.0, `extreme swingman raw ratio (27.5) is clamped to the realistic band (got ${extremeSwingmanRaw})`);
+
+const swingmanProjection = computeMatchupAdjustedStrikeouts(
+  baseInputs({ kPer9: 9.15, avgInningsPerStart: swingmanRaw }),
+);
+// With the clamp, base ≈ (9.15*8.0)/9 ≈ 8.13, so even the widest overall
+// multiplier (1.4x) tops out ≈ 11.4 — nowhere near the observed 37.7-class outlier.
+ok((swingmanProjection ?? 0) < 15, `swingman scenario no longer produces an outlier projection (got ${swingmanProjection})`);
 
 // ── Isolation guarantee: moundOutcomeAttribution.ts never references this module ──
 const attributionSrc = readFileSync(join(HERE, "moundOutcomeAttribution.ts"), "utf8");

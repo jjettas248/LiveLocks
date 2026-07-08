@@ -17,10 +17,14 @@
 // structure for pitcher signals — no shared code.
 
 import type { MoundDriver, MoundSignal } from "./types";
+import type { MoundDirection } from "./moundDirection";
 import {
   type MoundRadarWinItem,
+  type MoundOutcomeType,
   MOUND_WIN_LABEL,
   MOUND_WIN_COPY,
+  MOUND_FADE_WIN_LABEL,
+  MOUND_FADE_WIN_COPY,
 } from "../../../../shared/moundRadarWin";
 import { formatPlainDateLabel } from "../../../../shared/dateLabel";
 import { toEtDateKey, toEtTimeLabel } from "../../../utils/dateUtils";
@@ -33,10 +37,12 @@ export interface MoundOutcomeAttributionInput {
   seasonKPer9: number | null;
   seasonAvgInningsPerStart: number | null;
   wasPubliclyFlagged: boolean;
+  /** Direction stamped at build time (moundDirection.ts) — read as-is, never recomputed here. "follow"/null keeps the original Over-only rule unchanged; "fade" flips the comparison. */
+  moundDirection: MoundDirection;
 }
 
 export interface MoundOutcomeAttributionResult {
-  outcome: "mound_win" | "mound_calibration_miss";
+  outcome: MoundOutcomeType;
   userVisible: boolean;
   seasonBaselineValue: number | null;
 }
@@ -57,11 +63,22 @@ export function deriveMoundOutcome(input: MoundOutcomeAttributionInput): MoundOu
     return { outcome: "mound_calibration_miss", userVisible: false, seasonBaselineValue: baseline };
   }
 
-  const cashed = actual >= baseline;
-  if (!cashed) {
-    return { outcome: "mound_calibration_miss", userVisible: false, seasonBaselineValue: baseline };
+  const clearedOver = actual >= baseline;
+
+  if (input.moundDirection === "fade") {
+    // Fade recommendation is correct when the pitcher UNDERSHOOTS the
+    // baseline — the opposite comparison from the Follow/Over rule below.
+    const fadeCashed = !clearedOver;
+    if (!fadeCashed) {
+      return { outcome: "mound_calibration_miss", userVisible: false, seasonBaselineValue: baseline };
+    }
+    return { outcome: "mound_fade_win", userVisible: input.wasPubliclyFlagged === true, seasonBaselineValue: baseline };
   }
 
+  // Follow (or no direction) — unchanged Over-only rule.
+  if (!clearedOver) {
+    return { outcome: "mound_calibration_miss", userVisible: false, seasonBaselineValue: baseline };
+  }
   return { outcome: "mound_win", userVisible: input.wasPubliclyFlagged === true, seasonBaselineValue: baseline };
 }
 
@@ -78,13 +95,14 @@ function resolveSlateDateET(signal: MoundSignal): string {
   return signal.gameDate;
 }
 
-/**
- * Map a graded, won mound signal to a public daily-log row. Returns null when
- * the signal is not a userVisible win.
- */
-export function buildMoundWinItem(signal: MoundSignal, rank: number | null): MoundRadarWinItem | null {
+/** Shared builder for both outcome kinds — only the wanted outcome type and label/copy differ. */
+function moundWinItemForOutcome(
+  signal: MoundSignal,
+  rank: number | null,
+  wantOutcome: "mound_win" | "mound_fade_win",
+): MoundRadarWinItem | null {
   const o = signal.outcomes;
-  if (!o || o.outcome !== "mound_win" || o.userVisible !== true) return null;
+  if (!o || o.outcome !== wantOutcome || o.userVisible !== true) return null;
 
   const slateDateET = resolveSlateDateET(signal);
   return {
@@ -109,9 +127,40 @@ export function buildMoundWinItem(signal: MoundSignal, rank: number | null): Mou
     displayDateLabel: formatPlainDateLabel(slateDateET),
     gameStartTimeET: signal.startsAt ? toEtTimeLabel(signal.startsAt) : null,
     detectedBeforeFirstPitch: true,
-    label: MOUND_WIN_LABEL,
-    cardCopy: MOUND_WIN_COPY,
+    label: wantOutcome === "mound_win" ? MOUND_WIN_LABEL : MOUND_FADE_WIN_LABEL,
+    cardCopy: wantOutcome === "mound_win" ? MOUND_WIN_COPY : MOUND_FADE_WIN_COPY,
   };
+}
+
+/**
+ * Map a graded, won (Follow/Over) mound signal to a public daily-log row.
+ * Returns null when the signal is not a userVisible mound_win.
+ */
+export function buildMoundWinItem(signal: MoundSignal, rank: number | null): MoundRadarWinItem | null {
+  return moundWinItemForOutcome(signal, rank, "mound_win");
+}
+
+/**
+ * Map a graded, cashed Fade (Under) mound signal to a public daily-log row —
+ * fully separate from buildMoundWinItem, never blended into the same list.
+ * Returns null when the signal is not a userVisible mound_fade_win.
+ */
+export function buildMoundFadeWinItem(signal: MoundSignal, rank: number | null): MoundRadarWinItem | null {
+  return moundWinItemForOutcome(signal, rank, "mound_fade_win");
+}
+
+function rankedList(signals: MoundSignal[], wantOutcome: "mound_win" | "mound_fade_win"): MoundRadarWinItem[] {
+  const flagged = signals
+    .filter((s) => s.outcomes?.outcome === wantOutcome && s.outcomes?.userVisible === true)
+    .slice()
+    .sort((a, b) => b.score10 - a.score10);
+
+  const rankBySignalId = new Map<string, number>();
+  flagged.forEach((s, i) => rankBySignalId.set(s.signalId, i + 1));
+
+  return flagged
+    .map((s) => moundWinItemForOutcome(s, rankBySignalId.get(s.signalId) ?? null, wantOutcome))
+    .filter((w): w is MoundRadarWinItem => w != null);
 }
 
 /**
@@ -121,17 +170,12 @@ export function buildMoundWinItem(signal: MoundSignal, rank: number | null): Mou
 export function buildDailyMoundWins(signals: MoundSignal[]): {
   moundRadarWins: MoundRadarWinItem[];
 } {
-  const flagged = signals
-    .filter((s) => s.outcomes?.outcome === "mound_win" && s.outcomes?.userVisible === true)
-    .slice()
-    .sort((a, b) => b.score10 - a.score10);
+  return { moundRadarWins: rankedList(signals, "mound_win") };
+}
 
-  const rankBySignalId = new Map<string, number>();
-  flagged.forEach((s, i) => rankBySignalId.set(s.signalId, i + 1));
-
-  const wins = flagged
-    .map((s) => buildMoundWinItem(s, rankBySignalId.get(s.signalId) ?? null))
-    .filter((w): w is MoundRadarWinItem => w != null);
-
-  return { moundRadarWins: wins };
+/** Fully separate Fade-win daily list — mirrors buildDailyMoundWins, never merged with it. */
+export function buildDailyMoundFadeWins(signals: MoundSignal[]): {
+  moundRadarFadeWins: MoundRadarWinItem[];
+} {
+  return { moundRadarFadeWins: rankedList(signals, "mound_fade_win") };
 }
