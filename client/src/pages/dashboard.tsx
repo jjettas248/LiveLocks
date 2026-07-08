@@ -2193,21 +2193,6 @@ export default function Dashboard() {
                   </>
                 );
               }
-              // Goldmaster — hide cross-sport "Top Picks / Live Signals"
-              // panel from the standard paid-user dashboard surface (per user
-              // spec: "guard behind admin/debug flag only"). Admin users
-              // keep the panel as an internal diagnostic surface; an env
-              // flag also opts any environment back in. Free + trial users
-              // are unaffected (handled by branches above).
-              const SHOW_LEGACY_GLOBAL_SIGNALS =
-                import.meta.env.VITE_SHOW_LEGACY_GLOBAL_SIGNALS === "true" ||
-                !!user?.isAdmin;
-              if (!SHOW_LEGACY_GLOBAL_SIGNALS) {
-                // Paid (non-admin) users do not see the conversion card and
-                // do not see the negative recent-results feed. Graded
-                // history remains accessible in Analytics for admins only.
-                return null;
-              }
               return (
                 <TopPlaysPanel
                   isElite={!!user?.hasMLB || !!user?.isAdmin}
