@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { getAuthToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Sparkles, Target, Link2, Filter } from "lucide-react";
+import { Loader2, Sparkles, Target, Link2, Filter, Flame } from "lucide-react";
 import { HrBoardAssetCard } from "./HrBoardAssetCard";
 import { HrMovementFeed } from "./HrMovementFeed";
 import { HrBoardRecapPanel } from "./HrBoardRecapPanel";
@@ -15,6 +15,7 @@ import {
   type HrBoardAsset,
   type HrBoardAssetType,
   type HrBoardContentPack,
+  type HrBoardRow,
   type HrBoardTodayResponse,
   type HrMovementFeedResponse,
   type HrRecapResponse,
@@ -146,6 +147,15 @@ export function HrBoardStudio() {
   const analyticsQ = useQuery<HrBoardAnalyticsSummary>({
     queryKey: ["/api/admin/hr-board-studio/analytics"],
     queryFn: () => getJson<HrBoardAnalyticsSummary>("/api/admin/hr-board-studio/analytics"),
+    refetchInterval: 30_000,
+  });
+
+  const liveBestContactsQ = useQuery<{ date: string; generatedAt: string; rows: HrBoardRow[] }>({
+    queryKey: ["/api/admin/hr-board-studio/live-best-contacts"],
+    queryFn: () =>
+      getJson<{ date: string; generatedAt: string; rows: HrBoardRow[] }>(
+        "/api/admin/hr-board-studio/live-best-contacts",
+      ),
     refetchInterval: 30_000,
   });
 
@@ -341,6 +351,41 @@ export function HrBoardStudio() {
         isFetching={movementQ.isFetching}
         onRefresh={() => movementQ.refetch()}
       />
+
+      {/* ── Live Best Contacts ────────────────────────────────────────────── */}
+      <Card data-testid="live-best-contacts-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Flame className="h-4 w-4 text-primary" /> Live Best Contacts
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {liveBestContactsQ.isLoading ? (
+            <div className="text-xs text-muted-foreground">Loading…</div>
+          ) : (liveBestContactsQ.data?.rows.length ?? 0) === 0 ? (
+            <div className="text-xs text-muted-foreground">
+              No live Attack/Playable signals yet today.
+            </div>
+          ) : (
+            <div className="space-y-1.5" data-testid="live-best-contacts-list">
+              {liveBestContactsQ.data!.rows.map((r) => (
+                <div
+                  key={r.signalId}
+                  className="flex items-center justify-between gap-2 text-xs px-2 py-1.5 rounded-md bg-muted/30"
+                  data-testid={`row-live-best-contact-${r.playerId}`}
+                >
+                  <span className="font-medium">
+                    {r.rank}. {r.player} <span className="text-muted-foreground">({r.team})</span>
+                  </span>
+                  <span className="text-muted-foreground">
+                    {r.stage} · {r.score.toFixed(1)}/10
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ── Recap ─────────────────────────────────────────────────────────── */}
       <HrBoardRecapPanel

@@ -12,6 +12,7 @@ import { hrTierTheme, tierFromPlayabilityStatus } from "@/components/mlb/hrRadar
 import { PregameHub } from "@/components/mlb/pregame/PregameHub";
 import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
+import { HrRadarBestContactsSpotlight } from "@/components/mlb/hr-radar/HrRadarBestContactsSpotlight";
 import { type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import { MlbSlateRibbon } from "@/components/mlb/MlbSlateRibbon";
 import type { MLBSignal } from "@shared/mlbSignal";
@@ -987,6 +988,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
 
       {activeSubTab === "hr_radar" && (
         <div className="space-y-4">
+          <HrRadarBestContactsSpotlight />
           {/* Quick Decide / Full Ladder toggle */}
           <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border/50">
             <button

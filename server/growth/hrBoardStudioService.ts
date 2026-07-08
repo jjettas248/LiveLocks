@@ -13,6 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { todayET } from "../utils/dateUtils";
+import { storage } from "../storage";
 import {
   peekRadarSnapshot,
   getRadarSnapshot,
@@ -28,10 +29,13 @@ import {
   buildContentPack,
   buildMovementFeed,
   buildRecap,
+  buildLiveBestContactsRows,
   type ContentPackOptions,
+  type LiveHrRadarEntry,
 } from "./hrBoardStudioCore";
 import type {
   HrBoardContentPack,
+  HrBoardRow,
   HrBoardTodayResponse,
   HrMovementRow,
   HrRecapResponse,
@@ -68,6 +72,38 @@ function gatherStatesForDate(date: string): CanonicalHrRadarState[] {
   return getAllCanonicalHrRadarStates().filter(
     (s) => s.sessionDate == null || s.sessionDate === date,
   );
+}
+
+/** Live HR Radar Attack/Ready entries for `date`, mapped to the shared candidate shape. */
+async function gatherLiveLadderEntries(date: string): Promise<LiveHrRadarEntry[]> {
+  const ladder = await storage.getHrRadarLadder(date);
+  const live = [...ladder.sections.attackNow, ...(ladder.sections.ready ?? [])];
+  return live
+    .filter((e) => e.isGameFinal !== true)
+    .map((e) => ({
+      playerId: e.playerId,
+      gameId: e.gameId,
+      playerName: e.playerName,
+      team: e.team ?? null,
+      userStage: e.userStage ?? null,
+      currentReadinessScore: e.currentReadinessScore ?? null,
+      confidenceTier: e.confidenceTier ?? null,
+      headlineReason: e.headlineReason ?? null,
+      userReasons: e.userReasons,
+    }));
+}
+
+/** GET /live-best-contacts — today's top live Attack/Ready signals, ranked by composite score. */
+export async function getLiveBestContacts(
+  limit = 5,
+): Promise<{ date: string; generatedAt: string; rows: HrBoardRow[] }> {
+  const date = todayET();
+  const entries = await gatherLiveLadderEntries(date);
+  return {
+    date,
+    generatedAt: new Date().toISOString(),
+    rows: buildLiveBestContactsRows(entries, limit),
+  };
 }
 
 /** GET /today — ranked board rows for today's slate. */
@@ -110,7 +146,9 @@ export async function generateContentPack(opts: ContentPackOptions): Promise<HrB
   const rows = buildBoardRows(signals);
   const states = gatherStatesForDate(date);
   const movements = buildMovementFeed(rows, states);
-  return buildContentPack(date, rows, movements, opts);
+  const liveEntries = await gatherLiveLadderEntries(date);
+  const liveRows = buildLiveBestContactsRows(liveEntries);
+  return buildContentPack(date, rows, movements, opts, liveRows);
 }
 
 /** POST /generate-recap — recap assets for `date` (defaults to today). */

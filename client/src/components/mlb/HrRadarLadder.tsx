@@ -1573,7 +1573,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
   // throws "Rendered more hooks than during the previous render").
   const queryClient = useQueryClient();
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [hideFinished, setHideFinished] = useState(false);
+  const [hideFinished, setHideFinished] = useState(true);
   // Open diagnostic drawer (compact-table row click). Must sit with the other
   // hooks, above any early return, to keep the hook order stable.
   const [drawerRow, setDrawerRow] = useState<HrRadarCardViewModel | null>(null);
@@ -1798,7 +1798,11 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
     dead: sections.dead.length,
     // Phase 6 — `noAbYet` not surfaced in the public counts shape (the
     // header summary displayed to users only counts actionable sections).
-    total: sections.attackNow.length + sections.ready.length + sections.building.length + sections.watch.length + sections.cashed.length + sections.dead.length,
+    // `total` is LIVE-ONLY (excludes cashed/dead history) — it's the number
+    // that drives the "N live" header, the summary-bar visibility gate, and
+    // (via tableRows.length elsewhere) matches what's actually shown by
+    // default. Cashed/missed stay visible via their own dedicated pills.
+    total: sections.attackNow.length + sections.ready.length + sections.building.length + sections.watch.length,
   };
 
   // Phase 6 — `noAbYet` slots between the active live tiers and resolved
@@ -1857,7 +1861,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <span data-testid="text-ladder-total" title="Live HR Radar signals this session.">
-            {counts.attackNow + counts.ready + counts.building + counts.watch} live
+            {counts.total} live
             {counts.cashed > 0 && <span className="text-emerald-400/80"> · {counts.cashed} cashed</span>}
           </span>
           <Button
@@ -1891,7 +1895,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
       <HrRadarRecordBanner />
       {/* Section count summary — sticky so the radar state is always visible
           while scrolling through the sections. Only shows non-zero counts. */}
-      {counts.total > 0 && (
+      {tableRows.length > 0 && (
         <div
           className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm pb-1"
           data-testid="ladder-summary-bar-wrapper"
@@ -1971,7 +1975,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           topPriorityId={topPriority?.id ?? null}
         />
       )}
-      {counts.total === 0 && (
+      {tableRows.length === 0 && (
         <Card className="p-6 text-center" data-testid="ladder-empty-state">
           <div className="text-sm text-muted-foreground">
             No HR radar activity yet for this session.

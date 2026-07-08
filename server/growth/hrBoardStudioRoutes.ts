@@ -13,6 +13,7 @@ import {
   getMovementFeed,
   generateContentPack,
   generateRecap,
+  getLiveBestContacts,
 } from "./hrBoardStudioService";
 import {
   recordHrBoardEvent,
@@ -72,6 +73,19 @@ export function registerHrBoardStudioRoutes(app: Express): void {
     } catch (err: any) {
       console.error("[admin/hr-board-studio/movement-feed]", err?.message ?? err);
       return res.status(500).json({ error: "Failed to load movement feed" });
+    }
+  });
+
+  // GET today's live Best Contacts (top Attack/Ready HR Radar signals, ranked by score).
+  app.get("/api/admin/hr-board-studio/live-best-contacts", requireAdmin, async (req, res) => {
+    try {
+      const parsedLimit = parseInt(String(req.query.limit ?? "5"), 10);
+      const limit = Math.max(1, Math.min(10, Number.isFinite(parsedLimit) ? parsedLimit : 5));
+      const payload = await getLiveBestContacts(limit);
+      return res.json(payload);
+    } catch (err: any) {
+      console.error("[admin/hr-board-studio/live-best-contacts]", err?.message ?? err);
+      return res.status(500).json({ error: "Failed to load live best contacts" });
     }
   });
 

@@ -13,6 +13,7 @@ import { getHrRadarOutcomeStamp } from "../mlb/hrRadarOutcomeStamp";
 import { CALLED_HIT_OUTCOME_STATUSES } from "../mlb/hrRadarSection";
 import type { CanonicalHrRadarState } from "../mlb/hrRadarCanonicalStore";
 import type { PregamePowerSignal, PregamePowerTier } from "../mlb/pregamePowerRadar/types";
+import { selectBestContacts, type BestContactCandidate } from "../../shared/hrRadarBestContacts";
 import { applyCompliance } from "./hrBoardCompliance";
 import {
   HR_BOARD_BRAND_HANDLE,
@@ -107,6 +108,7 @@ const HASHTAG_BANK: Record<HrBoardAssetType, string[]> = {
   cashed_proof: ["#MLB", "#Receipts", "#TrackRecord", "#HomeRun", "#HRRadar"],
   near_miss_transparency: ["#MLB", "#Transparency", "#HRRadar", "#MLBTwitter"],
   postgame_recap: ["#MLB", "#Recap", "#TrackRecord", "#Receipts", "#HomeRun"],
+  live_best_contacts: ["#MLB", "#HRRadar", "#Dinger", "#LiveBaseball", "#PropBets"],
 };
 
 /** Always-on platform cashtags appended after any team cashtags. */
@@ -244,6 +246,47 @@ export function buildBoardRows(signals: PregamePowerSignal[]): HrBoardRow[] {
     parkTags: parkTagsFor(s),
     pitcherVulnerabilityTags: pitcherVulnTagsFor(s),
   }));
+}
+
+/** A live HR Radar entry (Attack/Ready tier) eligible for the Best Contacts pick. */
+export interface LiveHrRadarEntry extends BestContactCandidate {
+  headlineReason?: string | null;
+  userReasons?: string[];
+}
+
+/**
+ * Rank live HR Radar Attack/Ready entries and convert the top N into the
+ * shared HrBoardRow shape so the existing asset builders (makeAsset,
+ * toImageRows) work unchanged. PURE — selection only, no scoring, reads
+ * server-stamped fields verbatim (selectBestContacts does the ranking).
+ */
+export function buildLiveBestContactsRows(entries: LiveHrRadarEntry[], limit = 5): HrBoardRow[] {
+  const picked = selectBestContacts(entries, limit);
+  return picked.map((e, i) => {
+    const drivers = e.userReasons && e.userReasons.length > 0
+      ? e.userReasons.slice(0, 4)
+      : e.headlineReason
+        ? [e.headlineReason]
+        : [];
+    return {
+      rank: i + 1,
+      signalId: `${e.gameId}_${e.playerId}`,
+      playerId: e.playerId,
+      player: e.playerName,
+      team: e.team ?? "",
+      opponent: "",
+      game: "",
+      gameId: e.gameId,
+      gameTime: null,
+      score: round1((e.currentReadinessScore ?? 0) / 10) ?? 0,
+      stage: e.userStage === "fire" ? "Attack" : "Playable",
+      tier: e.userStage === "fire" ? "nuclear" : "elite",
+      drivers,
+      tags: [],
+      parkTags: [],
+      pitcherVulnerabilityTags: [],
+    };
+  });
 }
 
 // ── Movement feed ─────────────────────────────────────────────────────────────
@@ -418,6 +461,7 @@ export function buildContentPack(
   rows: HrBoardRow[],
   movements: HrMovementRow[],
   opts: ContentPackOptions = {},
+  liveRows: HrBoardRow[] = [],
 ): HrBoardContentPack {
   const includeLink = opts.includeLink === true;
   const link = opts.link ?? null;
@@ -636,6 +680,47 @@ export function buildContentPack(
         sourceSignalIds: hot.map((m) => m.signalId),
         ctaVariant: "follow_for_movement",
         teams: hot.map((m) => m.team),
+        includeLink,
+        link,
+      }),
+    );
+  }
+
+  // N. Live Best Contacts — top live Attack/Ready signals, ranked by the
+  // engine's own composite score. Only posted when at least one live signal
+  // exists (e.g. omitted entirely before first pitch) rather than posting an
+  // empty asset.
+  if (liveRows.length > 0) {
+    const header = pick(
+      [
+        "Best Contacts Today 🔥",
+        "Today's best live HR contacts 🎯",
+        "Live board — best contacts right now 💣",
+      ],
+      `live_best_contacts:${date}`,
+    );
+    const lines = liveRows
+      .map((r) => `${r.rank}. ${r.player} (${r.team}) — ${r.stage} · ${r.score.toFixed(1)}/10`)
+      .join("\n");
+    assets.push(
+      makeAsset({
+        assetType: "live_best_contacts",
+        title: `Best Contacts Today — ${date}`,
+        rawBody: `${header}\n\n${lines}`,
+        imagePayload: {
+          template: "movement",
+          title: "Best Contacts Today",
+          subtitle: date,
+          rows: toImageRows(liveRows),
+          footer: "Live Attack/Playable signals · 0–10 scale",
+          brand: BRAND,
+          accent: "Best Contacts",
+        },
+        recommendedTiming: "Live, as signals reach Playable/Attack",
+        sourcePlayerIds: liveRows.map((r) => r.playerId),
+        sourceSignalIds: liveRows.map((r) => r.signalId),
+        ctaVariant: "follow_for_movement",
+        teams: liveRows.map((r) => r.team),
         includeLink,
         link,
       }),
