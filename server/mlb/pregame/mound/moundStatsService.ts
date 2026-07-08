@@ -6,7 +6,8 @@
 // pregamePowerRadar/statsService.ts's role for pitcher signals.
 
 import { storage } from "../../../storage";
-import { slateDateET, daysAgoET } from "../../../utils/dateUtils";
+import { slateDateET } from "../../../utils/dateUtils";
+import { slateDaysAgoET } from "../../../../shared/slateDate";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
 import { rowToSignal } from "./moundPersistence";
 import { getMoundRadarSnapshot } from "./mlbMoundRadarService";
@@ -35,7 +36,11 @@ function uniqueBySignalId(signals: MoundSignal[]): MoundSignal[] {
 
 function datesBack(count: number): string[] {
   const n = Math.max(1, Math.min(60, Math.floor(count)));
-  return Array.from({ length: n }, (_, i) => daysAgoET(i));
+  // slateDaysAgoET (6am-ET slate rollover), not a plain midnight-ET calendar
+  // walk — see pregamePowerRadar/statsService.ts's twin fix for the full
+  // rationale (mismatched with sessionDate, silently drops the oldest real
+  // day out of the window during the 12am-6am ET window nightly).
+  return Array.from({ length: n }, (_, i) => slateDaysAgoET(i));
 }
 
 export async function loadMoundSignalsByDate(dateET: string): Promise<MoundSignal[]> {

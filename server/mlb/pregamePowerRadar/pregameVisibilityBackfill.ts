@@ -39,7 +39,8 @@
 // ROI / official W-L.
 
 import { storage } from "../../storage";
-import { slateDateET, daysAgoET } from "../../utils/dateUtils";
+import { slateDateET } from "../../utils/dateUtils";
+import { slateDaysAgoET } from "../../../shared/slateDate";
 import { buildPregamePowerRadar } from "./buildPregamePowerRadar";
 import { getSnapshot } from "./pregamePowerRadarStore";
 import { signalToRow, rowToSignal } from "./pregamePersistence";
@@ -172,7 +173,10 @@ export async function backfillPregameWinVisibilityRange(
   };
 
   for (let i = 0; i < clampedDays; i++) {
-    const dateET = daysAgoET(i);
+    // slateDaysAgoET (6am-ET slate rollover) — matches the sessionDate every
+    // signal is stamped with. A plain midnight-ET walk here would scan the
+    // wrong slate day during the 12am-6am ET window this sweep runs in.
+    const dateET = slateDaysAgoET(i);
     try {
       const result = await backfillPregameWinVisibility(dateET);
       total.scanned += result.scanned;
@@ -184,11 +188,12 @@ export async function backfillPregameWinVisibilityRange(
     }
   }
 
-  if (total.corrected > 0) {
-    console.log(
-      `[PREGAME_RADAR_VISIBILITY_BACKFILL] range complete dates=${total.datesScanned} scanned=${total.scanned} corrected=${total.corrected}`,
-    );
-  }
+  // Unconditional summary — previously only logged when corrected>0, which
+  // made "ran successfully, nothing to fix" indistinguishable from "silently
+  // never fired" in production logs.
+  console.log(
+    `[PREGAME_RADAR_VISIBILITY_BACKFILL] range complete dates=${total.datesScanned} scanned=${total.scanned} corrected=${total.corrected}`,
+  );
 
   return total;
 }

@@ -147,6 +147,20 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
   try {
     const games = await discoverTodaysGames();
 
+    // Defense-in-depth: discoverTodaysGames() now throws on a failed fetch
+    // instead of returning [] (see gameDiscoveryService.ts), so this branch
+    // should be unreachable in practice — but if some other/future path ever
+    // returns a legitimately-empty-but-not-thrown result while today's board
+    // already has real signals in memory, refuse to wipe it. A true off-day
+    // (no prior signals to protect) still proceeds and builds an empty board.
+    if (games.length === 0 && prevSignals && prevSignals.size > 0) {
+      console.warn(
+        `[MLB_PREGAME_MOUND_EMPTY_DISCOVERY] buildId=${buildId} date=${sessionDate} discovery returned 0 games with ${prevSignals.size} prior signals in memory — preserving existing snapshot`,
+      );
+      isMoundRadarBuildRunning = false;
+      return prevSnapshot;
+    }
+
     for (const game of games) {
       gamesScanned++;
       const gameStatus = mapGameStatus(game.espnStatus);

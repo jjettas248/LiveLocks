@@ -250,8 +250,12 @@ export async function discoverTodaysGames(): Promise<MLBGame[]> {
     ]);
 
     if (!espnRes.ok) {
-      console.error(`[MLB DISCOVERY] HTTP ${espnRes.status} from ESPN scoreboard API`);
-      return [];
+      // Do NOT return [] here — see the catch block below for why: an empty
+      // array is indistinguishable from a real off-day and silently wipes
+      // downstream state (pollGames' registry, Pregame/Mound Radar's
+      // in-memory board). Throw so callers' own try/catch can log it and
+      // leave their state untouched, exactly like the network-exception path.
+      throw new Error(`[MLB DISCOVERY] HTTP ${espnRes.status} from ESPN scoreboard API`);
     }
 
     const data = (await espnRes.json()) as {

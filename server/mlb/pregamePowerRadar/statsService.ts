@@ -5,7 +5,8 @@
 // empty slice so stats can never break runtime or settlement.
 
 import { storage } from "../../storage";
-import { slateDateET, daysAgoET } from "../../utils/dateUtils";
+import { slateDateET } from "../../utils/dateUtils";
+import { slateDaysAgoET } from "../../../shared/slateDate";
 import { getSnapshot } from "./pregamePowerRadarStore";
 import { rowToSignal } from "./pregamePersistence";
 import { getRadarSnapshot } from "./pregamePowerRadarService";
@@ -42,7 +43,11 @@ function uniqueBySignalId(signals: PregamePowerSignal[]): PregamePowerSignal[] {
 
 function datesBack(count: number): string[] {
   const n = Math.max(1, Math.min(60, Math.floor(count)));
-  return Array.from({ length: n }, (_, i) => daysAgoET(i));
+  // slateDaysAgoET (6am-ET slate rollover), not a plain midnight-ET calendar
+  // walk — every signal's sessionDate is stamped with the slate day, so a
+  // midnight walk drifted from it and silently dropped the oldest real day
+  // out of the 7-day window during the 12am-6am ET window nightly.
+  return Array.from({ length: n }, (_, i) => slateDaysAgoET(i));
 }
 
 export async function loadPregamePowerSignalsByDate(dateET: string): Promise<PregamePowerSignal[]> {
