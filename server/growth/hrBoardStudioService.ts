@@ -98,13 +98,36 @@ function computeFinalGameIds(): Set<string> {
   return finalGameIds;
 }
 
+/**
+ * Overlay fresher canonical (in-memory) HR Radar state onto the DB ladder —
+ * the same freshness overlay the public `/api/mlb/hr-radar/ladder` route
+ * applies, so a signal just promoted to FIRE/READY in the canonical store
+ * isn't invisible to this admin path during the ~20s DB reconcile lag. Best-
+ * effort: on failure, callers just get the DB ladder as-is.
+ */
+async function applyFreshnessOverlay(ladder: Awaited<ReturnType<typeof storage.getHrRadarLadder>>): Promise<void> {
+  try {
+    const { applyCanonicalFreshnessOverlay } = await import("../mlb/hrRadarFreshnessOverlay");
+    const { getActiveCanonicalHrRadarStates } = await import("../mlb/hrRadarCanonicalStore");
+    applyCanonicalFreshnessOverlay(ladder as any, getActiveCanonicalHrRadarStates(), Date.now());
+  } catch {
+    // best-effort — serve the DB ladder as-is.
+  }
+}
+
 /** Live HR Radar Attack/Ready entries for `date`, mapped to the shared candidate shape. */
 async function gatherLiveLadderEntries(date: string): Promise<LiveHrRadarEntry[]> {
   const ladder = await storage.getHrRadarLadder(date);
+  await applyFreshnessOverlay(ladder);
   const finalGameIds = computeFinalGameIds();
   const live = [...ladder.sections.attackNow, ...(ladder.sections.ready ?? [])];
   return live
-    .filter((e) => e.isGameFinal !== true && !finalGameIds.has(e.gameId))
+    .filter(
+      (e) =>
+        e.isGameFinal !== true &&
+        !finalGameIds.has(e.gameId) &&
+        (e.plateAppearancesTracked ?? 0) > 0,
+    )
     .map((e) => ({
       playerId: e.playerId,
       gameId: e.gameId,
