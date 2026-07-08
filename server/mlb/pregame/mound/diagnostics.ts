@@ -36,10 +36,22 @@ export function wasPubliclyFlaggedMound(signal: MoundSignal): boolean {
  * "Fade Candidate" badge everywhere else (moundDirection === "fade"), plus
  * the same non-suppressed/non-official/pregame-target guards
  * wasPubliclyFlaggedMound applies.
+ *
+ * firstPitchLockEligible === true (gameStatus scheduled/pre) is REQUIRED —
+ * this predicate is called with no `prev` signal for a game's first-ever
+ * build (server restart, a delayed build, or an earlier unresolved gamePk),
+ * and without this guard a build that first evaluates a pitcher AFTER the
+ * game already went live/final would flag him as a Fade candidate using
+ * hindsight (final box score) data, even though nothing was ever shown to a
+ * user before first pitch. Once legitimately set true pre-game, the flag
+ * still survives into live/final builds via carryForwardMoundGradedState's
+ * OR — this guard only blocks a flag being MINTED post-first-pitch with no
+ * prior true value to inherit.
  */
 export function wasPubliclyFlaggedMoundFade(signal: MoundSignal): boolean {
   return (
     signal.moundDirection === "fade" &&
+    signal.firstPitchLockEligible === true &&
     signal.isOfficialPlay === false &&
     signal.isPregameTarget === true &&
     !signal.suppressed

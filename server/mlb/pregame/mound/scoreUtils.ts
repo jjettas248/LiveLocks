@@ -89,8 +89,17 @@ export function projectedStrikeoutsFromKPer9(seasonKPer9: number | null | undefi
  * every downstream consumer (matchupAdjustedKs.ts's base, workload.ts's
  * "Long Leash", riskDrivers.ts's "Short Leash Risk") gets the same
  * corrected value instead of the same duplicated bug.
+ *
+ * ONLY an upper clamp — no lower bound. The distortion this function exists
+ * to correct (relief innings folded into a starts-only denominator) is
+ * strictly one-directional: season-total inningsPitched can only be >= true
+ * innings-as-a-starter (relief innings are never negative), so the raw ratio
+ * can only ever be inflated, never deflated. A genuinely LOW ratio (e.g. a
+ * true opener/call-up with 1 IP in 1 GS) is therefore real, not an artifact —
+ * clamping it upward would falsely raise moundShadowOutcomes.ts's
+ * pitcher_outs settlement baseline for exactly the low-sample starters who
+ * most need an accurate (low) bar (Codex review, PR #105).
  */
-const AVG_INNINGS_PER_START_MIN = 2.0;
 const AVG_INNINGS_PER_START_MAX = 8.0;
 
 export function computeAvgInningsPerStart(
@@ -98,7 +107,7 @@ export function computeAvgInningsPerStart(
   inningsPitched: number | null | undefined,
 ): number | null {
   if (gamesStarted == null || gamesStarted <= 0 || inningsPitched == null) return null;
-  return clamp(inningsPitched / gamesStarted, AVG_INNINGS_PER_START_MIN, AVG_INNINGS_PER_START_MAX);
+  return Math.min(inningsPitched / gamesStarted, AVG_INNINGS_PER_START_MAX);
 }
 
 /**

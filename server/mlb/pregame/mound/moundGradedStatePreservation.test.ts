@@ -275,5 +275,32 @@ const gradedWin: MoundOutcome = {
   ok(fresh.moundDirection === "follow", "a prior direction that was never publicly flagged is free to move on rebuild");
 }
 
+// ── 17. A game's first-ever build happening AFTER first pitch never mints a Fade flag ──
+// Regression (Codex review, PR #105): a server restart, delayed build, or
+// earlier unresolved gamePk can mean the FIRST successful build for a game
+// happens once it's already live/final — with no `prev` signal to carry a
+// legitimate flag forward. Without a pre-first-pitch guard, that first-ever
+// evaluation would flag a Fade candidate using hindsight (final box score)
+// data, even though nothing was ever shown to a user before first pitch.
+{
+  const fresh = sig({
+    moundDirection: "fade", tier: "track",
+    gameStatus: "final", firstPitchLockEligible: false,
+  });
+  carryForwardMoundGradedState(fresh, undefined);
+  ok(fresh.everPubliclyFlaggedFade === false, "a Fade signal first evaluated after first pitch (no prior flag to inherit) is never flagged");
+}
+
+// ── 18. A legitimate pre-first-pitch Fade flag still survives into a live/final rebuild ──
+{
+  const prev = sig({ moundDirection: "fade", everPubliclyFlaggedFade: true, tier: "track" });
+  const fresh = sig({
+    moundDirection: "fade", tier: "track",
+    gameStatus: "final", firstPitchLockEligible: false,
+  });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.everPubliclyFlaggedFade === true, "a Fade flag legitimately set pre-game survives into a post-first-pitch rebuild via the OR carry-forward");
+}
+
 console.log(`\nmoundGradedStatePreservation.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
