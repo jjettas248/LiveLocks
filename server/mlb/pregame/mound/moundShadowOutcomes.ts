@@ -11,9 +11,9 @@
 // Mirrors pregamePowerRadar/shadowOutcomes.ts's role for pitcher signals.
 
 import { storage } from "../../../storage";
-import { mlbGameCache } from "../../dataPullService";
+import { mlbGameCache, getPitcherAppearanceOrder } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
-import { deriveMoundOutcome, isMoundOutcomeGradeableNow } from "./moundOutcomeAttribution";
+import { deriveMoundOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled } from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
 import type { MoundOutcome, MoundSignal } from "./types";
 import type { MoundDirection } from "./moundDirection";
@@ -72,9 +72,10 @@ function resolveMoundOutcome(
 }
 
 /**
- * For a mound_win already graded live (gradedLive: true) and now that the
- * game has reached final: pull the latest box-score line and refresh ONLY
- * the raw counting stats (final Ks/outs/BB/ER) + resolvedAt.
+ * For a mound_win already graded live (gradedLive: true) and now that this
+ * pitcher's outing is complete (pulled, or the whole game went final): pull
+ * the latest box-score line and refresh ONLY the raw counting stats (final
+ * Ks/outs/BB/ER) + resolvedAt.
  *
  * Deliberately does NOT re-derive outcome/userVisible/seasonBaselineValue —
  * those decided the win and are locked in at the moment it was granted. The
@@ -204,10 +205,19 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
     const isFinal = signal.gameStatus === "final";
     if (!isFinal && signal.gameStatus !== "live") continue;
 
+    // A pitcher's own outing can be certainly over well before the whole
+    // game reaches final (bullpen innings can run for hours afterward) —
+    // see hasPitcherBeenPulled's doc comment. Only meaningful to check while
+    // live; a final game is already outingComplete regardless.
+    const pitcherPulled =
+      !isFinal &&
+      hasPitcherBeenPulled(signal.pitcherId, getPitcherAppearanceOrder(signal.gameId, signal.team));
+    const outingComplete = isFinal || pitcherPulled;
+
     if (pendingLiveWinRefresh) {
-      // No point re-fetching the same live line repeatedly — only refresh
-      // once the game has actually finished.
-      if (!isFinal) continue;
+      // No point re-fetching the line repeatedly while the pitcher is still
+      // actively in the game — only refresh once their outing is over.
+      if (!outingComplete) continue;
       const refreshedOutcome = refreshMoundWinCountingStats(signal);
       if (!refreshedOutcome) continue; // box score not available this tick — retry next tick, stays "graded"+gradedLive
       signal.outcomes = refreshedOutcome;
@@ -258,10 +268,15 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
     if (!outcome) continue;
 
     // See isMoundOutcomeGradeableNow's doc comment: a Follow/Over mound_win
-    // is monotonic-safe to grade live; everything else waits for final.
-    if (!isMoundOutcomeGradeableNow(isFinal, outcome.outcome)) continue;
+    // is monotonic-safe to grade live; everything else waits for outingComplete
+    // (game final OR this pitcher already pulled).
+    if (!isMoundOutcomeGradeableNow(outingComplete, outcome.outcome)) continue;
 
-    const gradedLive = !isFinal && outcome.outcome === "mound_win";
+    // gradedLive (needs a later counting-stat refresh) only applies to a win
+    // granted mid-outing via the monotonic-safe path — a win/miss graded at
+    // outingComplete already reflects this pitcher's true final line, since
+    // pulled/final both mean their Ks/outs can no longer change.
+    const gradedLive = !outingComplete && outcome.outcome === "mound_win";
     signal.outcomes = { ...outcome, gradedLive };
     signal.status = "graded";
     graded++;
@@ -269,7 +284,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
     console.log(
       `[MLB_PREGAME_OUTCOME_SETTLED] ${signal.signalId} market=${signal.primaryMarket} ` +
         `k=${outcome.finalStrikeouts} outs=${outcome.finalOutsRecorded} baseline=${outcome.seasonBaselineValue} ` +
-        `outcome=${outcome.outcome} gradedLive=${gradedLive}`,
+        `outcome=${outcome.outcome} gradedLive=${gradedLive} pitcherPulled=${pitcherPulled}`,
     );
 
     try {

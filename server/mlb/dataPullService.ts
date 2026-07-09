@@ -255,6 +255,15 @@ export interface GamePitchingBoxScorePitcher {
 
 interface GamePitchingBoxScoreCache {
   byPitcherId: Record<string, GamePitchingBoxScorePitcher>;
+  /**
+   * Ordered pitcher-appearance list per team abbreviation (index 0 = the
+   * starter), sourced from the live feed's boxscore.teams[side].pitchers —
+   * the same array MLB's own UI uses to render "who's pitched in this game
+   * and in what order." Mound Radar settlement (moundOutcomeAttribution.ts's
+   * hasPitcherBeenPulled) uses this to detect a pitcher's own outing being
+   * over well before the whole game reaches final.
+   */
+  pitcherOrderByTeam: Record<string, string[]>;
   fetchedAt: number;
 }
 
@@ -588,11 +597,16 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
     // zero extra network calls. `p.stats.pitching` sits alongside the batting
     // block read below but was never ingested anywhere in the codebase before.
     const byPitcherId: Record<string, GamePitchingBoxScorePitcher> = {};
+    const pitcherOrderByTeam: Record<string, string[]> = {};
 
     for (const side of ["home", "away"] as const) {
       const team = boxTeams[side];
       if (!team?.players) continue;
       const teamAbbrev: string = gameDataTeams[side]?.abbreviation ?? side;
+      // `team.pitchers` is the live feed's own ordered appearance list
+      // (index 0 = starter) — reused directly rather than re-derived, same
+      // source already trusted elsewhere in this file (syncBullpenUsage).
+      pitcherOrderByTeam[teamAbbrev] = (team.pitchers ?? []).map((id: number) => String(id));
 
       for (const [key, pdata] of Object.entries(team.players)) {
         const p = pdata as any;
@@ -639,7 +653,7 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
       }
     }
 
-    mlbGameCache.gamePitchingBoxScore[gameId] = { byPitcherId, fetchedAt: Date.now() };
+    mlbGameCache.gamePitchingBoxScore[gameId] = { byPitcherId, pitcherOrderByTeam, fetchedAt: Date.now() };
     // No Tank01-style fallback source exists for pitching lines (unlike batting
     // below) — surface an empty/partial parse so a transient live-feed gap is
     // observable rather than silently producing no settlement data. This is
@@ -681,6 +695,16 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
   } catch (err: any) {
     console.error(`[MLB pull] syncGameBoxScore(${gameId}) error:`, err.message);
   }
+}
+
+/**
+ * Read-only accessor for a team's live pitcher-appearance order (see
+ * GamePitchingBoxScoreCache.pitcherOrderByTeam). Returns null when the box
+ * score hasn't been synced for this game yet — callers treat that as "can't
+ * tell, assume not exited" rather than an error.
+ */
+export function getPitcherAppearanceOrder(gameId: string, team: string): string[] | null {
+  return mlbGameCache.gamePitchingBoxScore[gameId]?.pitcherOrderByTeam?.[team] ?? null;
 }
 
 // ── syncContactData ───────────────────────────────────────────────────────────

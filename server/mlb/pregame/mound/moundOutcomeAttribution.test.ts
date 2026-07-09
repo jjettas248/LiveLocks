@@ -1,7 +1,7 @@
 // Mound Radar — outcome attribution invariants (season-baseline settlement rule).
 // Run: npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts
 
-import { deriveMoundOutcome, isMoundOutcomeGradeableNow, buildMoundWinItem, buildMoundFadeWinItem, buildDailyMoundWins } from "./moundOutcomeAttribution";
+import { deriveMoundOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled, buildMoundWinItem, buildMoundFadeWinItem, buildDailyMoundWins } from "./moundOutcomeAttribution";
 import { MOUND_FADE_WIN_LABEL } from "../../../../shared/moundRadarWin";
 import type { MoundSignal } from "./types";
 
@@ -204,13 +204,22 @@ ok(buildMoundFadeWinItem(followWinNotFade, 1) === null, "a mound_win outcome is 
 // ── isMoundOutcomeGradeableNow: live-grading settlement-timing gate ──────────
 // A Follow/Over mound_win is monotonic-safe to grade the moment the box
 // score confirms it (strikeouts/outs-recorded only climb during a start);
-// everything else must wait for the game to reach final.
-ok(isMoundOutcomeGradeableNow(false, "mound_win") === true, "live + mound_win → gradeable now");
-ok(isMoundOutcomeGradeableNow(false, "mound_fade_win") === false, "live + mound_fade_win → not yet gradeable");
-ok(isMoundOutcomeGradeableNow(false, "mound_calibration_miss") === false, "live + calibration_miss → not yet gradeable");
-ok(isMoundOutcomeGradeableNow(true, "mound_win") === true, "final + mound_win → gradeable");
-ok(isMoundOutcomeGradeableNow(true, "mound_fade_win") === true, "final + mound_fade_win → gradeable");
-ok(isMoundOutcomeGradeableNow(true, "mound_calibration_miss") === true, "final + calibration_miss → gradeable");
+// everything else must wait for outingComplete (game final OR pitcher pulled).
+ok(isMoundOutcomeGradeableNow(false, "mound_win") === true, "outing not complete + mound_win → gradeable now");
+ok(isMoundOutcomeGradeableNow(false, "mound_fade_win") === false, "outing not complete + mound_fade_win → not yet gradeable");
+ok(isMoundOutcomeGradeableNow(false, "mound_calibration_miss") === false, "outing not complete + calibration_miss → not yet gradeable");
+ok(isMoundOutcomeGradeableNow(true, "mound_win") === true, "outingComplete + mound_win → gradeable");
+ok(isMoundOutcomeGradeableNow(true, "mound_fade_win") === true, "outingComplete + mound_fade_win → gradeable");
+ok(isMoundOutcomeGradeableNow(true, "mound_calibration_miss") === true, "outingComplete + calibration_miss → gradeable");
+
+// ── hasPitcherBeenPulled: appearance-order-based outing-complete detection ───
+ok(hasPitcherBeenPulled("100", null) === false, "no appearance order data → not pulled (never fabricate certainty)");
+ok(hasPitcherBeenPulled("100", []) === false, "empty appearance order → not pulled");
+ok(hasPitcherBeenPulled("100", ["100"]) === false, "sole/last entry in order → still the active pitcher, not pulled");
+ok(hasPitcherBeenPulled("100", ["100", "200"]) === true, "a later pitcher appears after this one → pulled");
+ok(hasPitcherBeenPulled("100", ["100", "200", "300"]) === true, "multiple relievers since → pulled");
+ok(hasPitcherBeenPulled("999", ["100", "200"]) === false, "pitcher not present in order at all → not pulled (hasn't recorded a line)");
+ok(hasPitcherBeenPulled("200", ["100", "200"]) === false, "most recent entry → currently active, not pulled");
 
 console.log(`\nmoundOutcomeAttribution.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

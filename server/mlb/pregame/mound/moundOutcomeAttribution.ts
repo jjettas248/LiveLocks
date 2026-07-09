@@ -83,23 +83,50 @@ export function deriveMoundOutcome(input: MoundOutcomeAttributionInput): MoundOu
 }
 
 /**
- * Settlement-timing gate: is this outcome safe to commit right now, given
- * whether the game has reached final?
+ * Has this pitcher been pulled from the game? True when their ID appears in
+ * the team's live appearance order (boxscore.teams[side].pitchers, index 0
+ * = starter — see dataPullService.ts's getPitcherAppearanceOrder) but is
+ * NOT the last entry, meaning a later pitcher has since taken the mound.
+ * Once true, this pitcher's own strikeouts/outs-recorded for the game are
+ * permanently locked — they cannot pitch again this game (bar an all but
+ * unheard-of re-entry) — so their line is just as settled as if the whole
+ * game had gone final, often hours sooner. A missing/empty order (box score
+ * not synced yet, or this pitcher hasn't recorded a line at all) is treated
+ * as "not pulled" — never fabricates certainty from absent data.
+ */
+export function hasPitcherBeenPulled(
+  pitcherId: string,
+  appearanceOrder: string[] | null | undefined,
+): boolean {
+  if (!appearanceOrder || appearanceOrder.length === 0) return false;
+  const idx = appearanceOrder.indexOf(String(pitcherId));
+  if (idx === -1) return false;
+  return idx < appearanceOrder.length - 1;
+}
+
+/**
+ * Settlement-timing gate: is this outcome safe to commit right now?
  *
- * A Follow/Over `mound_win` is monotonic-safe to grade the moment the live
- * box score confirms it — strikeouts/outs-recorded only climb over the
- * course of a start, so a win seen mid-game can never un-happen later.
- * `mound_fade_win` and every `mound_calibration_miss` must wait for final:
- * an under-baseline count can still climb (undoing a Fade win or a miss),
- * and a miss can't be declared while the pitcher may still take the mound.
- * Mirrors pregamePowerRadar/shadowOutcomes.ts's win-grades-live /
- * miss-waits-for-final split for Plate HR targets.
+ * `outingComplete` is true once this pitcher's OWN outing is certain to be
+ * over — either the whole game has reached final, or (typically much
+ * sooner) they've been pulled (see hasPitcherBeenPulled above). Once true,
+ * every outcome type is safe to grade: their final Ks/outs for the start
+ * are locked and cannot change regardless of how much longer the game runs.
+ *
+ * Before that, a Follow/Over `mound_win` is STILL monotonic-safe to grade
+ * live — strikeouts/outs-recorded only climb while a pitcher is actively in
+ * the game, so a win seen mid-outing can never un-happen. `mound_fade_win`
+ * and every `mound_calibration_miss` need `outingComplete`: an under-baseline
+ * count can still climb while the pitcher remains in, and a miss can't be
+ * declared while they might still take the mound again. Mirrors
+ * pregamePowerRadar/shadowOutcomes.ts's win-grades-live / miss-waits split
+ * for Plate HR targets, generalized from "game final" to "outing complete."
  */
 export function isMoundOutcomeGradeableNow(
-  isFinal: boolean,
+  outingComplete: boolean,
   outcome: MoundOutcomeType | undefined,
 ): boolean {
-  return isFinal || outcome === "mound_win";
+  return outingComplete || outcome === "mound_win";
 }
 
 function moundDriverDigest(drivers: MoundDriver[]): MoundRadarWinItem["moundDrivers"] {
