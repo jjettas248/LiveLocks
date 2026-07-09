@@ -82,6 +82,26 @@ export function deriveMoundOutcome(input: MoundOutcomeAttributionInput): MoundOu
   return { outcome: "mound_win", userVisible: input.wasPubliclyFlagged === true, seasonBaselineValue: baseline };
 }
 
+/**
+ * Settlement-timing gate: is this outcome safe to commit right now, given
+ * whether the game has reached final?
+ *
+ * A Follow/Over `mound_win` is monotonic-safe to grade the moment the live
+ * box score confirms it — strikeouts/outs-recorded only climb over the
+ * course of a start, so a win seen mid-game can never un-happen later.
+ * `mound_fade_win` and every `mound_calibration_miss` must wait for final:
+ * an under-baseline count can still climb (undoing a Fade win or a miss),
+ * and a miss can't be declared while the pitcher may still take the mound.
+ * Mirrors pregamePowerRadar/shadowOutcomes.ts's win-grades-live /
+ * miss-waits-for-final split for Plate HR targets.
+ */
+export function isMoundOutcomeGradeableNow(
+  isFinal: boolean,
+  outcome: MoundOutcomeType | undefined,
+): boolean {
+  return isFinal || outcome === "mound_win";
+}
+
 function moundDriverDigest(drivers: MoundDriver[]): MoundRadarWinItem["moundDrivers"] {
   return drivers
     .filter((d) => d.direction === "positive")

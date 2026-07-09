@@ -13,7 +13,7 @@
 import { storage } from "../../../storage";
 import { mlbGameCache } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
-import { deriveMoundOutcome } from "./moundOutcomeAttribution";
+import { deriveMoundOutcome, isMoundOutcomeGradeableNow } from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
 import type { MoundOutcome, MoundSignal } from "./types";
 import type { MoundDirection } from "./moundDirection";
@@ -149,18 +149,9 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
     const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart, everPubliclyFlagged, everPubliclyFlaggedFade);
     if (!outcome) continue;
 
-    // A Follow/Over mound_win is monotonic-safe to grade the moment the live
-    // box score confirms it — strikeouts/outs recorded only climb over the
-    // course of a start, so a win seen mid-game can never un-happen later.
-    // Fade wins and every calibration_miss still need the game to reach
-    // final: an under-baseline count can still climb, and "missed the bar"
-    // can't be declared while the pitcher may still take the mound. Mirrors
-    // shadowOutcomes.ts's win-grades-live / miss-waits-for-final split for
-    // Plate HR targets — without this, a starter who clears his K/9 baseline
-    // by the 5th inning sits ungraded for hours until the whole game (extras,
-    // bullpen game, etc.) finishes, which is what produced the "0 Wins Today"
-    // Mound symptom.
-    if (!isFinal && outcome.outcome !== "mound_win") continue;
+    // See isMoundOutcomeGradeableNow's doc comment: a Follow/Over mound_win
+    // is monotonic-safe to grade live; everything else waits for final.
+    if (!isMoundOutcomeGradeableNow(isFinal, outcome.outcome)) continue;
 
     signal.outcomes = outcome;
     signal.status = "graded";
@@ -168,7 +159,8 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
 
     console.log(
       `[MLB_PREGAME_OUTCOME_SETTLED] ${signal.signalId} market=${signal.primaryMarket} ` +
-        `k=${outcome.finalStrikeouts} outs=${outcome.finalOutsRecorded} baseline=${outcome.seasonBaselineValue} outcome=${outcome.outcome}`,
+        `k=${outcome.finalStrikeouts} outs=${outcome.finalOutsRecorded} baseline=${outcome.seasonBaselineValue} ` +
+        `outcome=${outcome.outcome} gradedLive=${!isFinal}`,
     );
 
     try {

@@ -1,7 +1,7 @@
 // Mound Radar — outcome attribution invariants (season-baseline settlement rule).
 // Run: npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts
 
-import { deriveMoundOutcome, buildMoundWinItem, buildMoundFadeWinItem, buildDailyMoundWins } from "./moundOutcomeAttribution";
+import { deriveMoundOutcome, isMoundOutcomeGradeableNow, buildMoundWinItem, buildMoundFadeWinItem, buildDailyMoundWins } from "./moundOutcomeAttribution";
 import { MOUND_FADE_WIN_LABEL } from "../../../../shared/moundRadarWin";
 import type { MoundSignal } from "./types";
 
@@ -200,6 +200,17 @@ const followWinNotFade = baseSignal({
   outcomes: { outcome: "mound_win", userVisible: true },
 });
 ok(buildMoundFadeWinItem(followWinNotFade, 1) === null, "a mound_win outcome is never picked up by buildMoundFadeWinItem (Fade-only)");
+
+// ── isMoundOutcomeGradeableNow: live-grading settlement-timing gate ──────────
+// A Follow/Over mound_win is monotonic-safe to grade the moment the box
+// score confirms it (strikeouts/outs-recorded only climb during a start);
+// everything else must wait for the game to reach final.
+ok(isMoundOutcomeGradeableNow(false, "mound_win") === true, "live + mound_win → gradeable now");
+ok(isMoundOutcomeGradeableNow(false, "mound_fade_win") === false, "live + mound_fade_win → not yet gradeable");
+ok(isMoundOutcomeGradeableNow(false, "mound_calibration_miss") === false, "live + calibration_miss → not yet gradeable");
+ok(isMoundOutcomeGradeableNow(true, "mound_win") === true, "final + mound_win → gradeable");
+ok(isMoundOutcomeGradeableNow(true, "mound_fade_win") === true, "final + mound_fade_win → gradeable");
+ok(isMoundOutcomeGradeableNow(true, "mound_calibration_miss") === true, "final + calibration_miss → gradeable");
 
 console.log(`\nmoundOutcomeAttribution.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
