@@ -11,7 +11,9 @@ import type {
 } from "@shared/schema";
 import type { MoundSignal, MoundMarketSetup } from "./types";
 import type { MoundDirection } from "./moundDirection";
-import { marketSetupLabel } from "./marketTagger";
+import { marketSetupLabel, platoonKFitLabel } from "./marketTagger";
+import { computeKProjectionLabel } from "./kProjectionLabel";
+import { computeKLineValue } from "./kLineValue";
 import { setMoundBuildSink } from "./buildMlbMoundRadar";
 import { setMoundDbFallback } from "./mlbMoundRadarService";
 import type { MoundRadarSnapshot } from "./mlbMoundRadarStore";
@@ -67,6 +69,15 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     const setupScore = marketScores[market] ?? 0;
     return { market, setupScore, setupLabel: marketSetupLabel(setupScore), isPrimary: market === primaryMarket };
   });
+  // Not persisted individually — reconstructed from the same diagnostics
+  // scores the original build stamped (pitcherSkillScore/opponentKProfileScore),
+  // defaulting to 5 (neutral) to match those components' own "unavailable"
+  // default (pitcherSkill.ts/opponentKProfile.ts), same discipline as
+  // marketSetups above.
+  const diagnostics = r.diagnostics as MoundSignal["diagnostics"];
+  const kStuffScore = diagnostics?.pitcherSkillScore ?? 5;
+  const platoonKFitScore = diagnostics?.opponentKProfileScore ?? 5;
+  const platoonKFitLabelValue = platoonKFitLabel(platoonKFitScore);
   return {
     signalId: r.signalId,
     sport: "mlb",
@@ -88,6 +99,16 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     marketTags,
     marketScores,
     marketSetups,
+    kStuffScore,
+    kStuffLabel: marketSetupLabel(kStuffScore),
+    platoonKFitScore,
+    platoonKFitLabel: platoonKFitLabelValue,
+    platoonKFitReason: platoonKFitLabelValue === "Weak" ? "poor handedness fit" : null,
+    // Not persisted (presentation-only, like marketEdgeContext below) — a
+    // DB-reconstructed signal has no projection/line to restore, so these
+    // pure functions correctly resolve to null rather than being fabricated.
+    kProjectionLabel: computeKProjectionLabel(null, null),
+    kLineValue: computeKLineValue(null, null, null),
     parkContext: null,
     score10: typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number),
     tier: r.tier as MoundSignal["tier"],

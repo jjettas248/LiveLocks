@@ -68,8 +68,8 @@ export interface MoundParkContext {
 export interface MoundMarketSetup {
   market: MoundMarket;
   setupScore: number;
-  /** Exactly 3 grades — see marketTagger.ts's marketSetupLabel(). No "Solid"/"Watch" middle ground. */
-  setupLabel: "Elite" | "Strong" | "Weak";
+  /** 4 grades — see marketTagger.ts's marketSetupLabel(). "Solid" is the full middle band so an ordinary setup doesn't flatten to "Weak". */
+  setupLabel: "Elite" | "Strong" | "Solid" | "Weak";
   isPrimary: boolean;
 }
 
@@ -149,6 +149,17 @@ export interface MoundSignal {
   marketTags: MoundMarket[];
   marketScores: Partial<Record<MoundMarket, number>>;
   marketSetups: MoundMarketSetup[];
+  /** Pure pitcher-skill grade (== pitcherSkillScore/diagnostics), independent of matchup. Display-only, tagging layer — never feeds score10/tier/grading. User-facing badge text is "K Skill". */
+  kStuffScore: number;
+  kStuffLabel: "Elite" | "Strong" | "Solid" | "Weak";
+  /** Pure platoon-matchup-fit grade (this pitcher's platoon K split weighted by today's opposing lineup handedness). Display-only, tagging layer — never feeds score10/tier/grading. User-facing badge text is "K Matchup" (internal name stays platoonKFit* — "platoon" isn't accessible user-facing terminology). */
+  platoonKFitScore: number;
+  platoonKFitLabel: "Elite" | "Strong" | "Solid" | "Weak";
+  platoonKFitReason?: "poor handedness fit" | null;
+  /** Qualitative read on the numeric strikeout projection (matchupAdjustedStrikeouts ?? projectedStrikeouts). Display-only, tagging layer — never feeds score10/tier/grading. */
+  kProjectionLabel: "High" | "Good" | "Average" | "Low" | null;
+  /** Line-aware, Over/Under-aware value read vs. the posted pitcher-strikeouts line only (marketEdgeContext.line) — never pitcher_outs or any other market's line. Display-only, tagging layer — never feeds score10/tier/grading. Null when no line is posted. */
+  kLineValue: { side: "Over" | "Under" | "No Edge"; label: "Elite" | "Strong" | "Solid" | "Weak"; margin: number; line: number; projection: number } | null;
 
   parkContext: MoundParkContext | null;
 

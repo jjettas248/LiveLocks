@@ -23,13 +23,22 @@ interface MoundDriver {
   evidence?: string;
 }
 
-type SetupLabel = "Elite" | "Strong" | "Weak";
+type SetupLabel = "Elite" | "Strong" | "Solid" | "Weak";
 
 interface MarketSetup {
   market: Market;
   setupScore: number;
   setupLabel: SetupLabel;
   isPrimary: boolean;
+}
+
+/** Line-aware, Over/Under-aware value read vs. the posted pitcher-strikeouts line only. Server-stamped, display-only — never re-derived client-side. */
+interface KLineValue {
+  side: "Over" | "Under" | "No Edge";
+  label: SetupLabel;
+  margin: number;
+  line: number;
+  projection: number;
 }
 
 interface ParkContext {
@@ -92,6 +101,17 @@ interface MoundSignal {
   marketTags: Market[];
   marketScores: Partial<Record<Market, number>>;
   marketSetups?: MarketSetup[];
+  /** Pure pitcher-skill grade, independent of matchup. Server-stamped, display-only. User-facing badge text is "K Skill". */
+  kStuffScore?: number;
+  kStuffLabel?: SetupLabel;
+  /** Pure platoon-matchup-fit grade. Server-stamped, display-only. User-facing badge text is "K Matchup". */
+  platoonKFitScore?: number;
+  platoonKFitLabel?: SetupLabel;
+  platoonKFitReason?: "poor handedness fit" | null;
+  /** Qualitative read on the numeric strikeout projection. Server-stamped, display-only. */
+  kProjectionLabel?: "High" | "Good" | "Average" | "Low" | null;
+  /** Value read vs. the posted pitcher-strikeouts line only. Server-stamped, display-only. Null when no line is posted. */
+  kLineValue?: KLineValue | null;
   parkContext?: ParkContext | null;
   score10: number;
   tier: Tier;
@@ -368,6 +388,11 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
             {s.opposingLineupLabel ?? `vs ${s.opponent}`}
             {s.throws ? ` · ${s.throws}HP` : ""}
           </div>
+          {/* Skill/workload comparison only, no line context — deliberately not
+              "Best Market"/"Best Bet" (those read as a betting recommendation). */}
+          <div className="text-[10px] text-muted-foreground/80 mt-0.5" data-testid={`mound-best-angle-${slug}`}>
+            Best Angle: {s.primaryMarket === "pitcher_strikeouts" ? "Pitcher Ks" : "Pitcher Outs"}
+          </div>
         </div>
         <div className="text-right shrink-0">
           <div className="text-xl font-extrabold tabular-nums" style={{ color: accentColor }}>
@@ -400,16 +425,53 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
       />
 
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-        {marketSetups.map((setup) => (
-          <Badge
-            key={setup.market}
-            variant="secondary"
-            className={`text-[10px] px-1.5 py-0 ${setup.isPrimary ? "bg-amber-500/20 text-amber-200" : ""}`}
-          >
-            {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
-            {setup.setupLabel ? ` · ${setup.setupLabel}` : ""}
+        {/* K Skill — pure pitcher-skill grade (kStuffLabel internally), never
+            blended with matchup. Always shown. */}
+        {s.kStuffLabel && (
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            💪 K Skill · {s.kStuffLabel}
           </Badge>
-        ))}
+        )}
+        {s.kProjectionLabel && (
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            📈 K Projection · {s.kProjectionLabel}
+          </Badge>
+        )}
+        {/* The old blended "Pitcher Ks" market badge is intentionally never
+            rendered here — only pitcher_outs (workload-only, no blending
+            issue) keeps its market badge. */}
+        {marketSetups
+          .filter((setup) => setup.market === "pitcher_outs")
+          .map((setup) => (
+            <Badge
+              key={setup.market}
+              variant="secondary"
+              className={`text-[10px] px-1.5 py-0 ${setup.isPrimary ? "bg-amber-500/20 text-amber-200" : ""}`}
+            >
+              {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
+              {setup.setupLabel ? ` · ${setup.setupLabel}` : ""}
+            </Badge>
+          ))}
+        {/* K Matchup (platoonKFitLabel internally) hidden for "Solid" — the
+            ordinary/neutral case (league-average platoon matchup) adds no
+            information. Only a real edge (Weak, or Elite/Strong) is shown. */}
+        {s.platoonKFitLabel && s.platoonKFitLabel !== "Solid" && (
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            🧩 K Matchup · {s.platoonKFitLabel}
+            {s.platoonKFitLabel === "Weak" && s.platoonKFitReason ? ` (${s.platoonKFitReason})` : ""}
+          </Badge>
+        )}
+        {/* K Over/K Under hidden on the compact card for "No Edge" — a
+            non-play isn't worth a top-level chip; only a real Over or Under
+            edge shows here, always with its own margin/line so the label is
+            self-explanatory without a tooltip. */}
+        {s.kLineValue && s.kLineValue.side !== "No Edge" && (
+          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+            💰 K {s.kLineValue.side} · {s.kLineValue.label}{" "}
+            {s.kLineValue.margin >= 0 ? "+" : ""}
+            {s.kLineValue.margin} vs {s.kLineValue.line}
+          </Badge>
+        )}
       </div>
 
       {positives.length > 0 && (
@@ -696,6 +758,56 @@ function MoundExpandedDetail({ signal: s }: { signal: MoundSignal }) {
           )}
         </div>
       )}
+
+      {/* Full K decomposition, unconditional — always shows all four concepts
+          (even "Solid" K Matchup, even "No Edge" K Line Value) regardless of
+          what the compact card above filters out. */}
+      <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1">
+        <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">K Decomposition</div>
+        {s.kStuffLabel && (
+          <div className="flex items-center justify-between gap-2 text-[10px]">
+            <span className="text-muted-foreground">K Skill</span>
+            <span className="font-semibold">
+              {s.kStuffLabel}{s.kStuffScore != null ? ` (${s.kStuffScore.toFixed(1)})` : ""}
+            </span>
+          </div>
+        )}
+        {s.platoonKFitLabel && (
+          <div
+            className="flex items-center justify-between gap-2 text-[10px]"
+            title="How today's projected lineup matches this pitcher's strikeout profile."
+          >
+            <span className="text-muted-foreground">K Matchup</span>
+            <span className="font-semibold">
+              {s.platoonKFitLabel}{s.platoonKFitScore != null ? ` (${s.platoonKFitScore.toFixed(1)})` : ""}
+              {s.platoonKFitLabel === "Weak" && s.platoonKFitReason ? ` — ${s.platoonKFitReason}` : ""}
+            </span>
+          </div>
+        )}
+        {s.kProjectionLabel && (
+          <div className="flex items-center justify-between gap-2 text-[10px]">
+            <span className="text-muted-foreground">K Projection</span>
+            <span className="font-semibold">
+              {s.kProjectionLabel}
+              {s.matchupAdjustedStrikeouts != null
+                ? ` (${s.matchupAdjustedStrikeouts.toFixed(1)})`
+                : s.projectedStrikeouts != null
+                  ? ` (${s.projectedStrikeouts.toFixed(1)})`
+                  : ""}
+            </span>
+          </div>
+        )}
+        {s.kLineValue && (
+          <div className="flex items-center justify-between gap-2 text-[10px]">
+            <span className="text-muted-foreground">K Line Value</span>
+            <span className="font-semibold">
+              {s.kLineValue.side === "No Edge"
+                ? `No Edge (${s.kLineValue.projection.toFixed(1)} proj vs ${s.kLineValue.line})`
+                : `${s.kLineValue.side} · ${s.kLineValue.label} ${s.kLineValue.margin >= 0 ? "+" : ""}${s.kLineValue.margin} vs ${s.kLineValue.line}`}
+            </span>
+          </div>
+        )}
+      </div>
 
       {allPositives.length > 0 && (
         <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20">

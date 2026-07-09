@@ -49,6 +49,7 @@ npx tsx server/mlb/pregame/mound/moundDirection.test.ts # Mound Radar Fade/Follo
 npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts # Mound Radar settlement rule: Follow (Over) mound_win vs Fade (Under) mound_fade_win vs mound_calibration_miss
 npx tsx server/mlb/pregame/mound/moundCalibrationStats.test.ts # Mound Radar public/admin stats — Fade wins fully separate from Follow/Over win counters
 npx tsx server/mlb/pregame/mound/moundAnalyticsSeparation.test.ts # Mound vs Plate outcome-taxonomy + in-memory store isolation
+npx tsx server/mlb/pregame/mound/moundKDisplaySplit.test.ts # Mound Radar K Skill/K Matchup/K Projection/K Line Value display decomposition (never blend skill+platoon fit into one "Weak" badge; Over/Under sign guard)
 npx tsx server/mlb/pregamePowerRadar/diagnostics.test.ts            # Pregame Radar public-visibility predicate (final-but-ungraded stays visible, graded miss hides, postponed hides)
 npx tsx server/mlb/pregamePowerRadar/slateDateRepair.test.ts # Pregame Radar slate-date repair planner (startsAt/gameDate correction, collision detection, no blanket day-shift)
 npx tsx server/mlb/pregamePowerRadar/nearHrRecentForm.test.ts # Pregame Radar near-HR recent-form component (retroactive nearHrContact reuse, recency weighting, consecutive-day bonus, leakage guard)

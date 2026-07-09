@@ -48,6 +48,8 @@ import { computeRecentForm } from "./recentForm";
 import { computeRiskDrivers } from "./riskDrivers";
 import { computeContactRisk } from "./contactRisk";
 import { computeMarketTags } from "./marketTagger";
+import { computeKProjectionLabel } from "./kProjectionLabel";
+import { computeKLineValue } from "./kLineValue";
 import { composeMoundScore } from "./scoring";
 import { computeMoundDirection } from "./moundDirection";
 import { projectedStrikeoutsFromKPer9, weightedPlatoonKRate, computeAvgInningsPerStart } from "./scoreUtils";
@@ -399,6 +401,13 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           workloadScore: workload.score10,
         });
 
+        // Display-only, tagging layer — never feeds score10/tier/drivers/market
+        // selection. kLineValue's line MUST be the posted pitcher-strikeouts
+        // line (marketEdgeContext.line) only — never pitcher_outs or any other
+        // market's odds.
+        const kProjectionLabel = computeKProjectionLabel(projectedStrikeouts, matchupAdjustedStrikeouts);
+        const kLineValue = computeKLineValue(projectedStrikeouts, matchupAdjustedStrikeouts, marketEdgeContext?.line ?? null);
+
         // Informational-only, like marketSetups — score10 is NEVER passed
         // into composeMoundScore/MOUND_COMPONENT_WEIGHTS below, only its
         // driver chips are folded into signal.drivers.
@@ -517,6 +526,13 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           marketTags: marketTags.marketTags,
           marketScores: marketTags.marketScores,
           marketSetups: marketTags.marketSetups,
+          kStuffScore: marketTags.kStuffScore,
+          kStuffLabel: marketTags.kStuffLabel,
+          platoonKFitScore: marketTags.platoonKFitScore,
+          platoonKFitLabel: marketTags.platoonKFitLabel,
+          platoonKFitReason: marketTags.platoonKFitReason,
+          kProjectionLabel,
+          kLineValue,
           parkContext: runEnv.parkContext,
           score10: scoring.score10,
           tier: scoring.tier,
