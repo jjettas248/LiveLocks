@@ -109,7 +109,12 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
   }
 
   for (const signal of Array.from(snapshot.signals.values())) {
-    if (signal.gameStatus !== "final" || signal.status === "graded") continue;
+    if (signal.status === "graded") continue;
+    // Grading needs box-score data, which only exists once the game is live
+    // or final — skip pre-game signals outright (cheaper than fetching
+    // season stats below for every scheduled game on every 5-min tick).
+    const isFinal = signal.gameStatus === "final";
+    if (!isFinal && signal.gameStatus !== "live") continue;
 
     // Season baseline inputs are re-derived from the diagnostics stamped at
     // build time (finalScoreCap/rawInputsAvailable don't carry the raw rate —
@@ -143,6 +148,19 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
 
     const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart, everPubliclyFlagged, everPubliclyFlaggedFade);
     if (!outcome) continue;
+
+    // A Follow/Over mound_win is monotonic-safe to grade the moment the live
+    // box score confirms it — strikeouts/outs recorded only climb over the
+    // course of a start, so a win seen mid-game can never un-happen later.
+    // Fade wins and every calibration_miss still need the game to reach
+    // final: an under-baseline count can still climb, and "missed the bar"
+    // can't be declared while the pitcher may still take the mound. Mirrors
+    // shadowOutcomes.ts's win-grades-live / miss-waits-for-final split for
+    // Plate HR targets — without this, a starter who clears his K/9 baseline
+    // by the 5th inning sits ungraded for hours until the whole game (extras,
+    // bullpen game, etc.) finishes, which is what produced the "0 Wins Today"
+    // Mound symptom.
+    if (!isFinal && outcome.outcome !== "mound_win") continue;
 
     signal.outcomes = outcome;
     signal.status = "graded";
