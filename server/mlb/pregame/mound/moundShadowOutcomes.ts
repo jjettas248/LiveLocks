@@ -72,16 +72,99 @@ function resolveMoundOutcome(
 }
 
 /**
+ * For a mound_win already graded live (gradedLive: true) and now that the
+ * game has reached final: pull the latest box-score line and refresh ONLY
+ * the raw counting stats (final Ks/outs/BB/ER) + resolvedAt.
+ *
+ * Deliberately does NOT re-derive outcome/userVisible/seasonBaselineValue —
+ * those decided the win and are locked in at the moment it was granted. The
+ * counting stats (strikeouts, outs recorded) are monotonic-safe to refresh
+ * because they only ever climb, but the season baseline they were compared
+ * against is refetched live each tick and can drift (e.g. the pitcher's
+ * season K/9 cache updates from an earlier game finalizing mid-day) —
+ * re-deriving the outcome against a shifted baseline risks silently
+ * revoking an already-public win, which this codebase's settlement
+ * philosophy (a calibration_miss is never a public loss) treats as strictly
+ * worse than a display number that lags until final.
+ */
+function refreshMoundWinCountingStats(signal: MoundSignal): MoundOutcome | null {
+  const box = mlbGameCache.gamePitchingBoxScore[signal.gameId];
+  const line = box?.byPitcherId?.[signal.pitcherId];
+  if (!line || !signal.outcomes) return null;
+
+  return {
+    ...signal.outcomes,
+    finalStrikeouts: line.strikeOuts,
+    finalOutsRecorded: line.outsRecorded,
+    finalBaseOnBalls: line.baseOnBalls,
+    finalEarnedRuns: line.earnedRuns,
+    resolvedAt: new Date().toISOString(),
+    gradedLive: false,
+  };
+}
+
+/**
+ * Persist a signal's current in-memory state. `gradedAt` is passed through
+ * as-is — callers pass `new Date()` only on the tick that first sets
+ * `status: "graded"`, and `null` on a later counting-stat refresh, so the
+ * upsert's `COALESCE(excluded.graded_at, existing)` (storage.ts) preserves
+ * the original first-graded timestamp instead of sliding it forward.
+ */
+async function persistMoundSignal(signal: MoundSignal, gradedAt: Date | null): Promise<void> {
+  await storage.upsertMlbMoundRadarSignal({
+    signalId: signal.signalId,
+    buildId: signal.buildId,
+    sessionDate: signal.sessionDate,
+    gameId: signal.gameId,
+    gameDate: signal.gameDate,
+    startsAt: signal.startsAt ?? null,
+    gameStatus: signal.gameStatus,
+    firstPitchLockEligible: signal.firstPitchLockEligible,
+    pitcherId: signal.pitcherId,
+    pitcherName: signal.pitcherName,
+    team: signal.team,
+    opponent: signal.opponent,
+    opposingLineupConfirmed: signal.opposingLineupConfirmed,
+    primaryMarket: signal.primaryMarket,
+    marketTags: signal.marketTags,
+    marketScores: signal.marketScores,
+    score10: String(signal.score10),
+    tier: signal.tier,
+    drivers: signal.drivers,
+    warnings: signal.warnings,
+    diagnostics: signal.diagnostics,
+    lineupStatus: signal.lineupStatus,
+    weatherStatus: signal.weatherStatus,
+    hasMarketLine: signal.hasMarketLine,
+    isOfficialPlay: false,
+    isPregameTarget: true,
+    status: signal.status,
+    suppressed: signal.suppressed,
+    suppressedReasons: signal.suppressedReasons,
+    outcomes: signal.outcomes ?? null,
+    everPubliclyFlagged: signal.everPubliclyFlagged,
+    everPubliclyFlaggedFade: signal.everPubliclyFlaggedFade,
+    moundDirection: signal.moundDirection,
+    becameLiveReady: signal.becameLiveReady,
+    becameLiveFire: signal.becameLiveFire,
+    convertedLiveAt: signal.convertedLiveAt ? new Date(signal.convertedLiveAt) : null,
+    lockedAt: signal.lockedAt ? new Date(signal.lockedAt) : null,
+    gradedAt,
+  });
+}
+
+/**
  * Single grading pass over the current snapshot. Updates in-memory signals
  * and persists them. Never throws into runtime. Runs on its own interval —
  * NOT chained inside gradePregameOutcomes() — independent failure isolation
  * from Plate's grader.
  */
-export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
+export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed: number }> {
   const snapshot = getMoundSnapshot();
-  if (!snapshot) return { graded: 0 };
+  if (!snapshot) return { graded: 0, refreshed: 0 };
 
   let graded = 0;
+  let refreshed = 0;
 
   // Rehydrate durable state from the DB before grading: the two boolean
   // flags AND moundDirection are all OR/sticky-upsert-protected columns
@@ -109,12 +192,37 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
   }
 
   for (const signal of Array.from(snapshot.signals.values())) {
-    if (signal.status === "graded") continue;
+    // A live-graded mound_win is terminal for classification but still
+    // awaiting its final counting-stat refresh — everything else that's
+    // already "graded" (final-graded wins, fade wins, misses) is fully done.
+    const pendingLiveWinRefresh = signal.status === "graded" && signal.outcomes?.gradedLive === true;
+    if (signal.status === "graded" && !pendingLiveWinRefresh) continue;
+
     // Grading needs box-score data, which only exists once the game is live
     // or final — skip pre-game signals outright (cheaper than fetching
     // season stats below for every scheduled game on every 5-min tick).
     const isFinal = signal.gameStatus === "final";
     if (!isFinal && signal.gameStatus !== "live") continue;
+
+    if (pendingLiveWinRefresh) {
+      // No point re-fetching the same live line repeatedly — only refresh
+      // once the game has actually finished.
+      if (!isFinal) continue;
+      const refreshedOutcome = refreshMoundWinCountingStats(signal);
+      if (!refreshedOutcome) continue; // box score not available this tick — retry next tick, stays "graded"+gradedLive
+      signal.outcomes = refreshedOutcome;
+      refreshed++;
+      console.log(
+        `[MLB_PREGAME_OUTCOME_REFRESHED] ${signal.signalId} market=${signal.primaryMarket} ` +
+          `k=${refreshedOutcome.finalStrikeouts} outs=${refreshedOutcome.finalOutsRecorded}`,
+      );
+      try {
+        await persistMoundSignal(signal, null);
+      } catch (err: any) {
+        console.warn(`[MLB_PREGAME_OUTCOME_REFRESHED] persist failed ${signal.signalId}:`, err?.message);
+      }
+      continue;
+    }
 
     // Season baseline inputs are re-derived from the diagnostics stamped at
     // build time (finalScoreCap/rawInputsAvailable don't carry the raw rate —
@@ -153,63 +261,25 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
     // is monotonic-safe to grade live; everything else waits for final.
     if (!isMoundOutcomeGradeableNow(isFinal, outcome.outcome)) continue;
 
-    signal.outcomes = outcome;
+    const gradedLive = !isFinal && outcome.outcome === "mound_win";
+    signal.outcomes = { ...outcome, gradedLive };
     signal.status = "graded";
     graded++;
 
     console.log(
       `[MLB_PREGAME_OUTCOME_SETTLED] ${signal.signalId} market=${signal.primaryMarket} ` +
         `k=${outcome.finalStrikeouts} outs=${outcome.finalOutsRecorded} baseline=${outcome.seasonBaselineValue} ` +
-        `outcome=${outcome.outcome} gradedLive=${!isFinal}`,
+        `outcome=${outcome.outcome} gradedLive=${gradedLive}`,
     );
 
     try {
-      await storage.upsertMlbMoundRadarSignal({
-        signalId: signal.signalId,
-        buildId: signal.buildId,
-        sessionDate: signal.sessionDate,
-        gameId: signal.gameId,
-        gameDate: signal.gameDate,
-        startsAt: signal.startsAt ?? null,
-        gameStatus: signal.gameStatus,
-        firstPitchLockEligible: signal.firstPitchLockEligible,
-        pitcherId: signal.pitcherId,
-        pitcherName: signal.pitcherName,
-        team: signal.team,
-        opponent: signal.opponent,
-        opposingLineupConfirmed: signal.opposingLineupConfirmed,
-        primaryMarket: signal.primaryMarket,
-        marketTags: signal.marketTags,
-        marketScores: signal.marketScores,
-        score10: String(signal.score10),
-        tier: signal.tier,
-        drivers: signal.drivers,
-        warnings: signal.warnings,
-        diagnostics: signal.diagnostics,
-        lineupStatus: signal.lineupStatus,
-        weatherStatus: signal.weatherStatus,
-        hasMarketLine: signal.hasMarketLine,
-        isOfficialPlay: false,
-        isPregameTarget: true,
-        status: signal.status,
-        suppressed: signal.suppressed,
-        suppressedReasons: signal.suppressedReasons,
-        outcomes: signal.outcomes ?? null,
-        everPubliclyFlagged: signal.everPubliclyFlagged,
-        everPubliclyFlaggedFade: signal.everPubliclyFlaggedFade,
-        moundDirection: signal.moundDirection,
-        becameLiveReady: signal.becameLiveReady,
-        becameLiveFire: signal.becameLiveFire,
-        convertedLiveAt: signal.convertedLiveAt ? new Date(signal.convertedLiveAt) : null,
-        lockedAt: signal.lockedAt ? new Date(signal.lockedAt) : null,
-        gradedAt: new Date(),
-      });
+      await persistMoundSignal(signal, new Date());
     } catch (err: any) {
       console.warn(`[MLB_PREGAME_OUTCOME_SETTLED] persist failed ${signal.signalId}:`, err?.message);
     }
   }
 
-  return { graded };
+  return { graded, refreshed };
 }
 
 /** Mound Radar Record + admin calibration rollup. */
