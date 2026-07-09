@@ -214,6 +214,17 @@ export interface MoundOutcome {
   outcome?: import("../../../../shared/moundRadarWin").MoundOutcomeType;
   userVisible?: boolean;
   seasonBaselineValue?: number | null;
+  /**
+   * True while a Follow/Over mound_win was graded live (game not yet final)
+   * and is still awaiting its final counting-stat refresh (see
+   * moundShadowOutcomes.ts's refresh pass). False/undefined once the outcome
+   * reflects the game's true final box score — either because it was graded
+   * at final directly, or because the refresh pass has already run. The
+   * outcome/userVisible/seasonBaselineValue that decided the win are locked
+   * at live-grading time and never re-derived by the refresh — only the raw
+   * counting stats (finalStrikeouts/finalOutsRecorded/etc.) get updated.
+   */
+  gradedLive?: boolean;
 }
 
 /** Per-component scorer result. All scores are on a 0–10 scale. Mirrors Plate's ComponentScore shape but is a separate type. */
