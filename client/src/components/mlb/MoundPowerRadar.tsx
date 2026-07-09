@@ -214,6 +214,60 @@ function formatAmericanOdds(odds: number): string {
   return odds > 0 ? `+${odds}` : `${odds}`;
 }
 
+function getSetupGrade(score10: number): string {
+  if (score10 >= 8.5) return "A+";
+  if (score10 >= 7.5) return "A";
+  if (score10 >= 6.5) return "B+";
+  if (score10 >= 5.5) return "B";
+  if (score10 >= 4.5) return "C";
+  return "D";
+}
+
+function getSetupLabelClasses(label?: SetupLabel | null): string {
+  switch (label) {
+    case "Elite":
+      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
+    case "Strong":
+      return "bg-green-500/20 text-green-200 border-green-400/30";
+    case "Solid":
+      return "bg-amber-500/20 text-amber-200 border-amber-400/30";
+    case "Weak":
+      return "bg-rose-500/20 text-rose-200 border-rose-400/30";
+    default:
+      return "bg-secondary text-muted-foreground";
+  }
+}
+
+function getProjectionLabelClasses(label?: "High" | "Good" | "Average" | "Low" | null): string {
+  switch (label) {
+    case "High":
+      return "bg-sky-500/20 text-sky-200 border-sky-400/30";
+    case "Good":
+      return "bg-blue-500/20 text-blue-200 border-blue-400/30";
+    case "Average":
+      return "bg-slate-500/20 text-slate-200 border-slate-400/30";
+    case "Low":
+      return "bg-rose-500/20 text-rose-200 border-rose-400/30";
+    default:
+      return "bg-secondary text-muted-foreground";
+  }
+}
+
+function getLineValueClasses(label?: SetupLabel | null): string {
+  switch (label) {
+    case "Elite":
+      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
+    case "Strong":
+      return "bg-green-500/20 text-green-200 border-green-400/30";
+    case "Solid":
+      return "bg-lime-500/20 text-lime-200 border-lime-400/30";
+    case "Weak":
+      return "bg-rose-500/20 text-rose-200 border-rose-400/30";
+    default:
+      return "bg-secondary text-muted-foreground";
+  }
+}
+
 export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: string | null } = {}) {
   const [filter, setFilter] = useState<FilterKey>("all");
 
@@ -396,7 +450,7 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
         </div>
         <div className="text-right shrink-0">
           <div className="text-xl font-extrabold tabular-nums" style={{ color: accentColor }}>
-            {s.score10.toFixed(1)}
+            {getSetupGrade(s.score10)}
           </div>
           <div
             className="inline-flex items-center gap-1 text-[10px] font-semibold"
@@ -428,12 +482,12 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
         {/* K Skill — pure pitcher-skill grade (kStuffLabel internally), never
             blended with matchup. Always shown. */}
         {s.kStuffLabel && (
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+          <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 border ${getSetupLabelClasses(s.kStuffLabel)}`}>
             💪 K Skill · {s.kStuffLabel}
           </Badge>
         )}
         {s.kProjectionLabel && (
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+          <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 border ${getProjectionLabelClasses(s.kProjectionLabel)}`}>
             📈 K Projection · {s.kProjectionLabel}
           </Badge>
         )}
@@ -446,7 +500,7 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
             <Badge
               key={setup.market}
               variant="secondary"
-              className={`text-[10px] px-1.5 py-0 ${setup.isPrimary ? "bg-amber-500/20 text-amber-200" : ""}`}
+              className={`text-[10px] px-1.5 py-0 border ${getSetupLabelClasses(setup.setupLabel)}`}
             >
               {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
               {setup.setupLabel ? ` · ${setup.setupLabel}` : ""}
@@ -456,7 +510,7 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
             ordinary/neutral case (league-average platoon matchup) adds no
             information. Only a real edge (Weak, or Elite/Strong) is shown. */}
         {s.platoonKFitLabel && s.platoonKFitLabel !== "Solid" && (
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+          <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 border ${getSetupLabelClasses(s.platoonKFitLabel)}`}>
             🧩 K Matchup · {s.platoonKFitLabel}
             {s.platoonKFitLabel === "Weak" && s.platoonKFitReason ? ` (${s.platoonKFitReason})` : ""}
           </Badge>
@@ -466,7 +520,7 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
             edge shows here, always with its own margin/line so the label is
             self-explanatory without a tooltip. */}
         {s.kLineValue && s.kLineValue.side !== "No Edge" && (
-          <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
+          <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 border ${getLineValueClasses(s.kLineValue.label)}`}>
             💰 K {s.kLineValue.side} · {s.kLineValue.label}{" "}
             {s.kLineValue.margin >= 0 ? "+" : ""}
             {s.kLineValue.margin} vs {s.kLineValue.line}
@@ -764,6 +818,10 @@ function MoundExpandedDetail({ signal: s }: { signal: MoundSignal }) {
           what the compact card above filters out. */}
       <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1">
         <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">K Decomposition</div>
+        <div className="flex items-center justify-between gap-2 text-[10px]">
+          <span className="text-muted-foreground">Model Score</span>
+          <span className="font-semibold">{s.score10.toFixed(1)} / 10</span>
+        </div>
         {s.kStuffLabel && (
           <div className="flex items-center justify-between gap-2 text-[10px]">
             <span className="text-muted-foreground">K Skill</span>
