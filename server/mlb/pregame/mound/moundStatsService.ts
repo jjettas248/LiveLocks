@@ -25,10 +25,14 @@ function uniqueBySignalId(signals: MoundSignal[]): MoundSignal[] {
   for (const signal of signals) {
     const existing = byId.get(signal.signalId);
     const everPubliclyFlagged = existing?.everPubliclyFlagged || signal.everPubliclyFlagged;
+    // Fade-track analog of everPubliclyFlagged above — OR'd the same way so a
+    // DB-durable Fade flag (dedicated column, SQL-level OR-upsert) survives
+    // even if the in-memory copy for this signalId transiently reads false.
+    const everPubliclyFlaggedFade = existing?.everPubliclyFlaggedFade || signal.everPubliclyFlaggedFade;
     if (existing?.outcomes && !signal.outcomes) {
-      byId.set(signal.signalId, { ...signal, status: existing.status, outcomes: existing.outcomes, everPubliclyFlagged });
+      byId.set(signal.signalId, { ...signal, status: existing.status, outcomes: existing.outcomes, everPubliclyFlagged, everPubliclyFlaggedFade });
     } else {
-      byId.set(signal.signalId, { ...signal, everPubliclyFlagged });
+      byId.set(signal.signalId, { ...signal, everPubliclyFlagged, everPubliclyFlaggedFade });
     }
   }
   return Array.from(byId.values());

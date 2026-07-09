@@ -13,6 +13,7 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { computeMatchupAdjustedStrikeouts, type MatchupAdjustedKsInputs } from "./matchupAdjustedKs";
+import { computeAvgInningsPerStart } from "./scoreUtils";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -140,6 +141,40 @@ const maxedOut = computeMatchupAdjustedStrikeouts(
   }),
 );
 ok((maxedOut ?? 0) <= 6.0 * 1.4 + 0.05, `stacking every favorable modifier still respects the overall clamp (got ${maxedOut})`);
+
+// ── Regression: swingman/call-up with relief innings inflating raw IP/GS ────
+// 20 relief IP + 12 start IP over 2 starts = 32 total IP / 2 GS = 16.0 raw
+// avgInningsPerStart (real per-start average ~6). Unclamped, this used to
+// blow past matchupAdjustedKs.ts's OWN clamp band (base*1.4) because the
+// clamp is self-referential against an already-wrong base — with
+// blendedKPer9≈9.15 (Projected Ks 6.1) and raw avgInningsPerStart≈27.5, base
+// ≈ 27.5 and base*1.4 ≈ 38.5, matching the observed real-world outlier
+// (Matchup Adj. Ks 37.7 for a Projected Ks 6.1 pitcher) almost exactly.
+const swingmanRaw = computeAvgInningsPerStart(2, 32);
+ok(swingmanRaw !== null && swingmanRaw <= 8.0, `swingman raw ratio (16.0) is clamped to the realistic band (got ${swingmanRaw})`);
+
+const extremeSwingmanRaw = computeAvgInningsPerStart(1, 27.5);
+ok(extremeSwingmanRaw !== null && extremeSwingmanRaw <= 8.0, `extreme swingman raw ratio (27.5) is clamped to the realistic band (got ${extremeSwingmanRaw})`);
+
+const swingmanProjection = computeMatchupAdjustedStrikeouts(
+  baseInputs({ kPer9: 9.15, avgInningsPerStart: swingmanRaw }),
+);
+// With the clamp, base ≈ (9.15*8.0)/9 ≈ 8.13, so even the widest overall
+// multiplier (1.4x) tops out ≈ 11.4 — nowhere near the observed 37.7-class outlier.
+ok((swingmanProjection ?? 0) < 15, `swingman scenario no longer produces an outlier projection (got ${swingmanProjection})`);
+
+// ── Regression: a genuinely low ratio (true opener/call-up) is NEVER raised ──
+// (Codex review, PR #105.) The distortion this helper corrects is strictly
+// one-directional — season-total inningsPitched can only be >= true
+// innings-as-a-starter (relief innings are never negative), so a LOW raw
+// ratio is always real, never an artifact. Raising it would falsely inflate
+// moundShadowOutcomes.ts's pitcher_outs settlement baseline for exactly the
+// low-sample starters who most need an accurate (low) bar.
+const trueOpener = computeAvgInningsPerStart(1, 1); // 1 start, 1 IP — a real opener/call-up
+ok(trueOpener === 1, `a genuinely low avgInningsPerStart (1.0) is passed through unchanged, never raised (got ${trueOpener})`);
+
+const trueOpenerFraction = computeAvgInningsPerStart(3, 4); // 3 starts, 4 IP avg — still a real short-outing profile
+ok(trueOpenerFraction !== null && Math.abs(trueOpenerFraction - 4 / 3) < 1e-9, `a low-but-real ratio (1.33) is never clamped upward (got ${trueOpenerFraction})`);
 
 // ── Isolation guarantee: moundOutcomeAttribution.ts never references this module ──
 const attributionSrc = readFileSync(join(HERE, "moundOutcomeAttribution.ts"), "utf8");

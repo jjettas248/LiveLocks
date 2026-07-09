@@ -37,17 +37,17 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
     primaryMarket: "pitcher_strikeouts", marketTags: ["pitcher_strikeouts"], marketScores: { pitcher_strikeouts: 7 },
     marketSetups: [],
     parkContext: null,
-    score10: 7, tier: "strong",
+    score10: 7, tier: "strong", moundDirection: null,
     drivers: [], warnings: [], tags: [],
     lineupStatus: "confirmed", weatherStatus: "estimated",
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     marketEdgeContext: null, projectedStrikeouts: 6,
     status: "active", suppressed: false, suppressedReasons: [],
-    outcomes: null, everPubliclyFlagged: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
+    outcomes: null, everPubliclyFlagged: false, everPubliclyFlaggedFade: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
     diagnostics: {
       pitcherSkillScore: 8, opponentKProfileScore: 7, workloadScore: 6, runEnvironmentScore: 6,
-      recentFormScore: 6, marketFitScore: 7, riskPenalty: 0,
+      recentFormScore: 6, marketFitScore: 7, contactRiskScore: 5, riskPenalty: 0,
       appliedDrivers: [], appliedWarnings: [],
       dataCoverageScore: 0.95, finalScoreBeforeCaps: 7, finalScoreAfterCaps: 7, publicTier: "strong",
       suppressed: false, suppressedReasons: [],
@@ -239,6 +239,82 @@ const gradedWin: MoundOutcome = {
     "g1", new Set(["p2"]), [prev], "pre", true, "2026-07-01T18:00:00.000Z", "b-new",
   );
   ok(preCarry.length === 0, "resolution gap before first pitch (pre) is not carried forward");
+}
+
+// ── 14. A publicly-flagged Fade direction is pinned across same-slate rebuilds ──
+// Regression (Codex review, PR #105): the grader branches on
+// signal.moundDirection, so a later pregame rebuild recomputing a fresh
+// direction (e.g. lineup confirms, tier moves off "track") must not silently
+// flip a signal the UI already showed as "Fade (Under)" into Follow/Over
+// settlement logic.
+{
+  const prev = sig({ moundDirection: "fade", everPubliclyFlaggedFade: true, tier: "track" });
+  // Fresh rebuild recomputes this cycle as "follow" (e.g. tier moved to
+  // "strong" as data firmed up) — sig({})'s defaults (tier: "strong",
+  // everPubliclyFlagged: false) mean the fresh signal's own intrinsic
+  // moundDirection would be "follow" if not pinned.
+  const fresh = sig({ moundDirection: "follow", tier: "strong" });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.moundDirection === "fade", "previously-flagged Fade direction is pinned, not silently flipped to the freshly-recomputed Follow");
+}
+
+// ── 15. A publicly-flagged Follow direction is pinned across same-slate rebuilds ──
+{
+  const prev = sig({ moundDirection: "follow", everPubliclyFlagged: true, tier: "strong" });
+  const fresh = sig({ moundDirection: "fade", tier: "track" });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.moundDirection === "follow", "previously-flagged Follow direction is pinned, not silently flipped to the freshly-recomputed Fade");
+}
+
+// ── 16. An UNFLAGGED prior direction is not pinned (never shown publicly, safe to let it move) ──
+{
+  const prev = sig({ moundDirection: "fade", everPubliclyFlaggedFade: false, tier: "track" });
+  const fresh = sig({ moundDirection: "follow", tier: "strong" });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.moundDirection === "follow", "a prior direction that was never publicly flagged is free to move on rebuild");
+}
+
+// ── 17. A game's first-ever build happening AFTER first pitch never mints a Fade flag ──
+// Regression (Codex review, PR #105): a server restart, delayed build, or
+// earlier unresolved gamePk can mean the FIRST successful build for a game
+// happens once it's already live/final — with no `prev` signal to carry a
+// legitimate flag forward. Without a pre-first-pitch guard, that first-ever
+// evaluation would flag a Fade candidate using hindsight (final box score)
+// data, even though nothing was ever shown to a user before first pitch.
+// suppressed: true throughout — a REAL track-tier signal is always
+// suppressed under composeMoundScore's Follow-oriented quality bar (score10
+// < 4.0 is always < MOUND_PUBLISH_MIN_SCORE 5.5), so these fixtures must
+// reflect that to actually exercise the realistic case (see test 19 below).
+{
+  const fresh = sig({
+    moundDirection: "fade", tier: "track", suppressed: true,
+    gameStatus: "final", firstPitchLockEligible: false,
+  });
+  carryForwardMoundGradedState(fresh, undefined);
+  ok(fresh.everPubliclyFlaggedFade === false, "a Fade signal first evaluated after first pitch (no prior flag to inherit) is never flagged");
+}
+
+// ── 18. A legitimate pre-first-pitch Fade flag still survives into a live/final rebuild ──
+{
+  const prev = sig({ moundDirection: "fade", everPubliclyFlaggedFade: true, tier: "track", suppressed: true });
+  const fresh = sig({
+    moundDirection: "fade", tier: "track", suppressed: true,
+    gameStatus: "final", firstPitchLockEligible: false,
+  });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.everPubliclyFlaggedFade === true, "a Fade flag legitimately set pre-game survives into a post-first-pitch rebuild via the OR carry-forward");
+}
+
+// ── 19. A real (always-suppressed) track-tier Fade signal CAN still be flagged ──
+// Regression (Codex review, PR #105): composeMoundScore suppresses every
+// score below MOUND_PUBLISH_MIN_SCORE (5.5), and "track" tier is DEFINED as
+// score10 < 4.0 — so a real Fade signal is unconditionally suppressed under
+// that Follow-oriented quality bar. wasPubliclyFlaggedMoundFade must NOT
+// check !suppressed, or the Fade flag can never fire for any real signal.
+{
+  const fresh = sig({ moundDirection: "fade", tier: "track", suppressed: true });
+  carryForwardMoundGradedState(fresh, undefined);
+  ok(fresh.everPubliclyFlaggedFade === true, "a real (suppressed) track-tier Fade signal is flagged pre-game — suppressed is never checked for Fade");
 }
 
 console.log(`\nmoundGradedStatePreservation.test: ${passed} passed, ${failed} failed`);

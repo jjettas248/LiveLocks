@@ -89,6 +89,8 @@ export interface MoundDiagnostics {
   runEnvironmentScore: number | null;
   recentFormScore: number | null;
   marketFitScore: number | null;
+  /** Informational only (contactRisk.ts) — never feeds score10/tier. Null when handedness splits are unavailable. */
+  contactRiskScore: number | null;
   riskPenalty: number;
 
   appliedDrivers: string[];
@@ -152,6 +154,8 @@ export interface MoundSignal {
 
   score10: number;
   tier: MoundTier;
+  /** Stamped once at build time (moundDirection.ts), never recomputed at grading time or on the client — the settlement rule (deriveMoundOutcome) grades against exactly this value. Backed by a dedicated, sticky-once-"fade" DB column (storage.ts) — not embedded in diagnostics, which is wholesale-overwritten on every upsert. */
+  moundDirection: import("./moundDirection").MoundDirection;
 
   drivers: MoundDriver[];
   warnings: string[];
@@ -180,6 +184,8 @@ export interface MoundSignal {
 
   outcomes?: MoundOutcome | null;
   everPubliclyFlagged: boolean;
+  /** Fade-track analog of everPubliclyFlagged above — see wasPubliclyFlaggedMoundFade (diagnostics.ts) for why Fade needs its own flag. Backed by its own dedicated DB column with the same SQL-level OR-upsert durability as everPubliclyFlagged (see storage.ts) — survives a server restart even if the in-memory carry-forward chain is lost. */
+  everPubliclyFlaggedFade: boolean;
   becameLiveReady: boolean;
   becameLiveFire: boolean;
   convertedLiveAt: string | null;

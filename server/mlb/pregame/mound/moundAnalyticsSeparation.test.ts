@@ -18,7 +18,7 @@ function ok(cond: boolean, msg: string) {
 }
 
 // ── Outcome taxonomies never overlap (compile-time + runtime) ────────────────
-const moundOutcomes: MoundOutcomeType[] = ["mound_win", "mound_calibration_miss"];
+const moundOutcomes: MoundOutcomeType[] = ["mound_win", "mound_fade_win", "mound_calibration_miss"];
 const plateOutcomes: PregameOutcomeType[] = ["pregame_win", "calibration_miss"];
 const overlap = moundOutcomes.filter((m) => (plateOutcomes as string[]).includes(m));
 ok(overlap.length === 0, `no overlap between mound and plate outcome types (found: ${overlap.join(",")})`);

@@ -15,6 +15,12 @@ interface MoundRadarPublicStats {
   pitcherPropsCashedToday: number;
   moundWinsLast7Days: number;
   flaggedBeforeFirstPitchToday: number;
+  // Fully separate "Fades Today" stat — never blended into the Follow/Over
+  // fields above.
+  moundFadeWinsToday: number;
+  fadePropsCashedToday: number;
+  moundFadeWinsLast7Days: number;
+  flaggedFadeBeforeFirstPitchToday: number;
 }
 
 function slateDateET(): string {
@@ -70,20 +76,63 @@ export function MoundRadarRecord() {
   );
 }
 
+/**
+ * "Fades Today" — fully separate from Mound Radar Record above (a cashed
+ * Fade is the opposite bet from a cashed Follow/Over, so it never shares a
+ * counter with it). Hidden until there is something to show.
+ */
+export function MoundRadarFadeRecord() {
+  const { data } = useQuery<MoundRadarPublicStats>({
+    queryKey: ["/api/mlb/mound-radar/record", slateDateET()],
+    queryFn: () => apiRequest("GET", "/api/mlb/mound-radar/record").then((r) => r.json()),
+    refetchInterval: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  if (!data || data.flaggedFadeBeforeFirstPitchToday === 0) return null;
+
+  return (
+    <Card className="p-3 bg-rose-500/10 border-rose-400/30" data-testid="mound-radar-fade-record">
+      <div className="flex items-center gap-2 mb-1.5">
+        <Trophy className="w-4 h-4 text-rose-300" />
+        <span className="text-sm font-bold text-rose-200">Fades Today</span>
+      </div>
+      <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
+        <Stat value={data.moundFadeWinsToday} label="Fade Wins Today" testid="mound-record-fade-wins-today" accent="rose" />
+        <Stat
+          value={data.fadePropsCashedToday}
+          label="Pitcher Props Cashed"
+          testid="mound-record-fade-props-cashed-today"
+          accent="rose"
+        />
+        <Stat
+          value={data.flaggedFadeBeforeFirstPitchToday}
+          label="Flagged Before First Pitch"
+          testid="mound-record-fade-flagged-today"
+          accent="rose"
+        />
+        <Stat value={data.moundFadeWinsLast7Days} label="Fade Wins (7d)" testid="mound-record-fade-wins-7d" accent="rose" muted />
+      </div>
+    </Card>
+  );
+}
+
 function Stat({
   value,
   label,
   testid,
   muted = false,
+  accent = "emerald",
 }: {
   value: number;
   label: string;
   testid: string;
   muted?: boolean;
+  accent?: "emerald" | "rose";
 }) {
   return (
     <div className={muted ? "opacity-70" : undefined}>
-      <span className="font-bold text-emerald-100" data-testid={testid}>
+      <span className={accent === "rose" ? "font-bold text-rose-100" : "font-bold text-emerald-100"} data-testid={testid}>
         {value}
       </span>{" "}
       <span className="text-muted-foreground">{label}</span>

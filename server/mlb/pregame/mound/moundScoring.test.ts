@@ -12,6 +12,8 @@ import {
 import { computePitcherSkill } from "./pitcherSkill";
 import { computeWorkload } from "./workload";
 import { computeRunEnvironment } from "./runEnvironment";
+import { computeRiskDrivers } from "./riskDrivers";
+import { computeAvgInningsPerStart } from "./scoreUtils";
 
 let passed = 0;
 let failed = 0;
@@ -120,6 +122,29 @@ const wlLongLeash = computeWorkload({
   pitcherKnown: true, bbPer9: 2.0, avgInningsPerStart: 6.5, lastStartPitchCount: 95, lastStartInningsPitched: 6.5, ipVarianceLast3: 0.5, archetype: "ace",
 });
 ok(wlLongLeash.drivers.some((d) => d.key === "wl_leash"), "6.5 avg IP/start → Long Leash driver");
+
+// ── Regression: a swingman's inflated raw avgInningsPerStart (season-total
+// IP across starts+relief / gamesStarted) must not wrongly fire Long Leash /
+// suppress Short Leash Risk once computeAvgInningsPerStart's clamp is
+// applied upstream — 2 GS + 32 total IP → raw 16.0, clamped to 8.0. The
+// clamped 8.0 still legitimately fires Long Leash (it's a real long-leash
+// signal at the clamp ceiling), but the score must be bounded, not the
+// unclamped 16.0's out-of-range value.
+const swingmanClamped = computeAvgInningsPerStart(2, 32);
+ok(swingmanClamped === 8.0, `swingman raw 16.0 IP/start clamps to the 8.0 ceiling (got ${swingmanClamped})`);
+const wlSwingman = computeWorkload({
+  pitcherKnown: true, bbPer9: 2.0, avgInningsPerStart: swingmanClamped, lastStartPitchCount: 95, lastStartInningsPitched: 6.5, ipVarianceLast3: 0.5, archetype: null,
+});
+ok(wlSwingman.score10 <= 10, `clamped swingman avgInningsPerStart never produces an out-of-range Workload score10 (got ${wlSwingman.score10})`);
+
+const riskShortLeashSwingman = computeRiskDrivers({
+  archetype: null, bbPer9: 2.0, lastStartPitchCount: 95, avgInningsPerStart: swingmanClamped,
+  isIndoors: true, windMph: null, windDirection: null, opposingLineupConfirmed: true,
+});
+ok(
+  !riskShortLeashSwingman.drivers.some((d) => d.key === "risk_short_leash"),
+  "clamped 8.0 avgInningsPerStart does not wrongly fire Short Leash Risk (< 5.0 threshold)",
+);
 
 // ── Regression: pitches/inning must use the SAME start's innings, not the
 // season average — a short/aberrant outing must not misread as "efficient".

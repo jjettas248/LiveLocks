@@ -14,17 +14,38 @@ import { storage } from "../../../storage";
 import { mlbGameCache } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
 import { deriveMoundOutcome } from "./moundOutcomeAttribution";
+import { computeAvgInningsPerStart } from "./scoreUtils";
 import type { MoundOutcome, MoundSignal } from "./types";
+import type { MoundDirection } from "./moundDirection";
 import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
 
 /**
  * Resolve final-game pitching-box-score outcome for a target, when available,
  * and stamp the outcome-attribution result (mound_win vs mound_calibration_miss).
+ *
+ * everPubliclyFlagged/everPubliclyFlaggedFade are passed in ALREADY REHYDRATED
+ * from the DB's durable, OR-upsert-protected values (see gradeMoundOutcomes)
+ * rather than read off `signal` directly — the in-memory snapshot alone can
+ * be missing carry-forward history after a process restart (no prevSignals
+ * to OR against on that game's first post-restart build), which would
+ * otherwise silently understamp userVisible for a legitimately-flagged pick.
  */
-function resolveMoundOutcome(signal: MoundSignal, seasonKPer9: number | null, seasonAvgInningsPerStart: number | null): MoundOutcome | null {
+function resolveMoundOutcome(
+  signal: MoundSignal,
+  seasonKPer9: number | null,
+  seasonAvgInningsPerStart: number | null,
+  everPubliclyFlagged: boolean,
+  everPubliclyFlaggedFade: boolean,
+): MoundOutcome | null {
   const box = mlbGameCache.gamePitchingBoxScore[signal.gameId];
   const line = box?.byPitcherId?.[signal.pitcherId];
   if (!line) return null;
+
+  // everPubliclyFlagged's underlying predicate (wasPubliclyFlaggedMound)
+  // structurally excludes "track" tier, so a Fade-direction signal must be
+  // checked against its own parallel flag (everPubliclyFlaggedFade) —
+  // otherwise a correct Fade call could never become userVisible.
+  const wasPubliclyFlagged = signal.moundDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged;
 
   const attribution = deriveMoundOutcome({
     primaryMarket: signal.primaryMarket,
@@ -32,7 +53,10 @@ function resolveMoundOutcome(signal: MoundSignal, seasonKPer9: number | null, se
     finalOutsRecorded: line.outsRecorded,
     seasonKPer9,
     seasonAvgInningsPerStart,
-    wasPubliclyFlagged: signal.everPubliclyFlagged,
+    wasPubliclyFlagged,
+    // Read as-stamped at build time — never recomputed here (see
+    // moundDirection.ts's discipline comment).
+    moundDirection: signal.moundDirection,
   });
 
   return {
@@ -59,6 +83,31 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
 
   let graded = 0;
 
+  // Rehydrate durable state from the DB before grading: the two boolean
+  // flags AND moundDirection are all OR/sticky-upsert-protected columns
+  // (storage.ts) — the in-memory snapshot alone can be missing carry-forward
+  // history (e.g. a process restart left this game's first post-restart
+  // build with no prevSignals to pin against, so a fresh rebuild could
+  // recompute a DIFFERENT direction than what was actually shown pre-game).
+  // Best-effort: grading still proceeds on in-memory-only state if this
+  // read fails.
+  let persistedState = new Map<string, { everPubliclyFlagged: boolean; everPubliclyFlaggedFade: boolean; moundDirection: MoundDirection }>();
+  try {
+    const rows = await storage.getMlbMoundRadarSignalsByDate(snapshot.sessionDate);
+    persistedState = new Map(
+      rows.map((r) => [
+        r.signalId,
+        {
+          everPubliclyFlagged: r.everPubliclyFlagged,
+          everPubliclyFlaggedFade: r.everPubliclyFlaggedFade,
+          moundDirection: (r.moundDirection as MoundDirection) ?? null,
+        },
+      ]),
+    );
+  } catch (err: any) {
+    console.warn(`[MLB_PREGAME_OUTCOME_SETTLED] durable-state rehydration failed date=${snapshot.sessionDate}:`, err?.message ?? err);
+  }
+
   for (const signal of Array.from(snapshot.signals.values())) {
     if (signal.gameStatus !== "final" || signal.status === "graded") continue;
 
@@ -69,12 +118,30 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
     // uses current season stats, not a stale build-time snapshot).
     const { mlbPlayerCache } = await import("../../dataPullService");
     const seasonStats = mlbPlayerCache.pitcherSeasonStats[signal.pitcherId] ?? null;
-    const seasonAvgInningsPerStart =
-      seasonStats?.gamesStarted != null && seasonStats.gamesStarted > 0 && seasonStats?.inningsPitched != null
-        ? seasonStats.inningsPitched / seasonStats.gamesStarted
-        : null;
+    const seasonAvgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
 
-    const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart);
+    const persisted = persistedState.get(signal.signalId);
+
+    // Pin the persisted direction FIRST (before computing the flags below,
+    // same ordering discipline as carryForwardMoundGradedState's in-memory
+    // sticky-pin) — once a signal was legitimately shown with a direction,
+    // a later rebuild recomputing a different one must not silently flip
+    // which settlement rule it grades against.
+    if (signal.moundDirection !== "fade" && persisted?.moundDirection === "fade" && persisted.everPubliclyFlaggedFade === true) {
+      signal.moundDirection = "fade";
+    } else if (signal.moundDirection !== "follow" && persisted?.moundDirection === "follow" && persisted.everPubliclyFlagged === true) {
+      signal.moundDirection = "follow";
+    }
+
+    const everPubliclyFlagged = signal.everPubliclyFlagged || (persisted?.everPubliclyFlagged ?? false);
+    const everPubliclyFlaggedFade = signal.everPubliclyFlaggedFade || (persisted?.everPubliclyFlaggedFade ?? false);
+    // Self-heal the in-memory snapshot too, not just this grading pass — a
+    // later re-read of the same in-memory signal (stats service, another
+    // grading tick) should see the rehydrated state as well.
+    signal.everPubliclyFlagged = everPubliclyFlagged;
+    signal.everPubliclyFlaggedFade = everPubliclyFlaggedFade;
+
+    const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart, everPubliclyFlagged, everPubliclyFlaggedFade);
     if (!outcome) continue;
 
     signal.outcomes = outcome;
@@ -119,6 +186,8 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number }> {
         suppressedReasons: signal.suppressedReasons,
         outcomes: signal.outcomes ?? null,
         everPubliclyFlagged: signal.everPubliclyFlagged,
+        everPubliclyFlaggedFade: signal.everPubliclyFlaggedFade,
+        moundDirection: signal.moundDirection,
         becameLiveReady: signal.becameLiveReady,
         becameLiveFire: signal.becameLiveFire,
         convertedLiveAt: signal.convertedLiveAt ? new Date(signal.convertedLiveAt) : null,
@@ -142,12 +211,18 @@ export function getMoundCalibrationRecord(): MoundCalibrationRecord {
   let wins = 0;
   let calibrationMisses = 0;
   let internalWins = 0;
+  // Fully separate from wins/internalWins above — never blended.
+  let fadeWins = 0;
+  let internalFadeWins = 0;
 
   for (const s of graded) {
     const o = s.outcomes!;
     if (o.outcome === "mound_win") {
       if (o.userVisible === true) wins++;
       else internalWins++;
+    } else if (o.outcome === "mound_fade_win") {
+      if (o.userVisible === true) fadeWins++;
+      else internalFadeWins++;
     } else if (o.outcome === "mound_calibration_miss") {
       calibrationMisses++;
     }
@@ -159,6 +234,8 @@ export function getMoundCalibrationRecord(): MoundCalibrationRecord {
     wins,
     calibrationMisses,
     internalWins,
+    fadeWins,
+    internalFadeWins,
     totalGraded: graded.length,
     winRate: publicGraded > 0 ? Math.round((wins / publicGraded) * 1000) / 10 : null,
   };

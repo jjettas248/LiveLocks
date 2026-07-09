@@ -2,7 +2,7 @@
 // Mirrors pregamePowerRadar/gradedStateCarry.ts's role for pitcher signals.
 
 import type { MoundGameStatus, MoundSignal } from "./types";
-import { wasPubliclyFlaggedMound } from "./diagnostics";
+import { wasPubliclyFlaggedMound, wasPubliclyFlaggedMoundFade } from "./diagnostics";
 
 export function carryForwardMoundGradedState(
   fresh: MoundSignal,
@@ -10,10 +10,26 @@ export function carryForwardMoundGradedState(
 ): MoundSignal {
   if (!prev || prev.sessionDate !== fresh.sessionDate) {
     fresh.everPubliclyFlagged = wasPubliclyFlaggedMound(fresh);
+    fresh.everPubliclyFlaggedFade = wasPubliclyFlaggedMoundFade(fresh);
     return fresh;
   }
 
+  // Once a signal has been legitimately shown to users with a direction
+  // (Fade or Follow), a later pregame rebuild (updated lineup/stats data)
+  // must not silently flip which settlement rule it grades against — the
+  // grader branches on signal.moundDirection, so an un-pinned flip could
+  // settle a pitcher the UI showed as "Fade (Under)" with Follow/Over logic
+  // instead. Pin it, mirroring lockedAt's "once set, never overwritten"
+  // discipline below. Must run BEFORE the wasPubliclyFlagged* recomputation
+  // so those checks see the (possibly pinned) direction, not the fresh one.
+  if (prev.moundDirection === "fade" && prev.everPubliclyFlaggedFade === true) {
+    fresh.moundDirection = "fade";
+  } else if (prev.moundDirection === "follow" && prev.everPubliclyFlagged === true) {
+    fresh.moundDirection = "follow";
+  }
+
   fresh.everPubliclyFlagged = wasPubliclyFlaggedMound(fresh) || prev.everPubliclyFlagged === true;
+  fresh.everPubliclyFlaggedFade = wasPubliclyFlaggedMoundFade(fresh) || prev.everPubliclyFlaggedFade === true;
   if (prev.outcomes && !fresh.outcomes) {
     fresh.outcomes = prev.outcomes;
     if (prev.status === "graded") fresh.status = "graded";

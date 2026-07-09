@@ -10,6 +10,7 @@ import type {
   MlbMoundRadarSignalRow,
 } from "@shared/schema";
 import type { MoundSignal, MoundMarketSetup } from "./types";
+import type { MoundDirection } from "./moundDirection";
 import { marketSetupLabel } from "./marketTagger";
 import { setMoundBuildSink } from "./buildMlbMoundRadar";
 import { setMoundDbFallback } from "./mlbMoundRadarService";
@@ -48,6 +49,8 @@ export function signalToRow(s: MoundSignal): InsertMlbMoundRadarSignal {
     suppressedReasons: s.suppressedReasons,
     outcomes: s.outcomes ?? null,
     everPubliclyFlagged: s.everPubliclyFlagged,
+    everPubliclyFlaggedFade: s.everPubliclyFlaggedFade,
+    moundDirection: s.moundDirection,
     becameLiveReady: s.becameLiveReady,
     becameLiveFire: s.becameLiveFire,
     convertedLiveAt: s.convertedLiveAt ? new Date(s.convertedLiveAt) : null,
@@ -88,6 +91,9 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     parkContext: null,
     score10: typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number),
     tier: r.tier as MoundSignal["tier"],
+    // Dedicated, sticky-once-"fade" column (see storage.ts's upsert) —
+    // stamped once at build time, never re-derived here.
+    moundDirection: (r.moundDirection as MoundDirection) ?? null,
     drivers: (r.drivers as MoundSignal["drivers"]) ?? [],
     warnings: (r.warnings as string[]) ?? [],
     tags: [],
@@ -108,6 +114,7 @@ export function rowToSignal(r: MlbMoundRadarSignalRow): MoundSignal {
     becameLiveFire: r.becameLiveFire,
     convertedLiveAt: r.convertedLiveAt ? new Date(r.convertedLiveAt).toISOString() : null,
     diagnostics: r.diagnostics as MoundSignal["diagnostics"],
+    everPubliclyFlaggedFade: r.everPubliclyFlaggedFade,
     // Not persisted (presentation-only, like Plate's marketEdgeContext) —
     // DB-reconstructed signals never have a live odds fetch/projection to
     // restore, so these stay null rather than fabricated.

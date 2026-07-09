@@ -71,6 +71,46 @@ export function projectedStrikeoutsFromKPer9(seasonKPer9: number | null | undefi
 }
 
 /**
+ * Realistic avg-innings-per-start for a probable starter, derived from
+ * season totals. seasonStats.inningsPitched is a SEASON-TOTAL across every
+ * appearance (starts + relief) — MLB Stats API's group=pitching/stats=season
+ * returns one aggregate row, with no starts-only split available anywhere in
+ * this codebase's data pulls. For a pure starter this ratio is accurate; for
+ * a swingman/call-up who also relieved, dividing total IP by gamesStarted
+ * alone overstates true innings-per-start (relief innings get folded into
+ * the starts-only denominator) — e.g. 20 relief IP + 12 start IP over 2
+ * starts = 32 total IP / 2 GS = 16.0 "avg IP/start" (real value ~6). Clamped
+ * to a realistic MLB-starter band rather than attempting a starts-only IP
+ * recomputation (that would require new data-pull work; see CLAUDE.md §7a's
+ * discipline on additive, no-op-when-absent inputs and capped effects).
+ * Single source of truth — buildMlbMoundRadar.ts and moundShadowOutcomes.ts
+ * BOTH call this instead of duplicating the raw division, so the
+ * display-time and grading-time values can never independently drift, and
+ * every downstream consumer (matchupAdjustedKs.ts's base, workload.ts's
+ * "Long Leash", riskDrivers.ts's "Short Leash Risk") gets the same
+ * corrected value instead of the same duplicated bug.
+ *
+ * ONLY an upper clamp — no lower bound. The distortion this function exists
+ * to correct (relief innings folded into a starts-only denominator) is
+ * strictly one-directional: season-total inningsPitched can only be >= true
+ * innings-as-a-starter (relief innings are never negative), so the raw ratio
+ * can only ever be inflated, never deflated. A genuinely LOW ratio (e.g. a
+ * true opener/call-up with 1 IP in 1 GS) is therefore real, not an artifact —
+ * clamping it upward would falsely raise moundShadowOutcomes.ts's
+ * pitcher_outs settlement baseline for exactly the low-sample starters who
+ * most need an accurate (low) bar (Codex review, PR #105).
+ */
+const AVG_INNINGS_PER_START_MAX = 8.0;
+
+export function computeAvgInningsPerStart(
+  gamesStarted: number | null | undefined,
+  inningsPitched: number | null | undefined,
+): number | null {
+  if (gamesStarted == null || gamesStarted <= 0 || inningsPitched == null) return null;
+  return Math.min(inningsPitched / gamesStarted, AVG_INNINGS_PER_START_MAX);
+}
+
+/**
  * Lineup-weighted platoon strikeout rate for a pitcher — the pitcher's own
  * K-rate split by opposing-batter handedness, weighted by the confirmed
  * opposing lineup's L/R/S composition. Extracted so opponentKProfile.ts's

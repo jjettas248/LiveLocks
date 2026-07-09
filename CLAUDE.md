@@ -42,6 +42,13 @@ npx tsx server/mlb/pregamePowerRadar/winAttribution.test.ts  # Pregame Radar Win
 npx tsx server/mlb/pregamePowerRadar/calibrationStats.test.ts # Pregame Radar public stats (wins-only) vs admin calibration (full denominator: byTier/byScoreBand/byDriver + conversion rates)
 npx tsx server/mlb/pregamePowerRadar/gradedStatePreservation.test.ts # Pregame Radar graded-state carry across snapshot rebuilds + wrong-slate snapshot refusal + lineup-dropout carry-forward
 npx tsx server/mlb/pregame/mound/moundGradedStatePreservation.test.ts # Mound Radar graded-state carry across snapshot rebuilds + wrong-slate snapshot refusal + starter-drop carry-forward
+npx tsx server/mlb/pregame/mound/contactRisk.test.ts # Mound Radar Hit/HR Susceptible High/Low tag (informational-only, zero effect on score10/tier)
+npx tsx server/mlb/pregame/mound/matchupAdjustedKs.test.ts # Mound Radar Matchup Adj. Ks enrichment + avgInningsPerStart swingman-inflation regression
+npx tsx server/mlb/pregame/mound/moundScoring.test.ts # Mound Radar component scorers + composite score10/tier invariants
+npx tsx server/mlb/pregame/mound/moundDirection.test.ts # Mound Radar Fade/Follow direction thresholds (server-stamped once at build time)
+npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts # Mound Radar settlement rule: Follow (Over) mound_win vs Fade (Under) mound_fade_win vs mound_calibration_miss
+npx tsx server/mlb/pregame/mound/moundCalibrationStats.test.ts # Mound Radar public/admin stats — Fade wins fully separate from Follow/Over win counters
+npx tsx server/mlb/pregame/mound/moundAnalyticsSeparation.test.ts # Mound vs Plate outcome-taxonomy + in-memory store isolation
 npx tsx server/mlb/pregamePowerRadar/diagnostics.test.ts            # Pregame Radar public-visibility predicate (final-but-ungraded stays visible, graded miss hides, postponed hides)
 npx tsx server/mlb/pregamePowerRadar/slateDateRepair.test.ts # Pregame Radar slate-date repair planner (startsAt/gameDate correction, collision detection, no blanket day-shift)
 npx tsx server/mlb/pregamePowerRadar/nearHrRecentForm.test.ts # Pregame Radar near-HR recent-form component (retroactive nearHrContact reuse, recency weighting, consecutive-day bonus, leakage guard)
