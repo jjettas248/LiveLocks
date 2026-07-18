@@ -194,18 +194,27 @@ console.log("\ngetWeatherSecondaryPresentations(park, drivers) — driver-key aw
   const noDriverButValues = getWeatherSecondaryPresentations(parkHot, []);
   assert("raw values present, no matching driver → context (informational)", noDriverButValues.every((p) => p.tone === "context"));
 
+  // Roof-closed games get carryLabel "Neutral Conditions" from parkWeatherScore.ts
+  // (isIndoors branch), not "Neutral Air" — this fixture reflects the real pairing.
   const roofByDriver = getWeatherSecondaryPresentations(
-    { temperatureF: 72, windMph: null, windDirectionLabel: null, carryLabel: "Neutral Air", carryType: "neutral" },
+    { temperatureF: 72, windMph: null, windDirectionLabel: null, carryLabel: "Neutral Conditions", carryType: "neutral" },
     [{ key: "pw_roof", direction: "neutral" }],
   );
   assert("pw_roof driver → single Roof Closed pill, neutral", roofByDriver.length === 1 && roofByDriver[0].text === "🏟️ Roof Closed" && roofByDriver[0].tone === "neutral");
 
-  // Documented fallback: no pw_roof driver present, but carryLabel says Neutral Air.
-  const roofByLabelFallback = getWeatherSecondaryPresentations(
+  // Regression: PR review caught that "Neutral Air" was being misread as a
+  // roof-closed signal. It's actually stamped for genuinely calm/mild OUTDOOR
+  // weather (parkWeatherScore.ts's outdoor branch) — an ordinary open-air game
+  // with no pw_roof driver must show its real temp/wind pills, never "Roof Closed".
+  const calmOutdoorNoRoofDriver = getWeatherSecondaryPresentations(
     { temperatureF: 72, windMph: 2, windDirectionLabel: "Calm", carryLabel: "Neutral Air", carryType: "neutral" },
     [],
   );
-  assert("carryLabel Neutral Air fallback (no pw_roof driver) → still Roof Closed pill", roofByLabelFallback.length === 1 && roofByLabelFallback[0].text === "🏟️ Roof Closed");
+  assert(
+    "calm outdoor Neutral Air with no pw_roof driver → real temp/wind pills, NOT Roof Closed",
+    calmOutdoorNoRoofDriver.length === 2 && calmOutdoorNoRoofDriver.every((p) => p.text !== "🏟️ Roof Closed"),
+    JSON.stringify(calmOutdoorNoRoofDriver),
+  );
 
   const nothing = getWeatherSecondaryPresentations(
     { temperatureF: null, windMph: null, windDirectionLabel: null, carryLabel: "Conditions Unavailable", carryType: "unknown" },

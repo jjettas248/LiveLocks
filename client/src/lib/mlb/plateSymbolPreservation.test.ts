@@ -84,7 +84,7 @@ console.log("\n[plateSymbolPreservation] running cases\n");
 //    glyph, carried into the new secondary pill rather than rendered text-only ──
 {
   const roofPill = getWeatherSecondaryPresentations(
-    { temperatureF: 72, windMph: null, windDirectionLabel: null, carryLabel: "Neutral Air", carryType: "neutral" },
+    { temperatureF: 72, windMph: null, windDirectionLabel: null, carryLabel: "Neutral Conditions", carryType: "neutral" },
     [{ key: "pw_roof", direction: "neutral" }],
   );
   assert("roof-closed secondary pill carries the 🏟️ symbol, not text-only", roofPill.length === 1 && roofPill[0].text.startsWith("🏟️"), roofPill[0]?.text);

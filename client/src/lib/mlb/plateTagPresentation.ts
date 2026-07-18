@@ -272,9 +272,15 @@ export interface WeatherSecondaryPresentation {
  * Secondary environment pills (temperature / wind / roof), built from the
  * driver array so wind/temp tone reflects which directional driver actually
  * fired (pw_wind_out/pw_wind_in/pw_temp/pw_cold) rather than being re-derived
- * from raw numbers. Roof-closed detection primarily uses the `pw_roof` driver
- * key; `carryLabel === "Neutral Air"` is only a documented fallback if that
- * driver is somehow absent.
+ * from raw numbers. Roof-closed detection uses ONLY the `pw_roof` driver key
+ * (server/mlb/pregamePowerRadar/parkWeatherScore.ts pushes it deterministically
+ * whenever isIndoors). `carryLabel === "Neutral Air"` is NOT a valid roof-closed
+ * signal — that label is stamped for genuinely open-air calm/mild weather (same
+ * file, outdoor branch); roof-closed games get carryLabel "Neutral Conditions"
+ * instead. An earlier revision conflated the two (misreading pw_roof's own
+ * descriptive label text, "Roof Closed (Neutral Air)", as if it were the carry
+ * classification) — that fallback mislabeled ordinary calm outdoor games as
+ * "Roof Closed" and hid their real temp/wind pills. Fixed per PR review.
  */
 export function getWeatherSecondaryPresentations(
   park: MinimalParkContext | null,
@@ -283,8 +289,7 @@ export function getWeatherSecondaryPresentations(
   const hasKey = (key: string) => drivers.some((d) => d.key === key);
   const pills: WeatherSecondaryPresentation[] = [];
 
-  const roofClosed = hasKey("pw_roof") || park?.carryLabel === "Neutral Air";
-  if (roofClosed) {
+  if (hasKey("pw_roof")) {
     // 🏟️ matches the existing roof-closed glyph used elsewhere on the card
     // (server/mlb/parkWindFit.ts's "Roof closed · neutral carry" case, and the
     // Neutral Conditions carry label) — carried forward, not invented.
