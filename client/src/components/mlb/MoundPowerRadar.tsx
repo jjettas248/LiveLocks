@@ -260,6 +260,42 @@ function getLineValueClasses(label?: SetupLabel | null): string {
   }
 }
 
+function MoundTagColorKey() {
+  return (
+    <details className="text-xs text-muted-foreground">
+      <summary className="cursor-pointer select-none text-[11px] font-semibold hover:text-foreground">
+        ⓘ Tag Color Key
+      </summary>
+
+      <div className="mt-2 grid gap-1.5 rounded-lg border border-border/30 bg-secondary/20 p-2 text-[11px]">
+        <div>
+          <span className="font-semibold text-green-300">Green</span>
+          {" = Advantage — positive skill, matchup, or market signal"}
+        </div>
+
+        <div>
+          <span className="font-semibold text-amber-300">Amber</span>
+          {" = Solid / usable — decent support, not a standout edge"}
+        </div>
+
+        <div>
+          <span className="font-semibold text-sky-300">Blue</span>
+          {" = Projection info — expected output only, not a bet by itself"}
+        </div>
+
+        <div>
+          <span className="font-semibold text-rose-300">Rose</span>
+          {" = Risk / caution — something working against the setup"}
+        </div>
+
+        <div className="pt-1 text-muted-foreground/80">
+          The setup grade badge (top-right of each card) uses its own tier color and is separate from these tag colors.
+        </div>
+      </div>
+    </details>
+  );
+}
+
 export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: string | null } = {}) {
   const [filter, setFilter] = useState<FilterKey>("all");
 
@@ -348,6 +384,8 @@ export function MoundPowerRadar({ selectedGameId = null }: { selectedGameId?: st
           </p>
         </Card>
       )}
+
+      <MoundTagColorKey />
 
       <div className="grid gap-2.5">
         {signals.map((s) => (
