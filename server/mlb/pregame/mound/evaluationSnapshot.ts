@@ -250,6 +250,16 @@ export function applyMoundSnapshotLifecycle(
  * pinned moundDirection for each (buildMlbMoundRadar.ts's existing per-pitcher
  * loop already does this before this function runs) — this function reads
  * `signal.moundDirection` as already-pinned, never re-derives it.
+ *
+ * IMPORTANT: `carryForwardDroppedFromMound` (moundGradedStateCarry.ts)
+ * produces a carried-over signal via a SHALLOW spread of `prev`
+ * (`{ ...prev, ... }`), so `carried.diagnostics` is the SAME object
+ * reference as `prev.diagnostics` — not a copy, and `prev` may still be
+ * reachable from the retained previous snapshot until this build's
+ * `setMoundSnapshot()` call swaps it in. `diagnostics` is therefore always
+ * shallow-cloned here before attaching the new `evaluation` field, never
+ * assigned into the existing object, so this pass can never mutate a
+ * retained prior-build or hydration object.
  */
 export function applyMoundEvaluationSnapshots(
   signals: Map<string, MoundSignal>,
@@ -277,7 +287,9 @@ export function applyMoundEvaluationSnapshots(
     const prevEvaluation = prev?.diagnostics?.evaluation ?? null;
     // fresh.moundDirection is already correctly pinned by this point — see
     // this function's own doc comment above.
-    fresh.diagnostics.evaluation = applyMoundSnapshotLifecycle(prevEvaluation, currentSnapshot, transition, fresh.moundDirection);
+    const evaluation = applyMoundSnapshotLifecycle(prevEvaluation, currentSnapshot, transition, fresh.moundDirection);
+    // Never mutate fresh.diagnostics in place — see doc comment above.
+    fresh.diagnostics = { ...fresh.diagnostics, evaluation };
   }
 }
 

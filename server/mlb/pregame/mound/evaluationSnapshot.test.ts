@@ -13,6 +13,7 @@ import {
   applyMoundEvaluationSnapshots,
   computeMoundGradingMeasurements,
 } from "./evaluationSnapshot";
+import { deriveMoundOutcome } from "./moundOutcomeAttribution";
 import type { MoundSignal, MoundEvaluationRecord } from "./types";
 
 let passed = 0;
@@ -199,6 +200,44 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
   ok(finalPregameSnapshot.champion.postedLine.outs.lineUnavailableReason === "no_data_source", "reason is no_data_source, not borrowed from Ks");
   const m = computeMoundGradingMeasurements("pitcher_outs", "follow", finalPregameSnapshot, null, 15, null);
   ok(m.actualVsFrozenLine.line === null, "Outs grading measurement never uses the Ks line as a substitute");
+}
+
+// ── 11. Existing public classification (deriveMoundOutcome) is untouched and independent of the new shadow measurement ──
+// deriveMoundOutcome is moundOutcomeAttribution.ts's PRODUCTION function — not
+// modified by this instrumentation (see the diff). This test runs BOTH the
+// existing public classifier and the new shadow-only measurement against the
+// identical inputs and proves neither reads from nor writes into the other:
+// the public outcome uses the LIVE-refetched baseline (unchanged, as today),
+// while the shadow measurement independently uses the FROZEN baseline — two
+// different baseline sources can legitimately disagree without either one
+// mutating or depending on the other's result.
+{
+  const liveRefetchedBaseline = 5; // what deriveMoundOutcome uses today, live
+  const frozenBaselineAtBuildTime = 6; // what was captured pregame — deliberately different
+  const finalStrikeouts = 5; // clears the live baseline (5) but NOT the frozen one (6)
+
+  const publicOutcome = deriveMoundOutcome({
+    primaryMarket: "pitcher_strikeouts",
+    finalStrikeouts,
+    finalOutsRecorded: null,
+    seasonKPer9: (liveRefetchedBaseline * 9) / 6, // reverse the projectedStrikeoutsFromKPer9 math for a clean baseline of 5
+    seasonAvgInningsPerStart: null,
+    wasPubliclyFlagged: true,
+    moundDirection: "follow",
+  });
+  ok(publicOutcome.outcome === "mound_win" && publicOutcome.userVisible === true,
+    "Public classification (deriveMoundOutcome, UNMODIFIED production code): 5 clears the live baseline (5) → mound_win");
+  ok(publicOutcome.seasonBaselineValue === 5, "Public classification's baseline is the LIVE one (5), exactly as it is in production today");
+
+  const finalPregameSnapshot = buildMoundEvaluationSnapshot(
+    sig({}), { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", (frozenBaselineAtBuildTime * 9) / 6, null,
+  );
+  const shadowMeasurement = computeMoundGradingMeasurements("pitcher_strikeouts", "follow", finalPregameSnapshot, finalStrikeouts, null, null);
+  ok(shadowMeasurement.championVsFrozenBaseline.baselineValue === 6, "Shadow measurement's baseline is the FROZEN one (6), independently sourced");
+  ok(shadowMeasurement.championVsFrozenBaseline.directionResult === "loss",
+    "Shadow measurement: 5 does NOT clear the frozen baseline (6) → loss — DISAGREES with the public mound_win, proving true independence");
+
+  ok(publicOutcome.outcome === "mound_win", "Public outcome is STILL mound_win after computing the disagreeing shadow measurement — no cross-contamination either direction");
 }
 
 console.log(`\nevaluationSnapshot.test (Mound): ${passed} passed, ${failed} failed`);

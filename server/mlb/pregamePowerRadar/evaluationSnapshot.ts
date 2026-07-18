@@ -195,6 +195,18 @@ export function applySnapshotLifecycle(
  * `signal.diagnostics.evaluation`. Call once per build cycle, after every
  * candidate for the cycle has been built (and after the existing
  * carryForwardGradedState pass), before persistence.
+ *
+ * IMPORTANT: `carryForwardDroppedFromLineup` (gradedStateCarry.ts) produces a
+ * carried-over signal via a SHALLOW spread of `prev` (`{ ...prev, ... }`), so
+ * `carried.diagnostics` is the SAME object reference as `prev.diagnostics` —
+ * not a copy. `prev` here may still be reachable from the retained previous
+ * snapshot (`getSnapshot()` continues serving it to concurrent readers until
+ * `setSnapshot()` swaps it in at the end of this build). Mutating
+ * `fresh.diagnostics` in place would therefore silently corrupt that prior
+ * snapshot's object graph for every carried-over signal. To guarantee this
+ * pass only ever writes to fresh, current-build objects, `diagnostics` is
+ * always shallow-cloned here before attaching the new `evaluation` field —
+ * never assigned into the existing object.
  */
 export function applyEvaluationSnapshots(
   signals: Map<string, PregamePowerSignal>,
@@ -210,6 +222,8 @@ export function applyEvaluationSnapshots(
     const currentSnapshot = buildEvaluationSnapshot(fresh, rank, buildId, all.length, frozenAt);
     const transition = detectTransition(fresh, prev);
     const prevEvaluation = prev?.diagnostics?.evaluation ?? null;
-    fresh.diagnostics.evaluation = applySnapshotLifecycle(prevEvaluation, currentSnapshot, transition);
+    const evaluation = applySnapshotLifecycle(prevEvaluation, currentSnapshot, transition);
+    // Never mutate fresh.diagnostics in place — see doc comment above.
+    fresh.diagnostics = { ...fresh.diagnostics, evaluation };
   }
 }
