@@ -1,21 +1,23 @@
-// HR Radar — "Recent Hits" proof strip. Always-on social proof when cashed
-// signals exist today: a single celebratory line ("🏆 3 HR cashed today") that
-// rewards the loop and builds trust. PRESENTATION ONLY.
+// HR Radar — "Today's Official Results" strip. Fire-only counts (never
+// tracked/uncalled HRs) with a celebratory pulse when a fresh Signal Hit just
+// landed this session. PRESENTATION ONLY.
 
 import { Trophy } from "lucide-react";
-import type { HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
 import { CashCelebration } from "@/components/mlb/hrRadarVisuals";
 
 export function HrRadarRecentHitsStrip({
-  cashed,
+  signalHits,
+  officialMisses,
   freshCount = 0,
 }: {
-  cashed: HrRadarCardViewModel[];
-  /** Number that just transitioned into cashed this session → celebrate. */
+  /** Fire-tier cashes only — server-derived (decisionView.counts.fireHitsToday). */
+  signalHits: number;
+  /** Fire-tier no-HR resolutions only (decisionView.counts.fireMissesToday). */
+  officialMisses: number;
+  /** Number that just transitioned into a Signal Hit this session → celebrate. */
   freshCount?: number;
 }) {
-  if (cashed.length === 0) return null;
-  const names = cashed.slice(0, 3).map((c) => c.playerName).join(" · ");
+  if (signalHits === 0 && officialMisses === 0) return null;
   const celebrate = freshCount > 0;
 
   const inner = (
@@ -24,14 +26,17 @@ export function HrRadarRecentHitsStrip({
       data-testid="hr-recent-hits-strip"
     >
       <Trophy className="w-4 h-4 text-emerald-400 shrink-0" />
-      <span className="text-sm font-bold text-emerald-300 shrink-0">
-        {cashed.length} HR cashed today
-      </span>
-      {names && (
-        <span className="text-xs text-emerald-200/70 truncate" data-testid="text-recent-hits-names">
-          · {names}
-        </span>
-      )}
+      <div className="min-w-0">
+        <div className="text-[9px] font-bold uppercase tracking-wide text-emerald-400/80">
+          Today&apos;s Official Results
+        </div>
+        <div className="text-sm font-bold text-emerald-300">
+          {signalHits} Signal Hit{signalHits === 1 ? "" : "s"}
+          {officialMisses > 0 && (
+            <span className="text-muted-foreground font-medium"> · {officialMisses} Missed</span>
+          )}
+        </div>
+      </div>
     </div>
   );
 

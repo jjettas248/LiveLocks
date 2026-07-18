@@ -8,6 +8,7 @@
 
 import {
   buildHrRadarCardViewModel,
+  buildConsumerViewModels,
   selectQuickDecide,
   selectTopPriority,
   topPriorityReasonLabel,
@@ -16,6 +17,7 @@ import {
 } from "@/lib/mlb/hrRadarViewModel";
 import { detectStageMovements } from "@/components/mlb/hr-radar/HrRadarStageToast";
 import type { HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
+import type { HrRadarConsumerEntry, HrRadarDecisionView } from "@shared/hrRadarDecisionView";
 
 let pass = 0;
 let fail = 0;
@@ -40,29 +42,37 @@ function entry(p: Partial<HrRadarLadderEntry>): HrRadarLadderEntry {
 
 console.log("\n=== HR Radar View Model — Invariant Suite ===\n");
 
-// ── 1. Stage mapping ───────────────────────────────────────────────────────
-console.log("stage mapping");
+// ── 1. Stage mapping (legacy fallback path — no `consumer` supplied) ───────
+console.log("stage mapping (legacy fallback path)");
 {
   const fire = buildHrRadarCardViewModel(entry({ userStage: "fire", officialSignalStage: "fire", displayCurrentScore10: 9.2 }));
   assert("fire userStage → fire", fire.stage === "fire");
   assert("fire is official call", fire.isOfficialCall === true);
   assert("fire is hero eligible", fire.isHeroEligible === true);
-  assert("fire CTA is take_it", fire.primaryCta === "take_it");
+  assert("fire CTA is take_now", fire.primaryCta === "take_now");
+  assert("fire canAddToSlip true", fire.canAddToSlip === true);
+  assert("fire canWatchNextAb false", fire.canWatchNextAb === false);
+  assert("fire promotionRequirement null", fire.promotionRequirement === null);
 
   const ready = buildHrRadarCardViewModel(entry({ userStage: "ready", displayCurrentScore10: 7.8 }));
   assert("ready userStage → ready", ready.stage === "ready");
   assert("ready is hero eligible", ready.isHeroEligible === true);
   assert("ready is NOT official", ready.isOfficialCall === false);
-  assert("ready CTA is watch_next_ab (never take_it)", ready.primaryCta === "watch_next_ab");
+  assert("ready CTA is watch_next_ab (never take_now)", ready.primaryCta === "watch_next_ab");
+  assert("ready canAddToSlip false — Ready is never a bet", ready.canAddToSlip === false);
+  assert("ready canWatchNextAb true", ready.canWatchNextAb === true);
 
   const build = buildHrRadarCardViewModel(entry({ userStage: "build", displayCurrentScore10: 4.5 }));
-  assert("build → build, not hero, track_next_ab", build.stage === "build" && !build.isHeroEligible && build.primaryCta === "track_next_ab");
+  assert("build → build, not hero, no CTA", build.stage === "build" && !build.isHeroEligible && build.primaryCta === "none");
+  assert("build canAddToSlip/canWatchNextAb both false", build.canAddToSlip === false && build.canWatchNextAb === false);
 
   const track = buildHrRadarCardViewModel(entry({ userStage: "track", displayCurrentScore10: 2.1 }));
-  assert("track → track, not hero, add_to_watch", track.stage === "track" && !track.isHeroEligible && track.primaryCta === "add_to_watch");
+  assert("track → track, not hero, no CTA", track.stage === "track" && !track.isHeroEligible && track.primaryCta === "none");
+  assert("track canAddToSlip/canWatchNextAb both false", track.canAddToSlip === false && track.canWatchNextAb === false);
 
   const cashed = buildHrRadarCardViewModel(entry({ userStage: "resolved", outcome: "called_hit", displayCurrentScore10: 8 }), { sectionHint: "cashed" });
-  assert("resolved + cashed hint → cashed, resolved, view_hit", cashed.stage === "cashed" && cashed.isResolved && cashed.primaryCta === "view_hit");
+  assert("resolved + cashed hint → cashed, resolved, no CTA", cashed.stage === "cashed" && cashed.isResolved && cashed.primaryCta === "none");
+  assert("resolved rows never carry canAddToSlip/canWatchNextAb", cashed.canAddToSlip === false && cashed.canWatchNextAb === false);
 
   const missed = buildHrRadarCardViewModel(entry({ userStage: "resolved", outcome: "called_miss" }), { sectionHint: "missed" });
   assert("resolved + missed hint → missed", missed.stage === "missed" && missed.isResolved);
@@ -72,6 +82,112 @@ console.log("stage mapping");
   assert("resolved outcome called_hit_* → cashed (no hint)", cashedNoHint.stage === "cashed");
   const missedNoHint = buildHrRadarCardViewModel(entry({ currentStatus: "resolved", outcome: "called_miss" }));
   assert("resolved outcome miss → missed (no hint)", missedNoHint.stage === "missed");
+}
+
+// ── 1b. Stage mapping (decision-view consumer path — the normal path) ──────
+console.log("\nstage mapping (decision-view consumer path)");
+{
+  function consumerFor(
+    e: HrRadarLadderEntry,
+    overrides: Partial<HrRadarConsumerEntry<HrRadarLadderEntry>>,
+  ): HrRadarConsumerEntry<HrRadarLadderEntry> {
+    return {
+      entryId: `${e.gameId}:${e.playerId}`,
+      source: e,
+      liveStage: null,
+      resultType: null,
+      consumerAction: "none",
+      isResolved: false,
+      hasFireCommitment: false,
+      canAddToSlip: false,
+      canWatchNextAb: false,
+      promotionRequirement: null,
+      ...overrides,
+    };
+  }
+
+  const fireEntry = entry({ userStage: "fire", displayCurrentScore10: 9.2 });
+  const fireConsumer = consumerFor(fireEntry, {
+    liveStage: "fire", consumerAction: "take_now", hasFireCommitment: true, canAddToSlip: true,
+  });
+  const fireVm = buildHrRadarCardViewModel(fireEntry, { consumer: fireConsumer });
+  assert("consumer-path Fire → stage fire, take_now, canAddToSlip true",
+    fireVm.stage === "fire" && fireVm.primaryCta === "take_now" && fireVm.canAddToSlip === true);
+  assert("consumer-path Fire → isOfficialCall true", fireVm.isOfficialCall === true);
+
+  const readyEntry = entry({ userStage: "ready", displayCurrentScore10: 7.5 });
+  const readyConsumer = consumerFor(readyEntry, {
+    liveStage: "ready", consumerAction: "watch_next_ab", canWatchNextAb: true,
+    promotionRequirement: "Needs one more qualifying contact event.",
+  });
+  const readyVm = buildHrRadarCardViewModel(readyEntry, { consumer: readyConsumer });
+  assert("consumer-path Ready → watch_next_ab, canWatchNextAb true, canAddToSlip false",
+    readyVm.primaryCta === "watch_next_ab" && readyVm.canWatchNextAb === true && readyVm.canAddToSlip === false);
+  assert("consumer-path Ready → promotionRequirement verbatim from server",
+    readyVm.promotionRequirement === "Needs one more qualifying contact event.");
+
+  const buildEntry = entry({ userStage: "build", displayCurrentScore10: 4.0 });
+  const buildConsumer = consumerFor(buildEntry, { liveStage: "build" });
+  const buildVm = buildHrRadarCardViewModel(buildEntry, { consumer: buildConsumer });
+  assert("consumer-path Build → no CTA, never canAddToSlip",
+    buildVm.primaryCta === "none" && buildVm.canAddToSlip === false && buildVm.canWatchNextAb === false);
+
+  // A Fire row whose server said canAddToSlip=false (invalid bet payload)
+  // must still surface take_now (it IS an official call) but never let the
+  // client add it to the slip.
+  const brokenFireEntry = entry({ userStage: "fire", displayCurrentScore10: 9.5 });
+  const brokenFireConsumer = consumerFor(brokenFireEntry, {
+    liveStage: "fire", consumerAction: "take_now", hasFireCommitment: true, canAddToSlip: false,
+  });
+  const brokenFireVm = buildHrRadarCardViewModel(brokenFireEntry, { consumer: brokenFireConsumer });
+  assert("Fire with invalid bet payload: still take_now but canAddToSlip false",
+    brokenFireVm.primaryCta === "take_now" && brokenFireVm.canAddToSlip === false);
+
+  const signalHitEntry = entry({ currentStatus: "resolved", outcome: "called_hit" });
+  const signalHitConsumer = consumerFor(signalHitEntry, {
+    isResolved: true, resultType: "signal_hit", hasFireCommitment: true,
+  });
+  const signalHitVm = buildHrRadarCardViewModel(signalHitEntry, { consumer: signalHitConsumer });
+  assert("consumer-path signal_hit → stage cashed, resolved, no CTA",
+    signalHitVm.stage === "cashed" && signalHitVm.isResolved && signalHitVm.primaryCta === "none");
+
+  const officialMissEntry = entry({ currentStatus: "resolved", outcome: "miss" });
+  const officialMissConsumer = consumerFor(officialMissEntry, {
+    isResolved: true, resultType: "official_miss", hasFireCommitment: true,
+  });
+  const officialMissVm = buildHrRadarCardViewModel(officialMissEntry, { consumer: officialMissConsumer });
+  assert("consumer-path official_miss → stage missed", officialMissVm.stage === "missed" && officialMissVm.isResolved);
+
+  // model_review resolved rows are never passed to buildHrRadarCardViewModel
+  // by callers (filtered before reaching a consumer VM) — not exercised here.
+
+  // buildConsumerViewModels — reads straight from a decisionView shape.
+  const decisionView: HrRadarDecisionView<HrRadarLadderEntry> = {
+    version: "hr-radar-decision-v1",
+    status: "ok",
+    sessionDate: "2026-07-18",
+    generatedAt: "2026-07-18T00:00:00.000Z",
+    entries: {
+      "g:fire-id": consumerFor(entry({ gameId: "g", playerId: "fire-id" }), {
+        liveStage: "fire", consumerAction: "take_now", canAddToSlip: true, hasFireCommitment: true,
+      }),
+    },
+    groups: {
+      takeNow: ["g:fire-id"], watchNextAb: [], build: [], watch: [],
+      waitingForFirstAb: [], signalHits: [], officialMisses: [], modelReview: [],
+    },
+    counts: {
+      takeNow: 1, watchNextAb: 0, build: 0, watch: 0, forming: 0,
+      waitingForFirstAb: 0, liveTracked: 1, fireHitsToday: 0, fireMissesToday: 0, modelReview: 0,
+    },
+  };
+  const vms = buildConsumerViewModels(decisionView, decisionView.groups.takeNow);
+  assert("buildConsumerViewModels returns one VM for the one takeNow id",
+    vms.length === 1 && vms[0].stage === "fire" && vms[0].canAddToSlip === true);
+  assert("buildConsumerViewModels skips an unknown id instead of throwing",
+    buildConsumerViewModels(decisionView, ["missing:id"]).length === 0);
+  assert("buildConsumerViewModels returns [] for an undefined decisionView",
+    buildConsumerViewModels(undefined, ["anything"]).length === 0);
 }
 
 // ── 2. No client-side score calculation / no raw-diagnostic leak ───────────
@@ -195,7 +311,7 @@ console.log("\ncross-tier board priority");
   assert("no live rows → no top priority", selectTopPriority([withResolved[0]]) == null);
 
   const labeled = buildHrRadarCardViewModel(entry({ playerId: "l1", userStage: "ready", displayCurrentScore10: 8, momentumLabel: "heating_up" }));
-  assert("reason label includes stage and momentum", topPriorityReasonLabel(labeled) === "Playable · heating up");
+  assert("reason label includes stage and momentum", topPriorityReasonLabel(labeled) === "Ready · heating up");
 }
 
 // ── 6. Stage-movement detection (dopamine layer) ───────────────────────────
@@ -211,12 +327,12 @@ console.log("\nstage movement detection");
   assert("only upward move surfaces", moves.length === 1 && moves[0].id === "x|g" && moves[0].to === "ready");
 }
 
-// ── 7. Stage labels consistent ─────────────────────────────────────────────
+// ── 7. Stage labels consistent — the ONE consumer vocabulary ───────────────
 console.log("\nstage labels");
-assert("public labels cover the one ladder",
-  HR_PUBLIC_STAGE_LABEL.track === "Watchlist" && HR_PUBLIC_STAGE_LABEL.build === "Lean" &&
-  HR_PUBLIC_STAGE_LABEL.ready === "Playable" && HR_PUBLIC_STAGE_LABEL.fire === "Attack" &&
-  HR_PUBLIC_STAGE_LABEL.cashed === "Cashed" && HR_PUBLIC_STAGE_LABEL.missed === "Missed");
+assert("public labels use the one consumer vocabulary (no Attack/Playable/Lean/Watchlist/Cashed)",
+  HR_PUBLIC_STAGE_LABEL.track === "Watch" && HR_PUBLIC_STAGE_LABEL.build === "Build" &&
+  HR_PUBLIC_STAGE_LABEL.ready === "Ready" && HR_PUBLIC_STAGE_LABEL.fire === "Fire" &&
+  HR_PUBLIC_STAGE_LABEL.cashed === "Signal Hit" && HR_PUBLIC_STAGE_LABEL.missed === "Missed");
 
 console.log(`\n=== Result: ${pass} pass, ${fail} fail ===`);
 if (fail > 0) { for (const f of failures) console.log(` - ${f}`); process.exit(1); }

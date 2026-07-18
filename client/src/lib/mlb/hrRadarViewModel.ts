@@ -1,22 +1,29 @@
 // HR Radar — canonical CLIENT view model. PRESENTATION-ONLY, PURE, React-free.
 //
-// The "Hot Seat" Quick Decide feed and the Full Ladder command table both read
-// this one mapper so they can never disagree on stage, score, drivers, or CTA.
-// It is a thin display layer OVER the already-canonical
-// `mapHrRadarRowToDisplayState` (hrRadarDisplayState.ts) — it NEVER computes an
-// engine score, infers a stage from raw stats, derives a probability, or
-// reconstructs signal logic. It only READS server-stamped fields and shapes
-// them into the fields the UI renders (CLAUDE.md §3.3/§3.5/§7.4 — UI renders
-// engine truth only).
+// Quick Decide and the Full Ladder both read this one mapper so they can
+// never disagree on stage, score, drivers, or CTA. Classification (stage,
+// consumer action, canAddToSlip/canWatchNextAb, promotionRequirement) is
+// sourced from the server's decision view (shared/hrRadarDecisionView.ts) —
+// see `buildConsumerViewModels`. This module NEVER computes an engine score,
+// infers a stage from raw stats, derives a probability, or reconstructs
+// signal logic; it only reads server-stamped fields (either the decision
+// view's consumer fields, or — for the one-time legacy-fallback path when a
+// response predates `decisionView` — the older `mapHrRadarRowToDisplayState`
+// adapter) and shapes them into what the UI renders (CLAUDE.md §3.3/§3.5/§7.4
+// — UI renders engine truth only).
 
 import type { HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
 import {
   mapHrRadarRowToDisplayState,
-  LIVE_STAGE_LABEL,
   type HrRadarRowInput,
-  type CanonicalUserStage,
 } from "@/components/mlb/hrRadarDisplayState";
 import { HR_RADAR_BADGE_META, type HrRadarBadge, type HrRadarBadgeTone } from "@shared/hrRadarStage";
+import type { HrRadarConsumerEntry, HrRadarDecisionView, HrRadarLiveStage } from "@shared/hrRadarDecisionView";
+import {
+  HR_RADAR_STAGE_COPY,
+  HR_RADAR_RESULT_COPY,
+  HR_RADAR_PROMOTION_FALLBACK,
+} from "@/components/mlb/hrRadarConsumerCopy";
 
 // A driver chip's label alone lost its meaning (fire/warn/info/good) once it
 // left the badge taxonomy — every chip then had to borrow its ROW's stage
@@ -30,12 +37,9 @@ export interface HrDriverChip {
 // ── The one public ladder, everywhere. ───────────────────────────────────────
 export type HrPublicStage = "track" | "build" | "ready" | "fire" | "cashed" | "missed";
 
-export type HrPrimaryCta =
-  | "add_to_watch"
-  | "track_next_ab"
-  | "watch_next_ab"
-  | "take_it"
-  | "view_hit";
+/** Mirrors the server's HrRadarConsumerAction — Build/Watch/resolved rows all
+ *  get "none" (no primary CTA at all; callers must not render a button). */
+export type HrPrimaryCta = "take_now" | "watch_next_ab" | "none";
 
 export interface HrRadarCardViewModel {
   id: string;
@@ -69,6 +73,13 @@ export interface HrRadarCardViewModel {
   recordEligible: boolean;
   inningLabel: string | null;
   nextPaLabel: string | null;
+  /** Server-derived: true only when stage === "fire" && bet-payload valid. */
+  canAddToSlip: boolean;
+  /** Server-derived: true only when stage === "ready". */
+  canWatchNextAb: boolean;
+  /** What's needed to promote this row, verbatim from the server when
+   *  supplied, else a stage-safe fallback. Null for Fire/resolved rows. */
+  promotionRequirement: string | null;
   /** Higher = more important. Stage dominates, then score, then momentum/urgency. */
   sortRank: number;
   /** Raw entry passed through for the diagnostic drawer (admin/debug detail). */
@@ -84,17 +95,13 @@ const STAGE_WEIGHT: Record<HrPublicStage, number> = {
   missed: 0,
 };
 
-const STAGE_CTA: Record<HrPublicStage, { cta: HrPrimaryCta; label: string }> = {
-  track: { cta: "add_to_watch", label: "Add to Watch" },
-  build: { cta: "track_next_ab", label: "Track Next AB" },
-  ready: { cta: "watch_next_ab", label: "Watch Next AB" },
-  fire: { cta: "take_it", label: "Take It" },
-  cashed: { cta: "view_hit", label: "View Hit" },
-  missed: { cta: "view_hit", label: "View" },
-};
+function lower(v: unknown): string {
+  return String(v ?? "").trim().toLowerCase();
+}
 
 // Outcomes that mean the called signal CASHED (HR landed after a call). Anything
 // else resolved is a miss. Read from the server outcome, never re-derived.
+// Used only by the legacy fallback path (no decisionView available).
 const CASHED_OUTCOMES = new Set([
   "called_hit",
   "called_hit_attack",
@@ -104,10 +111,6 @@ const CASHED_OUTCOMES = new Set([
   "called_near_hr",
 ]);
 
-function lower(v: unknown): string {
-  return String(v ?? "").trim().toLowerCase();
-}
-
 function isCashedOutcome(entry: HrRadarLadderEntry): boolean {
   const o = lower(entry.outcome) || lower(entry.outcomeStatus);
   return CASHED_OUTCOMES.has(o);
@@ -115,16 +118,101 @@ function isCashedOutcome(entry: HrRadarLadderEntry): boolean {
 
 // Map the canonical live user-stage onto the public ladder. Resolved rows are
 // split into cashed/missed by the server outcome (or an explicit section hint).
-function publicStage(
-  stage: CanonicalUserStage,
+// LEGACY FALLBACK ONLY — used when a ladder response predates `decisionView`.
+function legacyPublicStage(
+  stage: HrRadarRowInput["userStage"],
   entry: HrRadarLadderEntry,
   sectionHint?: "cashed" | "missed",
 ): HrPublicStage {
-  if (stage === "resolved") {
+  const s = lower(stage);
+  if (s === "resolved") {
     if (sectionHint) return sectionHint;
     return isCashedOutcome(entry) ? "cashed" : "missed";
   }
-  return stage; // "track" | "build" | "ready" | "fire" already align 1:1
+  if (s === "fire" || s === "ready" || s === "build" || s === "track") return s as HrPublicStage;
+  return "track";
+}
+
+interface Classification {
+  stage: HrPublicStage;
+  primaryCta: HrPrimaryCta;
+  isResolved: boolean;
+  canAddToSlip: boolean;
+  canWatchNextAb: boolean;
+  promotionRequirement: string | null;
+  isOfficialCall: boolean;
+  recordEligible: boolean;
+}
+
+function publicStageFromLiveStage(liveStage: HrRadarLiveStage): HrPublicStage {
+  if (liveStage === "watch") return "track";
+  return liveStage ?? "track";
+}
+
+/** Classification sourced from the server's decision view — the normal path. */
+function classifyFromConsumer(consumer: HrRadarConsumerEntry<HrRadarLadderEntry>): Classification {
+  let stage: HrPublicStage;
+  if (consumer.isResolved) {
+    stage = consumer.resultType === "signal_hit" ? "cashed" : "missed";
+  } else {
+    stage = publicStageFromLiveStage(consumer.liveStage);
+  }
+  return {
+    stage,
+    primaryCta: consumer.consumerAction,
+    isResolved: consumer.isResolved,
+    canAddToSlip: consumer.canAddToSlip,
+    canWatchNextAb: consumer.canWatchNextAb,
+    promotionRequirement: consumer.promotionRequirement,
+    isOfficialCall: !consumer.isResolved && consumer.liveStage === "fire" && consumer.hasFireCommitment,
+    recordEligible: consumer.hasFireCommitment,
+  };
+}
+
+/**
+ * LEGACY FALLBACK classification — used only when a ladder response has no
+ * `decisionView` (an old service-worker-cached API response, or a rollback).
+ * Mirrors the server's own rules (Fire-only slip access, Ready-only watch)
+ * so behavior matches even without the authoritative contract; emits one
+ * bounded diagnostic via the caller (see hrRadarDecisionViewFallback below)
+ * rather than silently reintroducing per-component count math.
+ */
+function classifyLegacy(
+  d: ReturnType<typeof mapHrRadarRowToDisplayState>,
+  entry: HrRadarLadderEntry,
+  sectionHint?: "cashed" | "missed",
+): Classification {
+  const stage = legacyPublicStage(d.userStage, entry, sectionHint);
+  const isResolved = stage === "cashed" || stage === "missed";
+  const primaryCta: HrPrimaryCta =
+    stage === "fire" && !isResolved ? "take_now" : stage === "ready" && !isResolved ? "watch_next_ab" : "none";
+  const hasValidIdentity = Boolean(entry.playerId && entry.playerName && entry.gameId);
+  const promotionRequirement =
+    !isResolved && (stage === "ready" || stage === "build" || stage === "track")
+      ? (d.nextEscalation ?? HR_RADAR_PROMOTION_FALLBACK[stage === "track" ? "watch" : stage])
+      : null;
+  return {
+    stage,
+    primaryCta,
+    isResolved,
+    canAddToSlip: stage === "fire" && !isResolved && hasValidIdentity,
+    canWatchNextAb: stage === "ready" && !isResolved,
+    promotionRequirement,
+    isOfficialCall: d.isOfficialCall,
+    recordEligible: d.recordEligible,
+  };
+}
+
+let fallbackWarned = false;
+/** Emits `[HR_RADAR_DECISION_VIEW_FALLBACK]` once per session, not per-render. */
+function warnFallbackOnce(): void {
+  if (fallbackWarned) return;
+  fallbackWarned = true;
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[HR_RADAR_DECISION_VIEW_FALLBACK] ladder response has no decisionView — using the legacy client adapter. " +
+    "This should be transient during rollout; if it persists, the server is not stamping decisionView.",
+  );
 }
 
 // Build ≤3 short trigger chips from server-stamped evidence ONLY — the badge
@@ -225,22 +313,30 @@ function priorityReasonFor(entry: HrRadarLadderEntry): string | null {
 }
 
 /**
- * Map one server HR Radar row → display view model. `sectionHint` lets a caller
- * pass the authoritative server grouping for resolved rows (sections.cashed vs
- * sections.dead) so cashed/missed is engine truth, not a client re-derivation.
+ * Map one server HR Radar row → display view model.
+ *
+ * `opts.consumer` — the matching `HrRadarConsumerEntry` from
+ * `decisionView.entries[entryId]`. This is the NORMAL path: stage, CTA,
+ * canAddToSlip/canWatchNextAb, and promotionRequirement all come verbatim
+ * from the server. `opts.sectionHint` is legacy-fallback-only.
  */
 export function buildHrRadarCardViewModel(
   entry: HrRadarLadderEntry,
-  opts: { sectionHint?: "cashed" | "missed" } = {},
+  opts: { sectionHint?: "cashed" | "missed"; consumer?: HrRadarConsumerEntry<HrRadarLadderEntry> } = {},
 ): HrRadarCardViewModel {
   const d = mapHrRadarRowToDisplayState(entry as unknown as HrRadarRowInput);
-  const stage = publicStage(d.userStage, entry, opts.sectionHint);
-  const isResolved = stage === "cashed" || stage === "missed";
+  if (!opts.consumer) warnFallbackOnce();
+  const classification = opts.consumer
+    ? classifyFromConsumer(opts.consumer)
+    : classifyLegacy(d, entry, opts.sectionHint);
+  const { stage, primaryCta, isResolved, canAddToSlip, canWatchNextAb, promotionRequirement, isOfficialCall, recordEligible } = classification;
+
   const score10 = d.displayScore10 ?? 0;
   const drivers = d.drivers;
   const headline = drivers[0] ?? d.actionStrengthLabel;
   const subhead = drivers[1] ?? "";
-  const { cta, label } = STAGE_CTA[stage];
+  const primaryCtaLabel =
+    primaryCta === "take_now" ? "Take Now" : primaryCta === "watch_next_ab" ? "Watch Next AB" : "";
 
   return {
     id: `${entry.playerId}|${entry.gameId}`,
@@ -256,15 +352,18 @@ export function buildHrRadarCardViewModel(
     subhead,
     nextEventLabel: nextEventFor(stage, d.nextEscalation),
     driverChips: buildDriverChips(entry, drivers),
-    primaryCta: cta,
-    primaryCtaLabel: label,
-    isOfficialCall: d.isOfficialCall,
+    primaryCta,
+    primaryCtaLabel,
+    isOfficialCall,
     isHeroEligible: !isResolved && (stage === "fire" || stage === "ready"),
     isResolved,
     hrChancePct: stage === "fire" ? d.hrChancePct : null,
-    recordEligible: d.recordEligible,
+    recordEligible,
     inningLabel: d.inningLabel,
     nextPaLabel: formatNextPa(entry),
+    canAddToSlip,
+    canWatchNextAb,
+    promotionRequirement,
     // Stage bucket (×100) dominates; score is the primary in-tier ranking;
     // momentum/urgency are small tie-breakers so a heating-up, almost-out-of-
     // PAs signal edges out a flatter same-tier peer with an identical score.
@@ -275,14 +374,35 @@ export function buildHrRadarCardViewModel(
   };
 }
 
-/** Public stage → display label (the one vocabulary) — the playability
- *  language: Watchlist/Lean/Playable/Attack. Only Playable/Attack are
- *  official calls; the ladder reads as betting guidance, not internal
- *  engine jargon. */
+/**
+ * Build view models for a list of `entryId`s from the decision view — the
+ * standard way both Quick Decide and the Full Ladder should read a
+ * `decisionView.groups.*` array. Skips any id that isn't present in
+ * `entries` (should not happen; the decision view guarantees referential
+ * integrity, but this stays defensive).
+ */
+export function buildConsumerViewModels(
+  decisionView: HrRadarDecisionView<HrRadarLadderEntry> | null | undefined,
+  entryIds: readonly string[],
+): HrRadarCardViewModel[] {
+  if (!decisionView) return [];
+  const out: HrRadarCardViewModel[] = [];
+  for (const id of entryIds) {
+    const consumer = decisionView.entries[id];
+    if (!consumer) continue;
+    out.push(buildHrRadarCardViewModel(consumer.source, { consumer }));
+  }
+  return out;
+}
+
+/** Public stage → display label (the one vocabulary, hrRadarConsumerCopy.ts). */
 export const HR_PUBLIC_STAGE_LABEL: Record<HrPublicStage, string> = {
-  ...LIVE_STAGE_LABEL,
-  cashed: "Cashed",
-  missed: "Missed",
+  track: HR_RADAR_STAGE_COPY.watch.short,
+  build: HR_RADAR_STAGE_COPY.build.short,
+  ready: HR_RADAR_STAGE_COPY.ready.short,
+  fire: HR_RADAR_STAGE_COPY.fire.short,
+  cashed: HR_RADAR_RESULT_COPY.signal_hit.short,
+  missed: HR_RADAR_RESULT_COPY.official_miss.short,
 };
 
 /** Sort live cards by importance (stage, then score) — highest first. */

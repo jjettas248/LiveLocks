@@ -10,6 +10,18 @@
 //   - It NEVER recomputes engine probability, readiness, confidence, or tier.
 //   - It only READS server-stamped fields and formats them for display.
 //   - It is React-free and DB-free so it is unit-testable with `npx tsx`.
+//
+// NOTE (post decision-view rebuild): Quick Decide and the Full Ladder now
+// source LIVE stage classification, action eligibility, and every displayed
+// count from the server's `decisionView` (shared/hrRadarDecisionView.ts) —
+// see hrRadarViewModel.ts. This module's classification fields
+// (userStage/section/isAdminOnly/isOfficialCall) remain here as the legacy
+// fallback adapter (used only when `decisionView` is absent from an old
+// cached response) and are still consumed for FORMATTING (score10, drivers,
+// grade, hrChancePct, inning label) regardless of which classification path
+// is active.
+
+import { HR_RADAR_STAGE_COPY, HR_RADAR_PROMOTION_FALLBACK } from "./hrRadarConsumerCopy";
 
 // ── Canonical user-facing sections ──────────────────────────────────────────
 // Live decision sections (top-down by conviction) + resolved + admin-only.
@@ -356,24 +368,26 @@ export function deriveDrivers(row: HrRadarRowInput, max = 4): string[] {
 
 // Per-stage escalation hint. This is static UI copy keyed off the stage, NOT a
 // recomputed probability or threshold — it tells the user what the engine is
-// waiting on to promote the row.
+// waiting on to promote the row. Sourced from the one consumer-copy module
+// (hrRadarConsumerCopy.ts) rather than a locally-hardcoded string per stage.
 const NEXT_ESCALATION: Record<CanonicalUserStage, string | null> = {
-  track: "Watchlist — needs harder contact and a confirming swing to develop.",
-  build: "Lean — one more barrel / hard fly can push this to Playable.",
-  ready: "Playable setup — one more barrel / hard fly becomes an Attack call.",
+  track: HR_RADAR_PROMOTION_FALLBACK.watch,
+  build: HR_RADAR_PROMOTION_FALLBACK.build,
+  ready: HR_RADAR_PROMOTION_FALLBACK.ready,
   fire: null,
   resolved: null,
 };
 
 // Shared with HR_PUBLIC_STAGE_LABEL (hrRadarViewModel.ts) — the one vocabulary
-// for the four live stages. Kept here (not re-derived) so there is exactly one
-// definition; the two consumers only diverge on how they label a resolved row
-// (this module: one "Resolved" bucket; the public ladder: split cashed/missed).
+// for the four live stages. Sourced from hrRadarConsumerCopy.ts (the single
+// consumer-facing copy module) so there is exactly one definition; the two
+// consumers only diverge on how they label a resolved row (this module: one
+// "Resolved" bucket; the public ladder: split cashed/missed).
 export const LIVE_STAGE_LABEL: Record<"track" | "build" | "ready" | "fire", string> = {
-  fire: "Attack",
-  ready: "Playable",
-  build: "Lean",
-  track: "Watchlist",
+  fire: HR_RADAR_STAGE_COPY.fire.short,
+  ready: HR_RADAR_STAGE_COPY.ready.short,
+  build: HR_RADAR_STAGE_COPY.build.short,
+  track: HR_RADAR_STAGE_COPY.watch.short,
 };
 
 const ACTION_STRENGTH_LABEL: Record<CanonicalUserStage, string> = {

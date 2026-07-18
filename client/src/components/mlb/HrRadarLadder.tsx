@@ -11,10 +11,16 @@ import { deriveCalibratedHrChancePct, buildHrRadarBreakdownBars, formatBreakdown
 import type { MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { getMlbInningWindow, getMlbInningWindowLabel, type MlbInningWindow } from "@shared/mlbInningWindow";
 import { type HrRadarBadge } from "@shared/hrRadarStage";
-import { buildHrRadarCardViewModel, buildDriverChips, selectTopPriority, topPriorityReasonLabel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
+import type { HrRadarDecisionView } from "@shared/hrRadarDecisionView";
+import { buildHrRadarCardViewModel, buildConsumerViewModels, buildDriverChips, selectTopPriority, topPriorityReasonLabel, type HrRadarCardViewModel } from "@/lib/mlb/hrRadarViewModel";
 import { HrRadarFullLadderTable } from "@/components/mlb/hr-radar/HrRadarFullLadderTable";
-import { HrRadarRecordBanner } from "@/components/mlb/hr-radar/HrRadarRecordBanner";
 import { hrTierTheme, TierRail, tierFromLadderSection, badgeToneClasses } from "@/components/mlb/hrRadarVisuals";
+import {
+  HR_RADAR_STAGE_COPY,
+  HR_RADAR_RESULT_COPY,
+  HR_RADAR_WAITING_FOR_FIRST_AB_COPY,
+  getHrRadarCtaLabel,
+} from "@/components/mlb/hrRadarConsumerCopy";
 
 // ── Signal-first inning pill (LiveLocks MLB UX Phase 1) ───────────────
 // Pure read of the row's currentInning (preferred) or detectedInning.
@@ -29,13 +35,20 @@ const HR_INNING_WINDOW_PILL: Record<MlbInningWindow, { label: string; color: str
 
 // Task #121 Step 3 — per-session dismiss + accept lists. Both keyed by
 // sessionDate so tomorrow's session starts clean. Pass = dismissed (hidden).
-// Take-it = accepted (kept visible with an "Accepted" badge so the user can
-// see they already acted on it across page refreshes within the same day).
+// Take Now = accepted (kept visible with an "Added to slip" badge so the
+// user can see they already acted on it across page refreshes within the
+// same day). Watch Next AB uses a SEPARATE `watching` set — reusing the
+// accept set would make a Ready row the user watched look pre-accepted the
+// moment that same player/game promotes to Fire, which would misrepresent
+// an unaccepted Fire call as an already-accepted bet.
 function dismissStorageKey(sessionDate: string): string {
   return `hr-radar-pass:${sessionDate}`;
 }
 function acceptStorageKey(sessionDate: string): string {
   return `hr-radar-accept:${sessionDate}`;
+}
+function watchingStorageKey(sessionDate: string): string {
+  return `hr-radar-watch-next-ab:${sessionDate}`;
 }
 function readSessionSet(key: string): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -67,6 +80,12 @@ function readAccepted(sessionDate: string): Set<string> {
 }
 function writeAccepted(sessionDate: string, set: Set<string>): void {
   writeSessionSet(acceptStorageKey(sessionDate), set);
+}
+function readWatching(sessionDate: string): Set<string> {
+  return readSessionSet(watchingStorageKey(sessionDate));
+}
+function writeWatching(sessionDate: string, set: Set<string>): void {
+  writeSessionSet(watchingStorageKey(sessionDate), set);
 }
 function entryDismissKey(playerId: string, gameId: string): string {
   return `${playerId}|${gameId}`;
@@ -242,6 +261,12 @@ export interface HrRadarLadderResponse {
     ready?: HrRadarLadderEntry[];
   };
   counts: { attackNow: number; building: number; watch: number; cashed: number; dead: number; total: number; ready?: number };
+  // Additive consumer decision contract (shared/hrRadarDecisionView.ts) — the
+  // single authoritative source for stage classification, action
+  // eligibility, and every displayed count. Optional so a response from an
+  // old service-worker cache (pre-rollout) still type-checks; consumers fall
+  // back to the legacy client adapter when absent (see hrRadarViewModel.ts).
+  decisionView?: HrRadarDecisionView<HrRadarLadderEntry>;
 }
 
 // Phase 6 — `noAbYet` is an additive parking lot for live games where the
@@ -260,6 +285,11 @@ export type SectionKey =
   | "dead"
   | "modelReview";
 
+// Section copy (label/description) is sourced from hrRadarConsumerCopy.ts —
+// the one consumer-facing vocabulary module — so Full Ladder can never drift
+// from Quick Decide's wording. This object keeps the VISUAL fields (icon,
+// accent, badge color, sublabel, default-collapsed) that are Full-Ladder-
+// specific layout, not vocabulary.
 export const SECTION_META: Record<SectionKey, {
   label: string;
   icon: typeof Flame;
@@ -270,75 +300,75 @@ export const SECTION_META: Record<SectionKey, {
   defaultCollapsed: boolean;
 }> = {
   attackNow: {
-    label: "ATTACK",
+    label: HR_RADAR_STAGE_COPY.fire.section,
     icon: Flame,
     accent: "border-red-500/40 bg-red-500/5",
     badge: "bg-red-500 text-white",
-    description: "Max-conviction HR window — official HR signal active.",
+    description: HR_RADAR_STAGE_COPY.fire.description,
     sublabel: "Act now — conviction confirmed",
     defaultCollapsed: false,
   },
   ready: {
-    label: "PLAYABLE",
+    label: HR_RADAR_STAGE_COPY.ready.section,
     icon: Zap,
     accent: "border-orange-500/40 bg-orange-500/5",
     badge: "bg-orange-500 text-white",
-    description: "Official HR signal active — strong setup, one step from Attack.",
-    sublabel: "One step from an Attack call",
+    description: HR_RADAR_STAGE_COPY.ready.description,
+    sublabel: "No bet yet",
     defaultCollapsed: false,
   },
   building: {
-    label: "LEAN",
+    label: HR_RADAR_STAGE_COPY.build.section,
     icon: Zap,
     accent: "border-amber-500/40 bg-amber-500/5",
     badge: "bg-amber-500 text-white",
-    description: "Signal forming · not official — worth tracking, not graded to the record yet.",
+    description: HR_RADAR_STAGE_COPY.build.description,
     sublabel: "Signal forming, not official",
     defaultCollapsed: false,
   },
   watch: {
-    label: "WATCHLIST",
+    label: HR_RADAR_STAGE_COPY.watch.section,
     icon: Eye,
     accent: "border-blue-500/30 bg-blue-500/5",
     badge: "bg-blue-500 text-white",
-    description: "Worth monitoring · not official — HR conditions are forming.",
-    sublabel: "Worth monitoring · not official",
-    defaultCollapsed: false,
+    description: HR_RADAR_STAGE_COPY.watch.description,
+    sublabel: "Early monitoring only",
+    defaultCollapsed: true,
   },
   noAbYet: {
-    label: "NO AB YET",
+    label: HR_RADAR_WAITING_FOR_FIRST_AB_COPY.section,
     icon: Eye,
     accent: "border-zinc-500/30 bg-zinc-500/5",
     badge: "bg-zinc-600 text-white",
-    description: "Game is live, no plate appearance tracked yet — parked here until the first AB.",
+    description: HR_RADAR_WAITING_FOR_FIRST_AB_COPY.description,
     sublabel: "Live game, no at-bats yet",
     defaultCollapsed: true,
   },
   cashed: {
-    label: "CASHED",
+    label: HR_RADAR_RESULT_COPY.signal_hit.section,
     icon: Trophy,
     accent: "border-emerald-500/40 bg-emerald-500/5",
     badge: "bg-emerald-500 text-white",
-    description: "HR confirmed after a called signal.",
+    description: HR_RADAR_RESULT_COPY.signal_hit.description,
     sublabel: "Called it ✓",
-    defaultCollapsed: false,
+    defaultCollapsed: true,
   },
   dead: {
-    label: "MISSED",
+    label: HR_RADAR_RESULT_COPY.official_miss.section,
     icon: XCircle,
     accent: "border-zinc-500/30 bg-zinc-500/5",
     badge: "bg-zinc-500 text-white",
-    description: "Signals that resolved without an HR.",
+    description: HR_RADAR_RESULT_COPY.official_miss.description,
     sublabel: "Resolved without HR",
     defaultCollapsed: true,
   },
   modelReview: {
-    label: "MODEL REVIEW",
+    label: HR_RADAR_RESULT_COPY.model_review.section,
     icon: AlertTriangle,
     accent: "border-purple-500/30 bg-purple-500/5",
     badge: "bg-purple-600 text-white",
-    description: "Admin-only. Uncalled HRs and first-AB HRs flagged for engine calibration.",
-    sublabel: "Engine calibration review",
+    description: HR_RADAR_RESULT_COPY.model_review.description,
+    sublabel: "Engine calibration review — admin only",
     defaultCollapsed: true,
   },
 };
@@ -492,6 +522,23 @@ export interface CardProps {
   onPass?: (entry: HrRadarLadderEntry) => void;
   onAccept?: (entry: HrRadarLadderEntry) => void;
   isAccepted?: boolean;
+  /** Ready's "Watch Next AB" — separate from onAccept/isAccepted (Fire's
+   *  bet-slip tracking) so watching a Ready row never marks it "accepted". */
+  onWatch?: (entry: HrRadarLadderEntry) => void;
+  isWatching?: boolean;
+  /**
+   * Server-derived overrides from the row's `HrRadarCardViewModel`
+   * (decisionView.entries[id].canAddToSlip / canWatchNextAb). When provided,
+   * these AND with the section-based gate below rather than replacing it —
+   * a Fire row can be `section === "attackNow"` yet still have
+   * `canAddToSlip === false` (e.g. incomplete bet-slip identity), and the
+   * card must not let that row reach the slip just because it's in the Fire
+   * section. Default to `true` (preserve existing behavior) for any caller
+   * that doesn't have a VM to pass (there should be none left, but this
+   * keeps a missing prop from silently disabling every action).
+   */
+  serverCanAddToSlip?: boolean;
+  serverCanWatchNextAb?: boolean;
   /** List-only affordance — opens the full-screen drawer (adds admin diagnostics
    * on top of this same card). Omitted when LadderCard already IS the drawer. */
   onOpenDrawer?: () => void;
@@ -622,7 +669,7 @@ function PregameDriverChips({ entry }: { entry: HrRadarLadderEntry }) {
   );
 }
 
-export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted, onOpenDrawer, isTopPriority = false }: CardProps) {
+export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted, onWatch, isWatching, onOpenDrawer, isTopPriority = false, serverCanAddToSlip = true, serverCanWatchNextAb = true }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
   // the (inning, half) pair for legacy rows that pre-date the label fields.
@@ -673,11 +720,21 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
     section === "cashed" ||
     section === "dead" ||
     entry.isGameFinal === true;
-  // Task #121 Step 3 — Take it / Pass are available on every LIVE card
-  // (Attack Now / Building / Watch). Resolved sections (cashed/dead) get
-  // no actions.
-  const isLiveSection = section === "attackNow" || section === "ready" || section === "building" || section === "watch";
-  const canAdd = !isResolved && isLiveSection && !!onAddToSlip;
+  // HR Radar consumer contract: ONLY Fire (section "attackNow") is an
+  // official, bettable call. Ready/Build/Watch may show "Watch Next AB" or
+  // no action at all, but must NEVER be able to invoke onAddToSlip — that
+  // was the bug here (isLiveSection previously included ready/building/watch,
+  // letting a non-official row add itself to the bet slip). Resolved
+  // sections (cashed/dead) get no actions either way. `serverCanAddToSlip`
+  // further ANDs in the row's own decisionView-derived flag — a Fire row can
+  // still fail this (e.g. incomplete player/game identity for the slip
+  // payload) even while correctly sitting in the Fire section.
+  const isFireSection = section === "attackNow";
+  const canAdd = !isResolved && isFireSection && !!onAddToSlip && serverCanAddToSlip;
+  // Ready gets its own non-transactional CTA (Watch Next AB) — distinct from
+  // Fire's bet-slip action and never invoking onAddToSlip. Gated the same
+  // way by `serverCanWatchNextAb` for symmetry with the Fire gate above.
+  const isReadySection = !isResolved && section === "ready" && serverCanWatchNextAb;
   // Goldmaster Phase 7 — pregame indicator for 0-AB rows.
   const isPregameOnly =
     entry.hasLiveABContext === false ||
@@ -819,7 +876,11 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
   };
 
   const handleAdd = () => {
-    if (!onAddToSlip) return;
+    // Defense in depth: never invoke onAddToSlip for a non-Fire row, or a
+    // Fire row the server flagged as slip-invalid, even if this handler is
+    // somehow reached from a stale closure or a future caller that forgets
+    // to gate on `canAdd` first.
+    if (!onAddToSlip || section !== "attackNow" || isResolved || !serverCanAddToSlip) return;
     onAccept?.(entry);
     onAddToSlip({
       playerId: entry.playerId,
@@ -1126,7 +1187,7 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
           data-testid={`text-cashed-from-tier-${entry.playerId}`}
         >
           {cashedFromTierLabel(entry.outcomeStatus) && (
-            <span>Cashed from {cashedFromTierLabel(entry.outcomeStatus)}</span>
+            <span>Signal Hit from {cashedFromTierLabel(entry.outcomeStatus)}</span>
           )}
           {peak10 != null && (
             <span className="text-emerald-400/90 font-mono font-semibold">
@@ -1379,17 +1440,17 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
         </Collapsible>
       )}
 
-      {/* Task #121 Step 3 — Take it / Pass dual control on live cards
-          (Attack Now / Building / Watch). Once the user has taken it, the
-          buttons collapse into a persistent "Accepted" badge so the choice
-          survives refresh within the same session. */}
+      {/* Take Now / Pass — Fire (Attack Now) rows ONLY, per the HR Radar
+          consumer contract (only an official Fire call may add to the bet
+          slip). Once taken, the buttons collapse into a persistent "Added"
+          badge so the choice survives refresh within the same session. */}
       {canAdd && isAccepted && (
         <div className="mt-2 flex items-center justify-end gap-2">
           <Badge
             className="text-[10px] px-2 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 gap-1 flex items-center"
             data-testid={`badge-accepted-${entry.playerId}`}
           >
-            <Plus className="w-2.5 h-2.5" /> Accepted this session
+            <Plus className="w-2.5 h-2.5" /> Added to slip this session
           </Badge>
         </div>
       )}
@@ -1425,12 +1486,63 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
               onClick={handleAdd}
               data-testid={`button-take-it-ladder-${entry.playerId}`}
             >
-              <Plus className="w-3 h-3" /> Take it
+              <Plus className="w-3 h-3" /> {getHrRadarCtaLabel("fire", "row")}
             </Button>
           </div>
         </div>
       )}
-      {(!canAdd) && (
+      {/* Watch Next AB / Pass — Ready rows ONLY. Explicitly non-transactional:
+          never invokes onAddToSlip, and uses its OWN `watching` session set —
+          never `isAccepted`/`onAccept` (Fire's bet-slip tracking) — so a
+          watched Ready row can never render as an already-accepted bet. */}
+      {isReadySection && isWatching && (
+        <div className="mt-2 flex items-center justify-end gap-2">
+          <Badge
+            className="text-[10px] px-2 py-0.5 bg-orange-500/15 text-orange-300 border border-orange-500/40 gap-1 flex items-center"
+            data-testid={`badge-watching-${entry.playerId}`}
+          >
+            Watching this session
+          </Badge>
+        </div>
+      )}
+      {isReadySection && !isWatching && (
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-[11px] gap-1 text-muted-foreground/60 hover:text-muted-foreground"
+            onClick={handleShare}
+            disabled={shareLoading}
+            data-testid={`button-share-ladder-${entry.playerId}`}
+            title="Share on X (Twitter)"
+          >
+            <Share2 className="w-3 h-3" />
+            {shareLoading ? "Sharing…" : "Share"}
+          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-[11px] gap-1 text-muted-foreground hover:text-foreground"
+              onClick={() => onPass?.(entry)}
+              data-testid={`button-pass-ladder-${entry.playerId}`}
+              title="Dismiss this card for the rest of today's session"
+            >
+              <X className="w-3 h-3" /> Pass
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px] gap-1 border-orange-500/40 text-orange-300 hover:bg-orange-500/10"
+              onClick={() => onWatch?.(entry)}
+              data-testid={`button-watch-next-ab-ladder-${entry.playerId}`}
+            >
+              {getHrRadarCtaLabel("ready", "row")}
+            </Button>
+          </div>
+        </div>
+      )}
+      {!canAdd && !isReadySection && (
         <div className="mt-2 flex items-center justify-end">
           <Button
             size="sm"
@@ -1514,6 +1626,8 @@ function HrRadarSignalDrawer({
   onPass,
   onAccept,
   isAccepted,
+  onWatch,
+  isWatching,
 }: {
   row: HrRadarCardViewModel | null;
   isAdmin: boolean;
@@ -1523,6 +1637,8 @@ function HrRadarSignalDrawer({
   onPass: (entry: HrRadarLadderEntry) => void;
   onAccept: (entry: HrRadarLadderEntry) => void;
   isAccepted: boolean;
+  onWatch: (entry: HrRadarLadderEntry) => void;
+  isWatching: boolean;
 }) {
   if (!row) return null;
   const section = stageToSectionKey(row.stage);
@@ -1547,6 +1663,10 @@ function HrRadarSignalDrawer({
           onPass={onPass}
           onAccept={onAccept}
           isAccepted={isAccepted}
+          onWatch={onWatch}
+          isWatching={isWatching}
+          serverCanAddToSlip={row.canAddToSlip}
+          serverCanWatchNextAb={row.canWatchNextAb}
         />
         {isAdmin && <DrawerAdminDiagnostics entry={row.entry} />}
       </div>
@@ -1593,6 +1713,24 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
   const rawSections = data?.sections ?? { attackNow: [], building: [], watch: [], cashed: [], dead: [] };
   const sessionDate = data?.sessionDate ?? "";
 
+  // ── Decision-view sourcing (same contract as HrQuickDecide.tsx). The
+  // server owns every displayed count; Full Ladder's per-section counts stay
+  // section-array-length (that's inherent to "how many rows are in this
+  // section", not a re-derivation), but the aggregate Fire/Ready/Signal-Hit/
+  // Miss numbers come from decisionView so they can never disagree with
+  // Quick Decide's header. `status: "degraded"` keeps the last-good view
+  // (never flashes a false "0 · 0 · 0"); `decisionView` entirely absent
+  // (pre-rollout cached response) falls back to the section-length counts
+  // this component always had.
+  const rawDecisionView = data?.decisionView;
+  const decisionViewLastGoodRef = useRef<HrRadarDecisionView<HrRadarLadderEntry> | null>(null);
+  if (rawDecisionView && rawDecisionView.status === "ok") {
+    decisionViewLastGoodRef.current = rawDecisionView;
+  }
+  const decisionView = rawDecisionView
+    ? (rawDecisionView.status === "ok" ? rawDecisionView : decisionViewLastGoodRef.current)
+    : null;
+
   // Task #121 Step 3 — per-session "Pass" dismiss list, persisted in
   // localStorage. Re-read on session-date change so tomorrow's session is
   // clean. Live (Watch / Building / AttackNow) entries dismissed by the
@@ -1606,6 +1744,10 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
   const [trackedSessionDate, setTrackedSessionDate] = useState<string>(sessionDate);
   const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissed(sessionDate));
   const [accepted, setAccepted] = useState<Set<string>>(() => readAccepted(sessionDate));
+  // Ready's "Watch Next AB" — a SEPARATE set from `accepted` (Fire's bet-slip
+  // tracking) so watching a Ready row never makes that same player/game look
+  // pre-accepted once it promotes to Fire.
+  const [watching, setWatching] = useState<Set<string>>(() => readWatching(sessionDate));
 
   // Task #121 Step 5 — one-time pulse when an entry transitions into cashed.
   // The `cashedInitializedRef` baseline guard prevents the pulse from firing
@@ -1629,6 +1771,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
     setTrackedSessionDate(sessionDate);
     setDismissed(readDismissed(sessionDate));
     setAccepted(readAccepted(sessionDate));
+    setWatching(readWatching(sessionDate));
     cashedInitializedRef.current = false;
     previousCashedKeysRef.current = new Set();
     setFreshlyCashedKeys(new Set());
@@ -1707,9 +1850,52 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawSections, dismissed, isAdmin, selectedGameId]);
 
+  // ── Decision-view row builder — the NORMAL path once `decisionView` is
+  // present. Every section's rows and every count come from the server's
+  // groups (server owns stage/result classification), not from the
+  // client-side `sections` derivation above (which stays as the bounded
+  // legacy fallback for a response with no `decisionView` at all). Only
+  // session-local "Pass" dismissal and the game-slate filter stay
+  // client-side — both are genuinely local UI state, not classification.
+  const decisionViewRows = useMemo(() => {
+    if (!decisionView) return null;
+    const passesGameFilter = (entryId: string): boolean => {
+      const consumer = decisionView.entries[entryId];
+      if (!consumer) return false;
+      if (selectedGameId && consumer.source.gameId !== selectedGameId) return false;
+      return true;
+    };
+    // "Pass" only hides a row from the LIVE decision surface — it must not
+    // also erase that player's eventual result. A user who passes a live
+    // Fire/Ready/Build/Watch row should still see it land in Signal
+    // Hits/Missed/Model Review once it resolves (matches the legacy
+    // `sections` derivation, which never applied the dismissed filter to
+    // cashed/dead/modelReview either).
+    const passesLiveFilters = (entryId: string): boolean => {
+      if (!passesGameFilter(entryId)) return false;
+      const consumer = decisionView.entries[entryId];
+      return !dismissed.has(entryDismissKey(consumer!.source.playerId, consumer!.source.gameId));
+    };
+    const pickLive = (ids: readonly string[]): HrRadarCardViewModel[] =>
+      buildConsumerViewModels(decisionView, ids.filter(passesLiveFilters));
+    const pickResolved = (ids: readonly string[]): HrRadarCardViewModel[] =>
+      buildConsumerViewModels(decisionView, ids.filter(passesGameFilter));
+    return {
+      attackNow: pickLive(decisionView.groups.takeNow),
+      ready: pickLive(decisionView.groups.watchNextAb),
+      building: pickLive(decisionView.groups.build),
+      watch: pickLive(decisionView.groups.watch),
+      noAbYet: pickLive(decisionView.groups.waitingForFirstAb),
+      cashed: pickResolved(decisionView.groups.signalHits),
+      dead: pickResolved(decisionView.groups.officialMisses),
+      modelReview: isAdmin ? pickResolved(decisionView.groups.modelReview) : [],
+    };
+  }, [decisionView, dismissed, selectedGameId, isAdmin]);
+
+  const cashedForPulse = decisionViewRows ? decisionViewRows.cashed.map((vm) => vm.entry) : sections.cashed;
   useEffect(() => {
     if (!sessionDate) return;
-    const currentKeys = new Set(sections.cashed.map(e => entryDismissKey(e.playerId, e.gameId)));
+    const currentKeys = new Set(cashedForPulse.map(e => entryDismissKey(e.playerId, e.gameId)));
     if (!cashedInitializedRef.current) {
       // Seed baseline silently on the first REAL payload — no animation.
       previousCashedKeysRef.current = currentKeys;
@@ -1726,7 +1912,7 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
       const t = window.setTimeout(() => setFreshlyCashedKeys(new Set()), 2400);
       return () => window.clearTimeout(t);
     }
-  }, [sessionDate, sections.cashed]);
+  }, [sessionDate, cashedForPulse]);
 
   // ── EARLY RETURNS — only after every hook above has been called.
   if (isLoading && !data) {
@@ -1788,22 +1974,54 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
       return next;
     });
   };
-
-  const counts = {
-    attackNow: sections.attackNow.length,
-    ready: sections.ready.length,
-    building: sections.building.length,
-    watch: sections.watch.length,
-    cashed: sections.cashed.length,
-    dead: sections.dead.length,
-    // Phase 6 — `noAbYet` not surfaced in the public counts shape (the
-    // header summary displayed to users only counts actionable sections).
-    // `total` is LIVE-ONLY (excludes cashed/dead history) — it's the number
-    // that drives the "N live" header, the summary-bar visibility gate, and
-    // (via tableRows.length elsewhere) matches what's actually shown by
-    // default. Cashed/missed stay visible via their own dedicated pills.
-    total: sections.attackNow.length + sections.ready.length + sections.building.length + sections.watch.length,
+  const handleWatch = (entry: HrRadarLadderEntry) => {
+    const key = entryDismissKey(entry.playerId, entry.gameId);
+    setWatching(prev => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      writeWatching(sessionDate, next);
+      return next;
+    });
   };
+
+  // Section row counts — sourced from decisionView's groups (server-owned
+  // classification) when present, else the legacy client-filtered `sections`
+  // (bounded fallback only). Either way this is "how many rows are actually
+  // in this section", not a re-derived aggregate — the aggregate Fire-hit/
+  // Fire-miss numbers used in the summary bar below come from
+  // `decisionView.counts` directly so they can never disagree with Quick
+  // Decide's header.
+  const counts = decisionViewRows
+    ? {
+        attackNow: decisionViewRows.attackNow.length,
+        ready: decisionViewRows.ready.length,
+        building: decisionViewRows.building.length,
+        watch: decisionViewRows.watch.length,
+        cashed: decisionViewRows.cashed.length,
+        dead: decisionViewRows.dead.length,
+        // Sum of the FILTERED (game-slate + pass) live rows, not the raw
+        // server-wide decisionView.counts.liveTracked — otherwise the header
+        // can claim more live signals than the ladder actually shows once
+        // scoped to one game or after rows are passed.
+        total: decisionViewRows.attackNow.length + decisionViewRows.ready.length
+          + decisionViewRows.building.length + decisionViewRows.watch.length,
+      }
+    : {
+        attackNow: sections.attackNow.length,
+        ready: sections.ready.length,
+        building: sections.building.length,
+        watch: sections.watch.length,
+        cashed: sections.cashed.length,
+        dead: sections.dead.length,
+        // Phase 6 — `noAbYet` not surfaced in the public counts shape (the
+        // header summary displayed to users only counts actionable sections).
+        // `total` is LIVE-ONLY (excludes cashed/dead history) — it's the number
+        // that drives the "N live" header, the summary-bar visibility gate, and
+        // (via tableRows.length elsewhere) matches what's actually shown by
+        // default. Cashed/missed stay visible via their own dedicated pills.
+        total: sections.attackNow.length + sections.ready.length + sections.building.length + sections.watch.length,
+      };
 
   // Phase 6 — `noAbYet` slots between the active live tiers and resolved
   // sections so users see the parking lot only after scrolling past
@@ -1827,18 +2045,28 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
   // Flatten the (already-filtered) sections into one compact-table row set,
   // sorted in-table by stage→score. `noAbYet` parking-lot rows stay out of the
   // table (pregame 0-AB noise); resolved rows carry their authoritative
-  // cashed/missed section hint so the public stage is engine truth.
+  // cashed/missed section hint so the public stage is engine truth. Prefers
+  // `decisionViewRows` (already-built VMs, server-classified) when present;
+  // the raw-`sections` + `buildHrRadarCardViewModel` loop is the bounded
+  // legacy fallback for a response with no `decisionView` at all.
   const sectionHintFor = (k: SectionKey): "cashed" | "missed" | undefined =>
     k === "cashed" ? "cashed" : k === "dead" || k === "modelReview" ? "missed" : undefined;
   const tableRows: HrRadarCardViewModel[] = [];
   for (const k of order) {
     if (k === "noAbYet") continue;
+    if (decisionViewRows) {
+      tableRows.push(...(decisionViewRows[k] ?? []));
+      continue;
+    }
     for (const e of (sections as Record<SectionKey, HrRadarLadderEntry[]>)[k] ?? []) {
       tableRows.push(buildHrRadarCardViewModel(e, { sectionHint: sectionHintFor(k) }));
     }
   }
   const drawerAccepted = drawerRow
     ? accepted.has(entryDismissKey(drawerRow.playerId, drawerRow.gameId))
+    : false;
+  const drawerWatching = drawerRow
+    ? watching.has(entryDismissKey(drawerRow.playerId, drawerRow.gameId))
     : false;
   // Phase 2 — cross-tier board priority: the single live card (any of
   // FIRE/READY/BUILD/TRACK) with the highest sortRank across the WHOLE
@@ -1862,7 +2090,9 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
         <div className="flex items-center gap-1.5 shrink-0">
           <span data-testid="text-ladder-total" title="Live HR Radar signals this session.">
             {counts.total} live
-            {counts.cashed > 0 && <span className="text-emerald-400/80"> · {counts.cashed} cashed</span>}
+            {counts.cashed > 0 && (
+              <span className="text-emerald-400/80"> · {counts.cashed} {HR_RADAR_RESULT_COPY.signal_hit.short.toLowerCase()}{counts.cashed === 1 ? "" : "s"}</span>
+            )}
           </span>
           <Button
             variant="ghost"
@@ -1892,7 +2122,6 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           </Button>
         </div>
       </div>
-      <HrRadarRecordBanner />
       {/* Section count summary — sticky so the radar state is always visible
           while scrolling through the sections. Only shows non-zero counts. */}
       {tableRows.length > 0 && (
@@ -1904,38 +2133,39 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 py-2 rounded-lg bg-card border border-border/40"
           data-testid="ladder-summary-bar"
         >
-          {/* Unified public ladder vocabulary — Attack · Playable · Lean · Watchlist. */}
+          {/* The one consumer vocabulary (hrRadarConsumerCopy.ts) — Fire ·
+              Ready · Build · Watch · Signal Hit · Missed. */}
           {counts.attackNow > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-red-400" data-testid="summary-fire">
-              <Flame className="w-3 h-3" /> Attack {counts.attackNow}
+              <Flame className="w-3 h-3" /> {HR_RADAR_STAGE_COPY.fire.short} {counts.attackNow}
             </span>
           )}
           {counts.ready > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-bold whitespace-nowrap text-orange-400" data-testid="summary-ready">
-              <Zap className="w-3 h-3" /> Playable {counts.ready}
+              <Zap className="w-3 h-3" /> {HR_RADAR_STAGE_COPY.ready.short} {counts.ready}
             </span>
           )}
           {counts.building > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-blue-400" data-testid="summary-build">
-              <Zap className="w-3 h-3" /> Lean {counts.building}
+              <Zap className="w-3 h-3" /> {HR_RADAR_STAGE_COPY.build.short} {counts.building}
             </span>
           )}
           {counts.watch > 0 && (
             <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-slate-400" data-testid="summary-track">
-              <Eye className="w-3 h-3" /> Watchlist {counts.watch}
+              <Eye className="w-3 h-3" /> {HR_RADAR_STAGE_COPY.watch.short} {counts.watch}
             </span>
           )}
           {counts.cashed > 0 && (
             <>
               <span className="text-muted-foreground/30 text-[11px]">·</span>
               <span className="flex items-center gap-1 text-[11px] font-semibold whitespace-nowrap text-emerald-400" data-testid="summary-cashed">
-                <Trophy className="w-3 h-3" /> {counts.cashed} HR
+                <Trophy className="w-3 h-3" /> {counts.cashed} {HR_RADAR_RESULT_COPY.signal_hit.short}{counts.cashed === 1 ? "" : "s"}
               </span>
             </>
           )}
           {counts.dead > 0 && (
             <span className="text-[11px] text-muted-foreground/50 whitespace-nowrap" data-testid="summary-missed">
-              {counts.dead} missed
+              {counts.dead} {HR_RADAR_RESULT_COPY.official_miss.short.toLowerCase()}
             </span>
           )}
         </div>
@@ -1972,6 +2202,8 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
           onPass={handlePass}
           onAccept={handleAccept}
           isAccepted={(entry) => accepted.has(entryDismissKey(entry.playerId, entry.gameId))}
+          onWatch={handleWatch}
+          isWatching={(entry) => watching.has(entryDismissKey(entry.playerId, entry.gameId))}
           topPriorityId={topPriority?.id ?? null}
         />
       )}
@@ -1995,6 +2227,8 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
         onPass={(entry) => { handlePass(entry); setDrawerRow(null); }}
         onAccept={handleAccept}
         isAccepted={drawerAccepted}
+        onWatch={handleWatch}
+        isWatching={drawerWatching}
       />
     </div>
   );
