@@ -38,6 +38,8 @@ export interface MatchupFitResult extends ComponentScore {
   bvpScore: number | null;
   /** AB (preferred) or PA used for BvP. */
   bvpSampleSize: number;
+  /** BvP hits (numerator) — additive passthrough of inputs.bvpHits, null when unavailable. */
+  bvpHits: number | null;
   bvpDirection: BvpDirection;
   /** Which key production fields are .000 (AVG/SLG/OPS) — drives the zero-prod rule. */
   zeroProductionFlags: string[];
@@ -88,6 +90,7 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
   let bvpModifier = 0;
   let bvpAvailable = false;
   let bvpScore: number | null = null;
+  let bvpHits: number | null = null;
   let bvpDirection: BvpDirection = "neutral";
   let zeroProductionFlags: string[] = [];
   let bvpZeroProduction = false;
@@ -98,6 +101,7 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
 
   if (sample >= 5 && inputs.bvpHr != null && inputs.bvpHits != null) {
     bvpAvailable = true;
+    bvpHits = inputs.bvpHits;
     const denom = pa > 0 ? pa : ab;
     const hrRate = denom > 0 ? inputs.bvpHr / denom : 0; // ~0.04 neutral
     const hitRate = denom > 0 ? inputs.bvpHits / denom : 0; // ~0.25 neutral
@@ -158,8 +162,8 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
 
   if (coverage === 0) {
     warnings.push("No matchup-fit data available");
-    return { score10: 5, available: false, drivers, warnings, bvpModifier, bvpAvailable, bvpScore, bvpSampleSize, bvpDirection, zeroProductionFlags, bvpZeroProduction };
+    return { score10: 5, available: false, drivers, warnings, bvpModifier, bvpAvailable, bvpScore, bvpSampleSize, bvpHits, bvpDirection, zeroProductionFlags, bvpZeroProduction };
   }
 
-  return { score10: round1(score), available: true, drivers, warnings, bvpModifier, bvpAvailable, bvpScore, bvpSampleSize, bvpDirection, zeroProductionFlags, bvpZeroProduction };
+  return { score10: round1(score), available: true, drivers, warnings, bvpModifier, bvpAvailable, bvpScore, bvpSampleSize, bvpHits, bvpDirection, zeroProductionFlags, bvpZeroProduction };
 }

@@ -651,6 +651,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             bvpAvailable: matchupFit.bvpAvailable,
             bvpScore: matchupFit.bvpScore,
             bvpSampleSize: matchupFit.bvpAvailable ? matchupFit.bvpSampleSize : null,
+            bvpHits: matchupFit.bvpAvailable ? matchupFit.bvpHits : null,
             bvpDirection: matchupFit.bvpDirection,
             zeroProductionBvpFlags: matchupFit.zeroProductionFlags,
             dataCoverageScore: scoring.dataCoverageScore,

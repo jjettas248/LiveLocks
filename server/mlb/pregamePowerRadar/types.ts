@@ -155,6 +155,12 @@ export interface PregamePowerDiagnostics {
   bvpScore: number | null;
   /** BvP sample size (AB or PA, whichever is present). */
   bvpSampleSize: number | null;
+  /**
+   * BvP hits (numerator) — additive, read-only. Optional because durable
+   * persistence/boot hydration can surface diagnostics snapshots written
+   * before this field existed; readers must tolerate its absence.
+   */
+  bvpHits?: number | null;
   bvpDirection: "positive" | "neutral" | "negative";
   /** Key BvP production fields at .000 (AVG/SLG/OPS). */
   zeroProductionBvpFlags: string[];
