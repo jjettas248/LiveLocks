@@ -39,13 +39,31 @@ const ALL_SQL = PREGAME_RADAR_PERSISTENCE_STATEMENTS.join("\n").toUpperCase();
   ok(ALL_SQL.includes("CREATE TABLE IF NOT EXISTS MLB_MOUND_RADAR_BUILDS"), "mlb_mound_radar_builds table is created");
 }
 
+// Returns true only if every ADD-COLUMN clause in an ALTER TABLE statement is
+// additive (`ADD COLUMN IF NOT EXISTS ...`) — used to reject any other ALTER
+// subcommand (DROP COLUMN, RENAME, ALTER COLUMN TYPE, etc.) hiding alongside it.
+function isSelfHealOnlyAlter(statement: string): boolean {
+  const upper = statement.toUpperCase().trim().replace(/;\s*$/, "");
+  const match = upper.match(/^ALTER TABLE\s+\S+\s+([\s\S]+)$/);
+  if (!match) return false;
+  const clauses = match[1].split(",").map((c) => c.trim());
+  return clauses.length > 0 && clauses.every((c) => c.startsWith("ADD COLUMN IF NOT EXISTS"));
+}
+
 // ── 2. Every statement is idempotent (IF NOT EXISTS-guarded) ───────────────
+// Only CREATE TABLE, CREATE (UNIQUE) INDEX, and additive self-healing
+// `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements are allowed — no
+// other ALTER subcommand (DROP COLUMN, RENAME, ALTER COLUMN TYPE, etc.).
 {
   for (const statement of PREGAME_RADAR_PERSISTENCE_STATEMENTS) {
     const upper = statement.toUpperCase();
     const isTable = upper.includes("CREATE TABLE");
     const isIndex = upper.includes("CREATE INDEX") || upper.includes("CREATE UNIQUE INDEX");
-    ok(isTable || isIndex, "every statement is a CREATE TABLE or CREATE INDEX");
+    const isAlter = upper.includes("ALTER TABLE");
+    ok(isTable || isIndex || isAlter, `every statement is a CREATE TABLE, CREATE INDEX, or ALTER TABLE: ${statement.trim().slice(0, 60)}...`);
+    if (isAlter) {
+      ok(isSelfHealOnlyAlter(statement), `ALTER TABLE statement is additive ADD COLUMN IF NOT EXISTS only: ${statement.trim().slice(0, 80)}...`);
+    }
     ok(upper.includes("IF NOT EXISTS"), `statement is IF NOT EXISTS-guarded: ${statement.trim().slice(0, 60)}...`);
   }
 }
@@ -74,12 +92,39 @@ const ALL_SQL = PREGAME_RADAR_PERSISTENCE_STATEMENTS.join("\n").toUpperCase();
   ok(ALL_SQL.includes("MOUND_DIRECTION TEXT"), "mound_direction column is present (mound signals)");
 }
 
+// ── 4a. Self-healing columns for pre-existing older tables are present ─────
+{
+  ok(
+    ALL_SQL.includes("ALTER TABLE PREGAME_POWER_RADAR_SIGNALS") &&
+    ALL_SQL.includes("ADD COLUMN IF NOT EXISTS EVER_PUBLICLY_FLAGGED BOOLEAN NOT NULL DEFAULT FALSE"),
+    "pregame_power_radar_signals self-heals ever_publicly_flagged via ADD COLUMN IF NOT EXISTS",
+  );
+  ok(
+    ALL_SQL.includes("ALTER TABLE MLB_MOUND_RADAR_SIGNALS") &&
+    ALL_SQL.includes("ADD COLUMN IF NOT EXISTS EVER_PUBLICLY_FLAGGED_FADE BOOLEAN NOT NULL DEFAULT FALSE"),
+    "mlb_mound_radar_signals self-heals ever_publicly_flagged_fade via ADD COLUMN IF NOT EXISTS",
+  );
+  ok(
+    ALL_SQL.includes("ADD COLUMN IF NOT EXISTS MOUND_DIRECTION TEXT"),
+    "mlb_mound_radar_signals self-heals mound_direction via ADD COLUMN IF NOT EXISTS",
+  );
+}
+
 // ── 5. No destructive statement anywhere in the migration ──────────────────
 {
   ok(!/\bDROP\b/.test(ALL_SQL), "no DROP statement anywhere in the migration");
   ok(!/\bTRUNCATE\b/.test(ALL_SQL), "no TRUNCATE statement anywhere in the migration");
   ok(!/\bDELETE\s+FROM\b/.test(ALL_SQL), "no DELETE FROM statement anywhere in the migration");
-  ok(!/\bALTER\s+TABLE\b/.test(ALL_SQL), "no ALTER TABLE statement anywhere in the migration (tables are created whole)");
+  ok(!/\bRENAME\b/.test(ALL_SQL), "no RENAME statement anywhere in the migration");
+  ok(!/ALTER\s+COLUMN[\s\S]*?\bTYPE\b/.test(ALL_SQL), "no destructive ALTER COLUMN ... TYPE change anywhere in the migration");
+  ok(!/DROP\s+COLUMN/.test(ALL_SQL), "no DROP COLUMN anywhere in the migration");
+  // Every ALTER TABLE present is additive-only (asserted per-statement in
+  // section 2 above); this is the aggregate cross-check.
+  for (const statement of PREGAME_RADAR_PERSISTENCE_STATEMENTS) {
+    if (statement.toUpperCase().includes("ALTER TABLE")) {
+      ok(isSelfHealOnlyAlter(statement), "every ALTER TABLE statement is additive ADD COLUMN IF NOT EXISTS only (aggregate check)");
+    }
+  }
 }
 
 // ── 6. Running the bootstrap twice back-to-back never throws ───────────────

@@ -14,7 +14,11 @@
 // Drizzle continues to own the canonical schema/types, this is a runtime
 // safety net, not a replacement for `drizzle-kit push:pg`.
 //
-// No DROP / ALTER-destructive statements anywhere in this file — see
+// Also self-heals a pre-existing (older) copy of these tables that predates
+// one of the sticky/graded-state columns below — additive `ADD COLUMN IF NOT
+// EXISTS` only, so re-running against an already-current table is a no-op.
+//
+// No DROP / destructive-ALTER statements anywhere in this file — see
 // pregameRadarPersistence.test.ts.
 
 export interface SqlExecutor {
@@ -64,6 +68,13 @@ const PREGAME_POWER_RADAR_SIGNALS = `
     locked_at TIMESTAMP,
     graded_at TIMESTAMP
   );
+`;
+
+// Self-heal: an older copy of this table created before ever_publicly_flagged
+// existed. Additive-only — no-op once the column is already present.
+const PREGAME_POWER_RADAR_SIGNALS_SELF_HEAL = `
+  ALTER TABLE pregame_power_radar_signals
+    ADD COLUMN IF NOT EXISTS ever_publicly_flagged BOOLEAN NOT NULL DEFAULT false;
 `;
 
 const PREGAME_POWER_RADAR_SIGNALS_UNIQUE_IDX = `
@@ -152,6 +163,14 @@ const MLB_MOUND_RADAR_SIGNALS = `
   );
 `;
 
+// Self-heal: an older copy of this table created before the fade-track
+// columns existed. Additive-only — no-op once both columns are present.
+const MLB_MOUND_RADAR_SIGNALS_SELF_HEAL = `
+  ALTER TABLE mlb_mound_radar_signals
+    ADD COLUMN IF NOT EXISTS ever_publicly_flagged_fade BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS mound_direction TEXT;
+`;
+
 const MLB_MOUND_RADAR_SIGNALS_UNIQUE_IDX = `
   CREATE UNIQUE INDEX IF NOT EXISTS mlb_mound_radar_signals_unique_idx
     ON mlb_mound_radar_signals (session_date, game_id, pitcher_id);
@@ -198,12 +217,14 @@ const MLB_MOUND_RADAR_BUILDS_DATE_IDX = `
 // idempotent (`IF NOT EXISTS`), so the array order is otherwise cosmetic.
 export const PREGAME_RADAR_PERSISTENCE_STATEMENTS: readonly string[] = [
   PREGAME_POWER_RADAR_SIGNALS,
+  PREGAME_POWER_RADAR_SIGNALS_SELF_HEAL,
   PREGAME_POWER_RADAR_SIGNALS_UNIQUE_IDX,
   PREGAME_POWER_RADAR_SIGNALS_DATE_IDX,
   PREGAME_POWER_RADAR_SIGNALS_BUILD_IDX,
   PREGAME_POWER_RADAR_BUILDS,
   PREGAME_POWER_RADAR_BUILDS_DATE_IDX,
   MLB_MOUND_RADAR_SIGNALS,
+  MLB_MOUND_RADAR_SIGNALS_SELF_HEAL,
   MLB_MOUND_RADAR_SIGNALS_UNIQUE_IDX,
   MLB_MOUND_RADAR_SIGNALS_DATE_IDX,
   MLB_MOUND_RADAR_SIGNALS_BUILD_IDX,
