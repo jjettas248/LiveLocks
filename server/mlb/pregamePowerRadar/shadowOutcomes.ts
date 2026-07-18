@@ -264,6 +264,22 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
     }
 
     if (changed) {
+      // Known bounded race, not fixed here: if a concurrent live rebuild
+      // replaces this exact signal while persistSignalWithRetry's own retry
+      // delay is still elapsing, and this (stale, build-A-derived) write then
+      // lands in the DB AFTER the newer rebuild's own persist, it can
+      // transiently move the DB row's buildId backward to build A —
+      // commitGradedSignal below correctly refuses the IN-MEMORY commit (the
+      // newer build's copy stays authoritative there), but the DB row itself
+      // stays stale until the next tick. This self-heals within one 5-minute
+      // grading cycle: resolveOutcome() is deterministic against box-score
+      // truth, so the next tick reproduces the same graded outcome from the
+      // newer (now-current) signal and re-persists it with the correct
+      // buildId. A tighter fix (carry this draft's outcome forward onto
+      // whatever is current and persist+commit that merged result on CAS
+      // refusal, reusing carryForwardGradedState's own merge logic) was
+      // considered and deliberately deferred — it adds a second write path
+      // into this function, which is out of scope for this pass.
       const persisted = await persistSignalWithRetry(draft);
       if (persisted) {
         const committed = commitGradedSignal(original, draft);
