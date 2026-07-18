@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, ChevronDown, ChevronUp, Check } from "lucide-react";
 import { MoundRadarRecord, MoundRadarFadeRecord } from "./MoundWinCard";
+import { getSetupGrade } from "@/lib/mlb/setupGrade";
 
 type Tier = "track" | "watch" | "strong" | "elite" | "nuclear";
 type Market = "pitcher_strikeouts" | "pitcher_outs";
@@ -212,15 +213,6 @@ function hasDriver(s: MoundSignal, predicate: (d: MoundDriver) => boolean): bool
 
 function formatAmericanOdds(odds: number): string {
   return odds > 0 ? `+${odds}` : `${odds}`;
-}
-
-function getSetupGrade(score10: number): string {
-  if (score10 >= 8.5) return "A+";
-  if (score10 >= 7.5) return "A";
-  if (score10 >= 6.5) return "B+";
-  if (score10 >= 5.5) return "B";
-  if (score10 >= 4.5) return "C";
-  return "D";
 }
 
 function getSetupLabelClasses(label?: SetupLabel | null): string {

@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, Landmark, ChevronDown, ChevronUp, Check } from "lucide-react";
 import { PregameHistoryDrawer } from "./PregameHistoryDrawer";
 import { PregameRadarRecord } from "./PregameWinCard";
+import { getSetupGrade } from "@/lib/mlb/setupGrade";
 
 type Tier = "track" | "watch" | "power_watch" | "strong" | "elite" | "nuclear";
 type Market = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
@@ -209,7 +210,7 @@ const CARRY_COLOR: Record<ParkContext["carryType"], string> = {
   unknown: "text-muted-foreground/70 italic",
 };
 
-type FilterKey = "all" | "hr" | "tb" | "elite" | "confirmed" | "park" | "pitcher";
+type FilterKey = "all" | "hr" | "tb" | "elite" | "confirmed" | "park" | "pitcher" | "risk";
 const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: "all", label: "All" },
   { key: "hr", label: "HR" },
@@ -218,7 +219,29 @@ const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: "confirmed", label: "Confirmed Lineups" },
   { key: "park", label: "Park Boost" },
   { key: "pitcher", label: "Pitcher Vulnerability" },
+  { key: "risk", label: "Risk Warnings" },
 ];
+
+/** Best Angle — pure display mapping of the existing server-stamped primaryMarket. Missing/unsupported markets render nothing (never inferred from drivers/score/tags/odds). */
+const BEST_ANGLE_LABEL: Partial<Record<Market, string>> = {
+  home_runs: "Home Run",
+  total_bases: "Total Bases",
+};
+
+/** Plate-only chip color mapping for the existing server-provided marketSetups[].setupLabel. Watch/missing is neutral — never rose (rose is reserved for actual risk/caution states). No new thresholds; only maps the existing four labels to color. */
+function getPlateSetupLabelClasses(label?: SetupLabel | null): string {
+  switch (label) {
+    case "Elite":
+      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
+    case "Strong":
+      return "bg-green-500/20 text-green-200 border-green-400/30";
+    case "Solid":
+      return "bg-amber-500/20 text-amber-200 border-amber-400/30";
+    case "Watch":
+    default:
+      return "bg-secondary text-muted-foreground border-border/40";
+  }
+}
 
 function hasDriver(s: PregameSignal, predicate: (d: PowerDriver) => boolean): boolean {
   return s.drivers.some((d) => d.direction === "positive" && predicate(d));
@@ -245,6 +268,7 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
         case "confirmed": return s.lineupStatus === "confirmed";
         case "park": return hasDriver(s, (d) => d.key.startsWith("pw_park") || d.key === "pw_wind_out" || d.key === "pw_temp");
         case "pitcher": return hasDriver(s, (d) => d.key.startsWith("pv_"));
+        case "risk": return s.drivers.some((d) => d.direction === "negative") || s.diagnostics.warningTags.length > 0;
         default: return true;
       }
     });
@@ -400,10 +424,15 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
             {s.pitcherName ? `vs ${s.pitcherName}` : "Pitcher TBD"}
             {s.handednessMatchup ? ` · ${s.handednessMatchup}` : ""}
           </div>
+          {BEST_ANGLE_LABEL[s.primaryMarket] && (
+            <div className="text-[10px] text-muted-foreground/80 mt-0.5" data-testid={`pregame-best-angle-${slug}`}>
+              Best Angle: {BEST_ANGLE_LABEL[s.primaryMarket]}
+            </div>
+          )}
         </div>
         <div className="text-right shrink-0">
           <div className="text-xl font-extrabold tabular-nums" style={{ color: hitHr ? cashedColor : style.color }}>
-            {s.score10.toFixed(1)}
+            {getSetupGrade(s.score10)}
           </div>
           <div
             className="inline-flex items-center gap-1 text-[10px] font-semibold"
@@ -430,18 +459,19 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
       <ParkConditionsRow park={s.parkContext} />
 
       {/* Player-specific park/wind fit (PR2) — server-stamped display/explainability,
-          renders verbatim. Never a numeric score; score10 above stays the headline. */}
+          renders verbatim. Never a numeric score; the letter grade above stays the headline. */}
       <PlayerParkWindFitRow fit={s.playerParkWindFit} batterName={s.batterName} />
 
-      {/* Market chips — qualitative setup labels only. Numeric setup scores are
-          intentionally NOT shown here (compact face OR tooltip); they live in the
-          admin/debug diagnostics views. */}
+      {/* Market chips — qualitative setup labels only, color-coded by the existing
+          server-provided setupLabel (Elite/Strong → green, Solid → amber,
+          Watch/missing → neutral). Numeric setup scores are intentionally NOT shown
+          here (compact face OR tooltip); they live in the admin/debug diagnostics views. */}
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
         {marketSetups.map((setup) => (
           <Badge
             key={setup.market}
             variant="secondary"
-            className={`text-[10px] px-1.5 py-0 ${setup.isPrimary ? "bg-amber-500/20 text-amber-200" : ""}`}
+            className={`text-[10px] px-1.5 py-0 border ${getPlateSetupLabelClasses(setup.setupLabel)} ${setup.isPrimary ? "font-bold" : ""}`}
           >
             {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
             {setup.setupLabel ? ` · ${setup.setupLabel}` : ""}
@@ -717,6 +747,16 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
         <div className="flex-1 min-w-0">
           <SetupMeter score10={s.score10} tier={s.tier} />
         </div>
+      </div>
+
+      {/* Raw numeric score — secondary information only. The letter grade on the
+          compact card (getSetupGrade) remains the primary user-facing decision
+          signal; this row exists for users who want the underlying number. */}
+      <div className="flex items-center justify-between text-[9px]">
+        <span className="text-muted-foreground uppercase tracking-wider font-bold">Raw Score</span>
+        <span className="font-semibold text-muted-foreground" data-testid={`pregame-raw-score-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}>
+          {s.score10.toFixed(1)} / 10
+        </span>
       </div>
 
       <div className="flex items-center justify-between text-[9px]">
