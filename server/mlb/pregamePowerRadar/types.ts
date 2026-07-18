@@ -202,6 +202,76 @@ export interface PregamePowerDiagnostics {
     bvp: boolean;
     nearHrRecentForm?: boolean;
   };
+
+  /**
+   * Frozen prediction-time evaluation snapshots (research instrumentation —
+   * Phase 1, see evaluationSnapshot.ts). Additive, optional: absent on rows
+   * persisted before this instrumentation shipped. Never read by scoring,
+   * qualification, or public sorting (diagnostics.ts) — measurement only.
+   */
+  evaluation?: PregameEvaluationRecord;
+}
+
+/** One frozen read of a candidate's champion state, taken at a specific build cycle. */
+export interface PregameEvaluationSnapshot {
+  frozenAt: string;
+  buildId: string;
+  /** Size of the full candidate population this signal's rank was computed against. */
+  candidatePoolSize: number;
+  champion: {
+    score10: number;
+    tier: PregamePowerTier;
+    componentScores: {
+      batterPowerScore: number | null;
+      pitcherVulnerabilityScore: number | null;
+      matchupFitScore: number | null;
+      parkWeatherScore: number | null;
+      lineupOpportunityScore: number | null;
+      nearHrRecentFormScore: number | null;
+    };
+    marketScores: Partial<Record<PregamePowerMarket, number>>;
+    drivers: PowerDriver[];
+    rank: {
+      holistic: number;
+      byMarket: Partial<Record<PregamePowerMarket, number>>;
+    };
+    dataCoverageScore: number;
+    lineupStatus: PregameLineupStatus;
+    weatherStatus: PregameWeatherStatus;
+    /**
+     * Evaluation-only sportsbook-line snapshot (never fed back into scoring,
+     * qualification, or ranking). Only ever populated when a real fetch for
+     * this signal's own primaryMarket has run — see evaluationSnapshot.ts.
+     */
+    postedLine: {
+      market: PregamePowerMarket;
+      line: number | null;
+      lineUnavailableReason: string | null;
+      sourceTimestamp: string | null;
+    };
+  };
+}
+
+/**
+ * Every evaluated candidate (including suppressed ones) gets a record.
+ * `finalPregameSnapshot` is NOT guaranteed non-null — see
+ * `finalPregameUnavailableReason`. Snapshot availability is independent of
+ * any per-market data-quality concept.
+ */
+export interface PregameEvaluationRecord {
+  /** Written exactly once, at genuine nonpublic→public transition. Never overwritten after. */
+  firstPublicSnapshot: PregameEvaluationSnapshot | null;
+  firstPublicUnavailableReason:
+    | "not_yet_public"
+    | "instrumentation_started_after_surface"
+    | null;
+  /** Refreshed every pre-lock cycle; frozen permanently once locked. */
+  finalPregameSnapshot: PregameEvaluationSnapshot | null;
+  finalPregameUnavailableReason:
+    | "first_seen_post_lock"
+    | "legacy_row"
+    | "no_complete_pregame_build"
+    | null;
 }
 
 export interface PregamePowerSignal {
@@ -313,6 +383,13 @@ export interface PregameOutcome {
   // "unknown" when AB-sequencing data was unavailable — never silently
   // defaulted to false when the answer isn't actually known.
   firstAbPregameWin?: true | false | "unknown";
+  /**
+   * Internal-only Total Bases classification (research instrumentation —
+   * totalBasesOutcome.ts). Never surfaces publicly and never alters `outcome`/
+   * `userVisible` above, which stay HR-oriented. `tb_unknown` when final
+   * totalBases is unavailable — never fabricated.
+   */
+  tbOutcome?: "tb_success" | "tb_miss" | "tb_unknown";
 }
 
 /** Per-component scorer result. All scores are on a 0–10 scale. */

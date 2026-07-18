@@ -15,6 +15,7 @@ import { mlbGameCache, getPitcherAppearanceOrder } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
 import { deriveMoundOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled } from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
+import { computeMoundGradingMeasurements } from "./evaluationSnapshot";
 import type { MoundOutcome, MoundSignal } from "./types";
 import type { MoundDirection } from "./moundDirection";
 import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
@@ -280,6 +281,29 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
     signal.outcomes = { ...outcome, gradedLive };
     signal.status = "graded";
     graded++;
+
+    // Research instrumentation (§7b, three separate measurements) — shadow-
+    // only, computed alongside but never altering the public classification
+    // above. gradingMeasurements is sticky (only ever set on this, the first
+    // grading transition — this branch is unreachable for an already-graded
+    // signal). Falls back to the existing live-refetched seasonBaselineValue,
+    // tagged legacyMovingBaseline, only when no frozen baseline was captured.
+    try {
+      const finalPregameSnapshot = signal.diagnostics.evaluation?.finalPregameSnapshot ?? null;
+      const gradingMeasurements = computeMoundGradingMeasurements(
+        signal.primaryMarket,
+        signal.moundDirection,
+        finalPregameSnapshot,
+        outcome.finalStrikeouts ?? null,
+        outcome.finalOutsRecorded ?? null,
+        outcome.seasonBaselineValue ?? null,
+      );
+      if (signal.diagnostics.evaluation) {
+        signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
+      }
+    } catch (err: any) {
+      console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed ${signal.signalId}:`, err?.message ?? err);
+    }
 
     console.log(
       `[MLB_PREGAME_OUTCOME_SETTLED] ${signal.signalId} market=${signal.primaryMarket} ` +

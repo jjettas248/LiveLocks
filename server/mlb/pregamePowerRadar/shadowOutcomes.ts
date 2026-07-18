@@ -20,6 +20,7 @@ import { getCanonicalHrRadarState } from "../hrRadarCanonicalStore";
 import { mlbGameCache } from "../dataPullService";
 import { getSnapshot, commitGradedSignal } from "./pregamePowerRadarStore";
 import { deriveWinAttribution } from "./winAttribution";
+import { classifyTotalBasesOutcome } from "./totalBasesOutcome";
 import type { PregameOutcome, PregamePowerSignal } from "./types";
 import type { PregameCalibrationRecord } from "../../../shared/pregameRadarWin";
 
@@ -93,6 +94,9 @@ function resolveOutcome(
     hrHalf: attribution.hrHalf,
     plateAppearanceNumber: attribution.plateAppearanceNumber,
     firstAbPregameWin: attribution.firstAbPregameWin,
+    // Internal-only, isolated from the HR-oriented outcome/userVisible above
+    // (see totalBasesOutcome.ts) — never surfaced publicly.
+    tbOutcome: classifyTotalBasesOutcome(line.tb ?? null),
   };
 }
 
