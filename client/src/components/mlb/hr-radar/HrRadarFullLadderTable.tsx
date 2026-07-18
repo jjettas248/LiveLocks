@@ -24,6 +24,10 @@ export interface HrRadarFullLadderTableProps {
   onPass?: (entry: HrRadarLadderEntry) => void;
   onAccept?: (entry: HrRadarLadderEntry) => void;
   isAccepted?: (entry: HrRadarLadderEntry) => boolean;
+  /** Ready's "Watch Next AB" — separate from onAccept/isAccepted (Fire's
+   *  bet-slip tracking); see LadderCard. */
+  onWatch?: (entry: HrRadarLadderEntry) => void;
+  isWatching?: (entry: HrRadarLadderEntry) => boolean;
   /** Cross-tier board priority pick (`selectTopPriority`) — the one row that
    * earns the "top priority" ribbon regardless of which section it lands in. */
   topPriorityId?: string | null;
@@ -37,6 +41,8 @@ export function HrRadarFullLadderTable({
   onPass,
   onAccept,
   isAccepted,
+  onWatch,
+  isWatching,
   topPriorityId = null,
 }: HrRadarFullLadderTableProps) {
   if (rows.length === 0) {
@@ -88,6 +94,8 @@ export function HrRadarFullLadderTable({
                   onPass={onPass}
                   onAccept={onAccept}
                   isAccepted={isAccepted ? isAccepted(vm.entry) : false}
+                  onWatch={onWatch}
+                  isWatching={isWatching ? isWatching(vm.entry) : false}
                   onOpenDrawer={() => onRowClick(vm)}
                   isTopPriority={topPriorityId != null && vm.id === topPriorityId}
                 />

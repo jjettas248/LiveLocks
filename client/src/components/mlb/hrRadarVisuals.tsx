@@ -3,19 +3,21 @@
 // Quick Decide (HrQuickDecide.tsx) and the Full Ladder (HrRadarLadder.tsx) used
 // to each invent their own colors, badges, and bars — six competing accents
 // that flattened the hierarchy so nothing popped. This module is the single
-// source of the visual language both surfaces read, so the two can never drift
-// and the eye can instantly rank a play by heat:
+// source of the visual language (color/icon/border/glow) both surfaces read,
+// so the two can never drift and the eye can instantly rank a play by heat:
 //
-//   WATCHLIST (cool) → LEAN → PLAYABLE → ATTACK (hot) · CASHED (win) · MISSED (muted)
+//   WATCH (cool) → BUILD → READY → FIRE (hot) · SIGNAL HIT (win) · MISSED (muted)
 //
-// Only Playable and Attack are official, graded HR calls — Watchlist/Lean are
-// radar coverage, not official picks.
+// Only Ready and Fire are official, graded HR calls — Watch/Build are radar
+// coverage, not official picks.
 //
-// It contains NO data logic. It never reads engine fields, never recomputes a
-// score/probability/tier — callers pass already-derived, server-stamped values
-// (via hrRadarDisplayState.ts / hrRadarScore.ts) and this module only styles
-// them. All motion here is neutralized by the global prefers-reduced-motion
-// reset in index.css.
+// This module owns VISUALS ONLY — color, icon, border, glow. It does not own
+// copy/vocabulary (that's hrRadarConsumerCopy.ts) and it contains NO data
+// logic: it never reads engine fields, never recomputes a
+// score/probability/tier — callers pass already-derived, server-stamped
+// values (via hrRadarDisplayState.ts / hrRadarScore.ts) and this module only
+// styles them. All motion here is neutralized by the global
+// prefers-reduced-motion reset in index.css.
 
 import { Flame, Zap, TrendingUp, Eye, Trophy, CircleSlash, type LucideIcon } from "lucide-react";
 import type { HrRadarBadgeTone } from "@shared/hrRadarStage";
@@ -25,7 +27,6 @@ export type HrHeatTier = "fire" | "ready" | "build" | "track" | "cashed" | "miss
 
 export interface HrTierTheme {
   tier: HrHeatTier;
-  label: string;
   icon: LucideIcon;
   /** Hero / accent text color. */
   text: string;
@@ -46,7 +47,6 @@ export interface HrTierTheme {
 const THEME: Record<HrHeatTier, HrTierTheme> = {
   fire: {
     tier: "fire",
-    label: "Attack",
     icon: Flame,
     text: "text-red-400",
     rail: "bg-red-500",
@@ -58,7 +58,6 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   },
   ready: {
     tier: "ready",
-    label: "Playable",
     icon: Zap,
     text: "text-orange-400",
     rail: "bg-orange-500",
@@ -71,7 +70,6 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   build: {
     // "Signal is heating up" — electric blue ownership (spec).
     tier: "build",
-    label: "Lean",
     icon: TrendingUp,
     text: "text-blue-400",
     rail: "bg-blue-500",
@@ -84,7 +82,6 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   track: {
     // "Something is forming" — neutral blue-gray, recedes (spec).
     tier: "track",
-    label: "Watchlist",
     icon: Eye,
     text: "text-slate-400",
     rail: "bg-slate-500",
@@ -96,7 +93,6 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   },
   cashed: {
     tier: "cashed",
-    label: "Cashed",
     icon: Trophy,
     text: "text-emerald-400",
     rail: "bg-emerald-500",
@@ -108,7 +104,6 @@ const THEME: Record<HrHeatTier, HrTierTheme> = {
   },
   missed: {
     tier: "missed",
-    label: "Missed",
     icon: CircleSlash,
     text: "text-zinc-400",
     rail: "bg-zinc-600",

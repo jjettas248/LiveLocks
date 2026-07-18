@@ -4253,13 +4253,36 @@ export async function registerRoutes(
         freshness: overlayDiag,
         generatedAt: new Date().toISOString(),
       };
+
+      // ── HR Radar consumer decision view (additive) ─────────────────────
+      // Single authoritative source for Quick Decide + Full Ladder's stage
+      // classification, action eligibility, and every displayed count — see
+      // shared/hrRadarDecisionView.ts. Never replaces `sections`/`counts`
+      // (backward-compatible with any not-yet-migrated consumer). Wrapped so
+      // a failure here still serves the rest of the (unaffected) ladder
+      // payload; the client falls back to its legacy adapter path when
+      // `decisionView` is absent (see hrQuickDecide.tsx/HrRadarLadder.tsx).
+      try {
+        const { buildHrRadarDecisionView } = await import("./mlb/hrRadarDecisionView");
+        (ladder as any).decisionView = buildHrRadarDecisionView(ladder as any);
+      } catch (e) {
+        const { degradedHrRadarDecisionView } = await import("./mlb/hrRadarDecisionView");
+        console.error("[mlb/hr-radar/ladder] decisionView build failed:", (e as Error).message);
+        (ladder as any).decisionView = degradedHrRadarDecisionView(
+          (ladder as any)?.sessionDate ?? "",
+          "decision_view_build_failed",
+        );
+      }
+
       return res.json(ladder);
     } catch (e: any) {
       console.error("[mlb/hr-radar/ladder]", e.message);
+      const { degradedHrRadarDecisionView } = await import("./mlb/hrRadarDecisionView");
       return res.json({
         sessionDate: "",
         sections: { attackNow: [], building: [], watch: [], cashed: [], dead: [] },
         counts: { attackNow: 0, building: 0, watch: 0, cashed: 0, dead: 0, total: 0 },
+        decisionView: degradedHrRadarDecisionView("", "ladder_build_failed"),
         diagnostics: {
           sessionDate: "",
           rowsFound: 0,
@@ -4280,15 +4303,20 @@ export async function registerRoutes(
   app.get("/api/mlb/hr-radar/ladder/validate", requireAuth, async (req, res) => {
     try {
       const { validateHrRadarLadder } = await import("./validation/hrRadar/ladderInvariants");
+      const { validateHrRadarDecisionView } = await import("./validation/hrRadar/decisionViewInvariants");
+      const { buildHrRadarDecisionView } = await import("./mlb/hrRadarDecisionView");
       const sessionDate = typeof req.query.sessionDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.sessionDate)
         ? req.query.sessionDate
         : undefined;
       const ladder = await storage.getHrRadarLadder(sessionDate);
       const report = validateHrRadarLadder(ladder);
+      const decisionView = buildHrRadarDecisionView(ladder as any);
+      const decisionViewReport = validateHrRadarDecisionView(decisionView);
       return res.json({
         sessionDate: ladder.sessionDate,
-        ok: report.violations.length === 0,
+        ok: report.violations.length === 0 && decisionViewReport.violations.length === 0,
         ...report,
+        decisionView: decisionViewReport,
       });
     } catch (e: any) {
       console.error("[mlb/hr-radar/ladder/validate]", e.message);

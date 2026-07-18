@@ -9,10 +9,10 @@ import { LiveFeed } from "@/components/mlb/LiveFeed";
 import { MlbSignalCard, type MlbSignalData } from "@/components/mlb/MlbSignalCard";
 import { HrRadarLadder, HeatingUpMeter, type HrRadarLadderEntry } from "@/components/mlb/HrRadarLadder";
 import { hrTierTheme, tierFromPlayabilityStatus } from "@/components/mlb/hrRadarVisuals";
+import { HR_RADAR_STAGE_COPY, hrRadarConsumerLabelForPlayability } from "@/components/mlb/hrRadarConsumerCopy";
 import { PregameHub } from "@/components/mlb/pregame/PregameHub";
 import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
-import { HrRadarBestContactsSpotlight } from "@/components/mlb/hr-radar/HrRadarBestContactsSpotlight";
 import { type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import { MlbSlateRibbon } from "@/components/mlb/MlbSlateRibbon";
 import type { MLBSignal } from "@shared/mlbSignal";
@@ -430,10 +430,15 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
           <div className="space-y-1">
             <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-semibold">
               <Activity className="w-3 h-3" />
-              {/* Server-stamped playability language (Watchlist/Lean/Playable/Attack) —
-                  render verbatim, never the raw confidenceTier/signalState jargon. */}
+              {/* Consumer-safe stage label (Fire/Ready/Build/Watch) — the same
+                  ONE vocabulary Quick Decide and Full Ladder use. Never the
+                  server's internal playability jargon (Watchlist/Lean/
+                  Playable/Attack), the internal pregame-seed tier
+                  (LEAN/WATCH), or raw confidenceTier/signalState. */}
               <span data-testid="text-analyze-tier">
-                Playability: {(alert as any).playabilityLabel ?? pregameSeedTier ?? alert.confidenceTier?.toUpperCase()}
+                Stage: {pregameSeedTier === "LEAN" ? HR_RADAR_STAGE_COPY.build.short
+                  : pregameSeedTier === "WATCH" ? HR_RADAR_STAGE_COPY.watch.short
+                  : hrRadarConsumerLabelForPlayability((alert as any).playabilityStatus)}
               </span>
               {pregameSeedTier && !(alert as any).playabilityLabel && (
                 <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">
@@ -988,7 +993,6 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
 
       {activeSubTab === "hr_radar" && (
         <div className="space-y-4">
-          <HrRadarBestContactsSpotlight />
           {/* Quick Decide / Full Ladder toggle */}
           <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border/50">
             <button
