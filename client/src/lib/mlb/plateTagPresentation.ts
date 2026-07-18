@@ -285,7 +285,10 @@ export function getWeatherSecondaryPresentations(
 
   const roofClosed = hasKey("pw_roof") || park?.carryLabel === "Neutral Air";
   if (roofClosed) {
-    pills.push({ text: "Roof Closed", tone: "neutral", classes: getPlateToneClasses("neutral") });
+    // 🏟️ matches the existing roof-closed glyph used elsewhere on the card
+    // (server/mlb/parkWindFit.ts's "Roof closed · neutral carry" case, and the
+    // Neutral Conditions carry label) — carried forward, not invented.
+    pills.push({ text: "🏟️ Roof Closed", tone: "neutral", classes: getPlateToneClasses("neutral") });
     return pills;
   }
 

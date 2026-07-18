@@ -198,14 +198,14 @@ console.log("\ngetWeatherSecondaryPresentations(park, drivers) — driver-key aw
     { temperatureF: 72, windMph: null, windDirectionLabel: null, carryLabel: "Neutral Air", carryType: "neutral" },
     [{ key: "pw_roof", direction: "neutral" }],
   );
-  assert("pw_roof driver → single Roof Closed pill, neutral", roofByDriver.length === 1 && roofByDriver[0].text === "Roof Closed" && roofByDriver[0].tone === "neutral");
+  assert("pw_roof driver → single Roof Closed pill, neutral", roofByDriver.length === 1 && roofByDriver[0].text === "🏟️ Roof Closed" && roofByDriver[0].tone === "neutral");
 
   // Documented fallback: no pw_roof driver present, but carryLabel says Neutral Air.
   const roofByLabelFallback = getWeatherSecondaryPresentations(
     { temperatureF: 72, windMph: 2, windDirectionLabel: "Calm", carryLabel: "Neutral Air", carryType: "neutral" },
     [],
   );
-  assert("carryLabel Neutral Air fallback (no pw_roof driver) → still Roof Closed pill", roofByLabelFallback.length === 1 && roofByLabelFallback[0].text === "Roof Closed");
+  assert("carryLabel Neutral Air fallback (no pw_roof driver) → still Roof Closed pill", roofByLabelFallback.length === 1 && roofByLabelFallback[0].text === "🏟️ Roof Closed");
 
   const nothing = getWeatherSecondaryPresentations(
     { temperatureF: null, windMph: null, windDirectionLabel: null, carryLabel: "Conditions Unavailable", carryType: "unknown" },
