@@ -140,5 +140,9 @@ const fitSmall = computeMatchupFit({
 ok(fitSmall.bvpModifier === 0, "BvP <6 PA → 0 modifier");
 ok(!fitSmall.bvpAvailable, "BvP <6 PA → not available");
 
+// ── bvpHits — additive passthrough, no-op when unavailable ────────────────────
+ok(fitBig.bvpHits === 18, `BvP available → bvpHits returns input verbatim (got ${fitBig.bvpHits})`);
+ok(fitSmall.bvpHits === null, "BvP <5 AB/PA → bvpHits null (unavailable)");
+
 console.log(`\nscoring.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -144,5 +144,22 @@ try {
   assert("10. no NBA/NCAAB files changed", cross.length === 0, cross.join(","));
 }
 
+// ── 11. carryKnown-driven fallback copy reconciles "HR Carry" + "fit unavailable" ──
+// ParkConditionsRow (carry) and PlayerParkWindFitRow (player-specific fit) are
+// independently-sourced pipelines that can legitimately disagree — carry can be
+// known while the player fit is unavailable (e.g. batter handedness unknown).
+// The fit row must explain this instead of reading as a silent contradiction.
+{
+  assert("11. fit row accepts a carryKnown prop", /carryKnown/.test(fitRowBody));
+  assert("11b. fit row explains independence when carry is known but fit isn't", clientSrc.includes("park carry above is independent"));
+  assert("11c. fit row keeps the short fallback when carry itself is also unknown", clientSrc.includes("❔ Park/wind data unavailable"));
+  // Call site computes carryKnown from the same parkContext the carry row reads —
+  // never a client-invented signal.
+  assert(
+    "11d. call site derives carryKnown from parkContext.carryType !== \"unknown\"",
+    /carryKnown=\{s\.parkContext != null && s\.parkContext\.carryType !== "unknown"\}/.test(clientSrc),
+  );
+}
+
 console.log(`\n[pregameParkWindDisplay] ${passed}/${passed + failed} cases passed${failed > 0 ? ` (${failed} FAILED)` : ""}\n`);
 if (failed > 0) process.exit(1);

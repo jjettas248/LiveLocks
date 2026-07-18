@@ -13,6 +13,15 @@ import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, Landmark, Che
 import { PregameHistoryDrawer } from "./PregameHistoryDrawer";
 import { PregameRadarRecord } from "./PregameWinCard";
 import { getSetupGrade } from "@/lib/mlb/setupGrade";
+import {
+  getPlateTagPresentation,
+  getPlateToneClasses,
+  getBvpPresentation,
+  getMarketTierPresentation,
+  getCarryPresentation,
+  getWeatherSecondaryPresentations,
+  type PlateTagTone,
+} from "@/lib/mlb/plateTagPresentation";
 
 type Tier = "track" | "watch" | "power_watch" | "strong" | "elite" | "nuclear";
 type Market = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
@@ -99,6 +108,8 @@ interface PregameDiagnostics {
   bvpAvailable: boolean;
   bvpScore: number | null;
   bvpSampleSize: number | null;
+  /** Optional — absent on older/rehydrated diagnostics snapshots. */
+  bvpHits?: number | null;
   bvpDirection: "positive" | "neutral" | "negative";
   pitcherOrderSplitDirection: "vulnerable" | "neutral" | "suppressive" | "unavailable";
   batterOrderSplitDirection: "strong" | "neutral" | "weak" | "unavailable";
@@ -192,24 +203,6 @@ const MARKET_EMOJI: Record<Market, string> = {
   hrr: "🎯",
 };
 
-// Carry label → emoji prefix. The label text itself is server-owned (parkContext);
-// the client only picks the leading glyph + color from the server's carryType.
-const CARRY_EMOJI: Record<ParkContext["carryLabel"], string> = {
-  "HR Carry": "🔥",
-  "Carry Boost": "🌬️",
-  "Carry Suppressed": "🧊",
-  "Neutral Air": "↔",
-  "Neutral Conditions": "🏟️",
-  "Conditions Unavailable": "🚫",
-};
-
-const CARRY_COLOR: Record<ParkContext["carryType"], string> = {
-  boost: "text-amber-300",
-  suppress: "text-sky-300",
-  neutral: "text-muted-foreground",
-  unknown: "text-muted-foreground/70 italic",
-};
-
 type FilterKey = "all" | "hr" | "tb" | "elite" | "confirmed" | "park" | "pitcher" | "risk";
 const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: "all", label: "All" },
@@ -228,23 +221,62 @@ const BEST_ANGLE_LABEL: Partial<Record<Market, string>> = {
   total_bases: "Total Bases",
 };
 
-/** Plate-only chip color mapping for the existing server-provided marketSetups[].setupLabel. Watch/missing is neutral — never rose (rose is reserved for actual risk/caution states). No new thresholds; only maps the existing four labels to color. */
-function getPlateSetupLabelClasses(label?: SetupLabel | null): string {
-  switch (label) {
-    case "Elite":
-      return "bg-emerald-500/20 text-emerald-200 border-emerald-400/30";
-    case "Strong":
-      return "bg-green-500/20 text-green-200 border-green-400/30";
-    case "Solid":
-      return "bg-amber-500/20 text-amber-200 border-amber-400/30";
-    case "Watch":
-    default:
-      return "bg-secondary text-muted-foreground border-border/40";
+/** Single resolver every driver-rendering call site uses (compact positives/negatives
+ * rows, "Why We Like Him" list) so they can never disagree with each other or with the
+ * expanded BvP row. For fit_bvp/fit_bvp_bad, both tone AND label come from
+ * getBvpPresentation (confidence-aware — never the server's static driver.label,
+ * which doesn't encode sample-size banding). Every other driver renders its own
+ * server-owned label verbatim. */
+function getDriverPresentation(
+  driver: PowerDriver,
+  diagnostics: PregameDiagnostics,
+): { tone: PlateTagTone; label: string; classes: string } {
+  if (driver.key === "fit_bvp" || driver.key === "fit_bvp_bad") {
+    const bvp = getBvpPresentation(diagnostics);
+    if (bvp) return { tone: bvp.tone, label: bvp.label, classes: bvp.classes };
   }
+  const p = getPlateTagPresentation(driver.key, driver.direction);
+  return { tone: p.tone, label: driver.label, classes: p.classes };
 }
 
 function hasDriver(s: PregameSignal, predicate: (d: PowerDriver) => boolean): boolean {
   return s.drivers.some((d) => d.direction === "positive" && predicate(d));
+}
+
+function PlateTagColorKey() {
+  return (
+    <details className="text-xs text-muted-foreground" data-testid="pregame-tag-color-key">
+      <summary className="cursor-pointer select-none text-[11px] font-semibold hover:text-foreground">
+        ⓘ Tag Color Key
+      </summary>
+
+      <div className="mt-2 grid gap-1.5 rounded-lg border border-border/30 bg-secondary/20 p-2 text-[11px]">
+        <div>
+          <span className="font-semibold text-emerald-300">Standout</span>
+          {" = Exceptional, high-value advantage"}
+        </div>
+        <div>
+          <span className="font-semibold text-amber-300">Supporting</span>
+          {" = Useful supporting evidence, not the strongest signal"}
+        </div>
+        <div>
+          <span className="font-semibold text-sky-300">Context</span>
+          {" = Projection, limited evidence, or informational context"}
+        </div>
+        <div>
+          <span className="font-semibold text-rose-300">Risk</span>
+          {" = Negative or suppressive condition"}
+        </div>
+        <div>
+          <span className="font-semibold text-muted-foreground">Neutral</span>
+          {" = No meaningful directional effect, or data unavailable"}
+        </div>
+        <div className="pt-1 text-muted-foreground/80">
+          The letter grade and setup tier badge (top-right of each card) use their own tier styling and are separate from these tag colors.
+        </div>
+      </div>
+    </details>
+  );
 }
 
 export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: string | null } = {}) {
@@ -314,6 +346,8 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
 
       <PregameRadarRecord />
 
+      <PlateTagColorKey />
+
       {isLoading && !data && (
         <Card className="p-6 text-center text-sm text-muted-foreground">Loading pre-game targets…</Card>
       )}
@@ -341,7 +375,14 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
 function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const style = TIER_STYLE[s.tier];
   const TierIcon = s.tier === "nuclear" || s.tier === "elite" ? Flame : s.tier === "strong" ? Zap : Target;
-  const positives = s.drivers.filter((d) => d.direction === "positive").slice(0, 4);
+  // Sort standout tags before supporting/context so they aren't crowded out
+  // by the 4-tag cap when a card has more than 4 positive drivers.
+  const TONE_RANK: Record<PlateTagTone, number> = { standout: 0, supporting: 1, context: 2, risk: 3, neutral: 4 };
+  const positives = s.drivers
+    .filter((d) => d.direction === "positive")
+    .slice()
+    .sort((a, b) => TONE_RANK[getDriverPresentation(a, s.diagnostics).tone] - TONE_RANK[getDriverPresentation(b, s.diagnostics).tone])
+    .slice(0, 4);
   const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
   const [expanded, setExpanded] = useState(false);
@@ -455,57 +496,71 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
         </div>
       </div>
 
-      {/* Park / weather context — secondary line, server-stamped, renders verbatim. */}
-      <ParkConditionsRow park={s.parkContext} />
+      {/* Park / weather context — primary carry pill + secondary directional pills.
+          Carry/weather driver classification is server-stamped; this row only formats it. */}
+      <ParkConditionsRow park={s.parkContext} drivers={s.drivers} />
 
       {/* Player-specific park/wind fit (PR2) — server-stamped display/explainability,
           renders verbatim. Never a numeric score; the letter grade above stays the headline. */}
-      <PlayerParkWindFitRow fit={s.playerParkWindFit} batterName={s.batterName} />
+      <PlayerParkWindFitRow
+        fit={s.playerParkWindFit}
+        batterName={s.batterName}
+        carryKnown={s.parkContext != null && s.parkContext.carryType !== "unknown"}
+      />
 
       {/* Market chips — qualitative setup labels only, color-coded by the existing
           server-provided setupLabel (Elite/Strong → green, Solid → amber,
           Watch/missing → neutral). Numeric setup scores are intentionally NOT shown
           here (compact face OR tooltip); they live in the admin/debug diagnostics views. */}
       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-        {marketSetups.map((setup) => (
-          <Badge
-            key={setup.market}
-            variant="secondary"
-            className={`text-[10px] px-1.5 py-0 border ${getPlateSetupLabelClasses(setup.setupLabel)} ${setup.isPrimary ? "font-bold" : ""}`}
-          >
-            {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
-            {setup.setupLabel ? ` · ${setup.setupLabel}` : ""}
-          </Badge>
-        ))}
+        {marketSetups.map((setup) => {
+          const tierPresentation = getMarketTierPresentation(setup.setupLabel);
+          return (
+            <Badge
+              key={setup.market}
+              variant="secondary"
+              className={`text-[10px] px-1.5 py-0 border ${tierPresentation.classes} ${setup.isPrimary ? "font-bold" : ""}`}
+            >
+              {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
+              {setup.setupLabel ? ` · ${tierPresentation.displayLabel}` : ""}
+            </Badge>
+          );
+        })}
       </div>
 
       {positives.length > 0 && (
         <div className="flex items-start gap-1.5 mt-2 flex-wrap">
-          {positives.map((d) => (
-            <span
-              key={d.key}
-              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-500/20"
-              title={d.evidence}
-            >
-              {d.key.startsWith("pw_wind") ? <Wind className="w-3 h-3" /> : d.key.startsWith("pv_") ? <ShieldAlert className="w-3 h-3" /> : null}
-              {d.label}
-            </span>
-          ))}
+          {positives.map((d) => {
+            const p = getDriverPresentation(d, s.diagnostics);
+            return (
+              <span
+                key={d.key}
+                className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md border ${p.classes}`}
+                title={d.evidence}
+              >
+                {d.key.startsWith("pw_wind") ? <Wind className="w-3 h-3" /> : d.key.startsWith("pv_") ? <ShieldAlert className="w-3 h-3" /> : null}
+                {p.label}
+              </span>
+            );
+          })}
         </div>
       )}
 
       {negatives.length > 0 && (
         <div className="flex items-start gap-1.5 mt-2 flex-wrap" data-testid={`pregame-warnings-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}>
-          {negatives.map((d) => (
-            <span
-              key={d.key}
-              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/20"
-              title={d.evidence}
-            >
-              <ShieldAlert className="w-3 h-3" />
-              {d.label}
-            </span>
-          ))}
+          {negatives.map((d) => {
+            const p = getDriverPresentation(d, s.diagnostics);
+            return (
+              <span
+                key={d.key}
+                className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md border ${p.classes}`}
+                title={d.evidence}
+              >
+                <ShieldAlert className="w-3 h-3" />
+                {p.label}
+              </span>
+            );
+          })}
         </div>
       )}
       </div>
@@ -534,10 +589,11 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   );
 }
 
-// Compact, visually-secondary park/weather context line. Renders ONLY the
-// server-stamped parkContext fields — no client-side carry/wind inference, no raw
-// weather-modifier values. One line on desktop; wraps on mobile.
-function ParkConditionsRow({ park }: { park?: ParkContext | null }) {
+// Environment row: venue name + a visually dominant primary carry pill, followed
+// by smaller secondary pills for temperature/wind/roof. Renders ONLY server-stamped
+// parkContext fields plus tone classification driven by the driver array — no
+// client-side carry/wind math. Wraps on mobile.
+function ParkConditionsRow({ park, drivers }: { park?: ParkContext | null; drivers: PowerDriver[] }) {
   // `null`/absent parkContext means the server genuinely does NOT know the
   // conditions (e.g. DB-fallback path). Be honest — never imply neutral.
   if (!park) {
@@ -557,34 +613,30 @@ function ParkConditionsRow({ park }: { park?: ParkContext | null }) {
   // Nothing known and no meaningful carry call → hide rather than render an empty row.
   if (!hasContext && !carryIsMeaningful && park.carryType !== "unknown") return null;
 
-  const segments: JSX.Element[] = [];
-  if (park.venueName) segments.push(<span key="venue">🏟️ {park.venueName}</span>);
-  if (park.temperatureF != null) segments.push(<span key="temp">{Math.round(park.temperatureF)}°</span>);
-  if (park.windMph != null) {
-    segments.push(
-      <span key="wind" className="inline-flex items-center gap-0.5">
-        <Wind className="w-3 h-3" />
-        {Math.round(park.windMph)}
-        {park.windDirectionLabel ? ` ${park.windDirectionLabel}` : ""}
-      </span>,
-    );
-  }
-  segments.push(
-    <span key="carry" className={`font-semibold ${CARRY_COLOR[park.carryType]}`}>
-      {CARRY_EMOJI[park.carryLabel]} {park.carryLabel}
-    </span>,
-  );
+  const carry = getCarryPresentation(park);
+  const secondaryPills = getWeatherSecondaryPresentations(park, drivers);
 
   return (
     <div
-      className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground flex-wrap"
+      className="flex items-center gap-1.5 mt-1.5 text-[11px] flex-wrap"
       data-testid="pregame-park-conditions"
       title={park.driverText ?? undefined}
     >
-      {segments.map((seg, i) => (
-        <span key={i} className="inline-flex items-center gap-1.5">
-          {i > 0 && <span className="opacity-40">·</span>}
-          {seg}
+      {park.venueName && <span className="text-muted-foreground">🏟️ {park.venueName}</span>}
+      <Badge
+        variant="secondary"
+        className={`text-[10px] px-2 py-0.5 border font-bold ${carry.classes}`}
+        data-testid="pregame-park-carry-primary"
+      >
+        {carry.emoji} {carry.label}
+      </Badge>
+      {secondaryPills.map((pill, i) => (
+        <span
+          key={i}
+          className={`inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded-md border ${pill.classes}`}
+        >
+          {pill.text.includes("mph") && <Wind className="w-3 h-3" />}
+          {pill.text}
         </span>
       ))}
     </div>
@@ -596,22 +648,33 @@ function ParkConditionsRow({ park }: { park?: ParkContext | null }) {
 // direction/speed + a short explanation. No client-side fit math, no numeric
 // model value. Wraps cleanly on mobile (flex-wrap). When the fit is absent
 // (DB-fallback path), shows an honest "data unavailable" fallback.
-const FIT_COLOR: Record<NonNullable<PlayerParkWindFit["classification"]>, string> = {
-  boost: "text-emerald-300",
-  suppress: "text-rose-300",
-  neutral: "text-muted-foreground",
-  unknown: "text-muted-foreground/70",
+const FIT_TONE: Record<NonNullable<PlayerParkWindFit["classification"]>, PlateTagTone> = {
+  boost: "supporting",
+  suppress: "risk",
+  neutral: "context",
+  unknown: "neutral",
 };
 
-function PlayerParkWindFitRow({ fit, batterName }: { fit?: PlayerParkWindFit | null; batterName: string }) {
+function PlayerParkWindFitRow({
+  fit,
+  batterName,
+  carryKnown = false,
+}: {
+  fit?: PlayerParkWindFit | null;
+  batterName: string;
+  carryKnown?: boolean;
+}) {
   const testid = `pregame-park-wind-fit-${batterName.replace(/\s+/g, "-").toLowerCase()}`;
   if (!fit) {
+    const text = carryKnown
+      ? "❔ Player-specific fit unavailable (batter handedness unknown) — park carry above is independent"
+      : "❔ Park/wind data unavailable";
     return (
       <div
         className="flex items-center gap-1.5 mt-1.5 text-[11px] text-muted-foreground/70 italic flex-wrap"
         data-testid={`${testid}-unavailable`}
       >
-        <span>❔ Park/wind data unavailable</span>
+        <span>{text}</span>
       </div>
     );
   }
@@ -622,7 +685,7 @@ function PlayerParkWindFitRow({ fit, batterName }: { fit?: PlayerParkWindFit | n
       data-testid={testid}
       title={fit.explanation}
     >
-      <span className={`inline-flex items-center gap-1 font-semibold ${FIT_COLOR[fit.classification]}`}>
+      <span className={`inline-flex items-center gap-1 font-semibold ${getPlateToneClasses(FIT_TONE[fit.classification])}`}>
         <span data-testid={`${testid}-emoji`}>{fit.emoji}</span>
         <span>{fit.label}</span>
       </span>
@@ -777,15 +840,18 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
         <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20">
           <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Why We Like Him</div>
           <ul className="space-y-1">
-            {allPositives.map((d) => (
-              <li key={d.key} className="flex items-start gap-1.5 text-[10px] text-foreground/90 leading-snug">
-                <Check className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
-                <span>
-                  {d.label}
-                  {d.evidence ? <span className="text-muted-foreground"> — {d.evidence}</span> : null}
-                </span>
-              </li>
-            ))}
+            {allPositives.map((d) => {
+              const p = getDriverPresentation(d, diag);
+              return (
+                <li key={d.key} className="flex items-start gap-1.5 text-[10px] text-foreground/90 leading-snug">
+                  <Check className={`w-3 h-3 shrink-0 mt-0.5 rounded-sm ${getPlateToneClasses(p.tone)}`} />
+                  <span>
+                    {p.label}
+                    {d.evidence ? <span className="text-muted-foreground"> — {d.evidence}</span> : null}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}
@@ -793,21 +859,16 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
       {hasMatchupContext && (
         <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1 text-[10px]">
           <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Matchup Context</div>
-          {diag.bvpAvailable && (
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">BvP History</span>
-              <span
-                className="font-semibold capitalize"
-                style={{
-                  color:
-                    diag.bvpDirection === "positive" ? "#22c55e" : diag.bvpDirection === "negative" ? "#ef4444" : "#a1a1aa",
-                }}
-              >
-                {diag.bvpDirection}
-                {diag.bvpSampleSize != null ? ` (${diag.bvpSampleSize} AB)` : ""}
-              </span>
-            </div>
-          )}
+          {(() => {
+            const bvp = getBvpPresentation(diag);
+            if (!bvp) return null;
+            return (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">BvP History</span>
+                <span className={`font-semibold px-1.5 py-0.5 rounded border ${bvp.classes}`}>{bvp.label}</span>
+              </div>
+            );
+          })()}
           {diag.pitcherOrderSplitDirection !== "unavailable" && (
             <div className="flex justify-between">
               <span className="text-muted-foreground">Pitcher vs Slot</span>
@@ -825,18 +886,30 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
         </div>
       )}
 
-      {diag.warningTags.length > 0 && (
-        <div className="flex items-start gap-1.5 flex-wrap">
-          {diag.warningTags.map((t) => (
-            <span
-              key={t}
-              className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-rose-500/10 text-rose-300 border border-rose-500/20"
-            >
-              <ShieldAlert className="w-3 h-3" /> {t}
-            </span>
-          ))}
-        </div>
-      )}
+      {(() => {
+        // "Poor BvP History" duplicates the resolved BvP row above (Matchup
+        // Context) once it's available — suppress the coarser string so the
+        // card never shows two different BvP descriptions at once.
+        const visibleWarningTags = diag.warningTags.filter(
+          (t) => !(t === "Poor BvP History" && diag.bvpAvailable),
+        );
+        if (visibleWarningTags.length === 0) return null;
+        return (
+          <div className="flex items-start gap-1.5 flex-wrap">
+            {visibleWarningTags.map((t) => {
+              const p = getPlateTagPresentation(t, "negative");
+              return (
+                <span
+                  key={t}
+                  className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md border ${p.classes}`}
+                >
+                  <ShieldAlert className="w-3 h-3" /> {t}
+                </span>
+              );
+            })}
+          </div>
+        );
+      })()}
     </div>
   );
 }
