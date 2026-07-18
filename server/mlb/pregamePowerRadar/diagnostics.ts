@@ -64,10 +64,26 @@ export function wasPubliclyFlaggedPregame(signal: PregamePowerSignal): boolean {
  * live, legitimately-changing fact (e.g. a lineup scratch) for a still-active
  * pre-lock signal — a target that gets scratched must always disappear from
  * the live board, never held visible by an earlier frozen flag.
+ *
+ * A `suspended` (non-graded) signal is the one case where a *live* pass on
+ * `wasPubliclyFlaggedPregame` must NOT be trusted on its own: that check has
+ * no awareness of `gameStatus`, so a signal built for the first time while
+ * its game is already suspended (a cold restart with no prior copy to carry
+ * a frozen flag from) could otherwise pass its intrinsic gates and surface
+ * as a brand-new recommendation for a game that's already past first pitch —
+ * exactly the "new actionable recommendation while paused" case suspended
+ * handling must block. Suspended therefore requires the frozen
+ * `everPubliclyFlagged` flag specifically (not an OR with the live pass): an
+ * already-flagged target stays visible (the flag survived via
+ * carryForwardGradedState's OR-forward), but a live-only pass can never
+ * mint visibility on its own while paused.
  */
 export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
   const flaggedNow = wasPubliclyFlaggedPregame(signal);
-  const flagged = signal.status === "graded" ? flaggedNow || signal.everPubliclyFlagged : flaggedNow;
+  const flagged =
+    signal.status === "graded" ? flaggedNow || signal.everPubliclyFlagged
+    : signal.gameStatus === "suspended" ? signal.everPubliclyFlagged
+    : flaggedNow;
   if (!flagged) return false;
   if (signal.status === "graded" && signal.outcomes?.hitHr === true) return true;
   if (signal.status !== "active" && signal.status !== "locked") return false;
