@@ -18,6 +18,7 @@ import { runMigrations } from "stripe-replit-sync";
 import { getStripeSync, getStripeEnvStatus } from "./stripeClient";
 import cron from "node-cron";
 import { db, pool } from "./db";
+import { ensurePregameRadarPersistenceSchema } from "./dbMigrations/pregameRadarPersistence";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
 import {
@@ -213,6 +214,15 @@ app.use((req, res, next) => {
   if (!process.env.RESEND_API_KEY) {
     console.warn("[email] WARNING: RESEND_API_KEY is missing — no emails will be sent. Configure it in environment secrets and verify the sending domain team@livelocksai.app is set up in Resend.");
   }
+
+  // Durable persistence bootstrap: Pre-Game Power Radar (Plate) + MLB Mound
+  // Radar tables. Deliberately NOT wrapped in try/catch — unlike the
+  // best-effort schema migrations below, a failure here must fail startup so
+  // the radars can never silently fall back to in-memory-only operation and
+  // lose history across restarts/deploys. Must run before the Plate/Mound
+  // build + grading timers are scheduled further down.
+  await ensurePregameRadarPersistenceSchema(pool);
+  console.log("[startup] Pregame/Mound Radar persistence schema ensured");
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.
