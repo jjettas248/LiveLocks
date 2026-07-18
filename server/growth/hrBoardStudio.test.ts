@@ -76,7 +76,7 @@ function mkSignal(partial: Partial<PregamePowerSignal> & { batterId: string }): 
     ],
     warnings: [],
     tags: ["power"],
-    lineupStatus: "confirmed",
+    lineupStatus: "posted",
     weatherStatus: "confirmed",
     gameStatus: "scheduled",
     firstPitchLockEligible: true,

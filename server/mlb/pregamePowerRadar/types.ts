@@ -31,7 +31,7 @@ export type PregamePowerTier =
 /** Markets the radar can tag. Phase 1 surfaces only home_runs + total_bases. */
 export type PregamePowerMarket = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
 
-export type PregameLineupStatus = "confirmed" | "projected" | "unconfirmed";
+export type PregameLineupStatus = "posted" | "unposted";
 export type PregameWeatherStatus = "confirmed" | "estimated" | "roof" | "unknown";
 export type PregameGameStatus =
   | "scheduled"
@@ -40,6 +40,7 @@ export type PregameGameStatus =
   | "final"
   | "postponed"
   | "delayed"
+  | "suspended"
   | "unknown";
 export type PregameSignalStatus = "active" | "locked" | "expired" | "graded";
 
@@ -301,8 +302,11 @@ export interface PregameOutcome {
   hrHalf?: "top" | "bottom" | null;
   // 1-based plate-appearance number of the HR within the player's game ABs.
   plateAppearanceNumber?: number | null;
-  // True when the HR came in the player's first plate appearance.
-  firstAbPregameWin?: boolean;
+  // True when the HR came in the player's first plate appearance, false when
+  // it's confirmed NOT the first (AB-sequencing data was present either way),
+  // "unknown" when AB-sequencing data was unavailable — never silently
+  // defaulted to false when the answer isn't actually known.
+  firstAbPregameWin?: true | false | "unknown";
 }
 
 /** Per-component scorer result. All scores are on a 0–10 scale. */

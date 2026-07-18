@@ -2,7 +2,9 @@
 //
 // Runtime source of truth = latest in-memory build snapshot. Durable history is
 // the DB (Phase 2); when memory is empty the API falls back to the latest DB
-// build. Keyed by `${sessionDate}_${gameId}_${batterId}`.
+// build. Keyed by `signalId` (`mlb-pregame:${sessionDate}:${gameId}:${batterId}`,
+// see buildPregamePowerRadar.ts) — NOT the underscore-joined form once
+// documented here; that form is not how signals are actually inserted.
 
 import type { PregamePowerSignal } from "./types";
 
@@ -46,6 +48,31 @@ export function snapshotAgeMs(): number {
 export function allSignals(): PregamePowerSignal[] {
   if (!latestSnapshot) return [];
   return Array.from(latestSnapshot.signals.values());
+}
+
+/**
+ * Compare-and-swap commit of a single graded signal. Copy-on-write grading
+ * (see shadowOutcomes.ts) builds a fresh `graded` object from an `expected`
+ * reference captured before persistence began — persistence is async, so a
+ * live rebuild can replace this exact signal (or its whole snapshot) while a
+ * DB write is in flight. This refuses the commit rather than clobbering
+ * whatever is actually current: `latestSnapshot` must still be the same
+ * slate day, and the live entry for this signalId must still be reference-
+ * equal to `expected`. A refused commit is not an error — the next grading
+ * tick's idempotent DB upsert reconciles it safely on its own.
+ */
+export function commitGradedSignal(
+  expected: PregamePowerSignal,
+  graded: PregamePowerSignal,
+): boolean {
+  if (!latestSnapshot) return false;
+  if (latestSnapshot.sessionDate !== graded.sessionDate) return false;
+
+  const current = latestSnapshot.signals.get(graded.signalId);
+  if (current !== expected) return false;
+
+  latestSnapshot.signals.set(graded.signalId, graded);
+  return true;
 }
 
 const normName = (v: unknown): string =>

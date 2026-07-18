@@ -86,7 +86,7 @@ const fbPlay = deriveWinAttribution({
 });
 ok(fbPlay.hrInning === 6 && fbPlay.hrHalf === "bottom", "inning falls back to play feed");
 ok(fbPlay.plateAppearanceNumber === null, "no AB feed → PA number unknown (null, not invented)");
-ok(fbPlay.firstAbPregameWin === false, "no AB feed → cannot claim first-AB");
+ok(fbPlay.firstAbPregameWin === "unknown", "no AB feed → first-AB status unknown, not silently false");
 
 const fbCanon = deriveWinAttribution({
   hitHr: true,
@@ -139,7 +139,7 @@ function makeSignal(over: {
     ],
     warnings: [],
     tags: [],
-    lineupStatus: "confirmed",
+    lineupStatus: "posted",
     weatherStatus: "confirmed",
     gameStatus: "final",
     firstPitchLockEligible: true,

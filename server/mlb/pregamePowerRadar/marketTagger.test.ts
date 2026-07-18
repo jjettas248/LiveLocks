@@ -79,7 +79,7 @@ function makeSignal(over: Partial<PregamePowerSignal>): PregamePowerSignal {
       { key: "a", label: "A", direction: "positive" },
       { key: "b", label: "B", direction: "positive" },
     ],
-    warnings: [], tags: [], lineupStatus: "confirmed", weatherStatus: "estimated",
+    warnings: [], tags: [], lineupStatus: "posted", weatherStatus: "estimated",
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     status: "active", suppressed: false, suppressedReasons: [],
@@ -94,9 +94,8 @@ function makeSignal(over: Partial<PregamePowerSignal>): PregamePowerSignal {
   };
 }
 
-ok(isPublicPregameSignal(makeSignal({})), "valid strong confirmed signal is public");
-ok(!isPublicPregameSignal(makeSignal({ lineupStatus: "projected" })), "projected lineup not public");
-ok(!isPublicPregameSignal(makeSignal({ lineupStatus: "unconfirmed" })), "unconfirmed not public");
+ok(isPublicPregameSignal(makeSignal({})), "valid strong posted-lineup signal is public");
+ok(!isPublicPregameSignal(makeSignal({ lineupStatus: "unposted" })), "unposted lineup not public");
 ok(!isPublicPregameSignal(makeSignal({ score10: 5.5 })), "below 6.0 not public");
 ok(!isPublicPregameSignal(makeSignal({ suppressed: true })), "suppressed not public");
 ok(!isPublicPregameSignal(makeSignal({ gameStatus: "final" })), "final not public");

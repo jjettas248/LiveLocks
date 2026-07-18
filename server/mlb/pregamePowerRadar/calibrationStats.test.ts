@@ -56,7 +56,7 @@ function makeSignal(over: {
     ],
     warnings: [],
     tags: [],
-    lineupStatus: over.lineupStatus ?? "confirmed",
+    lineupStatus: over.lineupStatus ?? "posted",
     weatherStatus: "confirmed",
     gameStatus: over.gameStatus ?? "final",
     firstPitchLockEligible: true,
@@ -197,6 +197,53 @@ ok(driftedStats.topPregameWinPlayers.length === 1, "drifted-but-flagged win stil
 
 const driftedCalibration = buildCalibrationStats([driftedWin], { startET: "2026-06-29", endET: "2026-06-29" });
 ok(driftedCalibration.targets === 1 && driftedCalibration.wins === 1, "drifted-but-flagged win still counts in admin calibration");
+
+// Regression: an "unknown"-order win (AB-sequencing data was unavailable at
+// grading time) must be excluded from firstAbWinRate's denominator entirely —
+// it is neither a confirmed first-AB win nor a confirmed later-AB win, so
+// counting it as if it were a confirmed non-first-AB result would silently
+// understate the true rate whenever AB data is incomplete. Ordinary misses
+// remain in the denominator exactly as before (they are never ambiguous).
+const unknownOrderWin = makeSignal({
+  signalId: "s-unknown-order",
+  score10: 7.6,
+  tier: "elite",
+  batterName: "Unknown Order Win",
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true, firstAbPregameWin: "unknown" as any },
+});
+const knownFirstAbOrderWin = makeSignal({
+  signalId: "s-known-first",
+  score10: 7.4,
+  tier: "elite",
+  batterName: "Known First AB Win",
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true, firstAbPregameWin: true },
+});
+const knownLaterAbOrderWin = makeSignal({
+  signalId: "s-known-later",
+  score10: 7.2,
+  tier: "elite",
+  batterName: "Known Later AB Win",
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true, firstAbPregameWin: false },
+});
+const orderMiss = makeSignal({
+  signalId: "s-order-miss",
+  score10: 7.0,
+  tier: "elite",
+  outcome: { hitHr: false, outcome: "calibration_miss", userVisible: false, firstAbPregameWin: false },
+});
+
+const orderStats = buildCalibrationStats(
+  [unknownOrderWin, knownFirstAbOrderWin, knownLaterAbOrderWin, orderMiss],
+  { startET: "2026-06-29", endET: "2026-06-29" },
+);
+ok(orderStats.targets === 4, "unknown-order regression: all four targets counted");
+ok(orderStats.wins === 3, "unknown-order regression: three wins (unknown + known-first + known-later)");
+ok(orderStats.calibrationMisses === 1, "unknown-order regression: one miss");
+ok(orderStats.firstAbWins === 1, "unknown-order regression: only the confirmed first-AB win counts as firstAbWins");
+ok(orderStats.laterAbWins === 2, "unknown-order regression: known-later win + the miss both count as laterAbWins (miss is always definitively false)");
+ok(orderStats.unknownOrderWins === 1, "unknown-order regression: exactly the one ambiguous win is tracked separately");
+// resolvedCount = wins(3) + misses(1) = 4; knownOrderResolvedCount = 4 - unknownOrderWins(1) = 3
+ok(orderStats.firstAbWinRate === 33.3, "unknown-order regression: rate excludes the unknown win from the denominator entirely, not just the numerator");
 
 console.log(`\ncalibrationStats.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

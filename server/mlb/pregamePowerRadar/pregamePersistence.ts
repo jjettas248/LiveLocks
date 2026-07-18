@@ -10,8 +10,31 @@ import type {
   InsertPregamePowerRadarSignal,
   PregamePowerRadarSignalRow,
 } from "@shared/schema";
-import type { PregamePowerSignal, PregameMarketSetup } from "./types";
+import type { PregameLineupStatus, PregamePowerSignal, PregameMarketSetup } from "./types";
 import { marketSetupLabel } from "./marketTagger";
+
+/**
+ * Rows persisted before the `confirmed`/`projected`/`unconfirmed` → `posted`/
+ * `unposted` rename still carry the old text values in the DB. Normalize on
+ * read so historical rows deserialize correctly without a backfill migration.
+ * `raw` is `unknown`, not `string` — the column is `text`, but a row read can
+ * legitimately hand back `null` or a stray value the TypeScript row type does
+ * not guarantee at runtime.
+ */
+function normalizeLegacyLineupStatus(raw: unknown): PregameLineupStatus {
+  switch (raw) {
+    case "posted":
+    case "unposted":
+      return raw;
+    case "confirmed":
+      return "posted";
+    case "projected":
+    case "unconfirmed":
+      return "unposted";
+    default:
+      return "unposted"; // null/malformed/unrecognized — fail safe to the non-posted state
+  }
+}
 import { setPregameBuildSink } from "./buildPregamePowerRadar";
 import { setDbFallback } from "./pregamePowerRadarService";
 import type { PregamePowerSnapshot } from "./pregamePowerRadarStore";
@@ -98,7 +121,7 @@ export function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
     drivers: (r.drivers as PregamePowerSignal["drivers"]) ?? [],
     warnings: (r.warnings as string[]) ?? [],
     tags: [],
-    lineupStatus: r.lineupStatus as PregamePowerSignal["lineupStatus"],
+    lineupStatus: normalizeLegacyLineupStatus(r.lineupStatus),
     weatherStatus: r.weatherStatus as PregamePowerSignal["weatherStatus"],
     gameStatus: r.gameStatus as PregamePowerSignal["gameStatus"],
     firstPitchLockEligible: r.firstPitchLockEligible,
@@ -131,6 +154,38 @@ export async function loadPregameSignalsForDate(sessionDate: string): Promise<Pr
 
 let installed = false;
 
+/**
+ * Reconstruct a snapshot from the latest persisted build for `sessionDate`.
+ * Extracted as its own named function (rather than only living inline as the
+ * `setDbFallback` callback) so a boot-time hydration hook (server/index.ts)
+ * can call the exact same reconstruction eagerly, instead of only reactively
+ * inside getRadarSnapshot()'s stale-rebuild-failed branch.
+ */
+export async function loadPregameSnapshotFromDb(sessionDate: string): Promise<PregamePowerSnapshot | null> {
+  const build = await storage.getLatestPregamePowerBuild(sessionDate);
+  if (!build) return null;
+  const rows = await storage.getPregamePowerRadarSignalsByDate(sessionDate);
+  const buildRows = rows.filter((r) => r.buildId === build.buildId);
+  if (buildRows.length === 0) return null;
+  const signals = new Map<string, PregamePowerSignal>();
+  for (const r of buildRows) signals.set(r.signalId, rowToSignal(r));
+  return {
+    buildId: build.buildId,
+    sessionDate,
+    generatedAt: build.completedAt ?? build.startedAt,
+    builtAtMs: build.completedAt ? Date.parse(build.completedAt) : Date.now(),
+    gamesScanned: build.gamesScanned,
+    battersEvaluated: build.battersEvaluated,
+    signals,
+    coverage: {
+      lineupCoverage: build.lineupCoverage ? parseFloat(build.lineupCoverage) : 0,
+      weatherCoverage: build.weatherCoverage ? parseFloat(build.weatherCoverage) : 0,
+      batterCoverage: build.batterCoverage ? parseFloat(build.batterCoverage) : 0,
+      pitcherCoverage: build.pitcherCoverage ? parseFloat(build.pitcherCoverage) : 0,
+    },
+  };
+}
+
 /** Wire the build sink + DB fallback. Idempotent. */
 export function installPregamePersistence(): void {
   if (installed) return;
@@ -158,28 +213,5 @@ export function installPregamePersistence(): void {
     console.log(`[PREGAME_POWER_RADAR_DB_UPSERT] persisted ${signals.length} rows build=${manifest.buildId}`);
   });
 
-  setDbFallback(async (sessionDate): Promise<PregamePowerSnapshot | null> => {
-    const build = await storage.getLatestPregamePowerBuild(sessionDate);
-    if (!build) return null;
-    const rows = await storage.getPregamePowerRadarSignalsByDate(sessionDate);
-    const buildRows = rows.filter((r) => r.buildId === build.buildId);
-    if (buildRows.length === 0) return null;
-    const signals = new Map<string, PregamePowerSignal>();
-    for (const r of buildRows) signals.set(r.signalId, rowToSignal(r));
-    return {
-      buildId: build.buildId,
-      sessionDate,
-      generatedAt: build.completedAt ?? build.startedAt,
-      builtAtMs: build.completedAt ? Date.parse(build.completedAt) : Date.now(),
-      gamesScanned: build.gamesScanned,
-      battersEvaluated: build.battersEvaluated,
-      signals,
-      coverage: {
-        lineupCoverage: build.lineupCoverage ? parseFloat(build.lineupCoverage) : 0,
-        weatherCoverage: build.weatherCoverage ? parseFloat(build.weatherCoverage) : 0,
-        batterCoverage: build.batterCoverage ? parseFloat(build.batterCoverage) : 0,
-        pitcherCoverage: build.pitcherCoverage ? parseFloat(build.pitcherCoverage) : 0,
-      },
-    };
-  });
+  setDbFallback(loadPregameSnapshotFromDb);
 }

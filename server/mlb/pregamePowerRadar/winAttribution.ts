@@ -82,7 +82,10 @@ export interface WinAttributionResult {
   hrInning: number | null;
   hrHalf: "top" | "bottom" | null;
   plateAppearanceNumber: number | null;
-  firstAbPregameWin: boolean;
+  // true/false only when AB-sequencing data was actually present to decide
+  // it either way; "unknown" when that data was unavailable — never silently
+  // defaulted to false when the answer isn't actually known.
+  firstAbPregameWin: true | false | "unknown";
 }
 
 /** Normalize canonical "T"/"B"/"top"/"bottom" → "top"|"bottom"|null. */
@@ -118,7 +121,13 @@ export function deriveWinAttribution(input: WinAttributionInput): WinAttribution
   const hrHalf =
     located?.half ?? input.hrPlayHalf ?? normHalf(input.canonicalHitHalf) ?? null;
   const plateAppearanceNumber = located?.plateAppearanceNumber ?? null;
-  const firstAbPregameWin = located?.firstAb === true;
+  // Only genuinely knowable when AB-sequencing data (priorABResults) was
+  // present — the inning/half fallbacks above (play feed, canonical hit) tell
+  // us *when* the HR happened, not whether it was PA #1, so they cannot
+  // resolve this either way. Absent AB data must stay "unknown", not a
+  // silent false.
+  const firstAbPregameWin: true | false | "unknown" =
+    located != null ? located.firstAb === true : "unknown";
 
   return {
     outcome: "pregame_win",

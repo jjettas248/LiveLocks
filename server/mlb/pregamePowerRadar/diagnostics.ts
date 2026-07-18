@@ -30,7 +30,7 @@ export function wasPubliclyFlaggedPregame(signal: PregamePowerSignal): boolean {
     signal.tier === "nuclear";
 
   return (
-    signal.lineupStatus === "confirmed" &&
+    signal.lineupStatus === "posted" &&
     tierEligible &&
     signal.score10 >= 6.0 &&
     positiveDrivers(signal).length >= 2 &&
@@ -72,7 +72,14 @@ export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
   if (signal.status === "graded" && signal.outcomes?.hitHr === true) return true;
   if (signal.status !== "active" && signal.status !== "locked") return false;
   if (signal.gameStatus === "postponed") return false;
-  if (signal.gameStatus === "live" || signal.gameStatus === "final") return signal.status === "locked";
+  // Suspended shares the same underlying property as live/final — first pitch
+  // has already happened — so it belongs in this branch rather than falling
+  // through to the generic pre-lock `return true` below. A suspended signal
+  // is preserved and visible (not hidden like postponed) as long as it's
+  // correctly locked; see buildPregamePowerRadar.ts's isLocked computation.
+  if (signal.gameStatus === "live" || signal.gameStatus === "final" || signal.gameStatus === "suspended") {
+    return signal.status === "locked";
+  }
   return true;
 }
 
