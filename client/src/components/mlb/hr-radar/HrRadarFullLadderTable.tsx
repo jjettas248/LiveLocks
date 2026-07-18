@@ -96,6 +96,8 @@ export function HrRadarFullLadderTable({
                   isAccepted={isAccepted ? isAccepted(vm.entry) : false}
                   onWatch={onWatch}
                   isWatching={isWatching ? isWatching(vm.entry) : false}
+                  serverCanAddToSlip={vm.canAddToSlip}
+                  serverCanWatchNextAb={vm.canWatchNextAb}
                   onOpenDrawer={() => onRowClick(vm)}
                   isTopPriority={topPriorityId != null && vm.id === topPriorityId}
                 />

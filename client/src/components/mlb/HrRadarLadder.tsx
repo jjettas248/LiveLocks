@@ -526,6 +526,19 @@ export interface CardProps {
    *  bet-slip tracking) so watching a Ready row never marks it "accepted". */
   onWatch?: (entry: HrRadarLadderEntry) => void;
   isWatching?: boolean;
+  /**
+   * Server-derived overrides from the row's `HrRadarCardViewModel`
+   * (decisionView.entries[id].canAddToSlip / canWatchNextAb). When provided,
+   * these AND with the section-based gate below rather than replacing it —
+   * a Fire row can be `section === "attackNow"` yet still have
+   * `canAddToSlip === false` (e.g. incomplete bet-slip identity), and the
+   * card must not let that row reach the slip just because it's in the Fire
+   * section. Default to `true` (preserve existing behavior) for any caller
+   * that doesn't have a VM to pass (there should be none left, but this
+   * keeps a missing prop from silently disabling every action).
+   */
+  serverCanAddToSlip?: boolean;
+  serverCanWatchNextAb?: boolean;
   /** List-only affordance — opens the full-screen drawer (adds admin diagnostics
    * on top of this same card). Omitted when LadderCard already IS the drawer. */
   onOpenDrawer?: () => void;
@@ -656,7 +669,7 @@ function PregameDriverChips({ entry }: { entry: HrRadarLadderEntry }) {
   );
 }
 
-export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted, onWatch, isWatching, onOpenDrawer, isTopPriority = false }: CardProps) {
+export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass, onAccept, isAccepted, onWatch, isWatching, onOpenDrawer, isTopPriority = false, serverCanAddToSlip = true, serverCanWatchNextAb = true }: CardProps) {
   // Goldmaster Phase 2+3 — prefer the FROZEN server-stamped detectedLabel /
   // hitLabel (these never advance on score climbs). Fall back to formatting
   // the (inning, half) pair for legacy rows that pre-date the label fields.
@@ -712,12 +725,16 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
   // no action at all, but must NEVER be able to invoke onAddToSlip — that
   // was the bug here (isLiveSection previously included ready/building/watch,
   // letting a non-official row add itself to the bet slip). Resolved
-  // sections (cashed/dead) get no actions either way.
+  // sections (cashed/dead) get no actions either way. `serverCanAddToSlip`
+  // further ANDs in the row's own decisionView-derived flag — a Fire row can
+  // still fail this (e.g. incomplete player/game identity for the slip
+  // payload) even while correctly sitting in the Fire section.
   const isFireSection = section === "attackNow";
-  const canAdd = !isResolved && isFireSection && !!onAddToSlip;
+  const canAdd = !isResolved && isFireSection && !!onAddToSlip && serverCanAddToSlip;
   // Ready gets its own non-transactional CTA (Watch Next AB) — distinct from
-  // Fire's bet-slip action and never invoking onAddToSlip.
-  const isReadySection = !isResolved && section === "ready";
+  // Fire's bet-slip action and never invoking onAddToSlip. Gated the same
+  // way by `serverCanWatchNextAb` for symmetry with the Fire gate above.
+  const isReadySection = !isResolved && section === "ready" && serverCanWatchNextAb;
   // Goldmaster Phase 7 — pregame indicator for 0-AB rows.
   const isPregameOnly =
     entry.hasLiveABContext === false ||
@@ -859,10 +876,11 @@ export function LadderCard({ entry, section, onAddToSlip, onOpenDetails, onPass,
   };
 
   const handleAdd = () => {
-    // Defense in depth: never invoke onAddToSlip for a non-Fire row, even if
-    // this handler is somehow reached from a stale closure or a future
-    // caller that forgets to gate on `canAdd` first.
-    if (!onAddToSlip || section !== "attackNow" || isResolved) return;
+    // Defense in depth: never invoke onAddToSlip for a non-Fire row, or a
+    // Fire row the server flagged as slip-invalid, even if this handler is
+    // somehow reached from a stale closure or a future caller that forgets
+    // to gate on `canAdd` first.
+    if (!onAddToSlip || section !== "attackNow" || isResolved || !serverCanAddToSlip) return;
     onAccept?.(entry);
     onAddToSlip({
       playerId: entry.playerId,
@@ -1647,6 +1665,8 @@ function HrRadarSignalDrawer({
           isAccepted={isAccepted}
           onWatch={onWatch}
           isWatching={isWatching}
+          serverCanAddToSlip={row.canAddToSlip}
+          serverCanWatchNextAb={row.canWatchNextAb}
         />
         {isAdmin && <DrawerAdminDiagnostics entry={row.entry} />}
       </div>
@@ -1839,24 +1859,36 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
   // client-side — both are genuinely local UI state, not classification.
   const decisionViewRows = useMemo(() => {
     if (!decisionView) return null;
-    const passesFilters = (entryId: string): boolean => {
+    const passesGameFilter = (entryId: string): boolean => {
       const consumer = decisionView.entries[entryId];
       if (!consumer) return false;
       if (selectedGameId && consumer.source.gameId !== selectedGameId) return false;
-      if (dismissed.has(entryDismissKey(consumer.source.playerId, consumer.source.gameId))) return false;
       return true;
     };
-    const pick = (ids: readonly string[]): HrRadarCardViewModel[] =>
-      buildConsumerViewModels(decisionView, ids.filter(passesFilters));
+    // "Pass" only hides a row from the LIVE decision surface — it must not
+    // also erase that player's eventual result. A user who passes a live
+    // Fire/Ready/Build/Watch row should still see it land in Signal
+    // Hits/Missed/Model Review once it resolves (matches the legacy
+    // `sections` derivation, which never applied the dismissed filter to
+    // cashed/dead/modelReview either).
+    const passesLiveFilters = (entryId: string): boolean => {
+      if (!passesGameFilter(entryId)) return false;
+      const consumer = decisionView.entries[entryId];
+      return !dismissed.has(entryDismissKey(consumer!.source.playerId, consumer!.source.gameId));
+    };
+    const pickLive = (ids: readonly string[]): HrRadarCardViewModel[] =>
+      buildConsumerViewModels(decisionView, ids.filter(passesLiveFilters));
+    const pickResolved = (ids: readonly string[]): HrRadarCardViewModel[] =>
+      buildConsumerViewModels(decisionView, ids.filter(passesGameFilter));
     return {
-      attackNow: pick(decisionView.groups.takeNow),
-      ready: pick(decisionView.groups.watchNextAb),
-      building: pick(decisionView.groups.build),
-      watch: pick(decisionView.groups.watch),
-      noAbYet: pick(decisionView.groups.waitingForFirstAb),
-      cashed: pick(decisionView.groups.signalHits),
-      dead: pick(decisionView.groups.officialMisses),
-      modelReview: isAdmin ? pick(decisionView.groups.modelReview) : [],
+      attackNow: pickLive(decisionView.groups.takeNow),
+      ready: pickLive(decisionView.groups.watchNextAb),
+      building: pickLive(decisionView.groups.build),
+      watch: pickLive(decisionView.groups.watch),
+      noAbYet: pickLive(decisionView.groups.waitingForFirstAb),
+      cashed: pickResolved(decisionView.groups.signalHits),
+      dead: pickResolved(decisionView.groups.officialMisses),
+      modelReview: isAdmin ? pickResolved(decisionView.groups.modelReview) : [],
     };
   }, [decisionView, dismissed, selectedGameId, isAdmin]);
 
@@ -1968,7 +2000,12 @@ export function HrRadarLadder({ onAddToSlip, onOpenDetails, isAdmin = false, sel
         watch: decisionViewRows.watch.length,
         cashed: decisionViewRows.cashed.length,
         dead: decisionViewRows.dead.length,
-        total: decisionView!.counts.liveTracked,
+        // Sum of the FILTERED (game-slate + pass) live rows, not the raw
+        // server-wide decisionView.counts.liveTracked — otherwise the header
+        // can claim more live signals than the ladder actually shows once
+        // scoped to one game or after rows are passed.
+        total: decisionViewRows.attackNow.length + decisionViewRows.ready.length
+          + decisionViewRows.building.length + decisionViewRows.watch.length,
       }
     : {
         attackNow: sections.attackNow.length,
