@@ -28,18 +28,16 @@ import { SportPicker } from "@/components/sport-picker";
 import { usePullRefresh } from "@/hooks/use-pull-refresh";
 import { hasProAccess } from "@/lib/tierUtils";
 import { useLocation } from "wouter";
-import { TopPlaysPanel } from "@/components/dashboard/TopPlaysPanel";
+import { LiveEdgeSurface } from "@/components/dashboard/LiveEdgeSurface";
 import { QueryErrorState } from "@/components/common/QueryErrorState";
 import { LiveIndicator } from "@/components/common/LiveIndicator";
 import { FreeActivationRail } from "@/components/dashboard/free-activation-rail";
-import { SignalPreviewConversionCard } from "@/components/dashboard/SignalPreviewConversionCard";
 import { TrialMissionRail } from "@/components/dashboard/trial-mission-rail";
 import { trackRailEvent } from "@/lib/railAnalytics";
 import { SignalDetailDialog } from "@/components/signals/SignalDetailDialog";
 import type { UnifiedTopPlay } from "@/hooks/useTopPlays";
 import { UserStatusRail } from "@/components/dashboard/UserStatusRail";
 import { LiveUpdateToast } from "@/components/common/LiveUpdateToast";
-import { LockedSignalModule } from "@/components/LockedSignalModule";
 import {
   Activity,
   Clock,
@@ -2126,9 +2124,9 @@ export default function Dashboard() {
               }
 
               const isFreeUser = !isAdminOrPaid;
-              if (isFreeUser) {
-                return (
-                  <>
+              return (
+                <>
+                  {isFreeUser && (
                     <FreeActivationRail
                       playsUsedToday={user?.playsUsedToday ?? 0}
                       playsLimit={3}
@@ -2172,37 +2170,27 @@ export default function Dashboard() {
                         });
                       }}
                     />
-                    {/*
-                      Conversion-priority order for free users:
-                      1) FreeActivationRail (above)
-                      2) Prominent missed-value / locked-profit band
-                         (LockedSignalModule) — moved up so the value
-                         proposition is visible without scrolling.
-                      3) Recent Player Prop Wins proof strip (below).
-                      The legacy LockedSignalModule render lower in this
-                      file is gated off so it never duplicates here.
-                    */}
-                    <LockedSignalModule onUpgradeClick={handleUpgradeClick} />
-                    {/*
-                      Conversion: free users see a forward-looking premium
-                      signal preview (no losses, no stale plays, no repeated
-                      players). Admins still have full graded history in
-                      Analytics. Replaces legacy <PublicProofStrip /> here.
-                    */}
-                    <SignalPreviewConversionCard onUpgradeClick={handleUpgradeClick} />
-                  </>
-                );
-              }
-              return (
-                <TopPlaysPanel
-                  isElite={!!user?.hasMLB || !!user?.isAdmin}
-                  onNavigateToSport={handleNavigateToSport}
-                  onAddToSlip={handleTopPlayAddToSlip}
-                  onViewDetails={(play, related) => {
-                    setSelectedDetailPlay(play);
-                    setSelectedDetailRelated(related ?? []);
-                  }}
-                />
+                  )}
+                  {/*
+                    Live Edge surface — server-authoritative full/preview
+                    branch (see LiveEdgeSurface). Renders TopPlaysPanel for a
+                    server-confirmed `access: "full"` response (admin/paid),
+                    or the honest LiveEdgePreview otherwise (free/expired/
+                    non-entitled). The client's isFreeUser/isAdminOrPaid
+                    heuristic above only decides whether FreeActivationRail
+                    also renders — it is NOT the security boundary for what
+                    Live Edge data is shown; that's enforced server-side.
+                  */}
+                  <LiveEdgeSurface
+                    onUpgradeClick={handleUpgradeClick}
+                    onNavigateToSport={handleNavigateToSport}
+                    onAddToSlip={handleTopPlayAddToSlip}
+                    onViewDetails={(play, related) => {
+                      setSelectedDetailPlay(play);
+                      setSelectedDetailRelated(related ?? []);
+                    }}
+                  />
+                </>
               );
             })()}
             <SignalDetailDialog

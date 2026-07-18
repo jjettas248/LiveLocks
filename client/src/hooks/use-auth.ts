@@ -1,7 +1,18 @@
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
 import { queryClient, getAuthToken, setAuthToken, clearAuthToken } from "@/lib/queryClient";
 import { readStoredAttribution } from "@/hooks/useAttributionCapture";
+import {
+  viewModeListeners,
+  getAdminViewMode,
+  setAdminViewMode,
+  useAdminViewMode,
+  type AdminViewMode,
+} from "@/lib/adminViewMode";
+
+// Re-exported so no other file's imports need to change — the pure state
+// machine lives in adminViewMode.ts (see that file for why), this module
+// just re-exports it and layers the queryClient side effects on top below.
+export { getAdminViewMode, setAdminViewMode, useAdminViewMode, type AdminViewMode };
 
 export interface AuthUser {
   id: number;
@@ -35,40 +46,11 @@ export interface AuthUser {
   isFreeAccount?: boolean;
 }
 
-// ── Admin View-As Mode ─────────────────────────────────────────────────────
-// Admin-only client-side overlay that lets an admin preview the UX of a Free /
-// Pro / All-Sports user. Purely cosmetic — never touches server account state,
-// never sends overrides to the backend. The real user is preserved; only the
-// gating fields read by useAuth() consumers are swapped out client-side.
-//
-// Defense in depth: applyViewMode() refuses to apply unless the REAL user is
-// an admin. Non-admin users cannot trip this override even by editing
-// localStorage.
-const VIEW_MODE_KEY = "ll_admin_view_mode_v1";
-export type AdminViewMode = "real" | "free" | "pro_mlb" | "all_sports" | "admin";
-
-const viewModeListeners = new Set<() => void>();
-let _viewMode: AdminViewMode = ((): AdminViewMode => {
-  if (typeof window === "undefined") return "real";
-  // The admin "View as" switcher lived in the removed MLB DevTools panel, which
-  // was the only in-app control that wrote this key. Clear any stale persisted
-  // override on load so an admin can never get stranded in a downgraded view
-  // (which would also hide every admin-gated surface) with no way to reset it.
-  if (localStorage.getItem(VIEW_MODE_KEY)) localStorage.removeItem(VIEW_MODE_KEY);
-  return "real";
-})();
-
-export function getAdminViewMode(): AdminViewMode {
-  return _viewMode;
-}
-
-export function setAdminViewMode(m: AdminViewMode): void {
-  _viewMode = m;
-  if (typeof window !== "undefined") {
-    if (m === "real") localStorage.removeItem(VIEW_MODE_KEY);
-    else localStorage.setItem(VIEW_MODE_KEY, m);
-  }
-  viewModeListeners.forEach((l) => l());
+// ── Admin View-As Mode — queryClient side effects ───────────────────────────
+// The pure state (get/set/hook) lives in @/lib/adminViewMode; registered here
+// (once, at module load) because this is the module that already owns
+// queryClient and the AuthUser shape. Fires on every mode change.
+viewModeListeners.add(() => {
   // Force every useAuth() consumer to re-derive its `select` output.
   queryClient.invalidateQueries({ queryKey: ["/api/auth/me"], refetchType: "none" });
   // Trigger an immediate setQueryData round-trip so subscribers re-run select.
@@ -76,19 +58,22 @@ export function setAdminViewMode(m: AdminViewMode): void {
   if (cur !== undefined) {
     queryClient.setQueryData(["/api/auth/me"], cur);
   }
-}
 
-export function useAdminViewMode(): [AdminViewMode, (m: AdminViewMode) => void] {
-  const [, force] = useState(0);
-  useEffect(() => {
-    const l = () => force((n) => n + 1);
-    viewModeListeners.add(l);
-    return () => {
-      viewModeListeners.delete(l);
-    };
-  }, []);
-  return [_viewMode, setAdminViewMode];
-}
+  // The view-mode header (attached by queryClient.ts's authHeaders()) changes
+  // the server response for /api/top-plays and /api/mlb/edge-feed without
+  // changing the query key, so TanStack has no way to know a cached response
+  // is stale for the new mode. Cancel in-flight requests FIRST (aborts the
+  // underlying fetch via the AbortSignal threaded through getQueryFn) so a
+  // response that started under the OLD mode can't resolve and repopulate
+  // the cache after the switch, then invalidate + refetch. The default
+  // "active" refetchType covers every currently-mounted observer, and the
+  // prefix match on ["/api/mlb/edge-feed"] covers both the default view and
+  // the ["/api/mlb/edge-feed","market-signals",inningWindow] variant.
+  queryClient.cancelQueries({ queryKey: ["/api/top-plays"] });
+  queryClient.cancelQueries({ queryKey: ["/api/mlb/edge-feed"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/top-plays"] });
+  queryClient.invalidateQueries({ queryKey: ["/api/mlb/edge-feed"] });
+});
 
 function applyViewMode(real: AuthUser | null, mode: AdminViewMode): AuthUser | null {
   if (!real || mode === "real") return real;

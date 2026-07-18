@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import type { LiveEdgePreview } from "@shared/topPlays";
 
 export type UnifiedTopPlay = {
   id: string;
@@ -39,8 +40,16 @@ export type UnifiedTopPlay = {
   matchup?: string;
 };
 
+// Server-authoritative discriminant — the client renders from this, it is
+// never the security boundary (that's enforced in
+// server/services/liveEdgeAccess.ts). "full" carries the complete payload;
+// "preview" carries only the sanitized LiveEdgePreview shape.
+export type TopPlaysResponse =
+  | { access: "full"; plays: UnifiedTopPlay[] }
+  | { access: "preview"; preview: LiveEdgePreview };
+
 export function useTopPlays() {
-  return useQuery<{ plays: UnifiedTopPlay[] }>({
+  return useQuery<TopPlaysResponse>({
     queryKey: ["/api/top-plays"],
     refetchInterval: 60_000,
   });

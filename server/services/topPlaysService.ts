@@ -109,11 +109,14 @@ const MARKET_LABELS: Record<string, string> = {
   h2_total: "2H Total", h2_spread: "2H Spread",
 };
 
-export function buildTopPlays(
+// Single source of truth for "what qualifies" — the qualification filter +
+// object construction, shared by buildTopPlays (display, capped+sorted) and
+// buildTopPlaysWithCount (also needs the true uncapped total). Kept
+// unexported: buildTopPlays and buildTopPlaysWithCount are the public API.
+function buildAllQualifiedPlays(
   nbaSignals: any[],
   ncaabSignals: any[],
   mlbSignals: any[],
-  maxPlays: number = 10,
 ): TopPlayItem[] {
   const plays: TopPlayItem[] = [];
 
@@ -223,12 +226,49 @@ export function buildTopPlays(
     });
   }
 
-  plays.sort((a, b) => {
+  return plays;
+}
+
+function sortByRank(plays: TopPlayItem[]): TopPlayItem[] {
+  return [...plays].sort((a, b) => {
     const aRank = computeRankScore(a);
     const bRank = computeRankScore(b);
     if (Math.abs(bRank - aRank) > 0.01) return bRank - aRank;
     return b.probability - a.probability;
   });
+}
 
-  return plays.slice(0, maxPlays);
+export function buildTopPlays(
+  nbaSignals: any[],
+  ncaabSignals: any[],
+  mlbSignals: any[],
+  maxPlays: number = 10,
+): TopPlayItem[] {
+  return sortByRank(buildAllQualifiedPlays(nbaSignals, ncaabSignals, mlbSignals)).slice(0, maxPlays);
+}
+
+// Single-pass variant for callers (the /api/top-plays route) that need both
+// the capped/sorted display list AND the true qualified count — avoids
+// running the qualification/construction loops (and their [MLB_TIER_FALLBACK]
+// logging) twice per request the way calling buildTopPlays + a separate
+// count function back-to-back would.
+export function buildTopPlaysWithCount(
+  nbaSignals: any[],
+  ncaabSignals: any[],
+  mlbSignals: any[],
+  maxPlays: number = 10,
+): { plays: TopPlayItem[]; totalQualified: number } {
+  const allQualified = buildAllQualifiedPlays(nbaSignals, ncaabSignals, mlbSignals);
+  return { plays: sortByRank(allQualified).slice(0, maxPlays), totalQualified: allQualified.length };
+}
+
+// Standalone convenience for tests / callers that only need the count —
+// still backed by the same buildAllQualifiedPlays as buildTopPlays, so it
+// can never drift from what actually qualifies.
+export function countQualifiedTopPlays(
+  nbaSignals: any[],
+  ncaabSignals: any[],
+  mlbSignals: any[],
+): number {
+  return buildAllQualifiedPlays(nbaSignals, ncaabSignals, mlbSignals).length;
 }
