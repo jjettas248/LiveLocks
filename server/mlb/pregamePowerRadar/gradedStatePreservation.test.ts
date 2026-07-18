@@ -43,7 +43,7 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     pitcherId: "p1", pitcherName: "P", battingOrderSlot: 3, handednessMatchup: "R vs L",
     primaryMarket: "home_runs", marketTags: ["home_runs"], marketScores: { home_runs: 7 },
     score10: 7, tier: "strong",
-    drivers: [], warnings: [], tags: [], lineupStatus: "confirmed", weatherStatus: "estimated",
+    drivers: [], warnings: [], tags: [], lineupStatus: "posted", weatherStatus: "estimated",
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     status: "active", suppressed: false, suppressedReasons: [],
@@ -240,7 +240,7 @@ const gradedWin: PregameOutcome = {
 {
   const prev = sig({
     signalId: "mlb-pregame:2026-07-01:g1:b1", gameId: "g1", batterId: "b1",
-    gameStatus: "scheduled", status: "active", lineupStatus: "confirmed",
+    gameStatus: "scheduled", status: "active", lineupStatus: "posted",
   });
   const scheduledCarry = carryForwardDroppedFromLineup(
     "g1", new Set(["b2"]), [prev], "scheduled", true, "2026-07-01T18:00:00.000Z", "b-new",
@@ -251,6 +251,52 @@ const gradedWin: PregameOutcome = {
     "g1", new Set(["b2"]), [prev], "pre", true, "2026-07-01T18:00:00.000Z", "b-new",
   );
   ok(preCarry.length === 0, "scratched-before-first-pitch batter (pre) is not carried forward");
+}
+
+// ── 15. Suspended game preserves a dropped batter (grouped with live/final) ──
+{
+  const prev = sig({
+    signalId: "mlb-pregame:2026-07-01:g1:b1", gameId: "g1", batterId: "b1",
+    gameStatus: "suspended", status: "active", lockedAt: null, buildId: "b-old",
+  });
+  const carried = carryForwardDroppedFromLineup(
+    "g1",
+    new Set(["b2"]), // b1 no longer in the fetched lineup
+    [prev],
+    "suspended",
+    false,
+    "2026-07-01T20:00:00.000Z",
+    "b-new",
+  );
+  ok(carried.length === 1, "dropped batter is carried forward during a suspended game");
+  ok(carried[0]?.status === "locked", "suspended game locks the carried signal, same as live/final");
+}
+
+// ── 16. A brand-new signal can never mint a fresh public flag while suspended ─
+{
+  // Drivers/tier/score/coverage all otherwise clear wasPubliclyFlaggedPregame's
+  // gates — isolates that the suspended check itself is what blocks this,
+  // not some other unrelated gate failing.
+  const fresh = sig({
+    gameStatus: "suspended",
+    drivers: [
+      { key: "d1", label: "Driver 1", direction: "positive" },
+      { key: "d2", label: "Driver 2", direction: "positive" },
+    ],
+  });
+  carryForwardGradedState(fresh, undefined);
+  ok(fresh.everPubliclyFlagged === false, "suspended blocks a brand-new signal from newly minting a public flag");
+}
+
+// ── 17. An already-flagged target's everPubliclyFlagged survives suspension ──
+{
+  const prev = sig({ everPubliclyFlagged: true });
+  // drivers: [] fails wasPubliclyFlaggedPregame's own gate on its own, isolating
+  // the OR-preserve from suspended's fresh-evaluation block — a suspended
+  // game must never REVOKE an already-true flag, only block minting a new one.
+  const fresh = sig({ gameStatus: "suspended", drivers: [] });
+  carryForwardGradedState(fresh, prev);
+  ok(fresh.everPubliclyFlagged === true, "already-flagged target stays flagged/preserved through a suspension, not revoked");
 }
 
 console.log(`\ngradedStatePreservation.test: ${passed} passed, ${failed} failed`);

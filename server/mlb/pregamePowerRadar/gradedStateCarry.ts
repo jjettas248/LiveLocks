@@ -25,12 +25,21 @@ export function carryForwardGradedState(
     // (tier, score, dataCoverageScore, etc., all re-fetched from live data on
     // every rebuild) can never erase an earlier true evaluation. No same-slate
     // prior copy to OR against here, so this rebuild's own live evaluation is
-    // all there is.
-    fresh.everPubliclyFlagged = wasPubliclyFlaggedPregame(fresh);
+    // all there is. Suspended games are excluded from *minting a new* flag —
+    // a target must never newly qualify as a fresh actionable recommendation
+    // while its game is paused mid-suspension (there is no `prev` here to
+    // preserve an already-true flag against, so this is strictly a new-signal
+    // case).
+    fresh.everPubliclyFlagged = fresh.gameStatus !== "suspended" && wasPubliclyFlaggedPregame(fresh);
     return fresh;
   }
 
-  fresh.everPubliclyFlagged = wasPubliclyFlaggedPregame(fresh) || prev.everPubliclyFlagged === true;
+  // Suspended blocks only the false→true transition (no *new* public flag
+  // while paused); an already-true `prev.everPubliclyFlagged` still OR-forwards
+  // unconditionally, so an already-surfaced target remains preserved and
+  // visible exactly as it was before its game paused.
+  fresh.everPubliclyFlagged =
+    (fresh.gameStatus !== "suspended" && wasPubliclyFlaggedPregame(fresh)) || prev.everPubliclyFlagged === true;
   if (prev.outcomes && !fresh.outcomes) {
     fresh.outcomes = prev.outcomes;
     if (prev.status === "graded") fresh.status = "graded";
@@ -71,7 +80,11 @@ export function carryForwardDroppedFromLineup(
   nowIso: string,
   buildId: string,
 ): PregamePowerSignal[] {
-  if (gameStatus !== "live" && gameStatus !== "final") return [];
+  // Suspended is grouped with live/final here — a suspended game has already
+  // started, so a batter dropped from the lineup mid-suspension must still be
+  // preserved exactly like an in-game substitution, not treated as a
+  // pre-first-pitch scratch.
+  if (gameStatus !== "live" && gameStatus !== "final" && gameStatus !== "suspended") return [];
   const isLocked = !firstPitchLockEligible;
   return prevSignalsForGame
     .filter((prev) => prev.gameId === gameId && !currentLineupBatterIds.has(prev.batterId))

@@ -297,7 +297,7 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
         case "hr": return s.marketTags.includes("home_runs");
         case "tb": return s.marketTags.includes("total_bases");
         case "elite": return s.tier === "elite" || s.tier === "nuclear";
-        case "confirmed": return s.lineupStatus === "confirmed";
+        case "confirmed": return s.lineupStatus === "posted";
         case "park": return hasDriver(s, (d) => d.key.startsWith("pw_park") || d.key === "pw_wind_out" || d.key === "pw_temp");
         case "pitcher": return hasDriver(s, (d) => d.key.startsWith("pv_"));
         case "risk": return s.drivers.some((d) => d.direction === "negative") || s.diagnostics.warningTags.length > 0;

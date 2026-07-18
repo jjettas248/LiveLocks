@@ -29,7 +29,7 @@ function confirmedGameIds(snapshot: PregamePowerSnapshot | null): Set<string> {
   const out = new Set<string>();
   if (!snapshot) return out;
   for (const s of Array.from(snapshot.signals.values())) {
-    if (s.lineupStatus === "confirmed") out.add(s.gameId);
+    if (s.lineupStatus === "posted") out.add(s.gameId);
   }
   return out;
 }

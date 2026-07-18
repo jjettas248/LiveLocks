@@ -241,11 +241,18 @@ function rankTargets(targets: PregameRadarTarget[]): PregameRadarTarget[] {
  * outcomeStatus, which are a lossy proxy (e.g. a live game with a still-
  * pending, badge-less target used to read identically to a fully-scheduled
  * slate). Takes plain strings so it works uniformly across Plate's
- * PregameGameStatus and Mound's MoundGameStatus (same literal value set).
+ * PregameGameStatus and Mound's MoundGameStatus — note the two enums have
+ * diverged as of Plate's "suspended" status (Mound has no equivalent value).
+ *
+ * A suspended game has already started and is expected to resume — it must
+ * count toward "in_progress" alongside "live", never toward "final" (it is
+ * explicitly non-terminal) and never left to fall through to the
+ * "pre_first_pitch" default (which would wrongly imply the slate hasn't
+ * started yet).
  */
 function deriveSlateStatus(gameStatuses: string[]): MlbPregameHubResponse["slateStatus"] {
   if (gameStatuses.length === 0) return "pre_first_pitch";
-  if (gameStatuses.some((s) => s === "live")) return "in_progress";
+  if (gameStatuses.some((s) => s === "live" || s === "suspended")) return "in_progress";
   if (gameStatuses.every((s) => s === "final" || s === "postponed")) return "final";
   return "pre_first_pitch";
 }

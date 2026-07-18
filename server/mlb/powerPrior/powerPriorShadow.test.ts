@@ -58,7 +58,7 @@ function makeSignal(over: Partial<PregamePowerSignal> = {}): PregamePowerSignal 
     ],
     warnings: [],
     tags: [],
-    lineupStatus: "confirmed",
+    lineupStatus: "posted",
     weatherStatus: "confirmed",
     gameStatus: "pre",
     firstPitchLockEligible: true,

@@ -18,7 +18,7 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     pitcherId: "p1", pitcherName: "P", battingOrderSlot: 3, handednessMatchup: "R vs L",
     primaryMarket: "home_runs", marketTags: ["home_runs"], marketScores: { home_runs: 7 },
     score10: 7, tier: "strong",
-    drivers: [], warnings: [], tags: [], lineupStatus: "confirmed", weatherStatus: "estimated",
+    drivers: [], warnings: [], tags: [], lineupStatus: "posted", weatherStatus: "estimated",
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     status: "active", suppressed: false, suppressedReasons: [],

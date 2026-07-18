@@ -644,10 +644,10 @@ app.use((req, res, next) => {
       const { buildPregamePowerRadar } = await import(
         "./mlb/pregamePowerRadar/buildPregamePowerRadar"
       );
-      const { getSnapshot } = await import(
+      const { getSnapshot, setSnapshot: setPregameSnapshot } = await import(
         "./mlb/pregamePowerRadar/pregamePowerRadarStore"
       );
-      const { installPregamePersistence } = await import(
+      const { installPregamePersistence, loadPregameSnapshotFromDb } = await import(
         "./mlb/pregamePowerRadar/pregamePersistence"
       );
       const { checkLineupReleaseAlerts } = await import(
@@ -657,6 +657,28 @@ app.use((req, res, next) => {
 
       // Wire DB persistence (build sink + DB fallback) before the first build.
       installPregamePersistence();
+
+      // Boot-time hydration: seed the in-memory snapshot from today's already-
+      // persisted rows before the first live rebuild runs, so a restart never
+      // transiently loses visibility into already-graded state that is safely
+      // sitting in the DB. Double-checked: a live rebuild (90s below) could
+      // complete and call setSnapshot() while this DB read is still in
+      // flight — the second check (post-await) ensures hydration never
+      // clobbers a fresher snapshot that arrived in the meantime.
+      try {
+        if (!getSnapshot()) {
+          const todayET = slateDateET();
+          const hydrated = await loadPregameSnapshotFromDb(todayET);
+          if (hydrated && !getSnapshot()) {
+            setPregameSnapshot(hydrated);
+            console.log(
+              `[PREGAME_POWER_RADAR_BOOT_HYDRATE] seeded ${hydrated.signals.size} signals from build=${hydrated.buildId} date=${todayET}`,
+            );
+          }
+        }
+      } catch (e) {
+        console.warn("[PREGAME_POWER_RADAR_BOOT_HYDRATE] failed:", (e as Error).message);
+      }
 
       // Runs a build and diffs the snapshot before/after so a newly-confirmed
       // lineup with a top-tier HR candidate fires a "lineups are live" alert.

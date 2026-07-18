@@ -91,9 +91,15 @@ function windDirectionLabel(dir: "in" | "out" | "cross" | "calm" | null): string
   }
 }
 
-function mapGameStatus(espnStatus: string | undefined): PregameGameStatus {
+export function mapGameStatus(espnStatus: string | undefined): PregameGameStatus {
   const s = (espnStatus ?? "").toUpperCase();
   if (s.includes("FINAL")) return "final";
+  // Checked before the general IN_PROGRESS/LIVE match — a suspended game is
+  // still technically "in progress" in some feeds, but it must resolve to its
+  // own distinct status (paused, non-terminal; see gradedStateCarry.ts and
+  // diagnostics.ts for how "suspended" is handled downstream) rather than
+  // "live".
+  if (s.includes("SUSPEND")) return "suspended";
   if (s.includes("IN_PROGRESS") || s.includes("LIVE")) return "live";
   if (s.includes("POSTPONED")) return "postponed";
   if (s.includes("DELAY")) return "delayed";
@@ -251,7 +257,8 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
       }
 
       const lineup = getStartingLineup(gamePk);
-      if (lineup.length > 0) lineupGames++;
+      const lineupPosted = lineup.length > 0;
+      if (lineupPosted) lineupGames++;
 
       // Near-HR recent-form: one batch query per game (not per-player N+1).
       // Never touches the game currently being scored — sessionDate is the
@@ -491,7 +498,13 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         ];
         const positiveDriverCount = drivers.filter((d) => d.direction === "positive").length;
 
-        const lineupStatus: PregameLineupStatus = "confirmed"; // synced lineups are official
+        // "posted" = the official batting order has been posted for this game
+        // (the only real signal available — MLB gives no separate confirmation
+        // flag). Every batter reaching this loop is already in a posted lineup
+        // by construction (the loop iterates `lineup`, which is only non-empty
+        // once posted), so this is semantic cleanup replacing a hardcoded
+        // literal with an honest derivation, not a new behavior.
+        const lineupStatus: PregameLineupStatus = lineupPosted ? "posted" : "unposted";
 
         const scoring = composePregameScore(
           {
@@ -506,7 +519,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           {
             batterPowerAvailable: batterPower.available,
             pitcherProfileAvailable,
-            confirmedLineup: lineupStatus === "confirmed",
+            confirmedLineup: lineupStatus === "posted",
             parkAvailable: parkHrFactor != null,
             weatherAvailable,
             bvpAvailable: matchupFit.bvpAvailable,
@@ -577,7 +590,13 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
 
         const signalId = `mlb-pregame:${sessionDate}:${game.gameId}:${player.playerId}`;
         const generatedAt = new Date().toISOString();
-        const isLocked = !firstPitchLockEligible && (gameStatus === "live" || gameStatus === "final");
+        // A suspended game has already started — suspension itself is
+        // sufficient to force the lock, independent of firstPitchLockEligible
+        // (which is derived from gameStatus at the top of this game's loop
+        // iteration and is not re-verified for consistency here).
+        const isLocked =
+          gameStatus === "suspended" ||
+          (!firstPitchLockEligible && (gameStatus === "live" || gameStatus === "final"));
 
         const signal: PregamePowerSignal = {
           signalId,
@@ -668,7 +687,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               weatherUpdatedAt: weather?.fetchedAt ? new Date(weather.fetchedAt).toISOString() : null,
             },
             rawInputsAvailable: {
-              lineup: lineupStatus === "confirmed",
+              lineup: lineupStatus === "posted",
               batterPower: batterPower.available,
               pitcherProfile: pitcherProfileAvailable,
               park: parkHrFactor != null,

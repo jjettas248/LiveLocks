@@ -28,7 +28,7 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
       { key: "d1", label: "Driver 1", direction: "positive" },
       { key: "d2", label: "Driver 2", direction: "positive" },
     ],
-    warnings: [], tags: [], lineupStatus: "confirmed", weatherStatus: "estimated",
+    warnings: [], tags: [], lineupStatus: "posted", weatherStatus: "estimated",
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
     hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
     status: "active", suppressed: false, suppressedReasons: [],
@@ -107,8 +107,33 @@ const gradedMiss: PregameOutcome = {
 
 // ── 9. Not publicly flagged pregame → hidden regardless of everything else ──
 {
-  const signal = sig({ gameStatus: "final", status: "graded", outcomes: gradedWin, lineupStatus: "unconfirmed" });
+  const signal = sig({ gameStatus: "final", status: "graded", outcomes: gradedWin, lineupStatus: "unposted" });
   ok(isPublicPregameSignal(signal) === false, "unconfirmed lineup is never publicly flagged, even with a graded HR");
+}
+
+// ── 10. Already-flagged + suspended + locked → stays visible (preserved) ────
+{
+  const signal = sig({ gameStatus: "suspended", status: "locked", everPubliclyFlagged: true });
+  ok(isPublicPregameSignal(signal) === true, "already-flagged suspended-and-locked signal stays visible (preserved)");
+}
+
+// ── 11. Suspended + not yet locked → hidden, same treatment as live/final ──
+{
+  const signal = sig({ gameStatus: "suspended", status: "active", everPubliclyFlagged: true });
+  ok(isPublicPregameSignal(signal) === false, "suspended signal not yet locked is hidden, same as live/final");
+}
+
+// ── 12. NEVER flagged + suspended + locked (cold-start, no prior copy) → hidden ──
+// Regression: a signal built for the first time while its game is already
+// suspended (no prior copy to carry a frozen everPubliclyFlagged from) must
+// NOT surface as a brand-new recommendation just because its intrinsic gates
+// (tier/score/drivers/coverage/lineupStatus) currently pass — a live-only
+// pass on wasPubliclyFlaggedPregame must never grant visibility on its own
+// while suspended.
+{
+  const signal = sig({ gameStatus: "suspended", status: "locked", everPubliclyFlagged: false });
+  ok(isPublicPregameSignal(signal) === false,
+    "a never-flagged signal cannot newly surface while suspended, even if its intrinsic gates currently pass");
 }
 
 console.log(`\ndiagnostics.test: ${passed} passed, ${failed} failed`);

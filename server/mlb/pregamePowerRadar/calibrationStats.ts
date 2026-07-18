@@ -105,7 +105,21 @@ export function buildCalibrationStats(
   const targets = signals.filter((s) => s.everPubliclyFlagged);
   const wins = targets.filter(isPublicPregameWin);
   const misses = targets.filter(isCalibrationMiss);
-  const firstAbWins = wins.filter((s) => s.outcomes?.firstAbPregameWin === true);
+  // `resolved` = every settled target (wins + misses) — the same set
+  // `resolvedCount` below counts. A miss is NEVER ambiguous (firstAbPregameWin
+  // is always definitively false for a miss), so it belongs in the first-AB
+  // denominator exactly as it always has; only a WIN whose AB-sequencing data
+  // was unavailable ("unknown") is genuinely indeterminate and must be
+  // excluded from the denominator entirely — narrowing the denominator to
+  // wins-only would silently change the metric's meaning from "first-AB win
+  // rate among all resolved targets" to "share of HR wins in the first AB".
+  const resolved = [...wins, ...misses];
+  const knownFirstAbWins = resolved.filter((s) => s.outcomes?.firstAbPregameWin === true);
+  // Filtered from `resolved` (not `wins`) so every miss is correctly absorbed
+  // here too — this is what keeps `knownFirstAbWins.length + laterAbWins.length`
+  // mathematically identical to `knownOrderResolvedCount` below.
+  const laterAbWins = resolved.filter((s) => s.outcomes?.firstAbPregameWin === false);
+  const unknownOrderWins = resolved.filter((s) => s.outcomes?.firstAbPregameWin === "unknown");
 
   const byTier: Record<string, MutableBucket> = {};
   const byScoreBand: Record<string, MutableBucket> = {};
@@ -135,6 +149,10 @@ export function buildCalibrationStats(
 
   const targetCount = targets.length;
   const resolvedCount = wins.length + misses.length;
+  // Excludes only the genuinely-ambiguous unknown-order wins from the
+  // denominator — preserves the original "rate over all resolved targets"
+  // meaning rather than narrowing to a different "share of HR wins" metric.
+  const knownOrderResolvedCount = resolvedCount - unknownOrderWins.length;
 
   return {
     dateRange: range,
@@ -142,8 +160,10 @@ export function buildCalibrationStats(
     wins: wins.length,
     calibrationMisses: misses.length,
     hitRate: roundPct(wins.length, resolvedCount),
-    firstAbWins: firstAbWins.length,
-    firstAbWinRate: roundPct(firstAbWins.length, resolvedCount),
+    firstAbWins: knownFirstAbWins.length,
+    laterAbWins: laterAbWins.length,
+    unknownOrderWins: unknownOrderWins.length,
+    firstAbWinRate: roundPct(knownFirstAbWins.length, knownOrderResolvedCount),
     byTier: finalizeBuckets(byTier),
     byScoreBand: finalizeBuckets(byScoreBand),
     byDriver: finalizeBuckets(byDriver),

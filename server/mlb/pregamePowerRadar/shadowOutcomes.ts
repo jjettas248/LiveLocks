@@ -18,7 +18,7 @@
 import { storage } from "../../storage";
 import { getCanonicalHrRadarState } from "../hrRadarCanonicalStore";
 import { mlbGameCache } from "../dataPullService";
-import { getSnapshot } from "./pregamePowerRadarStore";
+import { getSnapshot, commitGradedSignal } from "./pregamePowerRadarStore";
 import { deriveWinAttribution } from "./winAttribution";
 import type { PregameOutcome, PregamePowerSignal } from "./types";
 import type { PregameCalibrationRecord } from "../../../shared/pregameRadarWin";
@@ -97,8 +97,89 @@ function resolveOutcome(
 }
 
 /**
+ * Persist a graded signal, retrying a bounded number of times on failure
+ * before giving up. Returns true only on a confirmed successful write. The
+ * DB upsert is already idempotent (terminal-once-graded `status`, COALESCE'd
+ * `outcomes` — see storage.upsertPregamePowerRadarSignal), so re-attempting
+ * the identical write is always safe.
+ */
+export async function persistSignalWithRetry(signal: PregamePowerSignal, attempts = 2): Promise<boolean> {
+  const retryDelaysMs = [250, 750];
+  for (let attempt = 0; attempt <= attempts; attempt++) {
+    try {
+      await storage.upsertPregamePowerRadarSignal({
+        signalId: signal.signalId,
+        buildId: signal.buildId,
+        sessionDate: signal.sessionDate,
+        gameId: signal.gameId,
+        gameDate: signal.gameDate,
+        startsAt: signal.startsAt ?? null,
+        gameStatus: signal.gameStatus,
+        firstPitchLockEligible: signal.firstPitchLockEligible,
+        batterId: signal.batterId,
+        batterName: signal.batterName,
+        team: signal.team,
+        opponent: signal.opponent,
+        pitcherId: signal.pitcherId ?? null,
+        pitcherName: signal.pitcherName ?? null,
+        battingOrderSlot: signal.battingOrderSlot ?? null,
+        primaryMarket: signal.primaryMarket,
+        marketTags: signal.marketTags,
+        marketScores: signal.marketScores,
+        score10: String(signal.score10),
+        tier: signal.tier,
+        drivers: signal.drivers,
+        warnings: signal.warnings,
+        diagnostics: signal.diagnostics,
+        lineupStatus: signal.lineupStatus,
+        weatherStatus: signal.weatherStatus,
+        hasMarketLine: signal.hasMarketLine,
+        isOfficialPlay: false,
+        isPregameTarget: true,
+        status: signal.status,
+        suppressed: signal.suppressed,
+        suppressedReasons: signal.suppressedReasons,
+        outcomes: signal.outcomes ?? null,
+        everPubliclyFlagged: signal.everPubliclyFlagged,
+        becameLiveReady: signal.becameLiveReady,
+        becameLiveFire: signal.becameLiveFire,
+        convertedLiveAt: signal.convertedLiveAt ? new Date(signal.convertedLiveAt) : null,
+        lockedAt: signal.lockedAt ? new Date(signal.lockedAt) : null,
+        gradedAt: signal.status === "graded" ? new Date() : null,
+      });
+      return true;
+    } catch (err: any) {
+      if (attempt < attempts) {
+        console.warn(`[PREGAME_RADAR_PERSIST_RETRY] ${signal.signalId} attempt=${attempt + 1} message=${err?.message}`);
+        await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt] ?? 750));
+        continue;
+      }
+      console.error(`[PREGAME_RADAR_PERSIST_FAILED] ${signal.signalId}`, {
+        sessionDate: signal.sessionDate,
+        gameId: signal.gameId,
+        batterId: signal.batterId,
+        message: err?.message,
+        stack: err?.stack,
+      });
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
  * Single grading pass over the current snapshot. Updates in-memory signals and
  * persists them. Never throws into runtime.
+ *
+ * Copy-on-write: each signal's grading mutations are applied to a fresh
+ * `draft` object, never to the live `original` reference held in the
+ * snapshot's Map. The DB write only happens against `draft`, and only on
+ * confirmed persist success is `draft` committed back into the store (via a
+ * compare-and-swap keyed on the exact `original` reference) — so in-memory
+ * "graded" state and durable DB state can never diverge for longer than one
+ * failed write, and a failed write leaves the original signal completely
+ * untouched, naturally retriable on the next tick with no rollback logic
+ * needed.
  */
 export async function gradePregameOutcomes(): Promise<{ bridged: number; graded: number }> {
   const snapshot = getSnapshot();
@@ -122,22 +203,23 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
     // leave canonicalHits empty
   }
 
-  for (const signal of Array.from(snapshot.signals.values())) {
+  for (const original of Array.from(snapshot.signals.values())) {
     let changed = false;
+    const draft: PregamePowerSignal = { ...original };
 
     // ── Live bridge (read-only) ───────────────────────────────────────────────
-    const bridge = liveBridge(signal);
+    const bridge = liveBridge(draft);
     if (
-      bridge.becameLiveReady !== signal.becameLiveReady ||
-      bridge.becameLiveFire !== signal.becameLiveFire ||
-      bridge.convertedLiveAt !== signal.convertedLiveAt
+      bridge.becameLiveReady !== draft.becameLiveReady ||
+      bridge.becameLiveFire !== draft.becameLiveFire ||
+      bridge.convertedLiveAt !== draft.convertedLiveAt
     ) {
-      signal.becameLiveReady = bridge.becameLiveReady;
-      signal.becameLiveFire = bridge.becameLiveFire;
-      signal.convertedLiveAt = bridge.convertedLiveAt;
+      draft.becameLiveReady = bridge.becameLiveReady;
+      draft.becameLiveFire = bridge.becameLiveFire;
+      draft.convertedLiveAt = bridge.convertedLiveAt;
       changed = true;
       bridged++;
-      console.log(`[PREGAME_POWER_RADAR_BRIDGE] ${signal.signalId} ready=${bridge.becameLiveReady} fire=${bridge.becameLiveFire}`);
+      console.log(`[PREGAME_POWER_RADAR_BRIDGE] ${draft.signalId} ready=${bridge.becameLiveReady} fire=${bridge.becameLiveFire}`);
     }
 
     // ── Shadow outcome + win attribution ──────────────────────────────────────
@@ -148,90 +230,68 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
     // to play, sometimes hours. Only a *miss* (calibration_miss) genuinely
     // needs the game to be over — you can't call "no HR" while the batter
     // still has plate appearances left.
-    if (signal.status !== "graded") {
-      const outcome = resolveOutcome(signal, canonicalHits.get(`${signal.gameId}|${signal.batterId}`));
-      if (outcome && (outcome.hitHr === true || signal.gameStatus === "final")) {
-        signal.outcomes = outcome;
-        signal.status = "graded";
+    if (draft.status !== "graded") {
+      const outcome = resolveOutcome(draft, canonicalHits.get(`${draft.gameId}|${draft.batterId}`));
+      if (outcome && (outcome.hitHr === true || draft.gameStatus === "final")) {
+        draft.outcomes = outcome;
+        draft.status = "graded";
         changed = true;
         graded++;
-        console.log(`[PREGAME_POWER_RADAR_GRADED] ${signal.signalId} hr=${outcome.hitHr} tb=${outcome.totalBases} rbi=${outcome.rbiRecorded}`);
+        console.log(`[PREGAME_POWER_RADAR_GRADED] ${draft.signalId} hr=${outcome.hitHr} tb=${outcome.totalBases} rbi=${outcome.rbiRecorded}`);
         // Win Attribution: hits are public wins; misses are calibration only.
         if (outcome.outcome === "pregame_win" && outcome.userVisible) {
           console.log(
-            `[PREGAME_RADAR_WIN] ${signal.signalId} player=${signal.batterName} inning=${outcome.hrInning ?? "?"} pa=${outcome.plateAppearanceNumber ?? "?"} firstAb=${outcome.firstAbPregameWin === true}`,
+            `[PREGAME_RADAR_WIN] ${draft.signalId} player=${draft.batterName} inning=${outcome.hrInning ?? "?"} pa=${outcome.plateAppearanceNumber ?? "?"} firstAb=${outcome.firstAbPregameWin === true}`,
           );
           // Logged once at grading time (not per HTTP read) so polling clients
           // never multiply this into per-request log spam — see
           // buildPregameRadarWinItem for the same slateDateET resolution.
           console.log("[PREGAME_RADAR_DATE_KEY]", {
-            playerName: signal.batterName,
-            gameId: signal.gameId,
-            rawGameDate: signal.gameDate,
-            gameStartTime: signal.startsAt,
-            slateDateET: signal.sessionDate,
+            playerName: draft.batterName,
+            gameId: draft.gameId,
+            rawGameDate: draft.gameDate,
+            gameStartTime: draft.startsAt,
+            slateDateET: draft.sessionDate,
             settlementTime: outcome.resolvedAt,
-            groupedUnder: signal.sessionDate,
+            groupedUnder: draft.sessionDate,
           });
         } else if (outcome.outcome === "pregame_win") {
-          console.log(`[PREGAME_RADAR_WIN_INTERNAL] ${signal.signalId} player=${signal.batterName} (homered, not publicly flagged)`);
+          console.log(`[PREGAME_RADAR_WIN_INTERNAL] ${draft.signalId} player=${draft.batterName} (homered, not publicly flagged)`);
         } else {
-          console.log(`[PREGAME_CALIBRATION_MISS] ${signal.signalId} player=${signal.batterName} (no HR — internal calibration only)`);
+          console.log(`[PREGAME_CALIBRATION_MISS] ${draft.signalId} player=${draft.batterName} (no HR — internal calibration only)`);
         }
       }
     }
 
     if (changed) {
-      try {
-        await storage.upsertPregamePowerRadarSignal({
-          signalId: signal.signalId,
-          buildId: signal.buildId,
-          sessionDate: signal.sessionDate,
-          gameId: signal.gameId,
-          gameDate: signal.gameDate,
-          startsAt: signal.startsAt ?? null,
-          gameStatus: signal.gameStatus,
-          firstPitchLockEligible: signal.firstPitchLockEligible,
-          batterId: signal.batterId,
-          batterName: signal.batterName,
-          team: signal.team,
-          opponent: signal.opponent,
-          pitcherId: signal.pitcherId ?? null,
-          pitcherName: signal.pitcherName ?? null,
-          battingOrderSlot: signal.battingOrderSlot ?? null,
-          primaryMarket: signal.primaryMarket,
-          marketTags: signal.marketTags,
-          marketScores: signal.marketScores,
-          score10: String(signal.score10),
-          tier: signal.tier,
-          drivers: signal.drivers,
-          warnings: signal.warnings,
-          diagnostics: signal.diagnostics,
-          lineupStatus: signal.lineupStatus,
-          weatherStatus: signal.weatherStatus,
-          hasMarketLine: signal.hasMarketLine,
-          isOfficialPlay: false,
-          isPregameTarget: true,
-          status: signal.status,
-          suppressed: signal.suppressed,
-          suppressedReasons: signal.suppressedReasons,
-          outcomes: signal.outcomes ?? null,
-          everPubliclyFlagged: signal.everPubliclyFlagged,
-          becameLiveReady: signal.becameLiveReady,
-          becameLiveFire: signal.becameLiveFire,
-          convertedLiveAt: signal.convertedLiveAt ? new Date(signal.convertedLiveAt) : null,
-          lockedAt: signal.lockedAt ? new Date(signal.lockedAt) : null,
-          gradedAt: signal.status === "graded" ? new Date() : null,
-        });
-      } catch (err: any) {
-        console.error(`[PREGAME_RADAR_PERSIST_FAILED] ${signal.signalId}`, {
-          sessionDate: signal.sessionDate,
-          gameId: signal.gameId,
-          batterId: signal.batterId,
-          message: err?.message,
-          stack: err?.stack,
-        });
+      // Known bounded race, not fixed here: if a concurrent live rebuild
+      // replaces this exact signal while persistSignalWithRetry's own retry
+      // delay is still elapsing, and this (stale, build-A-derived) write then
+      // lands in the DB AFTER the newer rebuild's own persist, it can
+      // transiently move the DB row's buildId backward to build A —
+      // commitGradedSignal below correctly refuses the IN-MEMORY commit (the
+      // newer build's copy stays authoritative there), but the DB row itself
+      // stays stale until the next tick. This self-heals within one 5-minute
+      // grading cycle: resolveOutcome() is deterministic against box-score
+      // truth, so the next tick reproduces the same graded outcome from the
+      // newer (now-current) signal and re-persists it with the correct
+      // buildId. A tighter fix (carry this draft's outcome forward onto
+      // whatever is current and persist+commit that merged result on CAS
+      // refusal, reusing carryForwardGradedState's own merge logic) was
+      // considered and deliberately deferred — it adds a second write path
+      // into this function, which is out of scope for this pass.
+      const persisted = await persistSignalWithRetry(draft);
+      if (persisted) {
+        const committed = commitGradedSignal(original, draft);
+        if (!committed) {
+          console.warn(
+            `[PREGAME_RADAR_COMMIT_SUPERSEDED] ${draft.signalId} — a newer snapshot/signal already replaced this one during persistence; next tick reconciles`,
+          );
+        }
       }
+      // On persist failure, `draft` is discarded and `original` in the Map is
+      // untouched — automatically retriable on the next 5-minute tick. No
+      // rollback bookkeeping needed since nothing was ever mutated in place.
     }
   }
 

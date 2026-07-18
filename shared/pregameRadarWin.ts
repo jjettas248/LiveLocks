@@ -140,7 +140,13 @@ export interface PregameRadarCalibrationStats {
   wins: number;
   calibrationMisses: number;
   hitRate: number;
+  /** Wins with a confirmed first-AB HR (AB-sequencing data was present). */
   firstAbWins: number;
+  /** Wins confirmed NOT first-AB (AB-sequencing data was present either way). */
+  laterAbWins: number;
+  /** Wins where AB-sequencing data was unavailable — excluded from firstAbWinRate's denominator. */
+  unknownOrderWins: number;
+  /** firstAbWins / (all resolved targets minus unknownOrderWins). */
   firstAbWinRate: number;
   byTier: Record<string, PregameCalibrationBucket>;
   byScoreBand: Record<string, PregameCalibrationBucket>;
