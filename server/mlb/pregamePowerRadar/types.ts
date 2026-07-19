@@ -125,6 +125,24 @@ export interface PregameMarketEdgeContext {
   oddsUpdatedAt?: string;
 }
 
+/**
+ * Display-only power-profile snapshot: the raw hitter inputs already passed into
+ * `computeBatterPowerProfile` — NOT re-fetched, NOT recomputed, NEVER fed back into
+ * scoring. Surfaced so the expanded card can render real values with a truthful
+ * "unavailable" for genuinely-absent inputs (a below-threshold value must never read
+ * as unavailable). Every field optional/nullable so older persisted rows (written
+ * before this snapshot existed) hydrate cleanly. `pullRatePct` is RAW pull rate and
+ * is always labeled "Pull Rate" on the client — never "Pull-Air"/"Pull-Side Power".
+ */
+export interface PregamePowerProfileSnapshot {
+  xISO?: number | null;
+  hrFBRatioPct?: number | null;
+  barrelRatePct?: number | null;
+  hardHitRatePct?: number | null;
+  maxEV?: number | null;
+  pullRatePct?: number | null;
+}
+
 export interface PregamePowerDiagnostics {
   // Component sub-scores (all 0–10, null when not computed).
   batterPowerScore: number | null;
@@ -202,6 +220,14 @@ export interface PregamePowerDiagnostics {
     bvp: boolean;
     nearHrRecentForm?: boolean;
   };
+
+  /**
+   * Display-only raw power-profile snapshot (see PregamePowerProfileSnapshot).
+   * Additive — never read by scoring/grading. Frozen into the locked signal by
+   * gradedStateCarry so completed cards + restart/DB hydration show the ORIGINAL
+   * pregame profile, not a post-first-pitch rebuild. Optional for older rows.
+   */
+  powerProfile?: PregamePowerProfileSnapshot;
 }
 
 export interface PregamePowerSignal {

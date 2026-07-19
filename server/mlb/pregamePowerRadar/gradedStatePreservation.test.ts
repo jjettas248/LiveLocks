@@ -272,20 +272,58 @@ const gradedWin: PregameOutcome = {
   ok(carried[0]?.status === "locked", "suspended game locks the carried signal, same as live/final");
 }
 
-// ── 16. A brand-new signal can never mint a fresh public flag while suspended ─
+// ── 16. A brand-new signal can never mint a fresh public flag after first pitch ─
 {
   // Drivers/tier/score/coverage all otherwise clear wasPubliclyFlaggedPregame's
-  // gates — isolates that the suspended check itself is what blocks this,
-  // not some other unrelated gate failing.
+  // gates — isolates that the first-pitch guard itself is what blocks minting,
+  // not some other unrelated gate failing. A suspended game has already started,
+  // so firstPitchLockEligible is false (as it is for live/final), and the mint
+  // guard requires firstPitchLockEligible === true.
   const fresh = sig({
     gameStatus: "suspended",
+    firstPitchLockEligible: false,
     drivers: [
       { key: "d1", label: "Driver 1", direction: "positive" },
       { key: "d2", label: "Driver 2", direction: "positive" },
     ],
   });
   carryForwardGradedState(fresh, undefined);
-  ok(fresh.everPubliclyFlagged === false, "suspended blocks a brand-new signal from newly minting a public flag");
+  ok(fresh.everPubliclyFlagged === false, "post-first-pitch (suspended) blocks a brand-new signal from newly minting a public flag");
+}
+
+// ── 18. Cold-start live/final: a never-flagged signal built for the first time
+// AFTER first pitch cannot mint a public flag (no prior copy to inherit from) ──
+{
+  const freshLive = sig({
+    gameStatus: "live", firstPitchLockEligible: false,
+    drivers: [
+      { key: "d1", label: "Driver 1", direction: "positive" },
+      { key: "d2", label: "Driver 2", direction: "positive" },
+    ],
+  });
+  carryForwardGradedState(freshLive, undefined);
+  ok(freshLive.everPubliclyFlagged === false, "cold-start LIVE first build cannot mint a public flag with no prior copy");
+
+  const freshFinal = sig({
+    gameStatus: "final", firstPitchLockEligible: false,
+    drivers: [
+      { key: "d1", label: "Driver 1", direction: "positive" },
+      { key: "d2", label: "Driver 2", direction: "positive" },
+    ],
+  });
+  carryForwardGradedState(freshFinal, undefined);
+  ok(freshFinal.everPubliclyFlagged === false, "cold-start FINAL first build cannot mint a public flag with no prior copy");
+
+  // Sanity: a legitimate pre-first-pitch build DOES mint it.
+  const freshPre = sig({
+    gameStatus: "scheduled", firstPitchLockEligible: true,
+    drivers: [
+      { key: "d1", label: "Driver 1", direction: "positive" },
+      { key: "d2", label: "Driver 2", direction: "positive" },
+    ],
+  });
+  carryForwardGradedState(freshPre, undefined);
+  ok(freshPre.everPubliclyFlagged === true, "a legitimate pre-first-pitch first build still mints the public flag");
 }
 
 // ── 17. An already-flagged target's everPubliclyFlagged survives suspension ──

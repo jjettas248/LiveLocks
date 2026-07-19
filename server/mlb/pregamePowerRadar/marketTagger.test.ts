@@ -3,8 +3,8 @@
 
 import { computeMarketTags } from "./marketTagger";
 import { composePregameScore, type ScoringFlags } from "./scoring";
-import { isPublicPregameSignal, positiveDrivers } from "./diagnostics";
-import type { PregamePowerSignal } from "./types";
+// Public-visibility/lifecycle assertions live in diagnostics.test.ts, not here —
+// this suite covers market tagging only.
 
 let passed = 0;
 let failed = 0;
@@ -60,92 +60,6 @@ ok(typeof score === "number", `composite computed without market input (got ${sc
 const id = (sessionDate: string, gameId: string, batterId: string) =>
   `mlb-pregame:${sessionDate}:${gameId}:${batterId}`;
 ok(id("2026-06-23", "g1", "b1") === id("2026-06-23", "g1", "b1"), "signalId stable across rebuilds");
-
-// ── Public predicate ──────────────────────────────────────────────────────────
-function makeSignal(over: Partial<PregamePowerSignal>): PregamePowerSignal {
-  return {
-    signalId: "mlb-pregame:2026-06-23:g1:b1", sport: "mlb", engine: "pregame_power_radar",
-    sessionDate: "2026-06-23", gameId: "g1", gameDate: "2026-06-23", startsAt: null,
-    generatedAt: "", buildId: "b", batterId: "b1", batterName: "X", team: "NYY", opponent: "BOS",
-    pitcherId: "p1", pitcherName: "P", battingOrderSlot: 3, handednessMatchup: "R vs L",
-    primaryMarket: "home_runs", marketTags: ["home_runs"], marketScores: { home_runs: 7 },
-    marketSetups: [{ market: "home_runs", setupScore: 7, setupLabel: "Strong", isPrimary: true }],
-    parkContext: {
-      venueName: null, temperatureF: null, windMph: null, windDirectionLabel: null,
-      carryLabel: "Neutral Conditions", carryType: "neutral", driverText: null,
-    },
-    score10: 7, tier: "strong",
-    drivers: [
-      { key: "a", label: "A", direction: "positive" },
-      { key: "b", label: "B", direction: "positive" },
-    ],
-    warnings: [], tags: [], lineupStatus: "posted", weatherStatus: "estimated",
-    gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,
-    hasMarketLine: false, isOfficialPlay: false, isPregameTarget: true,
-    status: "active", suppressed: false, suppressedReasons: [],
-    outcomes: null, everPubliclyFlagged: false, becameLiveReady: false, becameLiveFire: false, convertedLiveAt: null,
-    diagnostics: {
-      batterPowerScore: 8, pitcherVulnerabilityScore: 7, matchupFitScore: 6, parkWeatherScore: 6,
-      lineupOpportunityScore: 6, marketFitScore: 7, dataCoverageScore: 0.95, suppressed: false,
-      suppressedReasons: [], sourceFreshness: {},
-      rawInputsAvailable: { lineup: true, batterPower: true, pitcherProfile: true, park: true, weather: true, bvp: false },
-    },
-    ...over,
-  };
-}
-
-ok(isPublicPregameSignal(makeSignal({})), "valid strong posted-lineup signal is public");
-ok(!isPublicPregameSignal(makeSignal({ lineupStatus: "unposted" })), "unposted lineup not public");
-ok(!isPublicPregameSignal(makeSignal({ score10: 5.5 })), "below 6.0 not public");
-ok(!isPublicPregameSignal(makeSignal({ suppressed: true })), "suppressed not public");
-ok(!isPublicPregameSignal(makeSignal({ gameStatus: "final" })), "final not public");
-ok(!isPublicPregameSignal(makeSignal({ gameStatus: "postponed" })), "postponed not public");
-ok(
-  !isPublicPregameSignal(makeSignal({ gameStatus: "live", status: "active" })),
-  "live + not-locked not public",
-);
-ok(
-  isPublicPregameSignal(makeSignal({ gameStatus: "live", status: "locked" })),
-  "live + locked is public",
-);
-ok(
-  !isPublicPregameSignal(makeSignal({ drivers: [{ key: "a", label: "A", direction: "positive" }] })),
-  "single positive driver not public",
-);
-ok(
-  positiveDrivers(makeSignal({})).length === 2,
-  "positiveDrivers derives from drivers[]",
-);
-ok(
-  !isPublicPregameSignal(makeSignal({
-    diagnostics: { ...makeSignal({}).diagnostics, rawInputsAvailable: { ...makeSignal({}).diagnostics.rawInputsAvailable, batterPower: false } },
-  })),
-  "batterPower unavailable not public",
-);
-ok(
-  !isPublicPregameSignal(makeSignal({ score10: 5.5, everPubliclyFlagged: true })),
-  "a still-active (not graded) signal does NOT recover via everPubliclyFlagged — live gates (e.g. score) must stay authoritative pre-grading",
-);
-ok(
-  isPublicPregameSignal(makeSignal({
-    status: "graded", score10: 5.5, everPubliclyFlagged: true,
-    outcomes: { hitHr: true, outcome: "pregame_win", userVisible: true },
-  })),
-  "a graded win recovers via a frozen everPubliclyFlagged: true even if score10 has since drifted below threshold",
-);
-ok(
-  !isPublicPregameSignal(makeSignal({ suppressed: true, everPubliclyFlagged: true })),
-  "a scratched/suppressed still-active signal stays hidden even with a frozen everPubliclyFlagged: true — suppression must always be live, never overridden by history, until the game is graded",
-);
-ok(
-  isPublicPregameSignal(makeSignal({
-    status: "graded",
-    suppressed: true,
-    everPubliclyFlagged: true,
-    outcomes: { hitHr: true, outcome: "pregame_win", userVisible: true },
-  })),
-  "a graded win stays visible via the frozen flag even if suppressed got set post-grading (game already happened, suppression is moot)",
-);
 
 console.log(`\nmarketTagger.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -43,60 +43,52 @@ export function wasPubliclyFlaggedPregame(signal: PregamePowerSignal): boolean {
 }
 
 /**
- * Final public-visibility predicate. Public surfaces only confirmed-lineup,
- * non-suppressed, strong+ targets. Live and final games show only locked rows.
+ * Frozen historical public-admission flag. Reads the durable `everPubliclyFlagged`
+ * value (set once pre-first-pitch, OR-forwarded across rebuilds and DB-hydrated by
+ * `carryForwardGradedState` + storage's SQL `OR`-upsert), NEVER a live re-evaluation
+ * of mutable fields. This is the basis for **retained visibility** and for
+ * historical/calibration counts: a target genuinely public before first pitch stays
+ * counted/visible for the rest of the slate regardless of later mutable dips or its
+ * win/miss outcome. `wasPubliclyFlaggedPregame` (which re-evaluates live fields) is
+ * used ONLY for the initial pre-first-pitch eligibility question, never for retention.
+ */
+export function flaggedBeforeFirstPitchPregame(signal: PregamePowerSignal): boolean {
+  return signal.everPubliclyFlagged === true;
+}
+
+/**
+ * Final public-visibility predicate — one shared lifecycle principle, no per-outcome
+ * exceptions. Two orthogonal questions:
  *
- * A graded target that actually homered stays visible after grading (display
- * only — never re-derived) so the card can render its cashed/"HOMERED" state.
- * A `final` game whose shadow grader hasn't run yet is treated the same as a
- * `live` one — still visible as a pending/locked row — instead of vanishing
- * the instant the game goes final only to (maybe) reappear once the 5-minute
- * grading pass catches up (or never, if the box score cache never resolves
- * for that game). A graded miss still hides once `status` flips to `"graded"`
- * without `hitHr`, via the active/locked check above.
+ *   1. INITIAL public eligibility (pre-first-pitch): may a signal surface for the
+ *      first time? Answered by the intrinsic quality gate `wasPubliclyFlaggedPregame`.
+ *      Unchanged — this pass never alters candidate volume or the eligibility bar.
+ *   2. RETAINED visibility (first pitch has passed): does an already-publicly-surfaced,
+ *      first-pitch-locked target stay on today's board through slate rollover? Answered
+ *      by the durable frozen flag `flaggedBeforeFirstPitchPregame` + a locked/graded
+ *      status — win OR miss, graded or not. A graded miss now stays visible (it moves
+ *      into the Completed section rather than being deleted). Cold-start minting of the
+ *      frozen flag is blocked in `gradedStateCarry.ts` (requires firstPitchLockEligible),
+ *      so retention can never surface a signal never shown before first pitch.
  *
- * For an already-`graded` signal, eligibility also accepts the frozen
- * `everPubliclyFlagged` flag (OR'd) — a target that was ever legitimately
- * flagged pregame must never silently drop out of the list because a later
- * rebuild's freshly-refetched mutable fields (tier/score/dataCoverageScore/
- * etc.) dipped below threshold. This OR is scoped to `graded` signals only:
- * `wasPubliclyFlaggedPregame` also gates `!suppressed`, and suppression is a
- * live, legitimately-changing fact (e.g. a lineup scratch) for a still-active
- * pre-lock signal — a target that gets scratched must always disappear from
- * the live board, never held visible by an earlier frozen flag.
- *
- * A `suspended` (non-graded) signal is the one case where a *live* pass on
- * `wasPubliclyFlaggedPregame` must NOT be trusted on its own: that check has
- * no awareness of `gameStatus`, so a signal built for the first time while
- * its game is already suspended (a cold restart with no prior copy to carry
- * a frozen flag from) could otherwise pass its intrinsic gates and surface
- * as a brand-new recommendation for a game that's already past first pitch —
- * exactly the "new actionable recommendation while paused" case suspended
- * handling must block. Suspended therefore requires the frozen
- * `everPubliclyFlagged` flag specifically (not an OR with the live pass): an
- * already-flagged target stays visible (the flag survived via
- * carryForwardGradedState's OR-forward), but a live-only pass can never
- * mint visibility on its own while paused.
+ * `status === "graded"` implies first pitch has passed (a signal only grades once its
+ * game is live/final), so it always routes to retention regardless of `gameStatus`.
  */
 export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
-  const flaggedNow = wasPubliclyFlaggedPregame(signal);
-  const flagged =
-    signal.status === "graded" ? flaggedNow || signal.everPubliclyFlagged
-    : signal.gameStatus === "suspended" ? signal.everPubliclyFlagged
-    : flaggedNow;
-  if (!flagged) return false;
-  if (signal.status === "graded" && signal.outcomes?.hitHr === true) return true;
-  if (signal.status !== "active" && signal.status !== "locked") return false;
   if (signal.gameStatus === "postponed") return false;
-  // Suspended shares the same underlying property as live/final — first pitch
-  // has already happened — so it belongs in this branch rather than falling
-  // through to the generic pre-lock `return true` below. A suspended signal
-  // is preserved and visible (not hidden like postponed) as long as it's
-  // correctly locked; see buildPregamePowerRadar.ts's isLocked computation.
-  if (signal.gameStatus === "live" || signal.gameStatus === "final" || signal.gameStatus === "suspended") {
-    return signal.status === "locked";
-  }
-  return true;
+  if (signal.status === "expired") return false;
+
+  const firstPitchPassed =
+    signal.status === "graded" ||
+    signal.gameStatus === "live" ||
+    signal.gameStatus === "final" ||
+    signal.gameStatus === "suspended";
+
+  // Pre-first-pitch: INITIAL public eligibility (unchanged intrinsic gate).
+  if (!firstPitchPassed) return wasPubliclyFlaggedPregame(signal);
+
+  // First pitch has passed: RETENTION off the durable frozen flag only.
+  return flaggedBeforeFirstPitchPregame(signal) && (signal.status === "locked" || signal.status === "graded");
 }
 
 export interface CoverageCounters {

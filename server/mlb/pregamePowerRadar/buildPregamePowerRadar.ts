@@ -695,6 +695,17 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               bvp: matchupFit.bvpAvailable,
               nearHrRecentForm: nearHrRecentForm.available,
             },
+            // Display-only snapshot of the raw hitter inputs already computed
+            // above — no re-fetch, no recompute, never fed back into scoring.
+            // gradedStateCarry freezes this to the original pregame values.
+            powerProfile: {
+              xISO: powerInputs.xISO,
+              hrFBRatioPct: powerInputs.hrFBRatioPct,
+              barrelRatePct: powerInputs.barrelRatePct,
+              hardHitRatePct: powerInputs.hardHitRatePct,
+              maxEV: powerInputs.maxEV,
+              pullRatePct: powerInputs.pullRatePct,
+            },
           },
         };
 

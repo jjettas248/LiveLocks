@@ -77,16 +77,45 @@ export function wasPubliclyFlaggedMoundFade(signal: MoundSignal): boolean {
   );
 }
 
-/** Final public-visibility predicate. Mirrors isPublicPregameSignal's structure. */
+/**
+ * Frozen historical public-admission flag — Follow only. Reads the durable
+ * `everPubliclyFlagged` value (set once pre-first-pitch, OR-forwarded across
+ * rebuilds and DB-hydrated), NEVER a live re-evaluation.
+ *
+ * Deliberately does NOT OR in `everPubliclyFlaggedFade`: `isPublicMoundSignal`
+ * has never admitted Fade publicly (its eligibility branch uses only the Follow
+ * predicate), so `everPubliclyFlaggedFade` represents Fade *eligibility*, not
+ * actual public delivery. Using it here would retroactively surface a card the
+ * product never publicly showed — a candidate-volume change. Fade flags/outcomes
+ * are still preserved internally across rebuild/restart (moundGradedStateCarry),
+ * but Fade stays publicly absent. Public Fade activation is a separate
+ * engine/product decision requiring its own before/after candidate-volume audit.
+ */
+export function flaggedBeforeFirstPitchMound(signal: MoundSignal): boolean {
+  return signal.everPubliclyFlagged === true;
+}
+
+/**
+ * Final public-visibility predicate — same shared lifecycle principle as
+ * isPublicPregameSignal (no per-outcome exceptions):
+ *   1. INITIAL eligibility (pre-first-pitch): `wasPubliclyFlaggedMound` (Follow),
+ *      unchanged — no candidate-volume change, Fade stays publicly absent.
+ *   2. RETAINED visibility (first pitch passed): the durable frozen Follow flag
+ *      + a locked/graded status — Follow win OR miss, graded or not. Cold-start
+ *      minting is blocked in moundGradedStateCarry (firstPitchLockEligible), so
+ *      retention never surfaces a signal never shown before first pitch.
+ * `status === "graded"` implies first pitch has passed, routing to retention.
+ */
 export function isPublicMoundSignal(signal: MoundSignal): boolean {
-  const flaggedNow = wasPubliclyFlaggedMound(signal);
-  const flagged = signal.status === "graded" ? flaggedNow || signal.everPubliclyFlagged : flaggedNow;
-  if (!flagged) return false;
-  if (signal.status === "graded" && signal.outcomes?.outcome === "mound_win") return true;
-  if (signal.status !== "active" && signal.status !== "locked") return false;
-  if (signal.gameStatus === "final" || signal.gameStatus === "postponed") return false;
-  if (signal.gameStatus === "live") return signal.status === "locked";
-  return true;
+  if (signal.gameStatus === "postponed") return false;
+  if (signal.status === "expired") return false;
+
+  const firstPitchPassed =
+    signal.status === "graded" || signal.gameStatus === "live" || signal.gameStatus === "final";
+
+  if (!firstPitchPassed) return wasPubliclyFlaggedMound(signal);
+
+  return flaggedBeforeFirstPitchMound(signal) && (signal.status === "locked" || signal.status === "graded");
 }
 
 export interface MoundCoverageCounters {

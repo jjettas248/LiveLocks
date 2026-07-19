@@ -317,5 +317,26 @@ const gradedWin: MoundOutcome = {
   ok(fresh.everPubliclyFlaggedFade === true, "a real (suppressed) track-tier Fade signal is flagged pre-game — suppressed is never checked for Fade");
 }
 
+// ── 20. Follow cold-start: a never-flagged Follow signal first built AFTER first
+// pitch (no prior copy) cannot mint everPubliclyFlagged — mirrors Plate's guard
+// and the Fade guard (tests 17-19), now applied to the Follow flag too. ──
+{
+  const followDrivers = [
+    { key: "d1", label: "D1", direction: "positive" as const },
+    { key: "d2", label: "D2", direction: "positive" as const },
+  ];
+  const freshLive = sig({ gameStatus: "live", firstPitchLockEligible: false, drivers: followDrivers });
+  carryForwardMoundGradedState(freshLive, undefined);
+  ok(freshLive.everPubliclyFlagged === false, "cold-start LIVE Follow build cannot mint everPubliclyFlagged with no prior copy");
+
+  const freshFinal = sig({ gameStatus: "final", firstPitchLockEligible: false, drivers: followDrivers });
+  carryForwardMoundGradedState(freshFinal, undefined);
+  ok(freshFinal.everPubliclyFlagged === false, "cold-start FINAL Follow build cannot mint everPubliclyFlagged with no prior copy");
+
+  const freshPre = sig({ gameStatus: "scheduled", firstPitchLockEligible: true, drivers: followDrivers });
+  carryForwardMoundGradedState(freshPre, undefined);
+  ok(freshPre.everPubliclyFlagged === true, "a legitimate pre-first-pitch Follow build still mints everPubliclyFlagged");
+}
+
 console.log(`\nmoundGradedStatePreservation.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -86,10 +86,25 @@ interface MarketEdgeContext {
 // cashed visual treatment in real time as the 30s poll picks up the grade.
 interface PregameOutcome {
   hitHr?: boolean;
+  totalBases?: number | null;
   outcome?: "pregame_win" | "calibration_miss";
   userVisible?: boolean;
   hrInning?: number | null;
   hrHalf?: "top" | "bottom" | null;
+}
+
+// Display-only raw power-profile snapshot (server: PregamePowerProfileSnapshot).
+// Frozen into the locked pregame signal. `pullRatePct` is RAW pull rate — always
+// labeled "Pull Rate", never "Pull-Air"/"Pull-Side Power". Every field optional so
+// older rehydrated rows render "Power profile unavailable" without individual
+// below-threshold values being mislabeled as unavailable.
+interface PowerProfileSnapshot {
+  xISO?: number | null;
+  hrFBRatioPct?: number | null;
+  barrelRatePct?: number | null;
+  hardHitRatePct?: number | null;
+  maxEV?: number | null;
+  pullRatePct?: number | null;
 }
 
 // Diagnostics carried by the server-side PregamePowerSignal (see
@@ -114,6 +129,8 @@ interface PregameDiagnostics {
   pitcherOrderSplitDirection: "vulnerable" | "neutral" | "suppressive" | "unavailable";
   batterOrderSplitDirection: "strong" | "neutral" | "weak" | "unavailable";
   batterCurrentOrderSlot: number | null;
+  /** Display-only raw power-profile snapshot — absent on older rehydrated rows. */
+  powerProfile?: PowerProfileSnapshot;
 }
 
 interface PregameSignal {
@@ -378,19 +395,45 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   // Sort standout tags before supporting/context so they aren't crowded out
   // by the 4-tag cap when a card has more than 4 positive drivers.
   const TONE_RANK: Record<PlateTagTone, number> = { standout: 0, supporting: 1, context: 2, risk: 3, neutral: 4 };
-  const positives = s.drivers
-    .filter((d) => d.direction === "positive")
+  // Pull is surfaced as its own dedicated "Pull Rate: X%" value below (never a
+  // "Pull-Side Power" chip), so it's excluded from the 4-chip candidates — this
+  // keeps a qualifying pull metric from being crowded off by the cap WITHOUT
+  // reordering or dropping any other driver. The remaining chips keep their
+  // existing order and 4-cap; overflow is surfaced as "+N more".
+  const positiveDriversAll = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
+  const positives = positiveDriversAll
     .slice()
     .sort((a, b) => TONE_RANK[getDriverPresentation(a, s.diagnostics).tone] - TONE_RANK[getDriverPresentation(b, s.diagnostics).tone])
     .slice(0, 4);
+  const hiddenPositiveCount = Math.max(0, positiveDriversAll.length - positives.length);
   const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
   const isLocked = s.status === "locked";
   const [expanded, setExpanded] = useState(false);
   const slug = s.batterName.replace(/\s+/g, "-").toLowerCase();
 
-  // Cashed HR — purely visual flip to a green "win" treatment. Server-stamped
-  // outcome only (outcomes.hitHr); the card never derives win/loss itself.
-  const hitHr = s.outcomes?.hitHr === true;
+  // Dedicated raw pull-rate value — shown only when the engine already emitted
+  // the qualifying `power_pullair` driver (sPull >= 7), on ANY Plate card
+  // regardless of HR vs TB primary. Value from the frozen powerProfile snapshot,
+  // falling back to the driver's "pull% X" evidence for older rehydrated rows.
+  // A below-threshold pull rate (no driver fired) is never shown as a signal.
+  const pullDriver = s.drivers.find((d) => d.key === "power_pullair");
+  const pullRateValue = (() => {
+    const pp = s.diagnostics.powerProfile?.pullRatePct;
+    if (pp != null) return Math.round(pp);
+    const m = pullDriver?.evidence?.match(/pull%\s*([\d.]+)/i);
+    return m ? Math.round(parseFloat(m[1])) : null;
+  })();
+  const showPullRate = pullDriver != null && pullRateValue != null;
+
+  // Market-aware final state — server-stamped outcomes only; the card never
+  // derives win/loss. A cashed-HR celebration shows ONLY when HR is the primary
+  // angle. A Total-Bases-primary card shows its final TB count instead (TB has
+  // no stored line → never a cash/miss). HR-primary misses show a plain factual
+  // "No HR" — shown, not erased.
+  const isHrPrimary = s.primaryMarket === "home_runs";
+  const hitHr = isHrPrimary && s.outcomes?.hitHr === true;
+  const noHr = isHrPrimary && s.outcomes != null && s.outcomes.hitHr === false;
+  const finalTotalBases = !isHrPrimary && s.outcomes != null ? (s.outcomes.totalBases ?? null) : null;
   const cashedColor = "#10b981";
 
   const edge = s.marketEdgeContext;
@@ -407,6 +450,18 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
           setupLabel: undefined as unknown as SetupLabel,
           isPrimary: m === s.primaryMarket,
         }));
+
+  // Best Angle fit word — the server-owned primary market's OWN fit tier
+  // (Elite/Strong/Solid). A Watch-tier primary shows the market alone (bare),
+  // never a contradictory "Not Qualified". primaryMarket itself is never
+  // suppressed/promoted/re-derived here; a Watch primary is an engine-audit
+  // finding surfaced as-is (full HR/TB comparison lives in expanded details).
+  const primarySetup = marketSetups.find((m) => m.isPrimary);
+  const primaryFitWord =
+    primarySetup?.setupLabel === "Elite" ? "Elite Fit"
+    : primarySetup?.setupLabel === "Strong" ? "Strong Fit"
+    : primarySetup?.setupLabel === "Solid" ? "Solid Fit"
+    : null;
 
   return (
     <Card
@@ -446,6 +501,22 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
                   : ""}
               </span>
             )}
+            {noHr && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-muted-foreground"
+                data-testid={`pregame-nohr-${slug}`}
+              >
+                No HR
+              </span>
+            )}
+            {finalTotalBases != null && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-300"
+                data-testid={`pregame-total-bases-${slug}`}
+              >
+                Total Bases: {finalTotalBases}
+              </span>
+            )}
             {isLocked && !hitHr && (
               <span className="inline-flex items-center gap-1 text-[10px] text-amber-300/90">
                 <Lock className="w-3 h-3" /> Locked at first pitch
@@ -467,7 +538,7 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
           </div>
           {BEST_ANGLE_LABEL[s.primaryMarket] && (
             <div className="text-[10px] text-muted-foreground/80 mt-0.5" data-testid={`pregame-best-angle-${slug}`}>
-              Best Angle: {BEST_ANGLE_LABEL[s.primaryMarket]}
+              Best Angle: {BEST_ANGLE_LABEL[s.primaryMarket]}{primaryFitWord ? ` — ${primaryFitWord}` : ""}
             </div>
           )}
         </div>
@@ -508,25 +579,23 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
         carryKnown={s.parkContext != null && s.parkContext.carryType !== "unknown"}
       />
 
-      {/* Market chips — qualitative setup labels only, color-coded by the existing
-          server-provided setupLabel (Elite/Strong → green, Solid → amber,
-          Watch/missing → neutral). Numeric setup scores are intentionally NOT shown
-          here (compact face OR tooltip); they live in the admin/debug diagnostics views. */}
-      <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-        {marketSetups.map((setup) => {
-          const tierPresentation = getMarketTierPresentation(setup.setupLabel);
-          return (
-            <Badge
-              key={setup.market}
-              variant="secondary"
-              className={`text-[10px] px-1.5 py-0 border ${tierPresentation.classes} ${setup.isPrimary ? "font-bold" : ""}`}
-            >
-              {MARKET_EMOJI[setup.market]} {MARKET_LABEL[setup.market]}
-              {setup.setupLabel ? ` · ${tierPresentation.displayLabel}` : ""}
-            </Badge>
-          );
-        })}
-      </div>
+      {/* Redundant per-market tier pills were removed from the compact face — the
+          single "Best Angle" line above is the primary-market read, and the full
+          Home Run / Total Bases fit comparison lives in expanded details. */}
+
+      {/* Dedicated raw pull-rate value — separate from the 4-chip cap so a
+          qualifying pull metric is never crowded off. Raw pull rate only; never
+          labeled "Pull-Air"/"Pull-Side Power". */}
+      {showPullRate && (
+        <div className="mt-2">
+          <span
+            className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md border ${getPlateToneClasses("supporting")}`}
+            data-testid={`pregame-pull-rate-${slug}`}
+          >
+            Pull Rate: {pullRateValue}%
+          </span>
+        </div>
+      )}
 
       {positives.length > 0 && (
         <div className="flex items-start gap-1.5 mt-2 flex-wrap">
@@ -543,6 +612,14 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
               </span>
             );
           })}
+          {hiddenPositiveCount > 0 && (
+            <span
+              className={`inline-flex items-center text-[10px] px-2 py-0.5 rounded-md border ${getPlateToneClasses("neutral")}`}
+              data-testid={`pregame-more-drivers-${slug}`}
+            >
+              +{hiddenPositiveCount} more
+            </span>
+          )}
         </div>
       )}
 
@@ -793,7 +870,10 @@ const COMPONENT_LABELS: Array<{ key: keyof PregameDiagnostics; label: string }> 
 
 function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
   const diag = s.diagnostics;
-  const allPositives = s.drivers.filter((d) => d.direction === "positive");
+  // Exclude power_pullair — raw pull rate is shown truthfully as "Pull Rate" in
+  // the compact value + the Core Power Profile below; it must never render via
+  // its server driver label "Pull-Side Power" (not a true pulled-air metric).
+  const allPositives = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
   const coverage = coverageLabel(diag.dataCoverageScore);
   const components = COMPONENT_LABELS
     .map(({ key, label }) => ({ label, value: diag[key] as number | null | undefined }))
@@ -907,6 +987,66 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
                 </span>
               );
             })}
+          </div>
+        );
+      })()}
+
+      {/* Market Fit comparison — matchup/model-fit classifications, NOT bets.
+          Rendered from the server-stamped setup labels (never re-derived). A
+          market below the Solid threshold reads "Below Solid". */}
+      <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1 text-[10px]" data-testid={`pregame-market-fit-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}>
+        <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Market Fit</div>
+        {([["home_runs", "Home Run Fit"], ["total_bases", "Total Bases Fit"]] as const).map(([market, label]) => {
+          const setup = s.marketSetups?.find((m) => m.market === market);
+          const tierLabel: SetupLabel | null = setup?.setupLabel ?? (s.marketScores[market] != null ? "Watch" : null);
+          const pres = tierLabel ? getMarketTierPresentation(tierLabel) : null;
+          return (
+            <div key={market} className="flex justify-between items-center">
+              <span className="text-muted-foreground">{label}</span>
+              {pres ? (
+                <span className={`font-semibold px-1.5 py-0.5 rounded border ${pres.classes}`}>{pres.displayLabel}</span>
+              ) : (
+                <span className="text-muted-foreground/70">unavailable</span>
+              )}
+            </div>
+          );
+        })}
+        <div className="pt-1 text-[9px] text-muted-foreground/80 leading-snug">
+          Market fit is a matchup/model classification — not an official bet or sportsbook-line prediction.
+        </div>
+      </div>
+
+      {/* Core Power Profile — raw hitter inputs (display-only snapshot). Missing
+          values read "unavailable"; a below-threshold value is a real number, not
+          unavailable. `Pull Rate` is raw pull rate, never "Pull-Air". */}
+      {(() => {
+        const pp = s.diagnostics.powerProfile;
+        const fmt = (v: number | null | undefined, kind: "iso" | "pct" | "mph") =>
+          v == null ? "unavailable"
+          : kind === "iso" ? v.toFixed(3)
+          : kind === "pct" ? `${v.toFixed(1)}%`
+          : `${Math.round(v)} mph`;
+        const rows: Array<{ label: string; value: number | null | undefined; kind: "iso" | "pct" | "mph" }> = [
+          { label: "ISO / xISO", value: pp?.xISO, kind: "iso" },
+          { label: "HR/FB", value: pp?.hrFBRatioPct, kind: "pct" },
+          { label: "Barrel Rate", value: pp?.barrelRatePct, kind: "pct" },
+          { label: "Hard-Hit Rate", value: pp?.hardHitRatePct, kind: "pct" },
+          { label: "Max Exit Velo", value: pp?.maxEV, kind: "mph" },
+          { label: "Pull Rate", value: pp?.pullRatePct, kind: "pct" },
+        ];
+        return (
+          <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1 text-[10px]" data-testid={`pregame-power-profile-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}>
+            <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Core Power Profile</div>
+            {pp == null ? (
+              <div className="text-muted-foreground/70">Power profile unavailable.</div>
+            ) : (
+              rows.map((r) => (
+                <div key={r.label} className="flex justify-between items-center">
+                  <span className="text-muted-foreground">{r.label}</span>
+                  <span className={`font-semibold tabular-nums ${r.value == null ? "text-muted-foreground/70" : ""}`}>{fmt(r.value, r.kind)}</span>
+                </div>
+              ))
+            )}
           </div>
         );
       })()}

@@ -30,7 +30,15 @@ export function carryForwardGradedState(
     // while its game is paused mid-suspension (there is no `prev` here to
     // preserve an already-true flag against, so this is strictly a new-signal
     // case).
-    fresh.everPubliclyFlagged = fresh.gameStatus !== "suspended" && wasPubliclyFlaggedPregame(fresh);
+    // A false→true mint is allowed ONLY from a legitimate pre-first-pitch state
+    // (`firstPitchLockEligible === true`, i.e. gameStatus scheduled/pre). Without
+    // this guard a brand-new build whose game is already live/final/suspended (a
+    // cold restart / delayed build / previously-unresolved gamePk, with no `prev`
+    // to inherit a true flag from) could mint a public flag using hindsight and
+    // surface a signal never shown before first pitch — exactly what "never allow
+    // an unseen signal to appear after first pitch" forbids. (firstPitchLockEligible
+    // is false for suspended too, subsuming the old suspended-only exclusion.)
+    fresh.everPubliclyFlagged = fresh.firstPitchLockEligible === true && wasPubliclyFlaggedPregame(fresh);
     return fresh;
   }
 
@@ -39,7 +47,7 @@ export function carryForwardGradedState(
   // unconditionally, so an already-surfaced target remains preserved and
   // visible exactly as it was before its game paused.
   fresh.everPubliclyFlagged =
-    (fresh.gameStatus !== "suspended" && wasPubliclyFlaggedPregame(fresh)) || prev.everPubliclyFlagged === true;
+    (fresh.firstPitchLockEligible === true && wasPubliclyFlaggedPregame(fresh)) || prev.everPubliclyFlagged === true;
   if (prev.outcomes && !fresh.outcomes) {
     fresh.outcomes = prev.outcomes;
     if (prev.status === "graded") fresh.status = "graded";
@@ -49,6 +57,15 @@ export function carryForwardGradedState(
   fresh.convertedLiveAt = fresh.convertedLiveAt ?? prev.convertedLiveAt;
   // First lock time sticks across rebuilds of a live/final game.
   if (prev.lockedAt) fresh.lockedAt = prev.lockedAt;
+  // Display-only power-profile snapshot sticks to the earliest computed pregame
+  // value (mirrors lockedAt's stick-once discipline) so completed cards + restart
+  // hydration show the ORIGINAL pregame profile, never a post-first-pitch rebuild.
+  // Storage persists diagnostics as a WHOLESALE JSONB overwrite (no per-field SQL
+  // merge), so freezing the nested value here — before the row is serialized — is
+  // what makes it durable across restart/hydration.
+  if (prev.diagnostics?.powerProfile && fresh.diagnostics) {
+    fresh.diagnostics.powerProfile = prev.diagnostics.powerProfile;
+  }
   return fresh;
 }
 

@@ -200,11 +200,15 @@ export interface MarketTierPresentation {
   classes: string;
 }
 
+// Market-fit tier → display word. Uses the real server tier words verbatim
+// (no invented "Prime"/"Qualified" vocabulary). `Watch` renders as "Below Solid"
+// and is only ever shown in the expanded fit comparison — never as a compact
+// recommendation. These are matchup/model-fit classifications, not bets.
 const MARKET_TIER_MAP: Record<MarketSetupLabel, { displayLabel: string; tone: PlateTagTone }> = {
-  Elite: { displayLabel: "Prime", tone: "standout" },
-  Strong: { displayLabel: "Qualified", tone: "supporting" },
+  Elite: { displayLabel: "Elite", tone: "standout" },
+  Strong: { displayLabel: "Strong", tone: "supporting" },
   Solid: { displayLabel: "Solid", tone: "context" },
-  Watch: { displayLabel: "Watch", tone: "neutral" },
+  Watch: { displayLabel: "Below Solid", tone: "neutral" },
 };
 
 export function getMarketTierPresentation(setupLabel?: MarketSetupLabel | null): MarketTierPresentation {

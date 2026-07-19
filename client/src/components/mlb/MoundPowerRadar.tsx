@@ -462,6 +462,17 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
                 <PartyPopper className="w-3 h-3" /> CASHED
               </span>
             )}
+            {/* Completed public Follow card that didn't cash — factual "Final"
+                marker so a graded miss stays visible as a completed row, not
+                erased. Follow only (Fade is publicly absent). */}
+            {s.status === "graded" && !cashed && isFollow && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold text-muted-foreground"
+                data-testid={`mound-final-${slug}`}
+              >
+                Final
+              </span>
+            )}
             {isLocked && !cashed && (
               <span className="inline-flex items-center gap-1 text-[10px] text-amber-300/90">
                 <Lock className="w-3 h-3" /> Locked at first pitch
