@@ -116,6 +116,16 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
     "gap case tagged correctly, snapshot stays null");
 }
 
+// ── 3b. A DELAYED/UNKNOWN game before first pitch stays snapshot-eligible (Codex review finding) ──
+{
+  const fresh = sig({ status: "active", firstPitchLockEligible: false, gameStatus: "delayed" });
+  const transition = detectMoundTransition(fresh, undefined);
+  ok(transition.lockedForEvaluation === false, "delayed pre-first-pitch game (status still active) is NOT locked-for-evaluation");
+  const snapshot = buildMoundEvaluationSnapshot(fresh, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6);
+  const record = applyMoundSnapshotLifecycle(null, snapshot, transition, fresh.moundDirection);
+  ok(record.finalPregameSnapshot === snapshot, "delayed game keeps refreshing finalPregameSnapshot, not prematurely frozen");
+}
+
 // ── 4. finalPregameSnapshot freezes once locked; frozenProductionBaseline never mutates after ──
 {
   const pregameSnapshot = buildMoundEvaluationSnapshot(sig({}), { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6);

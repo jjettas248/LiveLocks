@@ -95,8 +95,11 @@ function resolveOutcome(
     plateAppearanceNumber: attribution.plateAppearanceNumber,
     firstAbPregameWin: attribution.firstAbPregameWin,
     // Internal-only, isolated from the HR-oriented outcome/userVisible above
-    // (see totalBasesOutcome.ts) — never surfaced publicly.
-    tbOutcome: classifyTotalBasesOutcome(line.tb ?? null),
+    // (see totalBasesOutcome.ts) — never surfaced publicly. isExact guards
+    // against the Tank01 box-score fallback's approximate tb (hits+hr*3,
+    // which undercounts doubles/triples) — an inexact value always
+    // classifies as tb_unknown rather than risking a false tb_miss.
+    tbOutcome: classifyTotalBasesOutcome(line.tb ?? null, line.tbExact),
   };
 }
 

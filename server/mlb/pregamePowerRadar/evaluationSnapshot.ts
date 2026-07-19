@@ -146,8 +146,15 @@ export function detectTransition(
   const becamePublicNow = fresh.everPubliclyFlagged === true && !previouslyPublic;
   const instrumentationGapDetected =
     hadPriorSignal && previouslyPublic && (priorEvaluation == null || priorEvaluation.firstPublicSnapshot == null);
-  const lockedForEvaluation =
-    fresh.status === "locked" || fresh.status === "graded" || fresh.firstPitchLockEligible === false;
+  // "active" is confirmed the SOLE open-for-write status (diagnostics.ts:
+  // isPublicPregameSignal treats "active"/"locked" as visible, everything
+  // else as not) — do NOT additionally gate on firstPitchLockEligible.
+  // A DELAY/UNKNOWN gameStatus before first pitch sets
+  // firstPitchLockEligible=false while status stays "active" (the game
+  // hasn't gone live/final yet), and the public predicate can still surface
+  // that row — treating it as locked-for-evaluation here would prematurely
+  // freeze finalPregameSnapshot on a row that's still legitimately pregame.
+  const lockedForEvaluation = fresh.status !== "active";
   return { becamePublicNow, instrumentationGapDetected, lockedForEvaluation, hadPriorSignal, hadPriorEvaluationField };
 }
 

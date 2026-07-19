@@ -91,6 +91,23 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
   ok(record.firstPublicUnavailableReason === "instrumentation_started_after_surface", "gap case tagged correctly");
 }
 
+// ── 2b. A DELAYED/UNKNOWN game before first pitch stays snapshot-eligible ──
+// Codex review finding: firstPitchLockEligible is false for gameStatus
+// "delayed"/"unknown" (only "scheduled"/"pre" set it true), but status stays
+// "active" in that case (buildPregamePowerRadar.ts's isLocked only fires for
+// suspended, or live/final without lock-eligibility) — the public predicate
+// can still surface these rows. lockedForEvaluation must NOT freeze
+// finalPregameSnapshot here.
+{
+  const fresh = sig({ status: "active", firstPitchLockEligible: false, gameStatus: "delayed" });
+  const transition = detectTransition(fresh, undefined);
+  ok(transition.lockedForEvaluation === false, "delayed pre-first-pitch game (status still active) is NOT locked-for-evaluation");
+
+  const snapshot = buildEvaluationSnapshot(fresh, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z");
+  const record = applySnapshotLifecycle(null, snapshot, transition);
+  ok(record.finalPregameSnapshot === snapshot, "delayed game keeps refreshing finalPregameSnapshot, not prematurely frozen");
+}
+
 // ── 3. Suppressed/never-flagged candidate still gets a finalPregameSnapshot ──
 {
   const fresh = sig({ everPubliclyFlagged: false, suppressed: true, status: "active", firstPitchLockEligible: true });

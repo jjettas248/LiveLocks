@@ -22,6 +22,16 @@ ok(classifyTotalBasesOutcome(0) === "tb_miss", "0 total bases → tb_miss");
 ok(classifyTotalBasesOutcome(null) === "tb_unknown", "null (unresolved) → tb_unknown, never fabricated");
 ok(classifyTotalBasesOutcome(undefined) === "tb_unknown", "undefined → tb_unknown");
 
+// ── isExact guard: an approximate (Tank01-fallback) tb value is never classified numerically ──
+// Codex review finding: the Tank01 box-score fallback approximates
+// tb = hits + hr*3, which undercounts any double/triple. A player with one
+// double has actual 2 TB but the approximation would report 1 → tb_miss
+// (WRONG — should be tb_success). isExact:false must always yield
+// tb_unknown regardless of the (possibly wrong) numeric value.
+ok(classifyTotalBasesOutcome(1, false) === "tb_unknown", "approximate tb=1 (really 2, a double undercounted) → tb_unknown, never a false tb_miss");
+ok(classifyTotalBasesOutcome(4, false) === "tb_unknown", "approximate tb, even a high value, is still tb_unknown — never trust an inexact source");
+ok(classifyTotalBasesOutcome(2, true) === "tb_success", "isExact:true (default) still classifies normally");
+
 // ── Isolation: deriveWinAttribution's existing HR-only behavior is byte-for-byte unchanged ──
 {
   const hit = deriveWinAttribution({ hitHr: true, wasPubliclyFlagged: true, priorABResults: [{ hitType: "home_run", inning: 3, half: "top" }] });
