@@ -15,6 +15,7 @@ import { mlbGameCache, getPitcherAppearanceOrder } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
 import { deriveMoundOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled } from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
+import { computeMoundGradingMeasurements } from "./evaluationSnapshot";
 import type { MoundOutcome, MoundSignal } from "./types";
 import type { MoundDirection } from "./moundDirection";
 import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
@@ -226,6 +227,30 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         `[MLB_PREGAME_OUTCOME_REFRESHED] ${signal.signalId} market=${signal.primaryMarket} ` +
           `k=${refreshedOutcome.finalStrikeouts} outs=${refreshedOutcome.finalOutsRecorded}`,
       );
+
+      // Research instrumentation (§7b) — an earlier monotonic-safe live win
+      // never computed gradingMeasurements (see below: withheld while
+      // gradedLive), so this is the FIRST and only time they're computed for
+      // this signal, now that outingComplete is genuinely true and
+      // refreshedOutcome carries the true final counting stats — never
+      // partial live totals.
+      try {
+        const finalPregameSnapshot = signal.diagnostics.evaluation?.finalPregameSnapshot ?? null;
+        const gradingMeasurements = computeMoundGradingMeasurements(
+          signal.primaryMarket,
+          signal.moundDirection,
+          finalPregameSnapshot,
+          refreshedOutcome.finalStrikeouts ?? null,
+          refreshedOutcome.finalOutsRecorded ?? null,
+          refreshedOutcome.seasonBaselineValue ?? null,
+        );
+        if (signal.diagnostics.evaluation) {
+          signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
+        }
+      } catch (err: any) {
+        console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed (refresh) ${signal.signalId}:`, err?.message ?? err);
+      }
+
       try {
         await persistMoundSignal(signal, null);
       } catch (err: any) {
@@ -280,6 +305,37 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
     signal.outcomes = { ...outcome, gradedLive };
     signal.status = "graded";
     graded++;
+
+    // Research instrumentation (§7b, three separate measurements) — shadow-
+    // only, computed alongside but never altering the public classification
+    // above. Withheld entirely while gradedLive: an early monotonic-safe
+    // Follow win reflects PARTIAL, still-climbing live totals
+    // (outcome.finalStrikeouts/finalOutsRecorded are the CURRENT box-score
+    // line, not the true final one) — computing projection error, the
+    // production-baseline result, or the posted-line result from those would
+    // be misleading. They are computed exactly once, either here (when the
+    // outing was already complete at classification time) or in the
+    // pendingLiveWinRefresh branch above (once a gradedLive win's outing
+    // later completes) — never both, since gradedLive and outingComplete are
+    // mutually exclusive by construction (see gradedLive's definition above).
+    if (!gradedLive) {
+      try {
+        const finalPregameSnapshot = signal.diagnostics.evaluation?.finalPregameSnapshot ?? null;
+        const gradingMeasurements = computeMoundGradingMeasurements(
+          signal.primaryMarket,
+          signal.moundDirection,
+          finalPregameSnapshot,
+          outcome.finalStrikeouts ?? null,
+          outcome.finalOutsRecorded ?? null,
+          outcome.seasonBaselineValue ?? null,
+        );
+        if (signal.diagnostics.evaluation) {
+          signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
+        }
+      } catch (err: any) {
+        console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed ${signal.signalId}:`, err?.message ?? err);
+      }
+    }
 
     console.log(
       `[MLB_PREGAME_OUTCOME_SETTLED] ${signal.signalId} market=${signal.primaryMarket} ` +

@@ -156,6 +156,41 @@ export async function loadMoundSignalsForDate(sessionDate: string): Promise<Moun
   }
 }
 
+/**
+ * Reconstruct a snapshot from the latest persisted build for `sessionDate`.
+ * Mirrors pregamePowerRadar/pregamePersistence.ts's loadPregameSnapshotFromDb
+ * exactly (Mound Boot Hydration — Option A, research-plan §4.1). Extracted as
+ * its own named function so server/index.ts's boot-time hydration hook can
+ * call it eagerly, before the first build timer fires, so a restart never
+ * transiently loses already-persisted evaluation/outcome state (Follow/Fade
+ * flags, moundDirection, diagnostics.evaluation) the way an unhydrated cold
+ * start otherwise would.
+ */
+export async function loadMoundSnapshotFromDb(sessionDate: string): Promise<MoundRadarSnapshot | null> {
+  const build = await storage.getLatestMlbMoundRadarBuild(sessionDate);
+  if (!build) return null;
+  const rows = await storage.getMlbMoundRadarSignalsByDate(sessionDate);
+  const buildRows = rows.filter((r) => r.buildId === build.buildId);
+  if (buildRows.length === 0) return null;
+  const signals = new Map<string, MoundSignal>();
+  for (const r of buildRows) signals.set(r.signalId, rowToSignal(r));
+  return {
+    buildId: build.buildId,
+    sessionDate,
+    generatedAt: build.completedAt ?? build.startedAt,
+    builtAtMs: build.completedAt ? Date.parse(build.completedAt) : Date.now(),
+    gamesScanned: build.gamesScanned,
+    pitchersEvaluated: build.pitchersEvaluated,
+    signals,
+    coverage: {
+      starterCoverage: build.starterCoverage ? parseFloat(build.starterCoverage) : 0,
+      weatherCoverage: build.weatherCoverage ? parseFloat(build.weatherCoverage) : 0,
+      pitcherCoverage: build.pitcherCoverage ? parseFloat(build.pitcherCoverage) : 0,
+      lineupCoverage: build.lineupCoverage ? parseFloat(build.lineupCoverage) : 0,
+    },
+  };
+}
+
 let installed = false;
 
 /** Wire the build sink + DB fallback. Idempotent. */

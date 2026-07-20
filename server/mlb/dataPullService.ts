@@ -233,6 +233,15 @@ interface GameBoxScorePlayer {
   so: number;
   tb: number;
   runs: number;
+  /**
+   * True when `tb` was computed from real doubles/triples/HR counts (the
+   * primary MLB Stats API path). False on the Tank01 fallback path, whose
+   * box score doesn't expose doubles/triples — `tb` there is approximated as
+   * `hits + hr*3`, which silently undercounts any double/triple. Purely
+   * additive metadata: existing consumers of `tb` are unaffected, since the
+   * numeric value itself is unchanged either way.
+   */
+  tbExact: boolean;
 }
 
 interface GameBoxScoreCache {
@@ -632,6 +641,7 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
             so: safeNum(batting.strikeOuts) ?? 0,
             tb,
             runs: safeNum(batting.runs) ?? 0,
+            tbExact: true,
           };
         }
 
@@ -679,8 +689,14 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
               bb: p.bb,
               rbi: p.rbi,
               so: p.so,
+              // Approximation only — Tank01's box-score payload doesn't
+              // expose doubles/triples, so this undercounts any extra-base
+              // hit that isn't a HR. tbExact:false flags this for any
+              // consumer that needs to know the difference (see
+              // GameBoxScorePlayer's doc comment).
               tb: p.hits + p.hr * 3,
               runs: 0,
+              tbExact: false,
             };
           }
           console.log(`[MLB pull] syncGameBoxScore: game ${gameId} — Tank01 fallback provided ${tank01Box.players.length} players`);
