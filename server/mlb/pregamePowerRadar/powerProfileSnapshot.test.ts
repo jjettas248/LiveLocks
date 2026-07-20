@@ -107,14 +107,28 @@ function sig(over: Partial<PregamePowerSignal>, profile?: PregamePowerProfileSna
   );
 }
 
-// ── FREEZE no-op when there is no prior profile (older row) ──────────────────
+// ── FREEZE ABSENCE: a legacy public locked row with NO snapshot must stay
+// absent after a live/final rebuild — the fresh recompute must NOT leak
+// post-first-pitch values in as though they were the pregame snapshot. ───────
 {
-  const prev = sig({ everPubliclyFlagged: true }); // no profile
+  const prev = sig({ everPubliclyFlagged: true }); // legacy: no profile
   const fresh = sig({ gameStatus: "final", status: "locked", firstPitchLockEligible: false }, PROFILE_B);
   carryForwardGradedState(fresh, prev);
   ok(
+    (fresh.diagnostics as any).powerProfile === undefined,
+    "post-first-pitch, a legacy row with NO prior profile freezes to ABSENT — the fresh recompute is discarded",
+  );
+}
+
+// ── PRE-FIRST-PITCH ACQUIRE: a scheduled row may safely gain the additive
+// snapshot (still pregame data) even if the prior copy had none. ─────────────
+{
+  const prev = sig({ everPubliclyFlagged: false }); // scheduled, no profile
+  const fresh = sig({ gameStatus: "scheduled", status: "active", firstPitchLockEligible: true }, PROFILE_B);
+  carryForwardGradedState(fresh, prev);
+  ok(
     JSON.stringify((fresh.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_B),
-    "with no prior profile, the fresh profile is kept (no crash, no wipe)",
+    "pre-first-pitch, a scheduled row may acquire the additive snapshot (not frozen yet)",
   );
 }
 
@@ -126,6 +140,20 @@ function sig(over: Partial<PregamePowerSignal>, profile?: PregamePowerProfileSna
   ok(
     JSON.stringify((hydrated.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_A),
     "powerProfile survives the signalToRow → rowToSignal round trip (JSONB hydration)",
+  );
+}
+
+// ── HYDRATION of a LEGACY absence: a locked row frozen to ABSENT stays absent
+// through the row round trip — the card keeps rendering "unavailable". ───────
+{
+  const prev = sig({ everPubliclyFlagged: true }); // legacy: no profile
+  const fresh = sig({ gameStatus: "final", status: "graded", firstPitchLockEligible: false,
+    outcomes: { hitHr: false, totalBases: 1, outcome: "calibration_miss", userVisible: false } as any }, PROFILE_B);
+  carryForwardGradedState(fresh, prev); // freezes to absent
+  const hydrated = rowToSignal(signalToRow(fresh) as any);
+  ok(
+    (hydrated.diagnostics as any).powerProfile === undefined,
+    "a legacy locked row's ABSENT powerProfile stays absent across the row round trip (renders 'unavailable')",
   );
 }
 

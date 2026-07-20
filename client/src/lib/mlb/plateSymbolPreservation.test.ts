@@ -26,17 +26,19 @@ const libSrc = readFileSync("client/src/lib/mlb/plateTagPresentation.ts", "utf8"
 
 console.log("\n[plateSymbolPreservation] running cases\n");
 
-// ── Market badge emoji — unchanged by the Elite→Prime / Strong→Qualified rename ──
+// ── Market fit vocabulary — real tiers, no invented Prime/Qualified ──────────
+// The recovery pass removed the redundant compact per-market tier pills (the
+// single "Best Angle" line + expanded HR/TB fit comparison replaced them), so
+// the old `{MARKET_EMOJI[setup.market]}` chip usage is intentionally gone. The
+// emoji map itself is preserved. Vocabulary now uses the real server tiers.
 {
-  assert("MARKET_EMOJI still maps home_runs → 🎯", /home_runs:\s*"🎯"/.test(componentSrc));
-  assert("MARKET_EMOJI still maps total_bases → 📈", /total_bases:\s*"📈"/.test(componentSrc));
-  // The market chip still concatenates emoji + label + renamed tier text.
-  assert("market chip still renders MARKET_EMOJI[setup.market]", /\{MARKET_EMOJI\[setup\.market\]\}/.test(componentSrc));
+  assert("MARKET_EMOJI still defines home_runs → 🎯", /home_runs:\s*"🎯"/.test(componentSrc));
+  assert("MARKET_EMOJI still defines total_bases → 📈", /total_bases:\s*"📈"/.test(componentSrc));
 
   const hr = getMarketTierPresentation("Elite");
-  assert('raw "Elite" → display "Prime" (symbol comes from MARKET_EMOJI, not this function)', hr.displayLabel === "Prime");
+  assert('raw "Elite" → display "Elite" (no invented "Prime")', hr.displayLabel === "Elite");
   const tb = getMarketTierPresentation("Strong");
-  assert('raw "Strong" → display "Qualified"', tb.displayLabel === "Qualified");
+  assert('raw "Strong" → display "Strong" (no invented "Qualified")', tb.displayLabel === "Strong");
 }
 
 // ── Carry emoji — preserved exactly, including 🔥 for HR Carry ──────────────────

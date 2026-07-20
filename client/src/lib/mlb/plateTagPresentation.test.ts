@@ -12,6 +12,7 @@ import {
   getPlateTagPresentation,
   getBvpPresentation,
   getMarketTierPresentation,
+  resolveMarketFitPresentation,
   getCarryPresentation,
   getWeatherSecondaryPresentations,
   type PlateTagTone,
@@ -95,24 +96,39 @@ console.log("\ngetPlateTagPresentation — generic direction fallback for unreco
   assert("unrecognized classes trace to getPlateToneClasses", pos.classes === getPlateToneClasses("supporting"));
 }
 
-console.log("\ngetMarketTierPresentation");
+console.log("\ngetMarketTierPresentation — real tiers, no invented Prime/Qualified");
 {
   const elite = getMarketTierPresentation("Elite");
-  assert("Elite → Prime / standout", elite.displayLabel === "Prime" && elite.tone === "standout");
+  assert("Elite → Elite / standout", elite.displayLabel === "Elite" && elite.tone === "standout");
   assert("Elite classes === getPlateToneClasses(standout)", elite.classes === getPlateToneClasses("standout"));
 
   const strong = getMarketTierPresentation("Strong");
-  assert("Strong → Qualified / supporting (amber, not green)", strong.displayLabel === "Qualified" && strong.tone === "supporting");
+  assert("Strong → Strong / supporting (amber, not green)", strong.displayLabel === "Strong" && strong.tone === "supporting");
   assert("Strong classes === getPlateToneClasses(supporting)", strong.classes === getPlateToneClasses("supporting"));
 
   const solid = getMarketTierPresentation("Solid");
   assert("Solid → Solid (text unchanged) / context (blue)", solid.displayLabel === "Solid" && solid.tone === "context");
 
   const watch = getMarketTierPresentation("Watch");
-  assert("Watch → Watch / neutral", watch.displayLabel === "Watch" && watch.tone === "neutral");
+  assert("genuine server Watch → Below Solid / neutral", watch.displayLabel === "Below Solid" && watch.tone === "neutral");
 
-  const missing = getMarketTierPresentation(undefined);
-  assert("missing setupLabel → Watch / neutral (safe fallback)", missing.displayLabel === "Watch" && missing.tone === "neutral");
+  // No invented vocabulary at ANY tier.
+  for (const l of ["Elite", "Strong", "Solid", "Watch"] as const) {
+    const d = getMarketTierPresentation(l).displayLabel;
+    assert(`${l} never renders "Prime"/"Qualified"`, d !== "Prime" && d !== "Qualified", d);
+  }
+}
+
+console.log("\nresolveMarketFitPresentation — server setupLabel ONLY, never fabricated");
+{
+  assert("resolveMarketFitPresentation('Elite') → Elite", resolveMarketFitPresentation("Elite")?.displayLabel === "Elite");
+  assert("resolveMarketFitPresentation('Strong') → Strong", resolveMarketFitPresentation("Strong")?.displayLabel === "Strong");
+  assert("resolveMarketFitPresentation('Solid') → Solid", resolveMarketFitPresentation("Solid")?.displayLabel === "Solid");
+  assert("resolveMarketFitPresentation('Watch') → Below Solid (genuine server label)", resolveMarketFitPresentation("Watch")?.displayLabel === "Below Solid");
+  // Legacy payload: numeric score but NO server setupLabel → null so the UI shows
+  // "unavailable" — the client must never invent a fit ("Below Solid") from a score.
+  assert("legacy null setupLabel → null (unavailable, NOT fabricated)", resolveMarketFitPresentation(null) === null);
+  assert("legacy undefined setupLabel → null (unavailable, NOT fabricated)", resolveMarketFitPresentation(undefined) === null);
 }
 
 console.log("\ngetBvpPresentation — confidence (sample size) is separate from strength (direction)");

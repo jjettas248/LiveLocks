@@ -216,6 +216,20 @@ export function getMarketTierPresentation(setupLabel?: MarketSetupLabel | null):
   return { ...entry, classes: getPlateToneClasses(entry.tone) };
 }
 
+/**
+ * Expanded market-fit label resolution — uses the SERVER-STAMPED `setupLabel` ONLY.
+ * Returns null when the server did not stamp a label (e.g. a legacy payload that
+ * carries a numeric market score but no `marketSetups`), so the UI can render
+ * "unavailable" instead of FABRICATING a classification. The client must never
+ * derive a market fit ("Below Solid"/etc.) from a raw score — a legacy signal's
+ * true historical fit may have been Elite/Strong/Solid. Only a genuine server
+ * `Watch` label maps to "Below Solid".
+ */
+export function resolveMarketFitPresentation(setupLabel?: MarketSetupLabel | null): MarketTierPresentation | null {
+  if (!setupLabel) return null;
+  return getMarketTierPresentation(setupLabel);
+}
+
 // ── §6: carry + weather ──────────────────────────────────────────────────────
 
 export type CarryLabel =

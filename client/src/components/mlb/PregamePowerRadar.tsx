@@ -17,7 +17,7 @@ import {
   getPlateTagPresentation,
   getPlateToneClasses,
   getBvpPresentation,
-  getMarketTierPresentation,
+  resolveMarketFitPresentation,
   getCarryPresentation,
   getWeatherSecondaryPresentations,
   type PlateTagTone,
@@ -998,8 +998,9 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
         <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Market Fit</div>
         {([["home_runs", "Home Run Fit"], ["total_bases", "Total Bases Fit"]] as const).map(([market, label]) => {
           const setup = s.marketSetups?.find((m) => m.market === market);
-          const tierLabel: SetupLabel | null = setup?.setupLabel ?? (s.marketScores[market] != null ? "Watch" : null);
-          const pres = tierLabel ? getMarketTierPresentation(tierLabel) : null;
+          // Server-stamped setupLabel ONLY — never fabricate a fit from a raw
+          // score. Absent label → "unavailable" (not a made-up "Below Solid").
+          const pres = resolveMarketFitPresentation(setup?.setupLabel ?? null);
           return (
             <div key={market} className="flex justify-between items-center">
               <span className="text-muted-foreground">{label}</span>
@@ -1027,7 +1028,7 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
           : kind === "pct" ? `${v.toFixed(1)}%`
           : `${Math.round(v)} mph`;
         const rows: Array<{ label: string; value: number | null | undefined; kind: "iso" | "pct" | "mph" }> = [
-          { label: "ISO / xISO", value: pp?.xISO, kind: "iso" },
+          { label: "xISO", value: pp?.xISO, kind: "iso" },
           { label: "HR/FB", value: pp?.hrFBRatioPct, kind: "pct" },
           { label: "Barrel Rate", value: pp?.barrelRatePct, kind: "pct" },
           { label: "Hard-Hit Rate", value: pp?.hardHitRatePct, kind: "pct" },
