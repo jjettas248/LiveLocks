@@ -150,7 +150,12 @@ const publicStats = buildPublicStats(today, [...today, yesterdayWin], "2026-06-2
 ok(publicStats.pregameWinsToday === 2, "public stats count wins only today");
 ok(publicStats.firstAbPregameWinsToday === 1, "public stats count first-AB subset today");
 ok(publicStats.pregameWinsLast7Days === 3, "public stats count last-7 public wins");
-ok(publicStats.flaggedBeforeFirstPitchToday === 3, "flagged count matches the visible/live radar total (wins + still-live), excluding resolved misses and suppressed");
+// flaggedBeforeFirstPitchToday now reads the durable frozen flag
+// (everPubliclyFlagged), a stable historical count of "targets genuinely
+// flagged before first pitch today" — so it includes resolved MISSES
+// (firstAbWin + normalWin + miss + pending = 4) which are now retained/visible
+// on the board too, and still excludes suppressed (never flagged).
+ok(publicStats.flaggedBeforeFirstPitchToday === 4, "flaggedBeforeFirstPitchToday counts every durably-flagged target (wins + misses + still-live), excluding only suppressed/never-flagged");
 ok(publicStats.topPregameWinPlayers.length === 2, "top players include public wins only");
 ok(publicStats.topPregameWinPlayers.every((w) => !/miss/i.test(w.label) && !/loss/i.test(w.label)), "public win rows do not expose miss/loss labels");
 

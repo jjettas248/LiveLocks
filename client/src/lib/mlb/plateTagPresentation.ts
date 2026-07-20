@@ -200,16 +200,34 @@ export interface MarketTierPresentation {
   classes: string;
 }
 
+// Market-fit tier → display word. Uses the real server tier words verbatim
+// (no invented "Prime"/"Qualified" vocabulary). `Watch` renders as "Below Solid"
+// and is only ever shown in the expanded fit comparison — never as a compact
+// recommendation. These are matchup/model-fit classifications, not bets.
 const MARKET_TIER_MAP: Record<MarketSetupLabel, { displayLabel: string; tone: PlateTagTone }> = {
-  Elite: { displayLabel: "Prime", tone: "standout" },
-  Strong: { displayLabel: "Qualified", tone: "supporting" },
+  Elite: { displayLabel: "Elite", tone: "standout" },
+  Strong: { displayLabel: "Strong", tone: "supporting" },
   Solid: { displayLabel: "Solid", tone: "context" },
-  Watch: { displayLabel: "Watch", tone: "neutral" },
+  Watch: { displayLabel: "Below Solid", tone: "neutral" },
 };
 
 export function getMarketTierPresentation(setupLabel?: MarketSetupLabel | null): MarketTierPresentation {
   const entry = (setupLabel && MARKET_TIER_MAP[setupLabel]) || MARKET_TIER_MAP.Watch;
   return { ...entry, classes: getPlateToneClasses(entry.tone) };
+}
+
+/**
+ * Expanded market-fit label resolution — uses the SERVER-STAMPED `setupLabel` ONLY.
+ * Returns null when the server did not stamp a label (e.g. a legacy payload that
+ * carries a numeric market score but no `marketSetups`), so the UI can render
+ * "unavailable" instead of FABRICATING a classification. The client must never
+ * derive a market fit ("Below Solid"/etc.) from a raw score — a legacy signal's
+ * true historical fit may have been Elite/Strong/Solid. Only a genuine server
+ * `Watch` label maps to "Below Solid".
+ */
+export function resolveMarketFitPresentation(setupLabel?: MarketSetupLabel | null): MarketTierPresentation | null {
+  if (!setupLabel) return null;
+  return getMarketTierPresentation(setupLabel);
 }
 
 // ── §6: carry + weather ──────────────────────────────────────────────────────

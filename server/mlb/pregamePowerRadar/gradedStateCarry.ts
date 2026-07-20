@@ -30,7 +30,15 @@ export function carryForwardGradedState(
     // while its game is paused mid-suspension (there is no `prev` here to
     // preserve an already-true flag against, so this is strictly a new-signal
     // case).
-    fresh.everPubliclyFlagged = fresh.gameStatus !== "suspended" && wasPubliclyFlaggedPregame(fresh);
+    // A false→true mint is allowed ONLY from a legitimate pre-first-pitch state
+    // (`firstPitchLockEligible === true`, i.e. gameStatus scheduled/pre). Without
+    // this guard a brand-new build whose game is already live/final/suspended (a
+    // cold restart / delayed build / previously-unresolved gamePk, with no `prev`
+    // to inherit a true flag from) could mint a public flag using hindsight and
+    // surface a signal never shown before first pitch — exactly what "never allow
+    // an unseen signal to appear after first pitch" forbids. (firstPitchLockEligible
+    // is false for suspended too, subsuming the old suspended-only exclusion.)
+    fresh.everPubliclyFlagged = fresh.firstPitchLockEligible === true && wasPubliclyFlaggedPregame(fresh);
     return fresh;
   }
 
@@ -39,7 +47,7 @@ export function carryForwardGradedState(
   // unconditionally, so an already-surfaced target remains preserved and
   // visible exactly as it was before its game paused.
   fresh.everPubliclyFlagged =
-    (fresh.gameStatus !== "suspended" && wasPubliclyFlaggedPregame(fresh)) || prev.everPubliclyFlagged === true;
+    (fresh.firstPitchLockEligible === true && wasPubliclyFlaggedPregame(fresh)) || prev.everPubliclyFlagged === true;
   if (prev.outcomes && !fresh.outcomes) {
     fresh.outcomes = prev.outcomes;
     if (prev.status === "graded") fresh.status = "graded";
@@ -49,6 +57,25 @@ export function carryForwardGradedState(
   fresh.convertedLiveAt = fresh.convertedLiveAt ?? prev.convertedLiveAt;
   // First lock time sticks across rebuilds of a live/final game.
   if (prev.lockedAt) fresh.lockedAt = prev.lockedAt;
+  // Display-only power-profile snapshot: once the signal is no longer `active`
+  // (locked, graded, or otherwise resolved — the canonical lifecycle boundary),
+  // the completed card must show the ORIGINAL pregame snapshot — INCLUDING ITS
+  // ABSENCE on a legacy row that predates the field — never a post-lock recompute.
+  // So fresh inherits prev's value verbatim, even when that value is `undefined`
+  // (a legacy public locked row then keeps rendering "Power profile unavailable"
+  // rather than silently adopting freshly-computed post-lock values). While still
+  // `active` — including a delayed/unknown pregame row whose firstPitchLockEligible
+  // is false but which has NOT locked — a rebuild may still acquire/refresh the
+  // additive snapshot safely, since that's legitimate pregame data. (`status` is
+  // the right gate here, NOT firstPitchLockEligible: the latter is false for
+  // delayed/unknown active games too, which would wrongly freeze pregame data.)
+  // Storage persists diagnostics as a WHOLESALE JSONB overwrite, so freezing the
+  // nested value here — before serialization — is what makes it durable across
+  // restart/hydration.
+  const evaluationLocked = fresh.status !== "active";
+  if (evaluationLocked && fresh.diagnostics) {
+    fresh.diagnostics.powerProfile = prev.diagnostics?.powerProfile;
+  }
   return fresh;
 }
 

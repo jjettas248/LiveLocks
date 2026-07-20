@@ -7,7 +7,7 @@
 //
 // Run: npx tsx server/mlb/pregamePowerRadar/diagnostics.test.ts
 
-import { isPublicPregameSignal } from "./diagnostics";
+import { isPublicPregameSignal, positiveDrivers } from "./diagnostics";
 import type { PregamePowerSignal, PregameOutcome } from "./types";
 
 let passed = 0;
@@ -57,83 +57,132 @@ const gradedMiss: PregameOutcome = {
   hrInning: null, hrHalf: null, plateAppearanceNumber: null, firstAbPregameWin: false,
 };
 
-// ── 1. Final + locked + not yet graded → stays visible (the core regression) ─
+// A TB-primary graded outcome (no HR, some total bases) — a completed miss on
+// the HR track but a real completed Total-Bases result. Its VISIBILITY must be
+// identical to any other graded target (server retention is market-agnostic;
+// the market-aware final display is client-side).
+const gradedTb: PregameOutcome = {
+  hitHr: false, totalBases: 2, hitRecorded: true, rbiRecorded: 1,
+  resolvedAt: "2026-07-01T23:30:00.000Z",
+  outcome: "calibration_miss", userVisible: false,
+  hrInning: null, hrHalf: null, plateAppearanceNumber: null, firstAbPregameWin: false,
+};
+
+// ── 1. Scheduled/pre pregame target → visible via initial eligibility ───────
 {
-  const signal = sig({ gameStatus: "final", status: "locked", outcomes: null });
-  ok(isPublicPregameSignal(signal) === true, "final-but-ungraded locked signal stays visible");
+  const signal = sig({ gameStatus: "scheduled", status: "active" });
+  ok(isPublicPregameSignal(signal) === true, "pregame scheduled target is visible (initial eligibility)");
 }
 
-// ── 2. Final + graded + HR → visible (existing rescue, must still work) ─────
+// ── 2. Final + locked + not yet graded + flagged → stays visible (retention) ─
 {
-  const signal = sig({ gameStatus: "final", status: "graded", outcomes: gradedWin });
+  const signal = sig({ gameStatus: "final", status: "locked", outcomes: null, everPubliclyFlagged: true });
+  ok(isPublicPregameSignal(signal) === true, "final-but-ungraded locked flagged signal stays visible");
+}
+
+// ── 3. Graded HR + flagged → visible ────────────────────────────────────────
+{
+  const signal = sig({ gameStatus: "final", status: "graded", outcomes: gradedWin, everPubliclyFlagged: true });
   ok(isPublicPregameSignal(signal) === true, "graded HR stays visible after grading");
 }
 
-// ── 3. Final + graded + miss → hidden ────────────────────────────────────────
+// ── 4. Graded miss + flagged → STAYS VISIBLE (the core retention fix) ────────
+// Previously deleted the instant status flipped to "graded" without a HR.
 {
-  const signal = sig({ gameStatus: "final", status: "graded", outcomes: gradedMiss });
-  ok(isPublicPregameSignal(signal) === false, "graded miss is hidden once grading resolves it");
+  const signal = sig({ gameStatus: "final", status: "graded", outcomes: gradedMiss, everPubliclyFlagged: true });
+  ok(isPublicPregameSignal(signal) === true, "graded miss STAYS visible through the slate (completed, not erased)");
 }
 
-// ── 4. Postponed → always hidden ─────────────────────────────────────────────
+// ── 5. Completed Total-Bases target (graded, no HR, TB recorded) → visible ──
 {
-  const signal = sig({ gameStatus: "postponed", status: "locked" });
+  const signal = sig({
+    gameStatus: "final", status: "graded", primaryMarket: "total_bases",
+    outcomes: gradedTb, everPubliclyFlagged: true,
+  });
+  ok(isPublicPregameSignal(signal) === true, "completed Total-Bases candidate stays visible with its final result");
+}
+
+// ── 6. Postponed → always hidden ─────────────────────────────────────────────
+{
+  const signal = sig({ gameStatus: "postponed", status: "locked", everPubliclyFlagged: true });
   ok(isPublicPregameSignal(signal) === false, "postponed games are never public");
 }
 
-// ── 5. Live + locked → visible (regression check) ───────────────────────────
+// ── 7. Live + locked + flagged → visible (immutable while live) ─────────────
 {
-  const signal = sig({ gameStatus: "live", status: "locked" });
-  ok(isPublicPregameSignal(signal) === true, "live locked signal stays visible");
+  const signal = sig({ gameStatus: "live", status: "locked", everPubliclyFlagged: true });
+  ok(isPublicPregameSignal(signal) === true, "live locked flagged signal stays visible");
 }
 
-// ── 6. Live + active (not yet locked) → hidden (regression check) ──────────
+// ── 8. Live + active (not yet locked) → hidden ──────────────────────────────
 {
-  const signal = sig({ gameStatus: "live", status: "active" });
+  const signal = sig({ gameStatus: "live", status: "active", everPubliclyFlagged: true });
   ok(isPublicPregameSignal(signal) === false, "live game not yet locked is hidden");
 }
 
-// ── 7. Scheduled/pre pregame target → visible ───────────────────────────────
+// ── 9. Expired status is never public, regardless of gameStatus ────────────
 {
-  const signal = sig({ gameStatus: "scheduled", status: "active" });
-  ok(isPublicPregameSignal(signal) === true, "pregame scheduled target is visible");
-}
-
-// ── 8. Expired status is never public, regardless of gameStatus ────────────
-{
-  const signal = sig({ gameStatus: "final", status: "expired" });
+  const signal = sig({ gameStatus: "final", status: "expired", everPubliclyFlagged: true });
   ok(isPublicPregameSignal(signal) === false, "expired status is hidden");
 }
 
-// ── 9. Not publicly flagged pregame → hidden regardless of everything else ──
+// ── 10. Never publicly flagged → hidden even with a graded HR ───────────────
+// A late scratch / unposted-lineup target never got a frozen flag, so it is
+// never retained — retention requires ACTUAL prior public admission.
 {
-  const signal = sig({ gameStatus: "final", status: "graded", outcomes: gradedWin, lineupStatus: "unposted" });
-  ok(isPublicPregameSignal(signal) === false, "unconfirmed lineup is never publicly flagged, even with a graded HR");
+  const signal = sig({ gameStatus: "final", status: "graded", outcomes: gradedWin, everPubliclyFlagged: false });
+  ok(isPublicPregameSignal(signal) === false, "never-flagged target is not retained, even with a graded HR");
 }
 
-// ── 10. Already-flagged + suspended + locked → stays visible (preserved) ────
+// ── 11. Substituted batter (carried forward, locked, flagged) → stays visible ─
+// A pinch-hit/defensive-sub batter whose signal was carried forward keeps its
+// frozen flag + locked state, so it remains on the completed board.
+{
+  const signal = sig({ gameStatus: "final", status: "locked", everPubliclyFlagged: true, lineupStatus: "unposted" });
+  ok(isPublicPregameSignal(signal) === true, "substituted (carried-forward) locked flagged batter stays visible");
+}
+
+// ── 12. Already-flagged + suspended + locked → stays visible (preserved) ────
 {
   const signal = sig({ gameStatus: "suspended", status: "locked", everPubliclyFlagged: true });
   ok(isPublicPregameSignal(signal) === true, "already-flagged suspended-and-locked signal stays visible (preserved)");
 }
 
-// ── 11. Suspended + not yet locked → hidden, same treatment as live/final ──
+// ── 13. Suspended + not yet locked → hidden ─────────────────────────────────
 {
   const signal = sig({ gameStatus: "suspended", status: "active", everPubliclyFlagged: true });
-  ok(isPublicPregameSignal(signal) === false, "suspended signal not yet locked is hidden, same as live/final");
+  ok(isPublicPregameSignal(signal) === false, "suspended signal not yet locked is hidden");
 }
 
-// ── 12. NEVER flagged + suspended + locked (cold-start, no prior copy) → hidden ──
-// Regression: a signal built for the first time while its game is already
-// suspended (no prior copy to carry a frozen everPubliclyFlagged from) must
-// NOT surface as a brand-new recommendation just because its intrinsic gates
-// (tier/score/drivers/coverage/lineupStatus) currently pass — a live-only
-// pass on wasPubliclyFlaggedPregame must never grant visibility on its own
-// while suspended.
+// ── 14. Cold-start: never-flagged live/final/suspended locked → hidden ──────
+// Retention reads the durable frozen flag only. A signal built for the first
+// time after first pitch (no prior copy → everPubliclyFlagged never minted, see
+// gradedStateCarry cold-start guard) must NEVER surface for the first time.
 {
-  const signal = sig({ gameStatus: "suspended", status: "locked", everPubliclyFlagged: false });
+  ok(isPublicPregameSignal(sig({ gameStatus: "live", status: "locked", everPubliclyFlagged: false })) === false,
+    "cold-start live locked never-flagged signal is hidden");
+  ok(isPublicPregameSignal(sig({ gameStatus: "final", status: "locked", everPubliclyFlagged: false })) === false,
+    "cold-start final locked never-flagged signal is hidden");
+  ok(isPublicPregameSignal(sig({ gameStatus: "suspended", status: "locked", everPubliclyFlagged: false })) === false,
+    "cold-start suspended locked never-flagged signal is hidden");
+}
+
+// ── 15. Frozen-flag recovery: a graded win survives a later mutable-field dip ─
+{
+  const signal = sig({ gameStatus: "final", status: "graded", score10: 5.5, everPubliclyFlagged: true, outcomes: gradedWin });
+  ok(isPublicPregameSignal(signal) === true, "graded win recovers via frozen flag even if score10 drifted below threshold");
+}
+
+// ── 16. Pre-grading, live gates stay authoritative (flag does NOT recover) ──
+{
+  const signal = sig({ gameStatus: "scheduled", status: "active", score10: 5.5, everPubliclyFlagged: true });
   ok(isPublicPregameSignal(signal) === false,
-    "a never-flagged signal cannot newly surface while suspended, even if its intrinsic gates currently pass");
+    "a still-active pre-first-pitch signal does NOT recover via the frozen flag — live eligibility stays authoritative");
+}
+
+// ── 17. positiveDrivers helper derives from drivers[] ───────────────────────
+{
+  ok(positiveDrivers(sig({})).length === 2, "positiveDrivers derives from drivers[]");
 }
 
 console.log(`\ndiagnostics.test: ${passed} passed, ${failed} failed`);

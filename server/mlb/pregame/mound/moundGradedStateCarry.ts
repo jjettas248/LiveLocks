@@ -9,7 +9,14 @@ export function carryForwardMoundGradedState(
   prev: MoundSignal | undefined,
 ): MoundSignal {
   if (!prev || prev.sessionDate !== fresh.sessionDate) {
-    fresh.everPubliclyFlagged = wasPubliclyFlaggedMound(fresh);
+    // Follow flag: a false→true mint is allowed ONLY from a legitimate
+    // pre-first-pitch state (firstPitchLockEligible === true). Without this
+    // guard a brand-new build whose game is already live/final (cold restart /
+    // delayed build / previously-unresolved gamePk) could mint a public Follow
+    // flag using hindsight and surface a signal never shown before first pitch.
+    // (wasPubliclyFlaggedMoundFade already requires firstPitchLockEligible, so
+    // the Fade flag needs no extra guard here.)
+    fresh.everPubliclyFlagged = fresh.firstPitchLockEligible === true && wasPubliclyFlaggedMound(fresh);
     fresh.everPubliclyFlaggedFade = wasPubliclyFlaggedMoundFade(fresh);
     return fresh;
   }
@@ -28,7 +35,8 @@ export function carryForwardMoundGradedState(
     fresh.moundDirection = "follow";
   }
 
-  fresh.everPubliclyFlagged = wasPubliclyFlaggedMound(fresh) || prev.everPubliclyFlagged === true;
+  fresh.everPubliclyFlagged =
+    (fresh.firstPitchLockEligible === true && wasPubliclyFlaggedMound(fresh)) || prev.everPubliclyFlagged === true;
   fresh.everPubliclyFlaggedFade = wasPubliclyFlaggedMoundFade(fresh) || prev.everPubliclyFlaggedFade === true;
   if (prev.outcomes && !fresh.outcomes) {
     fresh.outcomes = prev.outcomes;

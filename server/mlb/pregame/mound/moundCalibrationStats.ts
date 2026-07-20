@@ -5,7 +5,7 @@
 // Mirrors pregamePowerRadar/calibrationStats.ts's role for pitcher signals.
 
 import type { MoundSignal } from "./types";
-import { isPublicMoundSignal } from "./diagnostics";
+import { flaggedBeforeFirstPitchMound } from "./diagnostics";
 import { buildMoundWinItem, buildMoundFadeWinItem } from "./moundOutcomeAttribution";
 import type {
   MoundCalibrationBucket,
@@ -91,7 +91,7 @@ export function buildMoundPublicStats(
     moundWinsToday: todayWins.length,
     pitcherPropsCashedToday: todayWins.length,
     moundWinsLast7Days: last7Wins.length,
-    flaggedBeforeFirstPitchToday: todaySignals.filter(isPublicMoundSignal).length,
+    flaggedBeforeFirstPitchToday: todaySignals.filter(flaggedBeforeFirstPitchMound).length,
     topMoundWinPlayers: rankedItems(todaySignals, "win").slice(0, 8),
     moundFadeWinsToday: todayFadeWins.length,
     fadePropsCashedToday: todayFadeWins.length,
