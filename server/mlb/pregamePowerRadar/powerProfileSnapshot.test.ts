@@ -94,42 +94,69 @@ function sig(over: Partial<PregamePowerSignal>, profile?: PregamePowerProfileSna
   );
 }
 
-// ── FREEZE: a post-first-pitch rebuild must keep the ORIGINAL pregame profile,
-// never overwrite it with a fresh recompute. ────────────────────────────────
+// ── FREEZE boundary is `status !== "active"` (locked/graded/resolved), NOT
+// firstPitchLockEligible. Once locked/graded the ORIGINAL pregame snapshot —
+// value OR absence — is preserved; while active (even a delayed/unknown pregame
+// row with firstPitchLockEligible:false) a rebuild may acquire/refresh it. ────
+
+// live + locked preserves the prior VALUE.
 {
   const prev = sig({ everPubliclyFlagged: true, lockedAt: "2026-07-01T20:00:00Z" }, PROFILE_A);
-  // A rebuild after first pitch recomputes diagnostics (fresh has PROFILE_B).
-  const fresh = sig({ gameStatus: "final", status: "locked", firstPitchLockEligible: false }, PROFILE_B);
+  const fresh = sig({ gameStatus: "live", status: "locked", firstPitchLockEligible: false }, PROFILE_B);
   carryForwardGradedState(fresh, prev);
-  ok(
-    JSON.stringify((fresh.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_A),
-    "post-first-pitch rebuild keeps the ORIGINAL pregame powerProfile (frozen), not the fresh recompute",
-  );
+  ok(JSON.stringify((fresh.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_A),
+    "live + locked preserves the prior pregame snapshot value (frozen A, not the fresh B)");
 }
-
-// ── FREEZE ABSENCE: a legacy public locked row with NO snapshot must stay
-// absent after a live/final rebuild — the fresh recompute must NOT leak
-// post-first-pitch values in as though they were the pregame snapshot. ───────
+// live + locked preserves the prior ABSENCE.
 {
   const prev = sig({ everPubliclyFlagged: true }); // legacy: no profile
-  const fresh = sig({ gameStatus: "final", status: "locked", firstPitchLockEligible: false }, PROFILE_B);
+  const fresh = sig({ gameStatus: "live", status: "locked", firstPitchLockEligible: false }, PROFILE_B);
   carryForwardGradedState(fresh, prev);
-  ok(
-    (fresh.diagnostics as any).powerProfile === undefined,
-    "post-first-pitch, a legacy row with NO prior profile freezes to ABSENT — the fresh recompute is discarded",
-  );
+  ok((fresh.diagnostics as any).powerProfile === undefined,
+    "live + locked preserves the prior ABSENCE (legacy row stays 'unavailable', fresh B discarded)");
+}
+// final + graded preserves the prior VALUE.
+{
+  const prev = sig({ everPubliclyFlagged: true, status: "graded" }, PROFILE_A);
+  const fresh = sig({ gameStatus: "final", status: "graded", firstPitchLockEligible: false }, PROFILE_B);
+  carryForwardGradedState(fresh, prev);
+  ok(JSON.stringify((fresh.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_A),
+    "final + graded preserves the prior pregame snapshot value (frozen A)");
+}
+// final + graded preserves the prior ABSENCE.
+{
+  const prev = sig({ everPubliclyFlagged: true, status: "graded" }); // legacy: no profile
+  const fresh = sig({ gameStatus: "final", status: "graded", firstPitchLockEligible: false }, PROFILE_B);
+  carryForwardGradedState(fresh, prev);
+  ok((fresh.diagnostics as any).powerProfile === undefined,
+    "final + graded preserves the prior ABSENCE (legacy row stays 'unavailable')");
 }
 
-// ── PRE-FIRST-PITCH ACQUIRE: a scheduled row may safely gain the additive
-// snapshot (still pregame data) even if the prior copy had none. ─────────────
+// ── ACTIVE PREGAME ACQUIRE — a row that has NOT locked may acquire/refresh the
+// additive snapshot even when firstPitchLockEligible is false (delayed/unknown). ─
 {
-  const prev = sig({ everPubliclyFlagged: false }); // scheduled, no profile
+  // delayed + active + firstPitchLockEligible:false → may acquire
+  const prev = sig({ everPubliclyFlagged: false }); // no profile
+  const fresh = sig({ gameStatus: "delayed", status: "active", firstPitchLockEligible: false }, PROFILE_B);
+  carryForwardGradedState(fresh, prev);
+  ok(JSON.stringify((fresh.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_B),
+    "delayed + active (firstPitchLockEligible:false) may still ACQUIRE the pregame snapshot");
+}
+{
+  // unknown + active + firstPitchLockEligible:false → may refresh A→B
+  const prev = sig({ everPubliclyFlagged: false }, PROFILE_A);
+  const fresh = sig({ gameStatus: "unknown", status: "active", firstPitchLockEligible: false }, PROFILE_B);
+  carryForwardGradedState(fresh, prev);
+  ok(JSON.stringify((fresh.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_B),
+    "unknown + active (firstPitchLockEligible:false) may still REFRESH the pregame snapshot");
+}
+{
+  // scheduled + active → may acquire (baseline pregame case)
+  const prev = sig({ everPubliclyFlagged: false });
   const fresh = sig({ gameStatus: "scheduled", status: "active", firstPitchLockEligible: true }, PROFILE_B);
   carryForwardGradedState(fresh, prev);
-  ok(
-    JSON.stringify((fresh.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_B),
-    "pre-first-pitch, a scheduled row may acquire the additive snapshot (not frozen yet)",
-  );
+  ok(JSON.stringify((fresh.diagnostics as any).powerProfile) === JSON.stringify(PROFILE_B),
+    "scheduled + active may acquire the additive snapshot (not frozen yet)");
 }
 
 // ── HYDRATION: the profile survives the persistence row round trip ──────────

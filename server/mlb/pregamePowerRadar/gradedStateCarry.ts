@@ -57,19 +57,23 @@ export function carryForwardGradedState(
   fresh.convertedLiveAt = fresh.convertedLiveAt ?? prev.convertedLiveAt;
   // First lock time sticks across rebuilds of a live/final game.
   if (prev.lockedAt) fresh.lockedAt = prev.lockedAt;
-  // Display-only power-profile snapshot: once first pitch has passed
-  // (firstPitchLockEligible === false, i.e. live/final/suspended) the completed
-  // card must show the ORIGINAL pregame snapshot — INCLUDING ITS ABSENCE on a
-  // legacy row that predates the field — never a post-first-pitch recompute. So
-  // fresh inherits prev's value verbatim, even when that value is `undefined`
+  // Display-only power-profile snapshot: once the signal is no longer `active`
+  // (locked, graded, or otherwise resolved — the canonical lifecycle boundary),
+  // the completed card must show the ORIGINAL pregame snapshot — INCLUDING ITS
+  // ABSENCE on a legacy row that predates the field — never a post-lock recompute.
+  // So fresh inherits prev's value verbatim, even when that value is `undefined`
   // (a legacy public locked row then keeps rendering "Power profile unavailable"
-  // rather than silently adopting freshly-computed post-first-pitch values).
-  // Pre-first-pitch (firstPitchLockEligible === true) a rebuild may still
-  // acquire/refresh the additive snapshot safely — it's still pregame data.
+  // rather than silently adopting freshly-computed post-lock values). While still
+  // `active` — including a delayed/unknown pregame row whose firstPitchLockEligible
+  // is false but which has NOT locked — a rebuild may still acquire/refresh the
+  // additive snapshot safely, since that's legitimate pregame data. (`status` is
+  // the right gate here, NOT firstPitchLockEligible: the latter is false for
+  // delayed/unknown active games too, which would wrongly freeze pregame data.)
   // Storage persists diagnostics as a WHOLESALE JSONB overwrite, so freezing the
   // nested value here — before serialization — is what makes it durable across
   // restart/hydration.
-  if (fresh.firstPitchLockEligible !== true && fresh.diagnostics) {
+  const evaluationLocked = fresh.status !== "active";
+  if (evaluationLocked && fresh.diagnostics) {
     fresh.diagnostics.powerProfile = prev.diagnostics?.powerProfile;
   }
   return fresh;
