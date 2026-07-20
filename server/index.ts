@@ -776,11 +776,35 @@ app.use((req, res, next) => {
   (async () => {
     try {
       const { buildMlbMoundRadar } = await import("./mlb/pregame/mound/buildMlbMoundRadar");
-      const { getMoundSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarStore");
-      const { installMoundPersistence } = await import("./mlb/pregame/mound/moundPersistence");
+      const { getMoundSnapshot, setMoundSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarStore");
+      const { installMoundPersistence, loadMoundSnapshotFromDb } = await import(
+        "./mlb/pregame/mound/moundPersistence"
+      );
       const { slateDateET } = await import("./utils/dateUtils");
 
       installMoundPersistence();
+
+      // Boot-time hydration (research plan §4.1, Option A) — mirrors the
+      // Plate hydration block above exactly: seed the in-memory snapshot from
+      // today's already-persisted rows before the first build timer fires, so
+      // a restart never transiently loses already-persisted Follow/Fade
+      // flags, moundDirection, or diagnostics.evaluation state. Double-checked
+      // (before AND after the await) so a concurrent build that completes
+      // mid-await is never clobbered by stale hydration.
+      try {
+        if (!getMoundSnapshot()) {
+          const todayET = slateDateET();
+          const hydrated = await loadMoundSnapshotFromDb(todayET);
+          if (hydrated && !getMoundSnapshot()) {
+            setMoundSnapshot(hydrated);
+            console.log(
+              `[MOUND_RADAR_BOOT_HYDRATE] seeded ${hydrated.signals.size} signals from build=${hydrated.buildId} date=${todayET}`,
+            );
+          }
+        }
+      } catch (e) {
+        console.warn("[MOUND_RADAR_BOOT_HYDRATE] failed:", (e as Error).message);
+      }
 
       setTimeout(() => {
         buildMlbMoundRadar().catch((e) =>

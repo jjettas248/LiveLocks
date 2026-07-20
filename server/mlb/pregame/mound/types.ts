@@ -122,6 +122,136 @@ export interface MoundDiagnostics {
     park: boolean;
     weather: boolean;
   };
+
+  /**
+   * Frozen prediction-time evaluation snapshots (research instrumentation —
+   * Phase 1, see evaluationSnapshot.ts). Additive, optional: absent on rows
+   * persisted before this instrumentation shipped. Never read by scoring,
+   * qualification, or public sorting (diagnostics.ts) — measurement only.
+   * Independent module from Plate's own evaluation types per this module's
+   * isolation convention (no shared type imports).
+   */
+  evaluation?: MoundEvaluationRecord;
+}
+
+/** One frozen read of a candidate's champion state, taken at a specific build cycle. */
+export interface MoundEvaluationSnapshot {
+  frozenAt: string;
+  buildId: string;
+  /** Size of the full candidate population this signal's rank was computed against. */
+  candidatePoolSize: number;
+  champion: {
+    score10: number;
+    tier: MoundTier;
+    componentScores: {
+      pitcherSkillScore: number | null;
+      opponentKProfileScore: number | null;
+      workloadScore: number | null;
+      runEnvironmentScore: number | null;
+      recentFormScore: number | null;
+    };
+    marketScores: Partial<Record<MoundMarket, number>>;
+    drivers: MoundDriver[];
+    rank: {
+      holistic: number;
+      byMarket: Partial<Record<MoundMarket, number>>;
+    };
+    dataCoverageScore: number;
+    lineupStatus: MoundLineupStatus;
+    weatherStatus: MoundWeatherStatus;
+    /**
+     * The PRIMARY Follow/Fade grading target — the same season-rate-derived
+     * baseline moundOutcomeAttribution.ts's seasonBaseline() already computes
+     * in production, captured once here at build time instead of refetched
+     * live at grading time. Never a sportsbook line — see postedLine below.
+     */
+    frozenProductionBaseline: {
+      strikeouts: { value: number | null };
+      outs: { value: number | null };
+    };
+    /**
+     * Evaluation-metadata-only sportsbook line (never feeds scoring,
+     * qualification, direction, or the champion outcome definition).
+     * Strikeouts has a real fetch path; Outs has none today — always
+     * unavailable, never fabricated or cross-substituted from Strikeouts.
+     */
+    postedLine: {
+      strikeouts: { line: number | null; lineUnavailableReason: string | null; sourceTimestamp: string | null };
+      outs: { line: number | null; lineUnavailableReason: string | null; sourceTimestamp: string | null };
+    };
+    /** Prediction-time projections, for the projection-error measurement only (§7b measurement 3). */
+    predictionTimeProjections: {
+      matchupAdjustedStrikeouts: number | null;
+    };
+  };
+}
+
+/**
+ * Every evaluated candidate (including suppressed ones) gets a record.
+ * `finalPregameSnapshot` is NOT guaranteed non-null — see
+ * `finalPregameUnavailableReason`. Snapshot availability is independent of
+ * any per-market data-quality concept.
+ */
+export interface MoundEvaluationRecord {
+  /** Written exactly once, at genuine nonpublic→public transition (either direction), and only while the signal is still unlocked. Never overwritten after. */
+  firstPublicSnapshot: MoundEvaluationSnapshot | null;
+  firstPublicUnavailableReason:
+    | "not_yet_public"
+    | "instrumentation_started_after_surface"
+    /** The signal genuinely became public for the first time, but only AFTER it had already locked — there is no legitimate pregame moment to freeze, so no snapshot is minted. */
+    | "became_public_after_lock"
+    | null;
+  /** Which direction first went public. "null" when unresolved after a same-cycle Follow+Fade conflict. */
+  firstPublicDirection: "follow" | "fade" | null;
+  /** True iff Follow and Fade both transitioned public in the same build cycle — see evaluationSnapshot.ts. */
+  directionConflict: boolean;
+  /** Refreshed every pre-lock cycle; frozen permanently once locked. */
+  finalPregameSnapshot: MoundEvaluationSnapshot | null;
+  finalPregameUnavailableReason:
+    | "first_seen_post_lock"
+    | "legacy_row"
+    | "no_complete_pregame_build"
+    | null;
+  /**
+   * Populated once, at grading time, by moundShadowOutcomes.ts — three
+   * separate measurements (§7b), independent of and never altering the
+   * existing public mound_win/mound_fade_win/mound_calibration_miss
+   * classification on `outcomes` above. Stays `null` while a monotonic-safe
+   * live Follow win has been granted but the pitcher's outing is not yet
+   * complete (`outcomes.gradedLive === true`) — computing these measurements
+   * from partial, still-climbing live totals would be misleading; they are
+   * only computed once, at the final counting-stat refresh once the outing
+   * is genuinely complete.
+   */
+  gradingMeasurements?: MoundGradingMeasurements | null;
+}
+
+export interface MoundGradingMeasurements {
+  /** PRIMARY: champion result vs. the frozen production baseline (never a sportsbook line). */
+  championVsFrozenBaseline: {
+    /** Truthful provenance — "unavailable" when neither a frozen nor a legacy baseline exists. Never claims "frozen_production_baseline" when a legacy live value was actually used. */
+    baselineSource: "frozen_production_baseline" | "legacy_live_baseline" | "unavailable";
+    baselineValue: number | null;
+    actual: number | null;
+    comparison: "over" | "under" | "push" | "unavailable";
+    /** Direction-aware result using the pinned moundDirection at grading time. A null/unresolved moundDirection ALWAYS yields "unavailable" here — never falls through to Follow behavior. */
+    directionResult: "follow_win" | "fade_win" | "loss" | "push" | "unavailable";
+    /** First blocking reason, in priority order: no baseline value → no actual result → no resolvable direction. Null only when directionResult is a real, non-"unavailable" verdict. */
+    gradingUnavailableReason: "no_baseline" | "no_actual_result" | "no_direction" | null;
+  };
+  /** SECONDARY: evaluation-only comparison vs. a frozen sportsbook line, when one exists. */
+  actualVsFrozenLine: {
+    line: number | null;
+    lineUnavailableReason: string | null;
+    actual: number | null;
+    result: "over" | "under" | "push" | "unavailable";
+  };
+  /** Accuracy metric, not win/loss — projected value vs. actual. */
+  projectionError: {
+    projectedValue: number | null;
+    actual: number | null;
+    error: number | null;
+  };
 }
 
 export interface MoundSignal {

@@ -48,6 +48,7 @@ import { computeNearHrRecentForm, type RecentContactEventRow } from "./nearHrRec
 import { computeMarketTags } from "./marketTagger";
 import { composePregameScore } from "./scoring";
 import { carryForwardGradedState, carryForwardDroppedFromLineup } from "./gradedStateCarry";
+import { applyEvaluationSnapshots } from "./evaluationSnapshot";
 import {
   getSnapshot,
   setSnapshot,
@@ -747,6 +748,16 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
     console.error(`[PREGAME_POWER_RADAR_BUILD_FAILED] buildId=${buildId}:`, err?.message ?? err);
     isPregamePowerRadarBuildRunning = false;
     return null;
+  }
+
+  // Research instrumentation (frozen evaluation snapshots) — runs once over
+  // the COMPLETE population after every candidate this cycle has been built
+  // and carry-forwarded, so ranks and transitions reflect the whole slate.
+  // Never affects score10/tier/drivers/marketScores or public sort/filter.
+  try {
+    applyEvaluationSnapshots(signals, prevSignals, buildId);
+  } catch (err: any) {
+    console.warn(`[PREGAME_RADAR_EVALUATION_SNAPSHOT] buildId=${buildId} failed:`, err?.message ?? err);
   }
 
   const completedAt = new Date().toISOString();

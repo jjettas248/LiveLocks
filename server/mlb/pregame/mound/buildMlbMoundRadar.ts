@@ -56,6 +56,7 @@ import { projectedStrikeoutsFromKPer9, weightedPlatoonKRate, computeAvgInningsPe
 import { computeMatchupAdjustedStrikeouts } from "./matchupAdjustedKs";
 import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
+import { applyMoundEvaluationSnapshots } from "./evaluationSnapshot";
 import {
   getMoundSnapshot,
   setMoundSnapshot,
@@ -147,6 +148,11 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
   // future "why is this empty" pass can read the answer instead of
   // re-deriving it from the scoring formula by hand.
   const confirmedLineupScores: number[] = [];
+  // Research instrumentation only (evaluationSnapshot.ts) — the same season
+  // rate inputs moundOutcomeAttribution.ts's seasonBaseline() uses, captured
+  // per pitcher this cycle so the post-loop evaluation-snapshot pass can
+  // freeze them without a second data fetch.
+  const seasonRatesByPitcherId = new Map<string, { seasonKPer9: number | null; seasonAvgInningsPerStart: number | null }>();
 
   try {
     const games = await discoverTodaysGames();
@@ -290,6 +296,10 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
 
         const pitcherKnown = true; // starter itself is always known here
         const avgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
+        seasonRatesByPitcherId.set(starter.pitcherId, {
+          seasonKPer9: seasonStats?.kPer9 ?? null,
+          seasonAvgInningsPerStart: avgInningsPerStart,
+        });
         // Calls the same shared function as moundOutcomeAttribution.ts's
         // settlement baseline (scoreUtils.ts) — the displayed projection and
         // the number that decides win/loss grading must never be able to
@@ -633,6 +643,18 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
     console.error(`[MLB_PREGAME_MOUND_TARGETS] build failed buildId=${buildId}:`, err?.message ?? err);
     isMoundRadarBuildRunning = false;
     return null;
+  }
+
+  // Research instrumentation (frozen evaluation snapshots) — runs once over
+  // the COMPLETE population after every candidate this cycle has been built
+  // and carryForwardMoundGradedState has already pinned moundDirection for
+  // each (the per-pitcher loop above already ran that), so a same-cycle
+  // Follow+Fade conflict resolves against the correctly-pinned direction.
+  // Never affects score10/tier/drivers/marketScores or public sort/filter.
+  try {
+    applyMoundEvaluationSnapshots(signals, prevSignals, buildId, seasonRatesByPitcherId);
+  } catch (err: any) {
+    console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] buildId=${buildId} failed:`, err?.message ?? err);
   }
 
   const completedAt = new Date().toISOString();
