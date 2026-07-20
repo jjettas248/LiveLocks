@@ -28,6 +28,7 @@ import type {
   MoundGradingMeasurements,
 } from "./types";
 import type { MoundDirection } from "./moundDirection";
+import { projectedStrikeoutsFromKPer9, round1 } from "./scoreUtils";
 
 export interface MoundPopulationRank {
   holistic: number;
@@ -72,13 +73,20 @@ export function computeMoundPopulationRanks(signals: MoundSignal[]): Map<string,
   return result;
 }
 
-/** Season-rate-derived frozen baseline, same shape as moundOutcomeAttribution.ts's seasonBaseline(). */
+/**
+ * Season-rate-derived frozen baseline. Reuses the SAME shared helpers
+ * moundOutcomeAttribution.ts's seasonBaseline() calls
+ * (projectedStrikeoutsFromKPer9 for strikeouts, round1 for the outs
+ * multiplication) rather than duplicating their formulas, so the frozen
+ * value and the production settlement baseline can never independently
+ * drift apart from a formula edit landing in only one place.
+ */
 export function computeFrozenProductionBaseline(
   seasonKPer9: number | null,
   seasonAvgInningsPerStart: number | null,
 ): { strikeouts: { value: number | null }; outs: { value: number | null } } {
-  const strikeouts = seasonKPer9 != null ? Math.round(((seasonKPer9 * 6) / 9) * 10) / 10 : null;
-  const outs = seasonAvgInningsPerStart != null ? Math.round(seasonAvgInningsPerStart * 3 * 10) / 10 : null;
+  const strikeouts = projectedStrikeoutsFromKPer9(seasonKPer9);
+  const outs = seasonAvgInningsPerStart != null ? round1(seasonAvgInningsPerStart * 3) : null;
   return { strikeouts: { value: strikeouts }, outs: { value: outs } };
 }
 
@@ -106,9 +114,15 @@ export function buildMoundEvaluationSnapshot(
         runEnvironmentScore: signal.diagnostics.runEnvironmentScore,
         recentFormScore: signal.diagnostics.recentFormScore,
       },
-      marketScores: signal.marketScores,
-      drivers: signal.drivers,
-      rank,
+      // Cloned, not referenced — carried-over (dropped-from-mound) signals
+      // share these object/array references with the retained previous
+      // snapshot via a shallow spread (see the doc comment on
+      // applyMoundEvaluationSnapshots below); embedding them by reference
+      // here would let any future mutation of the live signal's
+      // marketScores/drivers silently corrupt an already-frozen snapshot.
+      marketScores: { ...signal.marketScores },
+      drivers: signal.drivers.slice(),
+      rank: { holistic: rank.holistic, byMarket: { ...rank.byMarket } },
       dataCoverageScore: signal.diagnostics.dataCoverageScore,
       lineupStatus: signal.lineupStatus,
       weatherStatus: signal.weatherStatus,
@@ -203,9 +217,14 @@ export function applyMoundSnapshotLifecycle(
   let firstPublicDirection = prevEvaluation?.firstPublicDirection ?? null;
   let directionConflict = prevEvaluation?.directionConflict ?? false;
 
-  if (firstPublicSnapshot == null) {
+  // Only re-evaluate the transition while the reason is still at its default
+  // ("not_yet_public") — see the identical guard in pregamePowerRadar/
+  // evaluationSnapshot.ts's applySnapshotLifecycle for why this matters
+  // (prevents a later cycle's instrumentationGapDetected re-check from
+  // clobbering a more specific reason recorded on an earlier cycle).
+  if (firstPublicSnapshot == null && firstPublicUnavailableReason === "not_yet_public") {
     const becamePublicNow = transition.becamePublicFollowNow || transition.becamePublicFadeNow;
-    if (becamePublicNow) {
+    if (becamePublicNow && !transition.lockedForEvaluation) {
       let resolvedDirection: "follow" | "fade" | null;
       if (transition.directionConflict) {
         directionConflict = true;
@@ -219,6 +238,12 @@ export function applyMoundSnapshotLifecycle(
       firstPublicSnapshot = currentSnapshot;
       firstPublicUnavailableReason = null;
       firstPublicDirection = resolvedDirection;
+    } else if (becamePublicNow && transition.lockedForEvaluation) {
+      // Genuinely became public for the first time, but only after locking —
+      // there is no legitimate pregame moment to freeze. Never mint from
+      // post-lock data, and never attempt to resolve a direction for a
+      // discarded mint.
+      firstPublicUnavailableReason = "became_public_after_lock";
     } else if (transition.instrumentationGapDetected) {
       firstPublicUnavailableReason = "instrumentation_started_after_surface";
     }
@@ -303,8 +328,13 @@ export function applyMoundEvaluationSnapshots(
  * Shadow-only grading measurements (§7b) — computed at grading time,
  * independent of and never altering deriveMoundOutcome's existing public
  * classification. Reads the frozen baseline from `finalPregameSnapshot` when
- * legitimate; falls back to a caller-supplied live baseline (tagged
- * legacyMovingBaseline) only when no frozen snapshot exists.
+ * legitimate; falls back to a caller-supplied live baseline only when no
+ * frozen snapshot exists. Only call this once the pitcher's outing is
+ * genuinely complete (`outingComplete === true`) — see moundShadowOutcomes.ts,
+ * which withholds this call entirely while a monotonic-safe live Follow win
+ * is still pending its final counting-stat refresh, so `finalStrikeouts`/
+ * `finalOutsRecorded` here are always true final totals, never partial live
+ * ones.
  */
 export function computeMoundGradingMeasurements(
   primaryMarket: MoundMarket,
@@ -320,13 +350,23 @@ export function computeMoundGradingMeasurements(
     primaryMarket === "pitcher_strikeouts"
       ? finalPregameSnapshot?.champion.frozenProductionBaseline.strikeouts.value ?? null
       : finalPregameSnapshot?.champion.frozenProductionBaseline.outs.value ?? null;
-  const legacyMovingBaseline = frozenBaseline == null && legacyLiveBaseline != null;
-  const baselineValue = frozenBaseline ?? legacyLiveBaseline;
+  // Truthful provenance — never claims "frozen_production_baseline" when a
+  // legacy live value was actually used, and never claims a legacy value was
+  // used when neither source produced one.
+  const baselineSource: MoundGradingMeasurements["championVsFrozenBaseline"]["baselineSource"] =
+    frozenBaseline != null ? "frozen_production_baseline" : legacyLiveBaseline != null ? "legacy_live_baseline" : "unavailable";
+  const baselineValue = frozenBaseline ?? legacyLiveBaseline ?? null;
 
+  // First blocking reason, in priority order: no baseline → no actual result
+  // → no resolvable direction. `comparison` is a pure numeric fact (actual
+  // vs. baseline) and stays populated even when direction can't be
+  // determined — only `directionResult` degrades to "unavailable" in that case.
   let comparison: MoundGradingMeasurements["championVsFrozenBaseline"]["comparison"] = "unavailable";
-  let gradingUnavailableReason: "no_baseline" | null = null;
-  if (baselineValue == null || actual == null) {
+  let gradingUnavailableReason: MoundGradingMeasurements["championVsFrozenBaseline"]["gradingUnavailableReason"] = null;
+  if (baselineValue == null) {
     gradingUnavailableReason = "no_baseline";
+  } else if (actual == null) {
+    gradingUnavailableReason = "no_actual_result";
   } else if (actual === baselineValue) {
     comparison = "push";
   } else {
@@ -334,10 +374,21 @@ export function computeMoundGradingMeasurements(
   }
 
   let directionResult: MoundGradingMeasurements["championVsFrozenBaseline"]["directionResult"] = "unavailable";
-  if (comparison === "unavailable") directionResult = "unavailable";
-  else if (comparison === "push") directionResult = "push";
-  else if (moundDirection === "fade") directionResult = comparison === "under" ? "fade_win" : "loss";
-  else directionResult = comparison === "over" ? "follow_win" : "loss";
+  if (comparison === "unavailable") {
+    directionResult = "unavailable";
+  } else if (comparison === "push") {
+    directionResult = "push";
+  } else if (moundDirection === "fade") {
+    directionResult = comparison === "under" ? "fade_win" : "loss";
+  } else if (moundDirection === "follow") {
+    directionResult = comparison === "over" ? "follow_win" : "loss";
+  } else {
+    // moundDirection is null/unresolved — NEVER fall through to Follow
+    // behavior. A missing direction always yields "unavailable" here, even
+    // though comparison itself is a known fact.
+    directionResult = "unavailable";
+    if (gradingUnavailableReason == null) gradingUnavailableReason = "no_direction";
+  }
 
   const line =
     primaryMarket === "pitcher_strikeouts"
@@ -356,13 +407,12 @@ export function computeMoundGradingMeasurements(
 
   return {
     championVsFrozenBaseline: {
-      baselineSource: "frozen_production_baseline",
+      baselineSource,
       baselineValue,
       actual,
       comparison,
       directionResult,
       gradingUnavailableReason,
-      legacyMovingBaseline,
     },
     actualVsFrozenLine: {
       line: line?.line ?? null,

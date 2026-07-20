@@ -177,7 +177,7 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
   ok(m.championVsFrozenBaseline.baselineValue === 6, "primary measurement uses the frozen production baseline (6.0)");
   ok(m.championVsFrozenBaseline.comparison === "over", "7 > 6 → over");
   ok(m.championVsFrozenBaseline.directionResult === "follow_win", "Follow + over baseline → follow_win");
-  ok(m.championVsFrozenBaseline.legacyMovingBaseline === false, "frozen baseline was available — not a legacy fallback");
+  ok(m.championVsFrozenBaseline.baselineSource === "frozen_production_baseline", "frozen baseline was available — provenance says so truthfully");
   ok(m.actualVsFrozenLine.line === 4.5, "secondary measurement uses the posted line (4.5), separately");
   ok(m.actualVsFrozenLine.result === "over", "7 > 4.5 → over, independent of the primary result");
   ok(m.projectionError.projectedValue === 5.5, "projection-error measurement uses matchupAdjustedStrikeouts (5.5), a THIRD distinct value");
@@ -197,7 +197,7 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
 {
   const m = computeMoundGradingMeasurements("pitcher_strikeouts", "follow", null, 7, null, 6);
   ok(m.championVsFrozenBaseline.baselineValue === 6, "falls back to the caller-supplied legacy live baseline");
-  ok(m.championVsFrozenBaseline.legacyMovingBaseline === true, "tagged legacyMovingBaseline for promotion-grade exclusion");
+  ok(m.championVsFrozenBaseline.baselineSource === "legacy_live_baseline", "provenance truthfully says legacy_live_baseline, never frozen_production_baseline");
 }
 
 // ── 10. Mound Outs never has a posted line — always unavailable, never cross-substituted from Ks ──
@@ -248,6 +248,84 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
     "Shadow measurement: 5 does NOT clear the frozen baseline (6) → loss — DISAGREES with the public mound_win, proving true independence");
 
   ok(publicOutcome.outcome === "mound_win", "Public outcome is STILL mound_win after computing the disagreeing shadow measurement — no cross-contamination either direction");
+}
+
+// ── 12. Blocker #1: a candidate that becomes public for the FIRST time only AFTER it's already locked never mints ──
+{
+  const fresh = sig({ everPubliclyFlagged: true, moundDirection: "follow", status: "locked", firstPitchLockEligible: false, gameStatus: "live" });
+  const transition = detectMoundTransition(fresh, undefined);
+  ok(transition.becamePublicFollowNow === true && transition.lockedForEvaluation === true,
+    "candidate is public for the first time AND already locked in the same cycle");
+  const snapshot = buildMoundEvaluationSnapshot(fresh, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6);
+  const record = applyMoundSnapshotLifecycle(null, snapshot, transition, fresh.moundDirection);
+  ok(record.firstPublicSnapshot === null, "post-lock first-public transition never mints a snapshot");
+  ok(record.firstPublicUnavailableReason === "became_public_after_lock", "reason is truthfully became_public_after_lock, not a fabricated pregame moment");
+  ok(record.firstPublicDirection === null, "no direction is resolved for a discarded post-lock mint");
+}
+
+// ── 12b. The became_public_after_lock reason must not be clobbered by a later cycle's gap re-check ──
+{
+  const fresh1 = sig({ everPubliclyFlagged: true, moundDirection: "follow", status: "locked", firstPitchLockEligible: false, gameStatus: "live" });
+  const t1 = detectMoundTransition(fresh1, undefined);
+  const snap1 = buildMoundEvaluationSnapshot(fresh1, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6);
+  const record1 = applyMoundSnapshotLifecycle(null, snap1, t1, fresh1.moundDirection);
+  ok(record1.firstPublicUnavailableReason === "became_public_after_lock", "cycle 1: reason set correctly");
+
+  // Cycle 2: same signal, still locked, still public — previousWasPublic is now
+  // true and priorEvaluation.firstPublicSnapshot is still null, so
+  // instrumentationGapDetected WOULD fire again if not guarded against.
+  const fresh2 = sig({ everPubliclyFlagged: true, moundDirection: "follow", status: "locked", firstPitchLockEligible: false, gameStatus: "live" });
+  const t2 = detectMoundTransition(fresh2, fresh1);
+  ok(t2.instrumentationGapDetected === true, "cycle 2's raw gap re-check is (correctly) still true — the guard must live in applyMoundSnapshotLifecycle, not detectMoundTransition");
+  const snap2 = buildMoundEvaluationSnapshot(fresh2, { holistic: 1, byMarket: {} }, "b2", 1, "2026-07-02T00:00:00Z", 9, 6);
+  const record2 = applyMoundSnapshotLifecycle(record1, snap2, t2, fresh2.moundDirection);
+  ok(record2.firstPublicUnavailableReason === "became_public_after_lock",
+    "cycle 2: reason stays became_public_after_lock, NOT overwritten to instrumentation_started_after_surface");
+}
+
+// ── 13. Blocker #3: a null moundDirection must yield an unavailable direction result — never falls through to Follow ──
+{
+  const finalPregameSnapshot = buildMoundEvaluationSnapshot(sig({}), { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6);
+  // baseline=6, actual=9 → would be a clean "over"/follow_win IF direction were Follow. It must not be, since moundDirection is null.
+  const m = computeMoundGradingMeasurements("pitcher_strikeouts", null, finalPregameSnapshot, 9, null, null);
+  ok(m.championVsFrozenBaseline.comparison === "over", "comparison itself is still a known, computable fact (9 > 6)");
+  ok(m.championVsFrozenBaseline.directionResult === "unavailable", "directionResult is unavailable — NEVER follow_win when moundDirection is null");
+  ok(m.championVsFrozenBaseline.gradingUnavailableReason === "no_direction", "reason correctly identifies the missing direction, not a missing baseline/actual");
+}
+
+// ── 14. Blocker #4: baseline provenance is truthful, and missing-actual is distinguished from missing-baseline ──
+{
+  // No frozen snapshot, no legacy baseline → genuinely unavailable, not silently "frozen".
+  const m1 = computeMoundGradingMeasurements("pitcher_strikeouts", "follow", null, 9, null, null);
+  ok(m1.championVsFrozenBaseline.baselineSource === "unavailable", "no frozen and no legacy baseline → baselineSource is truthfully unavailable");
+  ok(m1.championVsFrozenBaseline.gradingUnavailableReason === "no_baseline", "reason is no_baseline");
+  ok(m1.championVsFrozenBaseline.comparison === "unavailable", "comparison can't be computed without a baseline");
+
+  // Baseline available (frozen), but the actual result itself is missing (box score not yet resolved).
+  const finalPregameSnapshot = buildMoundEvaluationSnapshot(sig({}), { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6);
+  const m2 = computeMoundGradingMeasurements("pitcher_strikeouts", "follow", finalPregameSnapshot, null, null, null);
+  ok(m2.championVsFrozenBaseline.baselineSource === "frozen_production_baseline", "baseline itself IS available here");
+  ok(m2.championVsFrozenBaseline.baselineValue === 6, "baseline value is populated");
+  ok(m2.championVsFrozenBaseline.gradingUnavailableReason === "no_actual_result",
+    "reason correctly distinguishes 'missing actual' from 'missing baseline' — these are NOT the same failure");
+  ok(m2.championVsFrozenBaseline.comparison === "unavailable", "comparison unavailable without an actual result");
+}
+
+// ── 15. Hardening: marketScores/drivers/rank are cloned, not referenced — mutating the source never leaks into a frozen snapshot ──
+{
+  const signal = sig({ marketScores: { pitcher_strikeouts: 7 }, drivers: [{ key: "d1", label: "L1", direction: "positive" }] });
+  const rank = { holistic: 1, byMarket: { pitcher_strikeouts: 1 } };
+  const snapshot = buildMoundEvaluationSnapshot(signal, rank, "b1", 1, "2026-07-01T00:00:00Z", 9, 6);
+  ok(snapshot.champion.marketScores !== signal.marketScores, "marketScores is a distinct object, not the same reference");
+  ok(snapshot.champion.drivers !== signal.drivers, "drivers is a distinct array, not the same reference");
+  ok(snapshot.champion.rank !== rank && snapshot.champion.rank.byMarket !== rank.byMarket, "rank (and its byMarket) is a distinct object, not the same reference");
+
+  signal.marketScores.pitcher_strikeouts = 999;
+  signal.drivers.push({ key: "d2", label: "L2", direction: "negative" });
+  rank.byMarket.pitcher_strikeouts = 999;
+  ok(snapshot.champion.marketScores.pitcher_strikeouts === 7, "snapshot's marketScores unaffected by mutating the source signal's marketScores afterward");
+  ok(snapshot.champion.drivers.length === 1, "snapshot's drivers unaffected by pushing onto the source signal's drivers afterward");
+  ok(snapshot.champion.rank.byMarket.pitcher_strikeouts === 1, "snapshot's rank unaffected by mutating the source rank object afterward");
 }
 
 console.log(`\nevaluationSnapshot.test (Mound): ${passed} passed, ${failed} failed`);

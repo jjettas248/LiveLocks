@@ -99,9 +99,15 @@ export function buildEvaluationSnapshot(
         lineupOpportunityScore: signal.diagnostics.lineupOpportunityScore,
         nearHrRecentFormScore: signal.diagnostics.nearHrRecentFormScore ?? null,
       },
-      marketScores: signal.marketScores,
-      drivers: signal.drivers,
-      rank,
+      // Cloned, not referenced — carried-over (dropped-from-lineup) signals
+      // share these object/array references with the retained previous
+      // snapshot via a shallow spread (see the doc comment on
+      // applyEvaluationSnapshots below); embedding them by reference here
+      // would let any future mutation of the live signal's marketScores/
+      // drivers silently corrupt an already-frozen snapshot.
+      marketScores: { ...signal.marketScores },
+      drivers: signal.drivers.slice(),
+      rank: { holistic: rank.holistic, byMarket: { ...rank.byMarket } },
       dataCoverageScore: signal.diagnostics.dataCoverageScore,
       lineupStatus: signal.lineupStatus,
       weatherStatus: signal.weatherStatus,
@@ -171,10 +177,22 @@ export function applySnapshotLifecycle(
   let firstPublicSnapshot = prevEvaluation?.firstPublicSnapshot ?? null;
   let firstPublicUnavailableReason: PregameEvaluationRecord["firstPublicUnavailableReason"] =
     prevEvaluation?.firstPublicUnavailableReason ?? "not_yet_public";
-  if (firstPublicSnapshot == null) {
-    if (transition.becamePublicNow) {
+  // Only re-evaluate the transition while the reason is still at its default
+  // ("not_yet_public") — once a definitive reason (or a mint) has been
+  // recorded, it must carry forward unchanged. Without this guard, a later
+  // cycle's instrumentationGapDetected re-check (which stays true every
+  // cycle after the signal is already public) would silently overwrite a
+  // more specific reason set on an earlier cycle (e.g. "became_public_after_
+  // lock") with the generic "instrumentation_started_after_surface".
+  if (firstPublicSnapshot == null && firstPublicUnavailableReason === "not_yet_public") {
+    if (transition.becamePublicNow && !transition.lockedForEvaluation) {
       firstPublicSnapshot = currentSnapshot;
       firstPublicUnavailableReason = null;
+    } else if (transition.becamePublicNow && transition.lockedForEvaluation) {
+      // Genuinely became public for the first time, but only after locking —
+      // there is no legitimate pregame moment to freeze. Never mint from
+      // post-lock data.
+      firstPublicUnavailableReason = "became_public_after_lock";
     } else if (transition.instrumentationGapDetected) {
       firstPublicUnavailableReason = "instrumentation_started_after_surface";
     }

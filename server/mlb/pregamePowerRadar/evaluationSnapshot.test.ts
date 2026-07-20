@@ -187,5 +187,55 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
   ok(signals.get("s1")!.diagnostics.evaluation!.finalPregameSnapshot!.candidatePoolSize === 2, "candidatePoolSize reflects the full population, not per-signal");
 }
 
+// ── 9. Blocker #1: a candidate that becomes public for the FIRST time only AFTER it's already locked never mints ──
+{
+  const fresh = sig({ everPubliclyFlagged: true, status: "locked", firstPitchLockEligible: false, gameStatus: "live" });
+  const transition = detectTransition(fresh, undefined);
+  ok(transition.becamePublicNow === true && transition.lockedForEvaluation === true,
+    "candidate is public for the first time AND already locked in the same cycle");
+  const snapshot = buildEvaluationSnapshot(fresh, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z");
+  const record = applySnapshotLifecycle(null, snapshot, transition);
+  ok(record.firstPublicSnapshot === null, "post-lock first-public transition never mints a snapshot");
+  ok(record.firstPublicUnavailableReason === "became_public_after_lock", "reason is truthfully became_public_after_lock, not a fabricated pregame moment");
+}
+
+// ── 9b. The became_public_after_lock reason must not be clobbered by a later cycle's gap re-check ──
+{
+  const fresh1 = sig({ everPubliclyFlagged: true, status: "locked", firstPitchLockEligible: false, gameStatus: "live" });
+  const t1 = detectTransition(fresh1, undefined);
+  const snap1 = buildEvaluationSnapshot(fresh1, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z");
+  const record1 = applySnapshotLifecycle(null, snap1, t1);
+  ok(record1.firstPublicUnavailableReason === "became_public_after_lock", "cycle 1: reason set correctly");
+
+  // Cycle 2: same signal, still locked, still public — previouslyPublic is
+  // now true and priorEvaluation.firstPublicSnapshot is still null, so
+  // instrumentationGapDetected WOULD fire again if not guarded against.
+  const fresh2 = sig({ everPubliclyFlagged: true, status: "locked", firstPitchLockEligible: false, gameStatus: "live" });
+  const t2 = detectTransition(fresh2, fresh1);
+  ok(t2.instrumentationGapDetected === true, "cycle 2's raw gap re-check is (correctly) still true — the guard must live in applySnapshotLifecycle, not detectTransition");
+  const snap2 = buildEvaluationSnapshot(fresh2, { holistic: 1, byMarket: {} }, "b2", 1, "2026-07-02T00:00:00Z");
+  const record2 = applySnapshotLifecycle(record1, snap2, t2);
+  ok(record2.firstPublicUnavailableReason === "became_public_after_lock",
+    "cycle 2: reason stays became_public_after_lock, NOT overwritten to instrumentation_started_after_surface");
+}
+
+// ── 10. Hardening: marketScores/drivers/rank are cloned, not referenced — mutating the source never leaks into a frozen snapshot ──
+{
+  const signal = sig({ marketScores: { home_runs: 7 }, drivers: [{ key: "d1", label: "L1", direction: "positive" }] });
+  const rank = { holistic: 1, byMarket: { home_runs: 1 } };
+  const snapshot = buildEvaluationSnapshot(signal, rank, "b1", 1, "2026-07-01T00:00:00Z");
+  ok(snapshot.champion.marketScores !== signal.marketScores, "marketScores is a distinct object, not the same reference");
+  ok(snapshot.champion.drivers !== signal.drivers, "drivers is a distinct array, not the same reference");
+  ok(snapshot.champion.rank !== rank && snapshot.champion.rank.byMarket !== rank.byMarket, "rank (and its byMarket) is a distinct object, not the same reference");
+
+  // Mutate the SOURCE objects after the snapshot was built — the frozen snapshot must be unaffected.
+  signal.marketScores.home_runs = 999;
+  signal.drivers.push({ key: "d2", label: "L2", direction: "negative" });
+  rank.byMarket.home_runs = 999;
+  ok(snapshot.champion.marketScores.home_runs === 7, "snapshot's marketScores unaffected by mutating the source signal's marketScores afterward");
+  ok(snapshot.champion.drivers.length === 1, "snapshot's drivers unaffected by pushing onto the source signal's drivers afterward");
+  ok(snapshot.champion.rank.byMarket.home_runs === 1, "snapshot's rank unaffected by mutating the source rank object afterward");
+}
+
 console.log(`\nevaluationSnapshot.test (Plate): ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

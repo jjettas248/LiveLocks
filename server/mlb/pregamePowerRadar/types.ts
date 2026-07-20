@@ -259,11 +259,13 @@ export interface PregameEvaluationSnapshot {
  * any per-market data-quality concept.
  */
 export interface PregameEvaluationRecord {
-  /** Written exactly once, at genuine nonpublic→public transition. Never overwritten after. */
+  /** Written exactly once, at genuine nonpublic→public transition, and only while the signal is still unlocked. Never overwritten after. */
   firstPublicSnapshot: PregameEvaluationSnapshot | null;
   firstPublicUnavailableReason:
     | "not_yet_public"
     | "instrumentation_started_after_surface"
+    /** The signal genuinely became public for the first time, but only AFTER it had already locked — there is no legitimate pregame moment to freeze, so no snapshot is minted. */
+    | "became_public_after_lock"
     | null;
   /** Refreshed every pre-lock cycle; frozen permanently once locked. */
   finalPregameSnapshot: PregameEvaluationSnapshot | null;

@@ -193,11 +193,13 @@ export interface MoundEvaluationSnapshot {
  * any per-market data-quality concept.
  */
 export interface MoundEvaluationRecord {
-  /** Written exactly once, at genuine nonpublic→public transition (either direction). Never overwritten after. */
+  /** Written exactly once, at genuine nonpublic→public transition (either direction), and only while the signal is still unlocked. Never overwritten after. */
   firstPublicSnapshot: MoundEvaluationSnapshot | null;
   firstPublicUnavailableReason:
     | "not_yet_public"
     | "instrumentation_started_after_surface"
+    /** The signal genuinely became public for the first time, but only AFTER it had already locked — there is no legitimate pregame moment to freeze, so no snapshot is minted. */
+    | "became_public_after_lock"
     | null;
   /** Which direction first went public. "null" when unresolved after a same-cycle Follow+Fade conflict. */
   firstPublicDirection: "follow" | "fade" | null;
@@ -214,7 +216,12 @@ export interface MoundEvaluationRecord {
    * Populated once, at grading time, by moundShadowOutcomes.ts — three
    * separate measurements (§7b), independent of and never altering the
    * existing public mound_win/mound_fade_win/mound_calibration_miss
-   * classification on `outcomes` above.
+   * classification on `outcomes` above. Stays `null` while a monotonic-safe
+   * live Follow win has been granted but the pitcher's outing is not yet
+   * complete (`outcomes.gradedLive === true`) — computing these measurements
+   * from partial, still-climbing live totals would be misleading; they are
+   * only computed once, at the final counting-stat refresh once the outing
+   * is genuinely complete.
    */
   gradingMeasurements?: MoundGradingMeasurements | null;
 }
@@ -222,15 +229,15 @@ export interface MoundEvaluationRecord {
 export interface MoundGradingMeasurements {
   /** PRIMARY: champion result vs. the frozen production baseline (never a sportsbook line). */
   championVsFrozenBaseline: {
-    baselineSource: "frozen_production_baseline";
+    /** Truthful provenance — "unavailable" when neither a frozen nor a legacy baseline exists. Never claims "frozen_production_baseline" when a legacy live value was actually used. */
+    baselineSource: "frozen_production_baseline" | "legacy_live_baseline" | "unavailable";
     baselineValue: number | null;
     actual: number | null;
     comparison: "over" | "under" | "push" | "unavailable";
-    /** Direction-aware result using the pinned moundDirection at grading time. */
+    /** Direction-aware result using the pinned moundDirection at grading time. A null/unresolved moundDirection ALWAYS yields "unavailable" here — never falls through to Follow behavior. */
     directionResult: "follow_win" | "fade_win" | "loss" | "push" | "unavailable";
-    gradingUnavailableReason: "no_baseline" | null;
-    /** True when no frozen baseline existed and this fell back to today's live-refetch behavior. */
-    legacyMovingBaseline: boolean;
+    /** First blocking reason, in priority order: no baseline value → no actual result → no resolvable direction. Null only when directionResult is a real, non-"unavailable" verdict. */
+    gradingUnavailableReason: "no_baseline" | "no_actual_result" | "no_direction" | null;
   };
   /** SECONDARY: evaluation-only comparison vs. a frozen sportsbook line, when one exists. */
   actualVsFrozenLine: {
