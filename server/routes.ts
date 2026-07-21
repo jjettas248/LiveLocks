@@ -3221,6 +3221,20 @@ export async function registerRoutes(
         console.warn(`[LL_CANONICAL_VIEWMODEL_BRIDGE] enrichment failed: ${(bridgeErr as Error).message}`);
       }
 
+      const requestUser = await storage.getUserById((req as any).resolvedUserId);
+      const viewModeHeader = req.header("x-ll-admin-view-mode") ?? null;
+      const { resolveLiveEdgeAccess, buildEdgeFeedResponse } = await import("./services/liveEdgeAccess");
+      const edgeFeedEnvelope = { updatedAt: newestUpdatedAt, generatedAt: Date.now(), staleCount: totalDropped, edgeCacheEntries: totalEdgeCacheEntries };
+      const activeCount = enrichedSignals.length;
+
+      // Preview (non-entitled) users never need the market-signals grouping
+      // computed at all — short-circuit before doing that work, regardless
+      // of which `view` was requested. Preview always collapses to the same
+      // exact minimal shape.
+      if (resolveLiveEdgeAccess(requestUser, "mlb", viewModeHeader) !== "full") {
+        return res.json(buildEdgeFeedResponse(requestUser, viewModeHeader, activeCount, enrichedSignals, edgeFeedEnvelope, "default"));
+      }
+
       // ── Signal-First Surfacing (LiveLocks MLB UX Phase 1) ────────────
       // Optional alternate response shape: ?view=market-signals returns
       // pre-grouped, signal-first MarketSignalViewModel rows used by the
@@ -3273,18 +3287,17 @@ export async function registerRoutes(
               `unknownInning=${unknownSummary.unknownInningCount}`,
           );
 
+          // inningWindow isn't part of the shared response contract (it's an
+          // echo of the request param, not signal data) — kept as an extra
+          // field alongside the delegated body for back-compat.
           return res.json({
-            mode: sorted.length > 0 ? "live" : "monitoring",
-            view: "market-signals",
             inningWindow: filter,
-            rows: sorted,
-            grouped,
-            unknownInningCount: unknownSummary.unknownInningCount,
-            unknownInningReasons: unknownSummary.unknownInningReasons,
-            updatedAt: newestUpdatedAt,
-            generatedAt: Date.now(),
-            staleCount: totalDropped,
-            edgeCacheEntries: totalEdgeCacheEntries,
+            ...buildEdgeFeedResponse(requestUser, viewModeHeader, activeCount, enrichedSignals, edgeFeedEnvelope, "market-signals", {
+              rows: sorted,
+              grouped,
+              unknownInningCount: unknownSummary.unknownInningCount,
+              unknownInningReasons: unknownSummary.unknownInningReasons,
+            }),
           });
         } catch (vmErr) {
           console.error(`[MLB_MARKET_VIEWMODEL] market-signals view failed: ${(vmErr as Error).message}`);
@@ -3292,17 +3305,10 @@ export async function registerRoutes(
         }
       }
 
-      return res.json({
-        mode: enrichedSignals.length > 0 ? "live" : "monitoring",
-        signals: enrichedSignals,
-        updatedAt: newestUpdatedAt,
-        generatedAt: Date.now(),
-        staleCount: totalDropped,
-        edgeCacheEntries: totalEdgeCacheEntries,
-      });
+      return res.json(buildEdgeFeedResponse(requestUser, viewModeHeader, activeCount, enrichedSignals, edgeFeedEnvelope, "default"));
     } catch (e: any) {
       console.error("[mlb/edge-feed]", e.message);
-      return res.json({ mode: "monitoring", signals: [], updatedAt: 0, generatedAt: Date.now(), staleCount: 0, edgeCacheEntries: 0 });
+      return res.json({ access: "full", mode: "monitoring", signals: [], updatedAt: 0, generatedAt: Date.now(), staleCount: 0, edgeCacheEntries: 0 });
     }
   });
 
@@ -9831,7 +9837,7 @@ export function registerAnalyticsRoutes(app: Express): void {
   //
   // AUDIT ENDPOINT CONTRACT (STRICT — DO NOT VIOLATE):
   // - This endpoint reads signal results from calcLogEntries ONLY.
-  app.get("/api/top-plays", requireAuth, async (_req, res) => {
+  app.get("/api/top-plays", requireAuth, async (req, res) => {
     try {
       // ── LiveLocks Batch D — canonical-aware top-plays ──────────────
       // Bus is the primary inventory source. When the bus has registered
@@ -9839,7 +9845,8 @@ export function registerAnalyticsRoutes(app: Express): void {
       // matched MLBSignal payload). When the bus is empty (cold start /
       // pre-engine-cycle), fall back to mlbEdgeCache iteration tagged
       // with [LL_TOP_PLAYS_CACHE_FALLBACK] so the gap is observable.
-      const { buildTopPlays } = await import("./services/topPlaysService");
+      const { buildTopPlaysWithCount } = await import("./services/topPlaysService");
+      const { buildTopPlaysResponse } = await import("./services/liveEdgeAccess");
       const { readBusInventory } = await import("./services/canonicalSignalViewModel");
 
       const mlbSignals: any[] = [];
@@ -9978,8 +9985,9 @@ export function registerAnalyticsRoutes(app: Express): void {
         ...ncaabStorageSignals.filter((s: any) => !ncaabSeenKeys.has(`${s.gameId}_${s.market}`)),
       ];
 
-      const plays = buildTopPlays(nbaSignals, ncaabSignals, mlbSignals, 10);
-      return res.json({ plays });
+      const { plays, totalQualified } = buildTopPlaysWithCount(nbaSignals, ncaabSignals, mlbSignals, 10);
+      const requestUser = await storage.getUserById((req as any).resolvedUserId);
+      return res.json(buildTopPlaysResponse(requestUser, req.header("x-ll-admin-view-mode") ?? null, totalQualified, plays));
     } catch (e: any) {
       console.error("[top-plays]", e.message);
       // Return a real error (not 200 {plays:[]}) so the client can distinguish

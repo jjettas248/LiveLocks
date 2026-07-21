@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { getAdminViewMode } from "@/lib/adminViewMode";
 
 const TOKEN_KEY = "ll_auth_token";
 
@@ -27,6 +28,15 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
   const headers: Record<string, string> = { ...extra };
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
+  }
+  // Admin-only QA preview mode (see @/lib/adminViewMode). Inert everywhere
+  // except the few routes that explicitly read it, and those routes only
+  // ever honor it after confirming the REAL authenticated account is admin
+  // (server/services/liveEdgeAccess.ts) — a non-admin sending this header
+  // has no effect.
+  const viewMode = getAdminViewMode();
+  if (viewMode !== "real") {
+    headers["X-LL-Admin-View-Mode"] = viewMode;
   }
   return headers;
 }
@@ -59,10 +69,15 @@ const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
+  // Forward TanStack's AbortSignal to fetch() so queryClient.cancelQueries()
+  // actually aborts the in-flight network request (not just discards its
+  // eventual result) — needed so switching admin view-mode can't have a
+  // late-arriving old-mode response repopulate the cache after the switch.
+  async ({ queryKey, signal }) => {
     const res = await fetch(queryKey.join("/") as string, {
       credentials: "include",
       headers: authHeaders(),
+      signal,
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {

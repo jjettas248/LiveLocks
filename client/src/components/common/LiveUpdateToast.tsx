@@ -7,7 +7,11 @@ export function LiveUpdateToast() {
   const seenIds = useRef(new Set<string>());
 
   useEffect(() => {
-    if (!data?.plays?.length) return;
+    // Only ever surface real play details (player, market, probability) for
+    // a server-confirmed full-access response — a preview-access response
+    // has no `plays` array at all, so this naturally does nothing for
+    // free/non-entitled users instead of needing a separate guard.
+    if (data?.access !== "full" || !data.plays.length) return;
     const elitePlays = data.plays.filter(p => p.confidenceTier === "ELITE");
     for (const play of elitePlays) {
       if (!seenIds.current.has(play.id)) {
@@ -19,7 +23,7 @@ export function LiveUpdateToast() {
         }
       }
     }
-  }, [data?.plays]);
+  }, [data?.access === "full" ? data.plays : undefined]);
 
   if (!toast) return null;
 

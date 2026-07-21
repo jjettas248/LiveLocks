@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, Component, type ReactNode } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
+import { getAdminViewMode } from "@/lib/adminViewMode";
 import { TopPlays } from "@/components/mlb/TopPlays";
 import { TopLiveOpportunities } from "@/components/mlb/TopLiveOpportunities";
 import { LiveBoard } from "@/components/mlb/LiveBoard";
@@ -15,7 +16,10 @@ import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
 import { type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import { MlbSlateRibbon } from "@/components/mlb/MlbSlateRibbon";
+import { LiveEdgePreview } from "@/components/dashboard/LiveEdgePreview";
+import { UpgradeModal } from "@/components/upgrade-modal";
 import type { MLBSignal } from "@shared/mlbSignal";
+import type { LiveEdgePreview as LiveEdgePreviewData } from "@shared/topPlays";
 import { applyConvictionCap10, convictionDisplayBadge, pregameSeedTierLabel } from "@shared/hrRadarConviction";
 import { ProbabilityRing } from "@/components/probability-ring";
 import { StatCard } from "@/components/stat-card";
@@ -107,16 +111,24 @@ type MLBGamesResponse = {
   games: MLBGame[];
 };
 
-type EdgeFeedResponse = {
-  // Freshness Integrity Fix #2 — server now returns full feed metadata so the
-  // client can detect a real engine recompute and clear sticky state on advance.
-  mode?: "live" | "monitoring";
-  signals: MLBSignal[];
-  updatedAt?: number;
-  generatedAt?: number;
-  staleCount?: number;
-  edgeCacheEntries?: number;
-};
+// Server-authoritative discriminant (see server/services/liveEdgeAccess.ts).
+// "full" carries the complete existing shape unchanged; "preview" carries
+// only the sanitized LiveEdgePreview — no signals/rows/grouped fields ride
+// along, regardless of which `view` was requested.
+type EdgeFeedResponse =
+  | {
+      access: "full";
+      // Freshness Integrity Fix #2 — server now returns full feed metadata so
+      // the client can detect a real engine recompute and clear sticky state
+      // on advance.
+      mode?: "live" | "monitoring";
+      signals: MLBSignal[];
+      updatedAt?: number;
+      generatedAt?: number;
+      staleCount?: number;
+      edgeCacheEntries?: number;
+    }
+  | { access: "preview"; preview: LiveEdgePreviewData };
 
 
 type CanonicalGradedOutcome = {
@@ -512,6 +524,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null; overProbability?: number | null; underProbability?: number | null; engineConfidence?: number | null; source?: "engine" | "calculator" }>>([]);
   const [analyzeTarget, setAnalyzeTarget] = useState<{ playerId: string; gameId: string } | null>(null);
   const [hrViewMode, setHrViewMode] = useState<"quick" | "ladder">("quick");
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   const isElite = user?.hasMLB === true;
 
@@ -532,24 +545,41 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
   // by displayGroup. Inning window filter is sent as a query param —
   // server filters but never DROPS valid signals (unknown rows pass
   // through, just de-prioritized in sort).
-  const { data: marketSignalsResp } = useQuery<{
-    rows: import("@/components/mlb/LiveFeed").MarketSignalViewModelClient[];
-    grouped: Record<string, import("@/components/mlb/LiveFeed").MarketSignalViewModelClient[]>;
-    unknownInningCount: number;
-    unknownInningReasons: Record<string, number>;
-  }>({
+  const { data: marketSignalsRespRaw } = useQuery<
+    | {
+        access: "full";
+        rows: import("@/components/mlb/LiveFeed").MarketSignalViewModelClient[];
+        grouped: Record<string, import("@/components/mlb/LiveFeed").MarketSignalViewModelClient[]>;
+        unknownInningCount: number;
+        unknownInningReasons: Record<string, number>;
+      }
+    | { access: "preview"; preview: LiveEdgePreviewData }
+  >({
     queryKey: ["/api/mlb/edge-feed", "market-signals", inningWindowFilter],
-    queryFn: async () => {
-      const res = await fetch(`/api/mlb/edge-feed?view=market-signals&inningWindow=${inningWindowFilter}`, { credentials: "include" });
+    queryFn: async ({ signal }) => {
+      const viewMode = getAdminViewMode();
+      const headers: Record<string, string> = {};
+      if (viewMode !== "real") headers["X-LL-Admin-View-Mode"] = viewMode;
+      const res = await fetch(`/api/mlb/edge-feed?view=market-signals&inningWindow=${inningWindowFilter}`, { credentials: "include", headers, signal });
       if (!res.ok) throw new Error("market-signals fetch failed");
       return res.json();
     },
     refetchInterval: 20_000,
     placeholderData: (prev) => prev,
-    enabled: activeSubTab === "live_feed",
+    // Preview-access users never need this query — the live_feed tab renders
+    // LiveEdgePreview from edgeFeedResp.access alone and never reads
+    // marketSignalsResp's data in that branch, so skip the extra request.
+    enabled: activeSubTab === "live_feed" && edgeFeedResp?.access !== "preview",
   });
-  const rawSignals: MlbSignalData[] = Array.isArray(edgeFeedResp?.signals)
-    ? (edgeFeedResp!.signals as MlbSignalData[]).map(s => mapMlbSignalToUi(s) as unknown as MlbSignalData)
+  // Narrowed view for the rest of the component — at runtime this is only
+  // ever the "preview" variant when edgeFeedResp is ALSO "preview" (both
+  // queries resolve the same user's access the same way), and the live_feed
+  // render branch below never reaches code that uses this when
+  // edgeFeedResp.access === "preview". Downstream code keeps using the same
+  // `marketSignalsResp` name/shape it always has.
+  const marketSignalsResp = marketSignalsRespRaw?.access === "full" ? marketSignalsRespRaw : undefined;
+  const rawSignals: MlbSignalData[] = edgeFeedResp?.access === "full" && Array.isArray(edgeFeedResp.signals)
+    ? edgeFeedResp.signals.map(s => mapMlbSignalToUi(s) as unknown as MlbSignalData)
     : [];
   const stickySignalMapRef = useRef<Map<string, MlbSignalData & { _stickyTs?: number }>>(new Map());
 
@@ -558,13 +588,13 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
   // potentially-misleading immediately, so we drop the whole map. The next
   // render rebuilds from `rawSignals` (the just-arrived authoritative feed).
   const lastEdgeFeedUpdatedAtRef = useRef<number>(0);
+  const edgeFeedUpdatedAt = edgeFeedResp?.access === "full" ? edgeFeedResp.updatedAt ?? 0 : 0;
   useEffect(() => {
-    const nextUpdatedAt = edgeFeedResp?.updatedAt ?? 0;
-    if (nextUpdatedAt > 0 && nextUpdatedAt !== lastEdgeFeedUpdatedAtRef.current) {
+    if (edgeFeedUpdatedAt > 0 && edgeFeedUpdatedAt !== lastEdgeFeedUpdatedAtRef.current) {
       stickySignalMapRef.current.clear();
-      lastEdgeFeedUpdatedAtRef.current = nextUpdatedAt;
+      lastEdgeFeedUpdatedAtRef.current = edgeFeedUpdatedAt;
     }
-  }, [edgeFeedResp?.updatedAt]);
+  }, [edgeFeedUpdatedAt]);
   // Freshness Integrity Fix #5 — TTL fallback in case `updatedAt` never
   // advances (engine quiet, server crash, network drop). 120s replaces the
   // old 30-minute TTL that let removed signals linger for half an hour.
@@ -797,6 +827,9 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
       />
 
       {activeSubTab === "live_feed" && (
+        edgeFeedResp?.access === "preview" ? (
+          <LiveEdgePreview preview={edgeFeedResp.preview} onUpgradeClick={() => setShowUpgradeModal(true)} />
+        ) : edgeFeedResp?.access !== "full" ? null : (
         <div className="space-y-4">
           {/* Signal-first inning window filter (LiveLocks MLB UX Phase 1). */}
           {(() => {
@@ -983,6 +1016,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
             );
           })()}
         </div>
+        )
       )}
 
       {activeSubTab === "pregame_power" && (
@@ -1106,6 +1140,15 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
             </div>
           </div>
         </div>
+      )}
+
+      {showUpgradeModal && (
+        <UpgradeModal
+          playsUsed={0}
+          limit={0}
+          currentTier={user?.subscriptionTier ?? null}
+          onClose={() => setShowUpgradeModal(false)}
+        />
       )}
     </div>
   );
