@@ -20,6 +20,7 @@ import {
   resolveMarketFitPresentation,
   getCarryPresentation,
   getWeatherSecondaryPresentations,
+  getGradeFactorTone,
   type PlateTagTone,
 } from "@/lib/mlb/plateTagPresentation";
 
@@ -107,6 +108,16 @@ interface PowerProfileSnapshot {
   pullRatePct?: number | null;
 }
 
+// Compact-card "Grade Factors" entry (see server/mlb/pregamePowerRadar/
+// gradeFactorSummary.ts GradeFactorEntry). Server-owned, frozen at build time —
+// rendered verbatim; the client never recomputes impact/selection/direction.
+interface GradeFactorEntry {
+  key: string;
+  label: string;
+  value: number;
+  direction: "positive" | "negative" | "neutral";
+}
+
 // Diagnostics carried by the server-side PregamePowerSignal (see
 // server/mlb/pregamePowerRadar/types.ts PregamePowerDiagnostics) and already
 // returned verbatim by the public API — surfaced here for the expanded detail
@@ -131,6 +142,12 @@ interface PregameDiagnostics {
   batterCurrentOrderSlot: number | null;
   /** Display-only raw power-profile snapshot — absent on older rehydrated rows. */
   powerProfile?: PowerProfileSnapshot;
+  /**
+   * Compact-card "Grade Factors" — absent/null on legacy rows or when Pitcher
+   * Vulnerability's own data isn't available. Render nothing in that case;
+   * never backfill from other diagnostics fields.
+   */
+  gradeFactorSummary?: GradeFactorEntry[] | null;
 }
 
 interface PregameSignal {
@@ -238,6 +255,37 @@ const BEST_ANGLE_LABEL: Partial<Record<Market, string>> = {
   total_bases: "Total Bases",
 };
 
+/**
+ * Shared by the compact market-fit chips and the expanded "Best Angle"/"Market
+ * Fit" sections so they can never disagree. Prefers server-stamped qualitative
+ * setups; falls back to bare market tags (no qualitative label, no raw score)
+ * for older payloads — never computes a tier here.
+ */
+function resolveMarketSetups(s: PregameSignal): MarketSetup[] {
+  return s.marketSetups && s.marketSetups.length > 0
+    ? s.marketSetups
+    : s.marketTags.map((m) => ({
+        market: m,
+        setupScore: s.marketScores[m] ?? 0,
+        setupLabel: undefined as unknown as SetupLabel,
+        isPrimary: m === s.primaryMarket,
+      }));
+}
+
+/**
+ * Best Angle fit word — the server-owned primary market's OWN fit tier
+ * (Elite/Strong/Solid). A Watch-tier (or legacy-absent) primary returns null so
+ * the market renders alone (bare), never a contradictory "Not Qualified".
+ * primaryMarket itself is never suppressed/promoted/re-derived here.
+ */
+function primaryFitWordFor(marketSetups: MarketSetup[]): string | null {
+  const primarySetup = marketSetups.find((m) => m.isPrimary);
+  return primarySetup?.setupLabel === "Elite" ? "Elite Fit"
+    : primarySetup?.setupLabel === "Strong" ? "Strong Fit"
+    : primarySetup?.setupLabel === "Solid" ? "Solid Fit"
+    : null;
+}
+
 /** Single resolver every driver-rendering call site uses (compact positives/negatives
  * rows, "Why We Like Him" list) so they can never disagree with each other or with the
  * expanded BvP row. For fit_bvp/fit_bvp_bad, both tone AND label come from
@@ -279,6 +327,10 @@ function PlateTagColorKey() {
         <div>
           <span className="font-semibold text-sky-300">Context</span>
           {" = Projection, limited evidence, or informational context"}
+        </div>
+        <div>
+          <span className="font-semibold text-orange-300">Attack</span>
+          {" = Favorable pitcher-vulnerability/attack condition (Grade Factors row) — distinct from Supporting"}
         </div>
         <div>
           <span className="font-semibold text-rose-300">Risk</span>
@@ -393,8 +445,11 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const style = TIER_STYLE[s.tier];
   const TierIcon = s.tier === "nuclear" || s.tier === "elite" ? Flame : s.tier === "strong" ? Zap : Target;
   // Sort standout tags before supporting/context so they aren't crowded out
-  // by the 4-tag cap when a card has more than 4 positive drivers.
-  const TONE_RANK: Record<PlateTagTone, number> = { standout: 0, supporting: 1, context: 2, risk: 3, neutral: 4 };
+  // by the 4-tag cap when a card has more than 4 positive drivers. No driver
+  // currently resolves to "attack" (that tone is Grade-Factors-only, rendered
+  // via a separate path below) — ranked alongside "supporting" so the record
+  // stays exhaustive if one ever does.
+  const TONE_RANK: Record<PlateTagTone, number> = { standout: 0, supporting: 1, attack: 1, context: 2, risk: 3, neutral: 4 };
   // Pull is surfaced as its own dedicated "Pull Rate: X%" value below (never a
   // "Pull-Side Power" chip), so it's excluded from the 4-chip candidates — this
   // keeps a qualifying pull metric from being crowded off by the cap WITHOUT
@@ -439,29 +494,12 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const edge = s.marketEdgeContext;
   const hasOdds = edge != null && edge.odds != null && edge.sportsbook;
 
-  // Prefer server-stamped qualitative setups. Fall back to bare market tags (no
-  // qualitative label, no raw score) for older payloads — never compute a tier here.
-  const marketSetups: MarketSetup[] =
-    s.marketSetups && s.marketSetups.length > 0
-      ? s.marketSetups
-      : s.marketTags.map((m) => ({
-          market: m,
-          setupScore: s.marketScores[m] ?? 0,
-          setupLabel: undefined as unknown as SetupLabel,
-          isPrimary: m === s.primaryMarket,
-        }));
+  // Market-fit chips (compact card) — sorted primary-first so "Best Angle" is
+  // always the leading chip, matching the market this card's grade is built for.
+  const marketSetups: MarketSetup[] = resolveMarketSetups(s);
+  const sortedMarketSetups = marketSetups.slice().sort((a, b) => (b.isPrimary ? 1 : 0) - (a.isPrimary ? 1 : 0));
 
-  // Best Angle fit word — the server-owned primary market's OWN fit tier
-  // (Elite/Strong/Solid). A Watch-tier primary shows the market alone (bare),
-  // never a contradictory "Not Qualified". primaryMarket itself is never
-  // suppressed/promoted/re-derived here; a Watch primary is an engine-audit
-  // finding surfaced as-is (full HR/TB comparison lives in expanded details).
-  const primarySetup = marketSetups.find((m) => m.isPrimary);
-  const primaryFitWord =
-    primarySetup?.setupLabel === "Elite" ? "Elite Fit"
-    : primarySetup?.setupLabel === "Strong" ? "Strong Fit"
-    : primarySetup?.setupLabel === "Solid" ? "Solid Fit"
-    : null;
+  const gradeFactors = s.diagnostics.gradeFactorSummary;
 
   return (
     <Card
@@ -536,11 +574,6 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
             {s.pitcherName ? `vs ${s.pitcherName}` : "Pitcher TBD"}
             {s.handednessMatchup ? ` · ${s.handednessMatchup}` : ""}
           </div>
-          {BEST_ANGLE_LABEL[s.primaryMarket] && (
-            <div className="text-[10px] text-muted-foreground/80 mt-0.5" data-testid={`pregame-best-angle-${slug}`}>
-              Best Angle: {BEST_ANGLE_LABEL[s.primaryMarket]}{primaryFitWord ? ` — ${primaryFitWord}` : ""}
-            </div>
-          )}
         </div>
         <div className="text-right shrink-0">
           <div className="text-xl font-extrabold tabular-nums" style={{ color: hitHr ? cashedColor : style.color }}>
@@ -552,6 +585,22 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
           >
             {hitHr ? <PartyPopper className="w-3 h-3" /> : <TierIcon className="w-3 h-3" />}
             {hitHr ? "Cashed" : style.label}
+          </div>
+          {/* Market-fit chips — server-owned marketSetups rendered verbatim,
+              primary first. Replaces the compact "Best Angle" sentence (moved
+              to expanded details); the full HR/TB comparison still lives there. */}
+          <div className="flex flex-col items-end gap-0.5 mt-1" data-testid={`pregame-market-fit-chips-${slug}`}>
+            {sortedMarketSetups.map((setup) => {
+              const pres = resolveMarketFitPresentation(setup.setupLabel ?? null);
+              return (
+                <span
+                  key={setup.market}
+                  className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md border ${pres ? pres.classes : getPlateToneClasses("neutral")}`}
+                >
+                  {setup.isPrimary ? MARKET_EMOJI[setup.market] : null} {MARKET_LABEL[setup.market]} • {pres ? pres.displayLabel : "Unavailable"}
+                </span>
+              );
+            })}
           </div>
           {hasOdds && (
             <div
@@ -567,6 +616,26 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
         </div>
       </div>
 
+      {/* Grade Factors — server-stamped, frozen at build time (see
+          server/mlb/pregamePowerRadar/gradeFactorSummary.ts). Always Pitcher
+          Vulnerability plus up to two more components/score-adjustments picked
+          by largest realized impact on the grade. Rendered verbatim — no
+          client-side selection, weighting, or tone re-derivation beyond the
+          server-stamped `direction`. Absent on legacy rows or when Pitcher
+          Vulnerability's own data is unavailable — renders nothing then. */}
+      {gradeFactors && gradeFactors.length > 0 && (
+        <div className="flex items-center gap-1.5 mt-2 flex-wrap" data-testid={`pregame-grade-factors-${slug}`}>
+          {gradeFactors.map((f) => (
+            <span
+              key={f.key}
+              className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md border ${getPlateToneClasses(getGradeFactorTone(f.direction))}`}
+            >
+              {f.label} • {f.value.toFixed(1)}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Park / weather context — primary carry pill + secondary directional pills.
           Carry/weather driver classification is server-stamped; this row only formats it. */}
       <ParkConditionsRow park={s.parkContext} drivers={s.drivers} />
@@ -578,10 +647,6 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
         batterName={s.batterName}
         carryKnown={s.parkContext != null && s.parkContext.carryType !== "unknown"}
       />
-
-      {/* Redundant per-market tier pills were removed from the compact face — the
-          single "Best Angle" line above is the primary-market read, and the full
-          Home Run / Total Bases fit comparison lives in expanded details. */}
 
       {/* Dedicated raw pull-rate value — separate from the 4-chip cap so a
           qualifying pull metric is never crowded off. Raw pull rate only; never
@@ -882,6 +947,12 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
     diag.bvpAvailable ||
     diag.pitcherOrderSplitDirection !== "unavailable" ||
     diag.batterOrderSplitDirection !== "unavailable";
+  // Best Angle sentence — moved here from the compact card face (now shown as
+  // market-fit chips instead); same shared helpers so the two views can never
+  // disagree. The full HR/TB comparison is the "Market Fit" section below.
+  const marketSetups = resolveMarketSetups(s);
+  const primaryFitWord = primaryFitWordFor(marketSetups);
+  const slug = s.batterName.replace(/\s+/g, "-").toLowerCase();
 
   return (
     <div className="space-y-2.5">
@@ -891,6 +962,12 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
           <SetupMeter score10={s.score10} tier={s.tier} />
         </div>
       </div>
+
+      {BEST_ANGLE_LABEL[s.primaryMarket] && (
+        <div className="text-[10px] text-muted-foreground/80" data-testid={`pregame-best-angle-${slug}`}>
+          Best Angle: {BEST_ANGLE_LABEL[s.primaryMarket]}{primaryFitWord ? ` — ${primaryFitWord}` : ""}
+        </div>
+      )}
 
       {/* Raw numeric score — secondary information only. The letter grade on the
           compact card (getSetupGrade) remains the primary user-facing decision

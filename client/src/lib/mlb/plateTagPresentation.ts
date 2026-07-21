@@ -11,7 +11,7 @@
 // dependency on PregamePowerRadar.tsx or any other component file — the
 // component imports FROM here, never the reverse.
 
-export type PlateTagTone = "standout" | "supporting" | "context" | "risk" | "neutral";
+export type PlateTagTone = "standout" | "supporting" | "context" | "risk" | "neutral" | "attack";
 
 export type PlateTagCategory =
   | "power"
@@ -33,12 +33,18 @@ export interface PlateTagPresentation {
 }
 
 // ── Canonical tone → class palette. The ONLY place tone maps to color. ──────
+// "attack" is a distinct amber/orange from "supporting" — reserved for pitcher-
+// vulnerability/attack-condition context (favorable to the batter), so it can
+// never be confused with the generic amber "Supporting" evidence tone at a
+// glance. It must never be used for factors that suppress the batter — that's
+// "risk" (rose), unchanged.
 const TONE_CLASSES: Record<PlateTagTone, string> = {
   standout: "bg-emerald-500/20 text-emerald-200 border-emerald-400/30 font-semibold",
   supporting: "bg-amber-500/15 text-amber-300 border-amber-500/25",
   context: "bg-sky-500/15 text-sky-300 border-sky-500/25",
   risk: "bg-rose-500/10 text-rose-300 border-rose-500/20",
   neutral: "bg-secondary text-muted-foreground border-border/40",
+  attack: "bg-orange-500/15 text-orange-300 border-orange-500/25",
 };
 
 export function getPlateToneClasses(tone: PlateTagTone): string {
@@ -188,6 +194,21 @@ export function getBvpPresentation(diag: BvpDiagnosticsInput): BvpPresentation |
 
   const tone: PlateTagTone = "neutral";
   return { tone, label: buildBvpLabel("Neutral BvP", hits, sample), classes: getPlateToneClasses(tone) };
+}
+
+// ── §4b: Grade Factors tone (compact-card summary) ──────────────────────────
+// The server stamps a per-entry direction (see server's gradeFactorSummary.ts);
+// this is the ONLY place that direction maps to a tone. Pitcher Vulnerability's
+// own entry follows the SAME mapping as every other Grade Factor — its tone is
+// never hardcoded to "attack" — so a stingy/low-vulnerability pitcher (negative
+// impact) renders rose, not a favorable attack condition.
+
+export type GradeFactorDirection = "positive" | "negative" | "neutral";
+
+export function getGradeFactorTone(direction: GradeFactorDirection): PlateTagTone {
+  if (direction === "positive") return "attack";
+  if (direction === "negative") return "risk";
+  return "neutral";
 }
 
 // ── §5: market tier mapping ──────────────────────────────────────────────────
