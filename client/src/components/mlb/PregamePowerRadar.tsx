@@ -445,8 +445,11 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const style = TIER_STYLE[s.tier];
   const TierIcon = s.tier === "nuclear" || s.tier === "elite" ? Flame : s.tier === "strong" ? Zap : Target;
   // Sort standout tags before supporting/context so they aren't crowded out
-  // by the 4-tag cap when a card has more than 4 positive drivers.
-  const TONE_RANK: Record<PlateTagTone, number> = { standout: 0, supporting: 1, context: 2, risk: 3, neutral: 4 };
+  // by the 4-tag cap when a card has more than 4 positive drivers. No driver
+  // currently resolves to "attack" (that tone is Grade-Factors-only, rendered
+  // via a separate path below) — ranked alongside "supporting" so the record
+  // stays exhaustive if one ever does.
+  const TONE_RANK: Record<PlateTagTone, number> = { standout: 0, supporting: 1, attack: 1, context: 2, risk: 3, neutral: 4 };
   // Pull is surfaced as its own dedicated "Pull Rate: X%" value below (never a
   // "Pull-Side Power" chip), so it's excluded from the 4-chip candidates — this
   // keeps a qualifying pull metric from being crowded off by the cap WITHOUT

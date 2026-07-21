@@ -59,6 +59,13 @@ import {
 
 let isPregamePowerRadarBuildRunning = false;
 
+// Dedup state for [PREGAME_MARKET_FIT_AUDIT] — observability-only, never read
+// by scoring/eligibility. Logged once per build as a SINGLE aggregated line
+// (not per-signal), and only when the set of flagged signalIds actually
+// changed since the previous build, so an unchanged condition doesn't repeat
+// identically on every rebuild cycle.
+let previousMarketFitAuditSignalIds = new Set<string>();
+
 /** Optional DB sink — wired in Phase 2 to persist all evaluated rows. */
 export type PregameBuildSink = (
   signals: PregamePowerSignal[],
@@ -186,6 +193,10 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   let pitcherResolved = 0;
   let createdPublicEligible = 0;
   let suppressedCount = 0;
+  // Collected during the loop, emitted as ONE aggregated (and deduped-across-
+  // rebuilds) log line after the build completes — see marketFitAudit's usage
+  // below and the dedup block near [PREGAME_POWER_RADAR_BUILD_COMPLETE].
+  const marketFitAuditFlags: Array<{ signalId: string; reason: string }> = [];
 
   try {
     const games = await discoverTodaysGames();
@@ -489,12 +500,16 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
 
         // Audit-only: flags when the server's own primaryMarket selection has a
         // LOWER fit than the secondary market (reachable via eliteHrShape in
-        // marketTagger.ts). Never changes primaryMarket/marketSetups — logged
-        // for engine-explainability review only, per the diagnostic-tag
-        // convention (CLAUDE.md §5).
+        // marketTagger.ts). Never changes primaryMarket/marketSetups. Collected
+        // here and emitted as ONE aggregated, deduped-across-rebuilds log line
+        // after the full build completes (see marketFitAuditFlags below) — a
+        // per-signal log on every rebuild would repeat identically for a
+        // signal that stays flagged across many cycles.
         const marketFitAudit = auditPrimaryMarketFit(marketTags.marketSetups);
         if (marketFitAudit.flagged) {
-          console.warn(`[PREGAME_MARKET_FIT_AUDIT] ${player.playerId} (${player.playerName}) game=${game.gameId} — ${marketFitAudit.reason}`);
+          // signalId isn't constructed until later in this loop body — this
+          // audit-only identifier mirrors its shape without depending on it.
+          marketFitAuditFlags.push({ signalId: `mlb-pregame:${sessionDate}:${game.gameId}:${player.playerId}`, reason: marketFitAudit.reason ?? "" });
         }
 
         // ── Drivers union + positive count ────────────────────────────────────
@@ -817,6 +832,21 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
     `[PREGAME_POWER_RADAR_BUILD_COMPLETE] buildId=${buildId} games=${gamesScanned} ` +
       `batters=${battersEvaluated} public=${createdPublicEligible} suppressed=${suppressedCount}`,
   );
+
+  // One aggregated line for the whole build, and only when the flagged set
+  // actually changed since last time — never a repeat per-signal log every
+  // rebuild for a condition that hasn't changed.
+  const currentMarketFitAuditSignalIds = new Set(marketFitAuditFlags.map((f) => f.signalId));
+  const marketFitAuditSetChanged =
+    currentMarketFitAuditSignalIds.size !== previousMarketFitAuditSignalIds.size ||
+    Array.from(currentMarketFitAuditSignalIds).some((id) => !previousMarketFitAuditSignalIds.has(id));
+  if (marketFitAuditFlags.length > 0 && marketFitAuditSetChanged) {
+    console.warn(
+      `[PREGAME_MARKET_FIT_AUDIT] buildId=${buildId} ${marketFitAuditFlags.length} flagged: ` +
+        marketFitAuditFlags.map((f) => `${f.signalId} (${f.reason})`).join("; "),
+    );
+  }
+  previousMarketFitAuditSignalIds = currentMarketFitAuditSignalIds;
 
   // Persist (Phase 2 sink) — never blocks/raises into runtime.
   if (buildSink) {
