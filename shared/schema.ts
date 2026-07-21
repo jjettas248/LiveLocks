@@ -1128,3 +1128,259 @@ export const mlbMoundRadarBuilds = pgTable("mlb_mound_radar_builds", {
 export const insertMlbMoundRadarBuildSchema = createInsertSchema(mlbMoundRadarBuilds).omit({ createdAt: true, updatedAt: true });
 export type MlbMoundRadarBuildRow = typeof mlbMoundRadarBuilds.$inferSelect;
 export type InsertMlbMoundRadarBuild = z.infer<typeof insertMlbMoundRadarBuildSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HR Radar Research — PR 1 (additive, inert, no runtime call sites yet).
+//
+// Five tables backing a fully additive shadow/research track for a challenger
+// HR model. None of these are read or written by any code path yet — the
+// champion engine (HRSignalBuilder, hrConversionModel, evaluateHRAlert,
+// hrAlertEngine, hrRadarUserStage, hrRadarCanonicalStore, hrRadarStateMachine,
+// hrRadarDecisionView) is completely unaware of this cluster and must stay
+// that way until an explicitly-approved canary phase. See
+// server/mlb/hrRadarResearch/ for the Zod contracts these columns are
+// validated against (by later PRs — no validation call site exists yet), and
+// server/dbMigrations/hrRadarResearchPersistence.ts for the idempotent boot
+// bootstrap that mirrors these definitions column-for-column.
+//
+// Deliberately no FK constraints anywhere in this cluster — matches the
+// existing hr_radar_alerts/hr_radar_signal_events/hr_radar_analytics/
+// hr_radar_outcome_stamps cluster above, which correlates purely via plain
+// text gameId/playerId/sessionDate columns. Avoids insert-ordering and
+// cascade friction for research data that may be pruned/backfilled later.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Immutable per-batter feature + champion-output snapshot, one row per
+// evaluated batter per evaluation epoch. `evaluationEpochId` is shared by
+// every batter evaluated from the same game-state event (a completed PA, a
+// pitching change, etc.) so ranking groups by epoch, not by evaluationAt —
+// writes for the same epoch can land milliseconds apart. `sourceRevision`
+// lets a reprocessed upstream event with corrected data produce a new,
+// auditable row instead of being silently swallowed by a conflict-ignore
+// insert. Uniqueness is enforced on the 4-column composite below, not on a
+// separately-maintained hash column.
+export const hrRadarEvaluationSnapshots = pgTable("hr_radar_evaluation_snapshots", {
+  snapshotId: text("snapshot_id").primaryKey(),
+  evaluationEpochId: text("evaluation_epoch_id").notNull(),
+  sourceRevision: integer("source_revision").notNull().default(0),
+  sessionDate: text("session_date").notNull(),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  team: text("team").notNull(),
+  opponent: text("opponent"),
+  evaluationAt: timestamp("evaluation_at").notNull(),
+  sourceEventAt: timestamp("source_event_at"),
+  sourceEventId: text("source_event_id"),
+  triggerType: text("trigger_type").notNull(),
+  playSequence: integer("play_sequence"),
+  plateAppearanceId: text("plate_appearance_id"),
+  inning: integer("inning"),
+  half: text("half"),
+  outs: integer("outs"),
+  currentPitcherId: text("current_pitcher_id"),
+  battingOrderSlot: integer("batting_order_slot"),
+  eligible: boolean("eligible").notNull().default(true),
+  // Controlled vocabulary (see hrEligibilityContract.ts), e.g.
+  // "already_homered_this_game" — a scope-qualified exclusion, not a claim
+  // that second-HR probability is zero. See predictionTargetScope below.
+  exclusionReason: text("exclusion_reason"),
+  // Names the prediction target explicitly: HR Radar predicts a player's
+  // FIRST home run of the game for the standard live market. Excluding a
+  // batter who already homered is only valid under this named scope.
+  predictionTargetScope: text("prediction_target_scope").notNull().default("first_hr_of_game"),
+  // Versions the raw-input envelope independently of feature_version, so a
+  // feature-builder bug can be fixed and features re-derived from preserved
+  // raw inputs without pretending historical live state can be reconstructed
+  // from derived numbers alone.
+  inputContractVersion: text("input_contract_version").notNull(),
+  rawInputs: jsonb("raw_inputs").notNull(),
+  featureVersion: text("feature_version").notNull(),
+  featureHash: text("feature_hash").notNull(),
+  // Renamed from a plain "features" column — this is the derived vector, not
+  // the raw preserved inputs above.
+  derivedFeatures: jsonb("derived_features").notNull(),
+  // Per-leaf presence/quality mirror of derivedFeatures (see
+  // hrFeatureAvailabilityVectorV1Schema).
+  availability: jsonb("availability").notNull(),
+  // Per-feature-family source/freshness timestamps (see
+  // hrFeatureFreshnessVectorV1Schema) — distinct from `availability`, which
+  // is presence/quality, not recency.
+  featureFreshness: jsonb("feature_freshness").notNull(),
+  statsAsOf: timestamp("stats_as_of").notNull(),
+  // Whether the champion engine produced ANY output for this batter at this
+  // epoch. When false, every champion_* field below is meaningless and must
+  // NEVER be read downstream as zero probability or a Watch stage.
+  championEvaluated: boolean("champion_evaluated").notNull().default(false),
+  championExclusionReason: text("champion_exclusion_reason"),
+  championVersionSource: text("champion_version_source"),
+  championModelVersion: text("champion_model_version"),
+  championRawProbability: numeric("champion_raw_probability"),
+  championCalibratedProbability: numeric("champion_calibrated_probability"),
+  championBuildScore: numeric("champion_build_score"),
+  championReadinessScore: numeric("champion_readiness_score"),
+  championAlertPath: text("champion_alert_path"),
+  championAlertTier: text("champion_alert_tier"),
+  championStage: text("champion_stage"),
+  championUserVisible: boolean("champion_user_visible").notNull().default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  epochUniqueIdx: uniqueIndex("hr_radar_eval_snapshots_epoch_unique_idx").on(
+    table.evaluationEpochId, table.playerId, table.featureVersion, table.sourceRevision,
+  ),
+  epochIdx: index("hr_radar_eval_snapshots_epoch_idx").on(table.evaluationEpochId),
+  sessionGameEvalIdx: index("hr_radar_eval_snapshots_session_game_eval_idx").on(
+    table.sessionDate, table.gameId, table.evaluationAt,
+  ),
+  gamePlayerEvalIdx: index("hr_radar_eval_snapshots_game_player_eval_idx").on(
+    table.gameId, table.playerId, table.evaluationAt,
+  ),
+  featureVersionEvalIdx: index("hr_radar_eval_snapshots_feature_version_eval_idx").on(
+    table.featureVersion, table.evaluationAt,
+  ),
+  // Supports an anti-join against hr_radar_evaluation_labels (LEFT JOIN ...
+  // WHERE label.snapshot_id IS NULL) to find eligible-but-unlabeled rows.
+  // NOT a partial index — Postgres cannot predicate an index on one table by
+  // the absence of a row in a different table.
+  eligibleUnlabeledLookupIdx: index("hr_radar_eval_snapshots_eligible_unlabeled_lookup_idx").on(
+    table.eligible, table.sessionDate, table.snapshotId,
+  ),
+}));
+
+export const insertHrRadarEvaluationSnapshotSchema = createInsertSchema(hrRadarEvaluationSnapshots).omit({ createdAt: true });
+export type HrRadarEvaluationSnapshot = typeof hrRadarEvaluationSnapshots.$inferSelect;
+export type InsertHrRadarEvaluationSnapshot = z.infer<typeof insertHrRadarEvaluationSnapshotSchema>;
+
+// One label row per (snapshotId, labelVersion) — append-only. A corrected
+// label adds a new versioned row rather than overwriting history, so the
+// label ledger stays genuinely auditable. `labelDisposition` gates what may
+// enter model metrics: only "resolved" rows may. `nextPaOccurred`/
+// `secondPaOccurred` disambiguate a censored (no further PA observed)
+// short-horizon outcome from a true negative — hrNextPa/hrNextTwoPa are null
+// exactly when the corresponding PA never occurred. hrRemainderGame is NOT
+// censored by the same rule: false is a fully valid, fully resolved outcome
+// when the game ends or the player is removed without a further HR.
+export const hrRadarEvaluationLabels = pgTable("hr_radar_evaluation_labels", {
+  snapshotId: text("snapshot_id").notNull(),
+  labelVersion: text("label_version").notNull(),
+  labelDisposition: text("label_disposition").notNull(),
+  resolvedAt: timestamp("resolved_at"),
+  resolutionReason: text("resolution_reason"),
+  hrRemainderGame: boolean("hr_remainder_game"),
+  hrNextPa: boolean("hr_next_pa"),
+  nextPaOccurred: boolean("next_pa_occurred"),
+  hrNextTwoPa: boolean("hr_next_two_pa"),
+  secondPaOccurred: boolean("second_pa_occurred"),
+  remainingPaObserved: integer("remaining_pa_observed"),
+  nextPaId: text("next_pa_id"),
+  secondPaId: text("second_pa_id"),
+  hrEventId: text("hr_event_id"),
+  hrPlaySequence: integer("hr_play_sequence"),
+  hrAt: timestamp("hr_at"),
+  hrInning: integer("hr_inning"),
+  hrPaOrdinal: integer("hr_pa_ordinal"),
+  labelSource: text("label_source").notNull().default("engine"),
+  dataQuality: text("data_quality"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.snapshotId, table.labelVersion] }),
+  dispositionIdx: index("hr_radar_eval_labels_disposition_idx").on(table.labelDisposition),
+  resolvedAtIdx: index("hr_radar_eval_labels_resolved_at_idx").on(table.resolvedAt),
+  snapshotIdx: index("hr_radar_eval_labels_snapshot_idx").on(table.snapshotId),
+}));
+
+export const insertHrRadarEvaluationLabelSchema = createInsertSchema(hrRadarEvaluationLabels).omit({ createdAt: true });
+export type HrRadarEvaluationLabel = typeof hrRadarEvaluationLabels.$inferSelect;
+export type InsertHrRadarEvaluationLabel = z.infer<typeof insertHrRadarEvaluationLabelSchema>;
+
+// One row per (snapshotId, modelVersion) — probability + rank ONLY. Proposed
+// stage/policy live in hrRadarShadowDecisions below (a model's probabilities
+// are expensive to produce once; multiple policies must be testable against
+// the same probabilities without duplicating this row).
+export const hrRadarShadowPredictions = pgTable("hr_radar_shadow_predictions", {
+  id: serial("id").primaryKey(),
+  snapshotId: text("snapshot_id").notNull(),
+  modelVersion: text("model_version").notNull(),
+  probNextPa: numeric("prob_next_pa"),
+  probNextTwoPa: numeric("prob_next_two_pa"),
+  probRemainderGame: numeric("prob_remainder_game"),
+  baselineOnlyProb: numeric("baseline_only_prob"),
+  liveLift: numeric("live_lift"),
+  rankInGame: integer("rank_in_game"),
+  inferenceDurationMs: integer("inference_duration_ms"),
+  errorState: text("error_state"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  snapshotModelUniqueIdx: uniqueIndex("hr_radar_shadow_predictions_snapshot_model_unique_idx").on(
+    table.snapshotId, table.modelVersion,
+  ),
+  modelVersionIdx: index("hr_radar_shadow_predictions_model_version_idx").on(table.modelVersion),
+  snapshotIdx: index("hr_radar_shadow_predictions_snapshot_idx").on(table.snapshotId),
+}));
+
+export const insertHrRadarShadowPredictionSchema = createInsertSchema(hrRadarShadowPredictions).omit({ id: true, createdAt: true });
+export type HrRadarShadowPrediction = typeof hrRadarShadowPredictions.$inferSelect;
+export type InsertHrRadarShadowPrediction = z.infer<typeof insertHrRadarShadowPredictionSchema>;
+
+// One row per (snapshotId, modelVersion, policyVersion) — the policy's
+// proposed stage for a given model's prediction. Split out from
+// hrRadarShadowPredictions so multiple policy versions can be evaluated
+// against one model's probabilities. `previousProposedStage` and
+// `stageTransitioned` let later evaluation count the FIRST proposed-Fire
+// transition per (gameId, playerId, modelVersion, policyVersion) — joined
+// back to hrRadarEvaluationSnapshots via snapshotId — rather than every
+// snapshot that merely remains Fire, which would inflate sample size and
+// precision.
+export const hrRadarShadowDecisions = pgTable("hr_radar_shadow_decisions", {
+  id: serial("id").primaryKey(),
+  snapshotId: text("snapshot_id").notNull(),
+  modelVersion: text("model_version").notNull(),
+  policyVersion: text("policy_version").notNull(),
+  proposedStage: text("proposed_stage"),
+  previousProposedStage: text("previous_proposed_stage"),
+  stageTransitioned: boolean("stage_transitioned").notNull().default(false),
+  topDrivers: jsonb("top_drivers"),
+  artifactChecksum: text("artifact_checksum"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  snapshotModelPolicyUniqueIdx: uniqueIndex("hr_radar_shadow_decisions_snapshot_model_policy_unique_idx").on(
+    table.snapshotId, table.modelVersion, table.policyVersion,
+  ),
+  modelPolicyIdx: index("hr_radar_shadow_decisions_model_policy_idx").on(table.modelVersion, table.policyVersion),
+  snapshotIdx: index("hr_radar_shadow_decisions_snapshot_idx").on(table.snapshotId),
+  stageTransitionIdx: index("hr_radar_shadow_decisions_stage_transition_idx").on(
+    table.proposedStage, table.stageTransitioned,
+  ),
+}));
+
+export const insertHrRadarShadowDecisionSchema = createInsertSchema(hrRadarShadowDecisions).omit({ id: true, createdAt: true });
+export type HrRadarShadowDecision = typeof hrRadarShadowDecisions.$inferSelect;
+export type InsertHrRadarShadowDecision = z.infer<typeof insertHrRadarShadowDecisionSchema>;
+
+// Immutable model metadata / lifecycle registry.
+export const hrRadarModelRegistry = pgTable("hr_radar_model_registry", {
+  modelVersion: text("model_version").primaryKey(),
+  modelType: text("model_type").notNull(),
+  featureVersion: text("feature_version").notNull(),
+  trainingWindowStart: text("training_window_start"),
+  trainingWindowEnd: text("training_window_end"),
+  calibrationWindowStart: text("calibration_window_start"),
+  calibrationWindowEnd: text("calibration_window_end"),
+  holdoutWindowStart: text("holdout_window_start"),
+  holdoutWindowEnd: text("holdout_window_end"),
+  artifactPath: text("artifact_path"),
+  artifactChecksum: text("artifact_checksum"),
+  metrics: jsonb("metrics"),
+  status: text("status").notNull().default("candidate"),
+  activatedAt: timestamp("activated_at"),
+  retiredAt: timestamp("retired_at"),
+  retirementReason: text("retirement_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  statusIdx: index("hr_radar_model_registry_status_idx").on(table.status),
+  featureVersionIdx: index("hr_radar_model_registry_feature_version_idx").on(table.featureVersion),
+}));
+
+export const insertHrRadarModelRegistrySchema = createInsertSchema(hrRadarModelRegistry).omit({ createdAt: true });
+export type HrRadarModelRegistryRow = typeof hrRadarModelRegistry.$inferSelect;
+export type InsertHrRadarModelRegistry = z.infer<typeof insertHrRadarModelRegistrySchema>;
