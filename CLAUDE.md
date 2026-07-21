@@ -54,6 +54,8 @@ npx tsx server/mlb/pregamePowerRadar/diagnostics.test.ts            # Pregame Ra
 npx tsx server/mlb/pregamePowerRadar/slateDateRepair.test.ts # Pregame Radar slate-date repair planner (startsAt/gameDate correction, collision detection, no blanket day-shift)
 npx tsx server/mlb/pregamePowerRadar/nearHrRecentForm.test.ts # Pregame Radar near-HR recent-form component (retroactive nearHrContact reuse, recency weighting, consecutive-day bonus, leakage guard)
 npx tsx server/utils/dateUtils.test.ts               # slateDateET() 6am-ET rollover + toEtDateKey() ET calendar-date conversion invariants
+npx tsx server/dbMigrations/hrRadarResearchPersistence.test.ts       # HR Radar research schema bootstrap idempotence + constraint + no-destructive-SQL guard
+npx tsx server/mlb/hrRadarResearch/hrRadarResearchContracts.test.ts  # HR Radar research Zod contracts (feature/trigger/eligibility/label/artifact/policy) + fail-closed flag parsing
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.

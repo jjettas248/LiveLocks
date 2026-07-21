@@ -19,6 +19,7 @@ import { getStripeSync, getStripeEnvStatus } from "./stripeClient";
 import cron from "node-cron";
 import { db, pool } from "./db";
 import { ensurePregameRadarPersistenceSchema } from "./dbMigrations/pregameRadarPersistence";
+import { ensureHrRadarResearchPersistenceSchema } from "./dbMigrations/hrRadarResearchPersistence";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
 import {
@@ -223,6 +224,15 @@ app.use((req, res, next) => {
   // build + grading timers are scheduled further down.
   await ensurePregameRadarPersistenceSchema(pool);
   console.log("[startup] Pregame/Mound Radar persistence schema ensured");
+
+  // Durable persistence bootstrap: HR Radar research foundation (PR 1) — five
+  // additive, currently-unused tables backing a future HR challenger model.
+  // Deliberately NOT wrapped in try/catch, same reasoning as the Pregame/
+  // Mound bootstrap above: a failure here must fail startup rather than let
+  // this schema silently fail to exist. Nothing reads or writes these tables
+  // yet — this call only ever creates schema, never rows.
+  await ensureHrRadarResearchPersistenceSchema(pool);
+  console.log("[startup] HR Radar research persistence schema ensured");
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.
