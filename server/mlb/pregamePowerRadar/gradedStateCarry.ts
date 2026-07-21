@@ -75,6 +75,11 @@ export function carryForwardGradedState(
   const evaluationLocked = fresh.status !== "active";
   if (evaluationLocked && fresh.diagnostics) {
     fresh.diagnostics.powerProfile = prev.diagnostics?.powerProfile;
+    // Compact-card "Grade Factors" — same freeze discipline as powerProfile
+    // above: once locked, the card must show the ORIGINAL pregame summary
+    // (including its absence on a legacy/pre-instrumentation row), never a
+    // post-lock recompute from since-changed diagnostics.
+    fresh.diagnostics.gradeFactorSummary = prev.diagnostics?.gradeFactorSummary;
   }
   return fresh;
 }

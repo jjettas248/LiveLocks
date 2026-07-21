@@ -15,6 +15,8 @@
 //     fabricated.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import type { GradeFactorEntry } from "./gradeFactorSummary";
+
 /**
  * Pre-game tiers. `fire` is intentionally absent — it is reserved for the live radar.
  * `power_watch` ("Batter Power Only") is a hitter with elite raw power but a weak/negative
@@ -236,6 +238,17 @@ export interface PregamePowerDiagnostics {
    * qualification, or public sorting (diagnostics.ts) — measurement only.
    */
   evaluation?: PregameEvaluationRecord;
+
+  /**
+   * Compact-card "Grade Factors" — exactly Pitcher Vulnerability plus up to two
+   * more components/score-adjustments picked by largest realized impact on the
+   * final grade (see gradeFactorSummary.ts). Display only, frozen at build
+   * time; never fed back into score10/tier/rank/qualification. `null`/absent
+   * when Pitcher Vulnerability's own data isn't available, or on rows persisted
+   * before this field existed — the client renders nothing in that case rather
+   * than backfilling it from currently-available diagnostics.
+   */
+  gradeFactorSummary?: GradeFactorEntry[] | null;
 }
 
 /** One frozen read of a candidate's champion state, taken at a specific build cycle. */

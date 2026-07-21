@@ -47,6 +47,8 @@ import { computeLineupOpportunity } from "./lineupOpportunity";
 import { computeNearHrRecentForm, type RecentContactEventRow } from "./nearHrRecentForm";
 import { computeMarketTags } from "./marketTagger";
 import { composePregameScore } from "./scoring";
+import { buildGradeFactorSummary } from "./gradeFactorSummary";
+import { auditPrimaryMarketFit } from "./marketFitAudit";
 import { carryForwardGradedState, carryForwardDroppedFromLineup } from "./gradedStateCarry";
 import { applyEvaluationSnapshots } from "./evaluationSnapshot";
 import {
@@ -485,6 +487,16 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           hardHitRatePct: savant?.hardHitRateSeason ?? null,
         });
 
+        // Audit-only: flags when the server's own primaryMarket selection has a
+        // LOWER fit than the secondary market (reachable via eliteHrShape in
+        // marketTagger.ts). Never changes primaryMarket/marketSetups — logged
+        // for engine-explainability review only, per the diagnostic-tag
+        // convention (CLAUDE.md §5).
+        const marketFitAudit = auditPrimaryMarketFit(marketTags.marketSetups);
+        if (marketFitAudit.flagged) {
+          console.warn(`[PREGAME_MARKET_FIT_AUDIT] ${player.playerId} (${player.playerName}) game=${game.gameId} — ${marketFitAudit.reason}`);
+        }
+
         // ── Drivers union + positive count ────────────────────────────────────
         const drivers: PowerDriver[] = [
           ...batterPower.drivers,
@@ -533,6 +545,28 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           },
         );
         if (batterPower.available) batterWithPower++;
+
+        // Compact-card "Grade Factors" — display-only summary of the terms
+        // composePregameScore already computed above. Never re-derives score10/
+        // tier/qualification; see gradeFactorSummary.ts for the realized-impact
+        // math and the "never fabricate Pitcher Vulnerability" null guard.
+        const gradeFactorSummary = buildGradeFactorSummary({
+          components: [
+            { key: "batterPower", label: "Batter Power", score: batterPower.score10, available: batterPower.available },
+            { key: "pitcherVulnerability", label: "Pitcher Vulnerability", score: pitcherVulnerabilityScore, available: pitcherProfileAvailable },
+            { key: "matchupFit", label: "Matchup Fit", score: matchupFit.score10, available: matchupFit.available },
+            { key: "parkWeather", label: "Park & Weather", score: parkWeather.score10, available: parkWeather.available },
+            { key: "lineupOpportunity", label: "Lineup Opportunity", score: lineupOpp.score10, available: lineupOpp.available },
+            { key: "nearHrRecentForm", label: "Near-HR Recent Form", score: nearHrRecentForm.score10, available: nearHrRecentForm.available },
+          ],
+          bvpModifier: matchupFit.bvpModifier,
+          bvpAvailable: matchupFit.bvpAvailable,
+          baseScore: scoring.baseScore,
+          finalScoreBeforeCaps: scoring.finalScoreBeforeCaps,
+          finalScoreCap: scoring.finalScoreCap,
+          matchupPenalty: scoring.matchupPenalty,
+          score10: scoring.score10,
+        });
 
         // Surface any matchup downgrade tags that aren't already a driver label as
         // negative drivers so the UI renders them as warning chips (dedup avoids
@@ -707,6 +741,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               maxEV: powerInputs.maxEV,
               pullRatePct: powerInputs.pullRatePct,
             },
+            gradeFactorSummary,
           },
         };
 
