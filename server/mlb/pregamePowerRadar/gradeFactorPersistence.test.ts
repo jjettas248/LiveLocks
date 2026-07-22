@@ -21,9 +21,9 @@ function ok(cond: boolean, msg: string) {
 }
 
 const FACTORS_A: GradeFactorEntry[] = [
-  { key: "pitcherVulnerability", label: "Pitcher Vulnerability", value: 8.0, impact: 0.69, direction: "positive" },
-  { key: "lineupOpportunity", label: "Lineup Opportunity", value: 9.0, impact: 0.36, direction: "positive" },
-  { key: "matchupPenalty", label: "Matchup Penalty", value: -0.5, impact: -0.5, direction: "negative" },
+  { key: "pitcherVulnerability", label: "Pitcher Vulnerability", displayLabel: "High", tone: "attack", value: 8.0, impact: 0.69, direction: "positive" },
+  { key: "lineupOpportunity", label: "Lineup Opportunity", displayLabel: "Excellent", tone: "supporting", value: 9.0, impact: 0.36, direction: "positive" },
+  { key: "matchupPenalty", label: "Matchup Penalty", displayLabel: "Downgrade", tone: "risk", value: -0.5, impact: -0.5, direction: "negative" },
 ];
 
 function sig(gradeFactorSummary?: GradeFactorEntry[] | null): PregamePowerSignal {

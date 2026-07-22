@@ -196,21 +196,6 @@ export function getBvpPresentation(diag: BvpDiagnosticsInput): BvpPresentation |
   return { tone, label: buildBvpLabel("Neutral BvP", hits, sample), classes: getPlateToneClasses(tone) };
 }
 
-// ── §4b: Grade Factors tone (compact-card summary) ──────────────────────────
-// The server stamps a per-entry direction (see server's gradeFactorSummary.ts);
-// this is the ONLY place that direction maps to a tone. Pitcher Vulnerability's
-// own entry follows the SAME mapping as every other Grade Factor — its tone is
-// never hardcoded to "attack" — so a stingy/low-vulnerability pitcher (negative
-// impact) renders rose, not a favorable attack condition.
-
-export type GradeFactorDirection = "positive" | "negative" | "neutral";
-
-export function getGradeFactorTone(direction: GradeFactorDirection): PlateTagTone {
-  if (direction === "positive") return "attack";
-  if (direction === "negative") return "risk";
-  return "neutral";
-}
-
 // ── §5: market tier mapping ──────────────────────────────────────────────────
 
 export type MarketSetupLabel = "Elite" | "Strong" | "Solid" | "Watch";

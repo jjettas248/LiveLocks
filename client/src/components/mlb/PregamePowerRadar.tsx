@@ -20,7 +20,6 @@ import {
   resolveMarketFitPresentation,
   getCarryPresentation,
   getWeatherSecondaryPresentations,
-  getGradeFactorTone,
   type PlateTagTone,
 } from "@/lib/mlb/plateTagPresentation";
 
@@ -110,12 +109,16 @@ interface PowerProfileSnapshot {
 
 // Compact-card "Grade Factors" entry (see server/mlb/pregamePowerRadar/
 // gradeFactorSummary.ts GradeFactorEntry). Server-owned, frozen at build time —
-// rendered verbatim; the client never recomputes impact/selection/direction.
+// rendered verbatim; the client never recomputes impact, wording, or tone.
 interface GradeFactorEntry {
   key: string;
   label: string;
   value: number;
   direction: "positive" | "negative" | "neutral";
+  /** Optional only for compatibility with rows frozen before qualitative labels shipped. */
+  displayLabel?: string;
+  /** Optional only for compatibility with rows frozen before semantic tones shipped. */
+  tone?: PlateTagTone;
 }
 
 // Diagnostics carried by the server-side PregamePowerSignal (see
@@ -499,7 +502,13 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const marketSetups: MarketSetup[] = resolveMarketSetups(s);
   const sortedMarketSetups = marketSetups.slice().sort((a, b) => (b.isPrimary ? 1 : 0) - (a.isPrimary ? 1 : 0));
 
-  const gradeFactors = s.diagnostics.gradeFactorSummary;
+  // Legacy frozen rows have numeric-only Grade Factors. Do not make the client
+  // invent labels or thresholds for them; their raw values remain in expanded
+  // component details, while current rows render the server-owned wording.
+  const gradeFactors = s.diagnostics.gradeFactorSummary?.filter(
+    (factor): factor is GradeFactorEntry & { displayLabel: string; tone: PlateTagTone } =>
+      typeof factor.displayLabel === "string" && factor.displayLabel.length > 0 && factor.tone != null,
+  );
 
   return (
     <Card
@@ -619,18 +628,18 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
       {/* Grade Factors — server-stamped, frozen at build time (see
           server/mlb/pregamePowerRadar/gradeFactorSummary.ts). Always Pitcher
           Vulnerability plus up to two more components/score-adjustments picked
-          by largest realized impact on the grade. Rendered verbatim — no
-          client-side selection, weighting, or tone re-derivation beyond the
-          server-stamped `direction`. Absent on legacy rows or when Pitcher
-          Vulnerability's own data is unavailable — renders nothing then. */}
+          by largest realized impact on the grade. The server owns each factor's
+          plain-language label and semantic tone; raw decimals stay in Expand
+          Details. Numeric-only legacy rows and unavailable Pitcher Vulnerability
+          render no compact summary rather than fabricating wording client-side. */}
       {gradeFactors && gradeFactors.length > 0 && (
         <div className="flex items-center gap-1.5 mt-2 flex-wrap" data-testid={`pregame-grade-factors-${slug}`}>
           {gradeFactors.map((f) => (
             <span
               key={f.key}
-              className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md border ${getPlateToneClasses(getGradeFactorTone(f.direction))}`}
+              className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md border ${getPlateToneClasses(f.tone)}`}
             >
-              {f.label} • {f.value.toFixed(1)}
+              {f.label} • {f.displayLabel}
             </span>
           ))}
         </div>

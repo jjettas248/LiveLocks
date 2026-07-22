@@ -104,9 +104,34 @@ const keys = summary!.map((f) => f.key);
 ok(keys.includes("lineupOpportunity") && keys.includes("nearHrRecentForm"), `top-2 by |impact| should be lineupOpportunity + nearHrRecentForm, NOT high-weight-but-near-neutral batterPower (got ${keys.join(",")})`);
 ok(!keys.includes("batterPower"), "high weight alone (batterPower) must not outrank a smaller-weight but materially impactful factor");
 
-// ── (5) Tone/direction: a stingy (low-vulnerability) pitcher must render
+// ── (5) Compact presentation: translate model diagnostics into user meaning
+//     and give each concept its own semantic color. The numeric values remain
+//     present for expanded/debug detail, but are not the compact-card wording. ─
+const readable = buildGradeFactorSummary({
+  components: components({
+    pitcherVulnerability: { score: 8.3, available: true },
+    batterPower: { score: 8.5, available: true },
+    matchupFit: { score: 7.6, available: true },
+    parkWeather: { score: 5, available: true },
+    lineupOpportunity: { score: 5, available: true },
+    nearHrRecentForm: { score: 5, available: true },
+  }),
+  bvpModifier: 0, bvpAvailable: false,
+  baseScore: 7.7, finalScoreBeforeCaps: 7.7, finalScoreCap: undefined, matchupPenalty: 0, score10: 7.7,
+})!;
+const readablePv = readable.find((f) => f.key === "pitcherVulnerability")!;
+const readablePower = readable.find((f) => f.key === "batterPower")!;
+const readableMatchup = readable.find((f) => f.key === "matchupFit")!;
+ok(readablePv.displayLabel === "High" && readablePv.tone === "attack" && readablePv.value === 8.3,
+  `8.3 Pitcher Vulnerability should render High/attack while preserving raw value (got ${JSON.stringify(readablePv)})`);
+ok(readablePower.displayLabel === "Elite" && readablePower.tone === "standout" && readablePower.value === 8.5,
+  `8.5 Batter Power should render Elite/standout while preserving raw value (got ${JSON.stringify(readablePower)})`);
+ok(readableMatchup.displayLabel === "Favorable" && readableMatchup.tone === "context" && readableMatchup.value === 7.6,
+  `7.6 Matchup Fit should render Favorable/context while preserving raw value (got ${JSON.stringify(readableMatchup)})`);
+
+// ── (6) Tone/direction: a stingy (low-vulnerability) pitcher must render
 //     negative, never hardcoded positive — Pitcher Vulnerability follows the
-//     SAME direction rule as every other entry. ─────────────────────────────
+//     SAME risk rule as every other entry. ───────────────────────────────────
 const stingy = buildGradeFactorSummary({
   components: components({ pitcherVulnerability: { score: 1.0, available: true } }), // impact = 0.23*(1-5) = -0.92 → negative
   bvpModifier: 0, bvpAvailable: false,
@@ -114,14 +139,29 @@ const stingy = buildGradeFactorSummary({
 });
 const pvEntry = stingy!.find((f) => f.key === "pitcherVulnerability")!;
 ok(pvEntry.direction === "negative", `a stingy/low-vulnerability pitcher must render "negative" (rose), not a hardcoded attack tone (got ${pvEntry.direction})`);
+ok(pvEntry.displayLabel === "Very Low" && pvEntry.tone === "risk",
+  `a stingy pitcher should read Very Low with risk tone (got ${pvEntry.displayLabel}/${pvEntry.tone})`);
 
-// ── (6) Neutral epsilon band ────────────────────────────────────────────────
+// ── (7) Neutral epsilon band ────────────────────────────────────────────────
 const neutralPv = buildGradeFactorSummary({
   components: components({ pitcherVulnerability: { score: 5.05, available: true } }), // impact = 0.23*0.05 ≈ 0.0115 → within epsilon
   bvpModifier: 0, bvpAvailable: false,
   baseScore: 5, finalScoreBeforeCaps: 5, finalScoreCap: undefined, matchupPenalty: 0, score10: 5,
 });
 ok(neutralPv!.find((f) => f.key === "pitcherVulnerability")!.direction === "neutral", "near-zero impact classifies as neutral (gray), not positive or negative");
+ok(neutralPv!.find((f) => f.key === "pitcherVulnerability")!.tone === "neutral", "near-zero impact receives neutral semantic tone");
+
+const neutralWording = buildGradeFactorSummary({
+  components: components({
+    pitcherVulnerability: { score: 5.5, available: true },
+    batterPower: { score: 5.5, available: true },
+  }),
+  bvpModifier: 0, bvpAvailable: false,
+  baseScore: 5.5, finalScoreBeforeCaps: 5.5, finalScoreCap: undefined, matchupPenalty: 0, score10: 5.5,
+})!;
+ok(neutralWording.find((f) => f.key === "pitcherVulnerability")?.displayLabel === "Neutral" &&
+   neutralWording.find((f) => f.key === "pitcherVulnerability")?.tone === "neutral",
+  "neutral wording never receives a favorable attack color even when its small weighted impact exceeds epsilon");
 
 console.log(`\ngradeFactorSummary.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
