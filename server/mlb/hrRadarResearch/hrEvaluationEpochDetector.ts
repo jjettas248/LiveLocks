@@ -57,6 +57,13 @@ export interface HrDetectedEpoch {
   sourceEventId: string;
   sourceEventAt: string | null;
   playSequence: number | null;
+  // Batters this exact tick's diff found no longer in the lineup (computed
+  // from the SAME diffBattingOrder() call used to decide triggerType, before
+  // this function's own memory update below overwrites the "last known"
+  // batting order). Capture must read this instead of re-deriving "removed"
+  // later via getLastKnownBattingOrder(), which by then reflects the NEW
+  // lineup, not the one this epoch was actually detected against.
+  removedBatters: HrEpochBattingOrderEntry[];
 }
 
 export interface HrBattingOrderDiff {
@@ -130,7 +137,7 @@ export function detectHrEvaluationEpoch(ctx: HrEpochDetectionContext): HrDetecte
     newState.battingOrder,
   );
 
-  let detected: HrDetectedEpoch | null = null;
+  let detected: Omit<HrDetectedEpoch, "removedBatters"> | null = null;
 
   if (orderDiff.removed.length > 0) {
     detected = {
@@ -196,7 +203,7 @@ export function detectHrEvaluationEpoch(ctx: HrEpochDetectionContext): HrDetecte
   if (newWeatherRoofSignal) _lastWeatherRoofSignal.set(gameId, newWeatherRoofSignal);
   _lastKnownBattingOrder.set(gameId, newState.battingOrder);
 
-  return detected;
+  return detected ? { ...detected, removedBatters: orderDiff.removed } : null;
 }
 
 function sha256Json(value: unknown): string {

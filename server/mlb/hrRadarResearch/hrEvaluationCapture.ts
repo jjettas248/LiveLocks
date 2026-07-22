@@ -27,7 +27,7 @@ import { evaluateHrEligibility } from "./hrEligibilityEvaluator";
 import { buildHrFeatureSnapshot, percentileFromDistribution, type HrFeatureBuilderBbe } from "./hrFeatureBuilder";
 import { computeHrFeatureHash } from "./hrFeatureHash";
 import { deriveEvaluationEpochId } from "./hrEvaluationEpochId";
-import { getLastKnownBattingOrder, type HrDetectedEpoch } from "./hrEvaluationEpochDetector";
+import type { HrDetectedEpoch } from "./hrEvaluationEpochDetector";
 import { shouldSampleGameForHrEvalCapture } from "./hrEvalCaptureSampling";
 import { enqueueHrEvaluationSnapshot } from "./hrEvaluationWriteQueue";
 import { recordHrCaptureDiagnostics } from "./hrEvalCaptureDiagnostics";
@@ -357,12 +357,15 @@ function captureHrEvaluationEpochInner(ctx: HrCaptureRuntimeContext): void {
   const startedAtMs = ctx.statsAsOfMs;
   const championSnapshots = getAllGameHrSnapshots(ctx.gameId);
 
-  // Population = current lineup ∪ any batter no longer in it as of THIS tick
-  // (so a just-removed batter still gets one final, correctly-excluded row).
-  const currentPlayerIds = new Set(ctx.batters.map((b) => b.batter?.playerId).filter(Boolean));
-  const lastKnown = getLastKnownBattingOrder(ctx.gameId) ?? [];
-  const justRemoved: HrCaptureBatterMaterials[] = lastKnown
-    .filter((b) => !currentPlayerIds.has(b.playerId))
+  // Population = current lineup ∪ any batter the epoch detector's diff found
+  // no longer in it as of THIS tick (so a just-removed batter still gets one
+  // final, correctly-excluded row). Read from ctx.detectedEpoch.removedBatters
+  // — computed by the detector against the PRE-tick lineup — rather than
+  // re-deriving via getLastKnownBattingOrder() here, which by the time this
+  // function runs already reflects the POST-tick lineup (the detector updates
+  // its own memory before triggerEngine/capture run), which would make
+  // "removed" always compute as empty.
+  const justRemoved: HrCaptureBatterMaterials[] = (ctx.detectedEpoch.removedBatters ?? [])
     .map((b) => ({
       batter: { playerId: b.playerId, playerName: b.playerName, team: b.team, slot: b.slot },
       playerContact: null,

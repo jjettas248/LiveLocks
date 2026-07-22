@@ -3842,6 +3842,14 @@ export class LiveGameOrchestrator {
       }
     }
 
+    // HR Radar Research (PR 2) — population-complete capture materials, one
+    // entry per lineup batter regardless of whether the champion evaluates
+    // them for HR this tick. Populated below (market-independent loop) and
+    // consumed only after every champion side effect for this tick has
+    // already completed (see the captureHrEvaluationEpoch call right before
+    // this function returns).
+    const hrCaptureMaterialsByPlayerId = new Map<string, HrCaptureBatterMaterials>();
+
     const batterArchetypeCache = new Map<string, MLBBatterArchetype>();
     let pitcherArch: MLBPitcherArchetype | null = null;
 
@@ -3884,6 +3892,42 @@ export class LiveGameOrchestrator {
       batterArchetypeCache.set(batter.playerId, bArch);
     }
 
+    // HR Radar Research (PR 2) — population-complete capture materials,
+    // built ONCE per batter here (market-independent, unlike the per-market
+    // BATTER_MARKETS loop below) so a capture epoch always sees every active
+    // lineup batter regardless of which markets computeImpactedMarkets()
+    // routed this tick to (e.g. a pitch_count_threshold-only tick routes to
+    // pitcher-only markets and would otherwise never populate this map).
+    // Skipped entirely when no epoch was detected — no wasted work on the
+    // common unchanged-tick case.
+    if (hrDetectedEpoch) {
+      for (const batter of state.battingOrder) {
+        if (!batter.playerId || batter.playerId === "unknown") continue;
+        const rollingStatsForCapture = mlbPlayerCache.batterRollingStats[batter.playerId];
+        const contactForCapture = contactCache?.byPlayerId?.[batter.playerId];
+        const rosterLookupForCapture = getPlayer(batter.playerId);
+        hrCaptureMaterialsByPlayerId.set(batter.playerId, {
+          batter: { playerId: batter.playerId, playerName: batter.playerName, team: batter.team, slot: batter.slot },
+          playerContact: contactForCapture ?? null,
+          rollingStats: rollingStatsForCapture
+            ? {
+                seasonHRRate: rollingStatsForCapture.seasonHRRate ?? null,
+                abSinceLastHR: rollingStatsForCapture.abSinceLastHR ?? null,
+                hrRateLast7: rollingStatsForCapture.hrRateLast7 ?? null,
+                hrRateLast15: rollingStatsForCapture.hrRateLast15 ?? null,
+                hrRateLast30: rollingStatsForCapture.hrRateLast30 ?? null,
+                seasonOps: rollingStatsForCapture.seasonOps ?? null,
+                seasonSlg: rollingStatsForCapture.seasonSlg ?? null,
+                seasonIBBRate: rollingStatsForCapture.seasonIBBRate ?? null,
+              }
+            : null,
+          batterHand: rosterLookupForCapture?.bats ?? null,
+          alreadyHomeredThisGame: isPlayerHrResolved(gameId, batter.playerId),
+          stillInBattingOrder: true,
+        });
+      }
+    }
+
     // Task #126 — HR Presence Floor tracker. Records playerIds for whom a
     // PATH A–E HR-radar row was created/updated this tick (i.e. the engine
     // returned ALERT or WATCH for the home_runs market). Any batter NOT in
@@ -3892,14 +3936,6 @@ export class LiveGameOrchestrator {
     // HR by that batter grades as called_miss (presence-only) instead of
     // uncalled_hr.
     const playersWithRealHrRow = new Set<string>();
-
-    // HR Radar Research (PR 2) — population-complete capture materials, one
-    // entry per lineup batter regardless of whether the champion evaluates
-    // them for HR this tick. Stashed below (market === "home_runs" pass,
-    // which every batter is visited for) and consumed only after every
-    // champion side effect for this tick has already completed (see the
-    // captureHrEvaluationEpoch call right before this function returns).
-    const hrCaptureMaterialsByPlayerId = new Map<string, HrCaptureBatterMaterials>();
 
     // ── Batter markets: evaluate each hitter in the starting lineup ────────────
     for (const market of BATTER_MARKETS) {
@@ -4065,31 +4101,15 @@ export class LiveGameOrchestrator {
           ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
           : "";
 
-        // HR Radar Research (PR 2) — population-complete capture materials.
-        // Gated on market==="home_runs" (every batter is visited once for
-        // this market per tick, independent of hrBuildScore) so this stashes
-        // exactly once per batter per tick, not once per market.
-        if (market === "home_runs") {
-          hrCaptureMaterialsByPlayerId.set(batter.playerId, {
-            batter: { playerId: batter.playerId, playerName: batter.playerName, team: batter.team, slot: batter.slot },
-            playerContact: playerContact ?? null,
-            rollingStats: rollingStats
-              ? {
-                  seasonHRRate: rollingStats.seasonHRRate ?? null,
-                  abSinceLastHR: rollingStats.abSinceLastHR ?? null,
-                  hrRateLast7: rollingStats.hrRateLast7 ?? null,
-                  hrRateLast15: rollingStats.hrRateLast15 ?? null,
-                  hrRateLast30: rollingStats.hrRateLast30 ?? null,
-                  seasonOps: rollingStats.seasonOps ?? null,
-                  seasonSlg: rollingStats.seasonSlg ?? null,
-                  seasonIBBRate: rollingStats.seasonIBBRate ?? null,
-                }
-              : null,
-            batterHand: resolvedBatterHand,
-            alreadyHomeredThisGame: isPlayerHrResolved(gameId, batter.playerId),
-            stillInBattingOrder: true,
-          });
-        }
+        // HR Radar Research (PR 2) capture materials are now stashed in a
+        // dedicated, market-independent loop above (see
+        // hrCaptureMaterialsByPlayerId), NOT here — a market===\"home_runs\"
+        // gate would skip population capture entirely on ticks where
+        // computeImpactedMarkets() routes only pitcher-only markets (e.g. a
+        // pitch_count_threshold-only tick), and forcing the home_runs pass to
+        // run engine computation on those ticks would make champion output
+        // depend on whether capture is enabled — exactly what capture must
+        // never do.
 
         const input: MLBPropInput = {
           playerId: batter.playerId,

@@ -32,7 +32,7 @@ function baseCtx(overrides: Partial<HrCaptureRuntimeContext> = {}): HrCaptureRun
     sessionDate: "2026-07-01",
     gameStatus: "live",
     state: { inning: 4, isTopInning: true, pitchCount: 55, outs: 1, homeScore: 2, awayScore: 1 },
-    detectedEpoch: { triggerType: "pa_complete", sourceEventId: "pa:20", sourceEventAt: null, playSequence: 20 },
+    detectedEpoch: { triggerType: "pa_complete", sourceEventId: "pa:20", sourceEventAt: null, playSequence: 20, removedBatters: [] },
     batters: [
       {
         batter: { playerId: "b1", playerName: "Batter One", team: "NYY", slot: 3 },

@@ -173,6 +173,26 @@ function baseState(overrides: Partial<HrEpochGameStateSlice> = {}): HrEpochGameS
   ok(a !== d, "a different sourceRevision derives a different evaluationEpochId");
 }
 
+// ── removedBatters is computed against the PRE-tick lineup, not stale by the
+// time capture reads it (regression: the detector used to update its "last
+// known" memory before capture could diff against the old lineup, which
+// made the removed-batter list always compute empty). ──────────────────────
+{
+  clearHrEpochDetectorStateForGame("gameRemoved");
+  const prev = baseState({ battingOrder: lineup(["1", "2", "3"]) });
+  detectHrEvaluationEpoch({ gameId: "gameRemoved", prevState: null, newState: prev, stateChangeTriggers: [], newWeatherRoofSignal: null });
+  const next = baseState({ battingOrder: lineup(["1", "3"]) });
+  const detected = detectHrEvaluationEpoch({
+    gameId: "gameRemoved", prevState: prev, newState: next, stateChangeTriggers: [], newWeatherRoofSignal: null,
+  });
+  ok(detected?.triggerType === "lineup_removal", "removing a batter fires lineup_removal");
+  ok(detected?.removedBatters.length === 1 && detected.removedBatters[0].playerId === "2", "the detected epoch carries the removed batter directly, not re-derived later from (by-then-stale) memory");
+  // Confirm the staleness trap this regression guards against: by the time
+  // this next call runs (simulating a later read, e.g. from the capture
+  // step), the detector's own memory has already moved on to `next`.
+  ok(getLastKnownBattingOrder("gameRemoved")?.length === 2, "the detector's own memory has already advanced past the removal by the time a later reader queries it");
+}
+
 // ── getLastKnownBattingOrder tracks state across ticks even with no epoch ──
 {
   clearHrEpochDetectorStateForGame("gameMemory");
