@@ -1,7 +1,7 @@
 // Mound Radar — diagnostics rollups + public visibility predicate.
 // Mirrors pregamePowerRadar/diagnostics.ts's role, own thresholds.
 
-import type { MoundSignal, MoundRadarResponse } from "./types";
+import type { MoundSignal, MoundRadarResponse, MoundEvaluationSnapshot } from "./types";
 import { MOUND_PUBLISH_MIN_SCORE } from "./scoring";
 import { buildMoundSettlementView } from "./moundOutcomeAttribution";
 
@@ -128,6 +128,43 @@ export interface MoundCoverageCounters {
   lineupCoverage: number;
 }
 
+/**
+ * Omits ONLY `champion.rawContactSnapshot` (PR 2/5) from a frozen evaluation
+ * snapshot — every other pre-existing field (drivers, componentScores,
+ * frozenProductionBaseline, postedLine, predictionTimeProjections, etc.) is
+ * preserved verbatim. Removing `evaluation` wholesale would be a separate,
+ * out-of-scope API-contract change; this PR's exposure fix is scoped to the
+ * one field it added.
+ */
+function stripRawContactSnapshot(
+  snapshot: MoundEvaluationSnapshot | null,
+): MoundEvaluationSnapshot | null {
+  if (!snapshot || snapshot.champion.rawContactSnapshot === undefined) return snapshot;
+  const { rawContactSnapshot, ...restChampion } = snapshot.champion;
+  return { ...snapshot, champion: restChampion };
+}
+
+/**
+ * Shallow-clones a signal to omit only `champion.rawContactSnapshot` from
+ * both frozen evaluation snapshots — never mutates the shared in-memory
+ * MoundSignal/MoundDiagnostics/MoundEvaluationRecord objects.
+ */
+function withoutResearchInstrumentation(signal: MoundSignal): MoundSignal {
+  const evaluation = signal.diagnostics.evaluation;
+  if (!evaluation) return signal;
+  return {
+    ...signal,
+    diagnostics: {
+      ...signal.diagnostics,
+      evaluation: {
+        ...evaluation,
+        firstPublicSnapshot: stripRawContactSnapshot(evaluation.firstPublicSnapshot),
+        finalPregameSnapshot: stripRawContactSnapshot(evaluation.finalPregameSnapshot),
+      },
+    },
+  };
+}
+
 export function buildMoundResponse(
   date: string,
   buildId: string,
@@ -136,6 +173,7 @@ export function buildMoundResponse(
   signals: MoundSignal[],
   counters: MoundCoverageCounters,
   includeSuppressed: boolean,
+  includeResearchInstrumentation: boolean,
 ): MoundRadarResponse {
   const publicSignals = signals.filter(isPublicMoundSignal);
   const suppressedSignals = signals.filter((s) => !isPublicMoundSignal(s));
@@ -152,6 +190,7 @@ export function buildMoundResponse(
     .slice(0, 8);
 
   const out = includeSuppressed ? signals : publicSignals;
+  const outWithInstrumentation = includeResearchInstrumentation ? out : out.map(withoutResearchInstrumentation);
 
   // Stamp the public settlement-view contract fresh per response — never
   // persisted redundantly, computed from `outcomes` plus the durable
@@ -162,7 +201,7 @@ export function buildMoundResponse(
   // for a signal that was genuinely publicly flagged and whose MARKET outcome
   // cashed. A shallow copy per signal — never mutates the in-memory
   // snapshot's own signal objects.
-  const withSettlementView = out.map((s) => ({
+  const withSettlementView = outWithInstrumentation.map((s) => ({
     ...s,
     settlementView: buildMoundSettlementView(
       s.outcomes,

@@ -328,6 +328,7 @@ async function buildMoundView(): Promise<{ view: PregameRadarView; source: MlbPr
       lineupCoverage: snapshot?.coverage.lineupCoverage ?? 0,
     },
     false,
+    false,
   );
 
   const targets = rankTargets(response.signals.map((s, i) => moundTargetFromSignal(s, i + 1)));
