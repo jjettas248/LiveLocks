@@ -10,7 +10,7 @@
 
 import type { PregamePowerTier } from "./types";
 import { clamp10, round1 } from "./scoreUtils";
-import { ATTACK_ENVIRONMENT_THRESHOLDS } from "./attackEnvironment";
+import { ATTACK_ENVIRONMENT_THRESHOLDS, ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON } from "./attackEnvironment";
 import type { AttackEnvironmentTier } from "./attackEnvironment";
 
 export interface ScoringComponents {
@@ -264,7 +264,7 @@ export function composePregameScore(
     otherwisePublishable &&
     score10 < ATTACK_ENVIRONMENT_THRESHOLDS.borderlineScore
   ) {
-    suppressedReasons.push("attack_environment_hostile_borderline");
+    suppressedReasons.push(ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON);
   }
 
   if (score10 < PUBLISH_MIN_SCORE) {

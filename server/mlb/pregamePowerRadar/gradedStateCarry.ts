@@ -52,6 +52,17 @@ export function carryForwardGradedState(
     fresh.outcomes = prev.outcomes;
     if (prev.status === "graded") fresh.status = "graded";
   }
+  // Same discipline as everPubliclyFlagged above: suppressedReasons is
+  // recomputed fresh from live-refetched data on every rebuild, so the
+  // Attack Environment gate's reason can silently disappear on a later
+  // rebuild (weather resync, updated season stats) even though it fired at
+  // least once. OR it forward so the shadow-elimination analytics can never
+  // retroactively reclassify a genuinely-suppressed candidate as retained.
+  fresh.everAttackEnvironmentSuppressed = fresh.everAttackEnvironmentSuppressed || prev.everAttackEnvironmentSuppressed === true;
+  // Prefer prev's snapshot (the earliest one recorded) over this build's own
+  // freshly-computed score10 — once a snapshot exists it must never move.
+  fresh.attackEnvironmentSuppressedScore10 = prev.attackEnvironmentSuppressedScore10 ?? fresh.attackEnvironmentSuppressedScore10;
+
   fresh.becameLiveReady = fresh.becameLiveReady || prev.becameLiveReady;
   fresh.becameLiveFire = fresh.becameLiveFire || prev.becameLiveFire;
   fresh.convertedLiveAt = fresh.convertedLiveAt ?? prev.convertedLiveAt;

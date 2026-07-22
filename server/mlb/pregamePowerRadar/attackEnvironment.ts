@@ -54,6 +54,13 @@ export function getParkDirection(parkWeatherDrivers: PowerDriver[]): "positive" 
   return "neutral";
 }
 
+/**
+ * Single source of truth for the suppression-reason string — used by
+ * scoring.ts (pushes it), calibrationStats.ts (reads it), and
+ * gradedStateCarry.ts (freezes it). Never duplicate this literal.
+ */
+export const ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON = "attack_environment_hostile_borderline" as const;
+
 export type AttackEnvironmentTier = "ELITE" | "FAVORABLE" | "NEUTRAL" | "HOSTILE";
 
 export type AttackEnvironmentCohort =

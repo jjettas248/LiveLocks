@@ -3,8 +3,9 @@
 
 import { buildPublicStats, buildCalibrationStats, buildAttackEnvironmentEliminationStats } from "./calibrationStats";
 import { wasPubliclyFlaggedPregame } from "./diagnostics";
+import { carryForwardGradedState } from "./gradedStateCarry";
 import type { PregameOutcome, PregamePowerSignal } from "./types";
-import type { AttackEnvironmentTier, AttackEnvironmentCohort } from "./attackEnvironment";
+import { ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON, type AttackEnvironmentTier, type AttackEnvironmentCohort } from "./attackEnvironment";
 
 let passed = 0;
 let failed = 0;
@@ -28,6 +29,8 @@ function makeSignal(over: {
   suppressedReasons?: string[];
   attackEnvironmentTier?: AttackEnvironmentTier;
   attackEnvironmentCohort?: AttackEnvironmentCohort;
+  everAttackEnvironmentSuppressed?: boolean;
+  attackEnvironmentSuppressedScore10?: number | null;
 }): PregamePowerSignal {
   const signal = {
     signalId: over.signalId,
@@ -73,6 +76,17 @@ function makeSignal(over: {
     suppressedReasons: over.suppressedReasons ?? [],
     outcomes: over.outcome ?? null,
     everPubliclyFlagged: false, // placeholder — computed below from the real predicate
+    // Mirrors buildPregamePowerRadar.ts's own initial-construction default:
+    // derived from suppressedReasons unless the test explicitly overrides it
+    // (used to simulate a later rebuild where the live reason already dropped).
+    everAttackEnvironmentSuppressed:
+      over.everAttackEnvironmentSuppressed ?? (over.suppressedReasons ?? []).includes(ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON),
+    attackEnvironmentSuppressedScore10:
+      over.attackEnvironmentSuppressedScore10 !== undefined
+        ? over.attackEnvironmentSuppressedScore10
+        : (over.suppressedReasons ?? []).includes(ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON)
+          ? over.score10
+          : null,
     becameLiveReady: over.becameLiveReady ?? false,
     becameLiveFire: over.becameLiveFire ?? false,
     convertedLiveAt: null,
@@ -339,6 +353,45 @@ ok(
   !suppressedBorderlineMiss.everPubliclyFlagged && !suppressedBorderlineWin.everPubliclyFlagged,
   "sanity: both suppressed fixtures are genuinely never-publicly-flagged",
 );
+
+// ── Regression: everAttackEnvironmentSuppressed survives a later rebuild ─────
+// where suppressedReasons/score10 have drifted (weather resync, updated
+// season stats). This is the exact bug flagged in PR review: suppressedReasons
+// is recomputed live on every rebuild, so a candidate genuinely suppressed
+// pre-lock could otherwise lose the reason string on a later rebuild and be
+// silently miscounted as "retained." carryForwardGradedState must OR the
+// frozen flag forward and preserve the ORIGINAL score10 snapshot, never the
+// drifted one.
+const prevSuppressed = makeSignal({
+  signalId: "s-drift", score10: 6.2, tier: "watch", everPubliclyFlagged: false,
+  suppressedReasons: [ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON], attackEnvironmentTier: "HOSTILE",
+});
+ok(prevSuppressed.everAttackEnvironmentSuppressed === true, "sanity: prev fixture starts genuinely suppressed");
+ok(prevSuppressed.attackEnvironmentSuppressedScore10 === 6.2, "sanity: prev fixture's frozen snapshot is 6.2");
+
+// Simulate a later rebuild: the environment flipped back to non-hostile, so
+// THIS build's fresh recompute no longer includes the reason and score10 has
+// drifted well outside the borderline band — exactly what a naive
+// live-suppressedReasons read would misclassify as "retained."
+const freshRebuild = makeSignal({
+  signalId: "s-drift", score10: 7.8, tier: "strong", everPubliclyFlagged: false,
+  suppressedReasons: [], attackEnvironmentTier: "NEUTRAL",
+  everAttackEnvironmentSuppressed: false, attackEnvironmentSuppressedScore10: null,
+});
+ok(freshRebuild.suppressedReasons.length === 0, "sanity: fresh rebuild's live suppressedReasons no longer include the attack reason");
+
+const carried = carryForwardGradedState({ ...freshRebuild }, prevSuppressed);
+ok(carried.everAttackEnvironmentSuppressed === true, "carryForwardGradedState ORs the frozen flag forward despite the fresh rebuild's suppressedReasons losing the reason");
+ok(carried.attackEnvironmentSuppressedScore10 === 6.2, "carryForwardGradedState preserves the ORIGINAL score10 snapshot (6.2), not the drifted live score10 (7.8)");
+ok(carried.score10 === 7.8, "sanity: the live/current score10 itself is NOT overwritten by the freeze — only the dedicated snapshot field is");
+
+// Feed the carried (post-drift) row into the shadow-elimination stats: it
+// must still land on the suppressed side, using its frozen 6.2 snapshot for
+// band membership — never excluded or reclassified as retained just because
+// the live score10 (7.8) has since drifted out of the borderline band.
+const driftStats = buildAttackEnvironmentEliminationStats([carried]);
+ok(driftStats.suppressedByAttackEnvironment === 1, `drifted-but-frozen row still counts as attack-suppressed (got ${driftStats.suppressedByAttackEnvironment})`);
+ok(driftStats.comparisonEligible === 1, `drifted row still lands in the matched band via its frozen snapshot, not its drifted live score10 (got ${driftStats.comparisonEligible})`);
 
 console.log(`\ncalibrationStats.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

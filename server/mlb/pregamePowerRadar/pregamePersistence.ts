@@ -12,6 +12,7 @@ import type {
 } from "@shared/schema";
 import type { PregameLineupStatus, PregamePowerSignal, PregameMarketSetup } from "./types";
 import { marketSetupLabel } from "./marketTagger";
+import { ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON } from "./attackEnvironment";
 
 /**
  * Rows persisted before the `confirmed`/`projected`/`unconfirmed` → `posted`/
@@ -134,6 +135,23 @@ export function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
     suppressedReasons: (r.suppressedReasons as string[]) ?? [],
     outcomes: (r.outcomes as PregamePowerSignal["outcomes"]) ?? null,
     everPubliclyFlagged: r.everPubliclyFlagged,
+    // Best-effort reconstruction on a cold restart (no dedicated DB column for
+    // this yet, unlike `everPubliclyFlagged` above) — derived from whatever
+    // `suppressedReasons`/`score10` were last persisted. This carries the same
+    // fidelity bound as every other mutable-recomputed field reconstructed
+    // here; it does NOT survive a live-refetch drift that happens BETWEEN the
+    // last DB write and a restart. The in-memory rebuild path (the common
+    // case — the loop runs every cycle without a restart) is fully protected
+    // by `carryForwardGradedState`'s OR-forward; this fallback only matters
+    // for the rarer full-process-restart case.
+    everAttackEnvironmentSuppressed: ((r.suppressedReasons as string[]) ?? []).includes(
+      ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON,
+    ),
+    attackEnvironmentSuppressedScore10: ((r.suppressedReasons as string[]) ?? []).includes(
+      ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON,
+    )
+      ? (typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number))
+      : null,
     becameLiveReady: r.becameLiveReady,
     becameLiveFire: r.becameLiveFire,
     convertedLiveAt: r.convertedLiveAt ? new Date(r.convertedLiveAt).toISOString() : null,

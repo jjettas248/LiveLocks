@@ -7,7 +7,7 @@ import type { PregamePowerSignal } from "./types";
 import { flaggedBeforeFirstPitchPregame } from "./diagnostics";
 import { buildPregameRadarWinItem } from "./winAttribution";
 import { PUBLISH_MIN_SCORE } from "./scoring";
-import { ATTACK_ENVIRONMENT_THRESHOLDS } from "./attackEnvironment";
+import { ATTACK_ENVIRONMENT_THRESHOLDS, ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON } from "./attackEnvironment";
 import type {
   AttackEnvironmentEliminationStats,
   PregameCalibrationBucket,
@@ -16,7 +16,7 @@ import type {
   PregameRadarWinItem,
 } from "../../../shared/pregameRadarWin";
 
-const ATTACK_SUPPRESSION_REASON = "attack_environment_hostile_borderline";
+const ATTACK_SUPPRESSION_REASON = ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON;
 
 const SCORE_BANDS = ["<6", "6-7", "7-8", "8-9", "9-10"] as const;
 
@@ -213,21 +213,38 @@ export function buildCalibrationStats(
  * Total-Bases-primary cards (the grader's public outcome is "did the batter
  * homer," not "did the TB line hit" — TB is graded separately/internally), so
  * these fields are named explicitly as HR-conversion rates.
+ *
+ * Suppressed/retained membership reads the FROZEN `everAttackEnvironmentSuppressed`
+ * flag (OR'd forward across rebuilds by `carryForwardGradedState`), never the
+ * live `suppressedReasons` array — `suppressedReasons` is recomputed from
+ * live-refetched data (weather, season stats, etc.) on every rebuild, so a
+ * candidate genuinely suppressed pre-lock could otherwise lose that reason on
+ * a later rebuild and get silently reclassified as "retained," corrupting the
+ * hit-rate comparison. For the same reason, a suppressed row's score-band
+ * membership uses its frozen `attackEnvironmentSuppressedScore10` snapshot
+ * (the score at the moment it was first suppressed) rather than a live
+ * `score10` that can keep drifting after the fact.
  */
 export function buildAttackEnvironmentEliminationStats(
   signals: PregamePowerSignal[],
 ): AttackEnvironmentEliminationStats {
   const evaluated = signals.filter((s) => s.diagnostics.attackEnvironmentTier != null);
 
-  const attackSuppressedAll = evaluated.filter((s) => s.suppressedReasons.includes(ATTACK_SUPPRESSION_REASON));
+  const attackSuppressedAll = evaluated.filter((s) => s.everAttackEnvironmentSuppressed);
 
   // Matched comparison population: same otherwise-clean, same borderline band,
   // whether or not Attack Environment was the (only) reason it got suppressed.
   const comparisonEligible = evaluated.filter((s) => {
+    const compareScore10 = s.everAttackEnvironmentSuppressed
+      ? s.attackEnvironmentSuppressedScore10 ?? s.score10
+      : s.score10;
+    // "Otherwise clean" still reads the live array minus the attack reason —
+    // this checks for a DIFFERENT, unrelated suppression cause, which isn't
+    // the frozen-state bug being guarded against here.
     const nonAttackReasons = s.suppressedReasons.filter((r) => r !== ATTACK_SUPPRESSION_REASON);
     return (
-      s.score10 >= PUBLISH_MIN_SCORE &&
-      s.score10 < ATTACK_ENVIRONMENT_THRESHOLDS.borderlineScore &&
+      compareScore10 >= PUBLISH_MIN_SCORE &&
+      compareScore10 < ATTACK_ENVIRONMENT_THRESHOLDS.borderlineScore &&
       nonAttackReasons.length === 0
     );
   });
@@ -235,8 +252,8 @@ export function buildAttackEnvironmentEliminationStats(
   const resolvedComparison = comparisonEligible.filter(
     (s) => s.outcomes?.outcome === "pregame_win" || s.outcomes?.outcome === "calibration_miss",
   );
-  const resolvedSuppressed = resolvedComparison.filter((s) => s.suppressedReasons.includes(ATTACK_SUPPRESSION_REASON));
-  const retainedResolved = resolvedComparison.filter((s) => !s.suppressedReasons.includes(ATTACK_SUPPRESSION_REASON));
+  const resolvedSuppressed = resolvedComparison.filter((s) => s.everAttackEnvironmentSuppressed);
+  const retainedResolved = resolvedComparison.filter((s) => !s.everAttackEnvironmentSuppressed);
 
   const suppressedHrWins = resolvedSuppressed.filter((s) => s.outcomes?.outcome === "pregame_win").length;
   const suppressedHrMisses = resolvedSuppressed.filter((s) => s.outcomes?.outcome === "calibration_miss").length;
