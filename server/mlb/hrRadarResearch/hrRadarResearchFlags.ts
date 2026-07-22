@@ -1,7 +1,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // HR Radar Research — feature flags (PR 1).
 //
-// A single module holding all six flags for this initiative, rather than the
+// A single module holding all seven flags for this initiative, rather than the
 // codebase's usual one-flag-per-file precedent (e.g. HR_RADAR_GOLDMASTER_V1
 // in hrRadarUserStage.ts, HR_PREGAME_PRIOR in hrConversionModel.ts). That
 // precedent fits a flag guarding one specific, already-colocated code path
@@ -9,7 +9,7 @@
 // dormant subsystem with no existing file to naturally live in. Scattering
 // them would force every later PR to add a new file just to hold one flag.
 //
-// All six default to their INERT value (OFF / 0 / ""), inverted from the
+// All seven default to their INERT value (OFF / 0 / ""), inverted from the
 // existing default-ON kill-switch precedent, since this is new dormant
 // infrastructure, not a guard on already-shipped behavior.
 //
@@ -119,6 +119,20 @@ export const HR_RADAR_MODEL_VERSION: string = parseHrResearchModelVersion(
   process.env.HR_RADAR_MODEL_VERSION,
 );
 
+// Feature flag: HR_RADAR_EVAL_CAPTURE_GAME_PERCENT (PR 2)
+//   Purpose: percent (0-100) of live games the evaluation-capture observer
+//     samples once HR_RADAR_EVAL_CAPTURE_ENABLED is also on (traffic-shaping,
+//     not a boolean gate). Default 0 (no games sampled). Deliberately a
+//     SEPARATE flag/parse call from HR_RADAR_CHALLENGER_GAME_PERCENT — the
+//     two subsystems (capture vs. future challenger shadow) roll out on
+//     independent schedules and must never share one sampling knob.
+//   Promotion plan: raise gradually (e.g. to 10) once PR 2 lands in a
+//     research/shadow environment; never consulted by champion HR Radar
+//     code. Invalid/out-of-range input fails closed to 0, not clamped.
+export const HR_RADAR_EVAL_CAPTURE_GAME_PERCENT: number = parseHrResearchGamePercent(
+  process.env.HR_RADAR_EVAL_CAPTURE_GAME_PERCENT,
+);
+
 export interface HrRadarResearchFlagsSnapshot {
   HR_RADAR_EVAL_CAPTURE_ENABLED: boolean;
   HR_RADAR_SHADOW_MODEL_ENABLED: boolean;
@@ -126,9 +140,10 @@ export interface HrRadarResearchFlagsSnapshot {
   HR_RADAR_CHALLENGER_POLICY_ENABLED: boolean;
   HR_RADAR_CHALLENGER_GAME_PERCENT: number;
   HR_RADAR_MODEL_VERSION: string;
+  HR_RADAR_EVAL_CAPTURE_GAME_PERCENT: number;
 }
 
-/** Convenience snapshot of all six flags' current (import-time-resolved) values. */
+/** Convenience snapshot of all seven flags' current (import-time-resolved) values. */
 export function hrRadarResearchFlagsSnapshot(): HrRadarResearchFlagsSnapshot {
   return {
     HR_RADAR_EVAL_CAPTURE_ENABLED,
@@ -137,5 +152,6 @@ export function hrRadarResearchFlagsSnapshot(): HrRadarResearchFlagsSnapshot {
     HR_RADAR_CHALLENGER_POLICY_ENABLED,
     HR_RADAR_CHALLENGER_GAME_PERCENT,
     HR_RADAR_MODEL_VERSION,
+    HR_RADAR_EVAL_CAPTURE_GAME_PERCENT,
   };
 }

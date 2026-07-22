@@ -31,26 +31,55 @@ import { z } from "zod";
 
 export const HR_FEATURES_V1 = "hr_features_v1" as const;
 
+// Independently-versioned raw-input envelope contract version (see
+// hrRawInputEnvelopeSchema below) — distinct from HR_FEATURES_V1 so a
+// feature-builder bug can be fixed and features re-derived from preserved
+// raw inputs without bumping the derived-feature contract itself.
+export const HR_RAW_INPUTS_V1 = "hr_raw_inputs_v1" as const;
+
 const numericLeaf = z.number().nullable();
 const extraLeaves = z.record(z.string(), z.number().nullable());
 
-// ── Block A: batter HR prior ────────────────────────────────────────────────
+// ── Block A: batter HR prior (season/career baselines — no in-game data) ───
 export const hrBatterPriorFeaturesSchema = z.object({
   hrRatePriorSeasonal: numericLeaf,
   hrRateCareer: numericLeaf,
   barrelRatePriorSeasonal: numericLeaf,
   hardHitRatePriorSeasonal: numericLeaf,
   pullRatePrior: numericLeaf,
+  // PR 2 additions — approved HR-specific research plan, batter prior block.
+  hardHitAirBallRatePriorSeasonal: numericLeaf,
+  flyBallRatePrior: numericLeaf,
+  hrPerFlyBallRatePrior: numericLeaf,
+  xSlgPrior: numericLeaf,
+  xIsoPrior: numericLeaf,
+  sweetSpotRatePrior: numericLeaf,
   extra: extraLeaves,
 });
 export type HrBatterPriorFeatures = z.infer<typeof hrBatterPriorFeaturesSchema>;
 
-// ── Block B: live current form ──────────────────────────────────────────────
+// ── Block B: live current form (today's in-game contact evidence only) ─────
 export const hrLiveFormFeaturesSchema = z.object({
   exitVeloTodayAvg: numericLeaf,
   barrelsToday: numericLeaf,
   hardHitRateToday: numericLeaf,
   recentFormStreakScore: numericLeaf,
+  // PR 2 additions. The ordered non-HR BBE sequence itself is NOT a leaf here
+  // — it is preserved verbatim in rawInputs.families.liveContactBBE; these
+  // are aggregates derived from that sequence.
+  maxExitVeloToday: numericLeaf,
+  evLaInteractionScore: numericLeaf,
+  estimatedHrQualityToday: numericLeaf,
+  maxEstimatedHrQualityToday: numericLeaf,
+  avgBattedBallDistanceToday: numericLeaf,
+  parkAdjustedContactQualityToday: numericLeaf,
+  sprayPullFactorToday: numericLeaf,
+  recencyWeightedContactScore: numericLeaf,
+  // Independent dangerous-contact count — one increment per BBE regardless of
+  // how many measurements that BBE yields (see nearHrContact.ts detection).
+  dangerousContactCountToday: z.number().int().nullable(),
+  contactQualityDeltaVsPrior: numericLeaf,
+  contactTrendSlope: numericLeaf,
   extra: extraLeaves,
 });
 export type HrLiveFormFeatures = z.infer<typeof hrLiveFormFeaturesSchema>;
@@ -61,6 +90,13 @@ export const hrPitcherStateFeaturesSchema = z.object({
   pitcherFatigueScore: numericLeaf,
   pitchCountToday: numericLeaf,
   timesThroughOrder: numericLeaf,
+  // PR 2 additions.
+  battersFacedToday: z.number().int().nullable(),
+  velocityTrendSlope: numericLeaf,
+  velocityDropFromSeason: numericLeaf,
+  pitchMixShiftScore: numericLeaf,
+  dangerousAerialContactAllowedToday: z.number().int().nullable(),
+  pitcherRemovalProbability: numericLeaf,
   extra: extraLeaves,
 });
 export type HrPitcherStateFeatures = z.infer<typeof hrPitcherStateFeaturesSchema>;
@@ -69,6 +105,11 @@ export type HrPitcherStateFeatures = z.infer<typeof hrPitcherStateFeaturesSchema
 export const hrMatchupFeaturesSchema = z.object({
   handednessSplitFactor: numericLeaf,
   platoonAdvantage: z.boolean().nullable(),
+  // PR 2 additions.
+  shrunkBatterVsHandHrRate: numericLeaf,
+  shrunkPitcherVsHandHrRateAllowed: numericLeaf,
+  pitchFamilyPowerFitScore: numericLeaf,
+  arsenalProfileFitScore: numericLeaf,
   extra: extraLeaves,
 });
 export type HrMatchupFeatures = z.infer<typeof hrMatchupFeaturesSchema>;
@@ -78,6 +119,14 @@ export const hrOpportunityFeaturesSchema = z.object({
   battingOrderSlot: z.number().int().nullable(),
   remainingPaEstimate: z.number().int().nullable(),
   inning: z.number().int().nullable(),
+  // PR 2 additions.
+  lineupDistanceToNextPa: z.number().int().nullable(),
+  remainingPaP25: z.number().int().nullable(),
+  remainingPaP50: z.number().int().nullable(),
+  remainingPaP75: z.number().int().nullable(),
+  scoreDifferential: numericLeaf,
+  substitutionRiskScore: numericLeaf,
+  pitcherSurvivalUncertaintyScore: numericLeaf,
   extra: extraLeaves,
 });
 export type HrOpportunityFeatures = z.infer<typeof hrOpportunityFeaturesSchema>;
@@ -88,16 +137,46 @@ export const hrEnvironmentFeaturesSchema = z.object({
   temperatureF: numericLeaf,
   parkHrFactor: numericLeaf,
   roofState: z.enum(["open", "closed", "retractable_unknown", "na"]).nullable(),
+  // PR 2 additions.
+  handednessParkHrFactor: numericLeaf,
+  wallDistanceFitScore: numericLeaf,
+  windVectorDegrees: numericLeaf,
+  windSpeedMph: numericLeaf,
+  humidityPercent: numericLeaf,
+  pressureHpa: numericLeaf,
   extra: extraLeaves,
 });
 export type HrEnvironmentFeatures = z.infer<typeof hrEnvironmentFeaturesSchema>;
 
-// ── Block G: data quality (feature-vector-level summary) ───────────────────
+// ── Block G: data quality (feature-vector-level summary) — no `extra`, this
+// block IS the escape hatch's own accounting. ───────────────────────────────
 export const hrDataQualityFeaturesSchema = z.object({
   missingInputs: z.array(z.string()),
   overallQuality: z.enum(["full", "degraded", "missing"]),
+  // PR 2 additions.
+  feedDegradationFlags: z.array(z.string()),
+  identityConfidence: z.enum(["confirmed", "fuzzy_matched", "unresolved"]).nullable(),
 });
 export type HrDataQualityFeatures = z.infer<typeof hrDataQualityFeaturesSchema>;
+
+// ── Block H (PR 2): ablation-only raw inputs. These fields receive NO
+// predetermined positive weight — they are preserved for future ablation
+// study only, deliberately kept out of the 7 scored blocks above so no
+// weighted-scoring code can treat them as evidence. A static source-scan
+// test (hrEvalCaptureNoChampionMutation.test.ts) asserts these field names
+// never appear as identifiers in any champion scoring file. ───────────────
+export const hrAblationOnlyInputsSchema = z.object({
+  xBaSeasonal: numericLeaf,
+  pitcherEraSeasonal: numericLeaf,
+  rawBvpHrRate: numericLeaf,
+  rawBvpPlateAppearances: z.number().int().nullable(),
+  atBatsSinceLastHr: z.number().int().nullable(),
+  seasonIbbRate: numericLeaf,
+  genericHotLabel: z.string().nullable(),
+  leverageIndex: numericLeaf,
+  extra: extraLeaves,
+});
+export type HrAblationOnlyInputs = z.infer<typeof hrAblationOnlyInputsSchema>;
 
 // ── Derived feature vector (validated against the `derived_features` jsonb column) ──
 export const hrDerivedFeatureVectorV1Schema = z.object({
@@ -109,6 +188,7 @@ export const hrDerivedFeatureVectorV1Schema = z.object({
   opportunity: hrOpportunityFeaturesSchema,
   environment: hrEnvironmentFeaturesSchema,
   dataQuality: hrDataQualityFeaturesSchema,
+  ablationInputs: hrAblationOnlyInputsSchema,
 });
 export type HrDerivedFeatureVectorV1 = z.infer<typeof hrDerivedFeatureVectorV1Schema>;
 

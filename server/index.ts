@@ -918,6 +918,12 @@ app.use((req, res, next) => {
     const { startAlertDrainer } = await import("./services/alertSubscriber");
     startAlertDrainer();
 
+    // HR Radar Research (PR 2) — bounded evaluation-capture write drainer.
+    // No-op writer (queue always empty) unless HR_RADAR_EVAL_CAPTURE_ENABLED
+    // is set — see server/mlb/hrRadarResearch/hrEvaluationWriteQueue.ts.
+    const { startHrEvaluationWriteDrainer } = await import("./mlb/hrRadarResearch/hrEvaluationWriteQueue");
+    startHrEvaluationWriteDrainer();
+
     // Batch E — Analytics aggregators. Read-only periodic snapshots.
     try {
       const { startMlbIntelligenceAggregator } = await import("./analytics/mlbSignalIntelligence");
