@@ -989,6 +989,16 @@ export const pregamePowerRadarSignals = pgTable("pregame_power_radar_signals", {
   suppressedReasons: jsonb("suppressed_reasons").notNull().default([]),
   outcomes: jsonb("outcomes"),
   everPubliclyFlagged: boolean("ever_publicly_flagged").notNull().default(false),
+  // Same durability discipline as everPubliclyFlagged above: suppressedReasons
+  // is recomputed fresh from live-refetched data (weather, season stats) on
+  // every rebuild, so the Attack Environment gate's suppression reason could
+  // otherwise silently drop on a later rebuild. OR'd forward by
+  // carryForwardGradedState so the shadow-elimination analytics never
+  // misclassify a genuinely-suppressed candidate as retained after a restart.
+  everAttackEnvironmentSuppressed: boolean("ever_attack_environment_suppressed").notNull().default(false),
+  // score10 snapshot from the FIRST time everAttackEnvironmentSuppressed
+  // became true — never overwritten again once set. Null until suppressed.
+  attackEnvironmentSuppressedScore10: numeric("attack_environment_suppressed_score_10"),
   becameLiveReady: boolean("became_live_ready").notNull().default(false),
   becameLiveFire: boolean("became_live_fire").notNull().default(false),
   convertedLiveAt: timestamp("converted_live_at"),
