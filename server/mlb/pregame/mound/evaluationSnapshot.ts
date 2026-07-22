@@ -100,7 +100,7 @@ export function buildMoundEvaluationSnapshot(
   frozenAt: string,
   seasonKPer9: number | null,
   seasonAvgInningsPerStart: number | null,
-  rawContactSnapshot: RawPitcherContactSnapshot | undefined,
+  rawContactSnapshot?: RawPitcherContactSnapshot,
 ): MoundEvaluationSnapshot {
   return {
     frozenAt,
@@ -304,7 +304,7 @@ export function applyMoundEvaluationSnapshots(
   prevSignals: Map<string, MoundSignal> | null,
   buildId: string,
   seasonRatesByPitcherId: Map<string, { seasonKPer9: number | null; seasonAvgInningsPerStart: number | null }>,
-  rawContactSnapshotsBySignalId: Map<string, RawPitcherContactSnapshot>,
+  rawContactSnapshotsBySignalId: Map<string, RawPitcherContactSnapshot> = new Map(),
 ): void {
   const all = Array.from(signals.values());
   const ranks = computeMoundPopulationRanks(all);

@@ -58,6 +58,29 @@ import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
 import { applyMoundEvaluationSnapshots } from "./evaluationSnapshot";
 import { aggregateRawPitcherContactSnapshot, type RawContactSupportingInputs, type RawPitcherContactSnapshot } from "./rawPitcherContactSnapshot";
+
+/**
+ * Builds RawContactSupportingInputs from the already-resolved seasonStats/
+ * recentStarts objects. Exported as a thin, directly-testable extraction of
+ * exactly the expressions used in the per-pitcher build loop below — so a
+ * test can exercise this REAL construction (not a hand-mirrored copy) without
+ * running the full build orchestrator. seasonStatsAvailable/recentStartsAvailable
+ * intentionally reuse the identical `!= null` checks the existing
+ * rawInputsAvailable.pitcherSeasonStats/.pitcherRecentStarts diagnostics use.
+ */
+export function buildRawContactSupportingInputs(
+  seasonStats: { inningsPitched: number | null; homeRunsAllowed: number | null; bbPer9: number | null } | null,
+  recentStarts: { ipVarianceLast3: number | null } | null,
+): RawContactSupportingInputs {
+  return {
+    seasonStatsAvailable: seasonStats != null,
+    inningsPitchedSeason: seasonStats?.inningsPitched ?? null,
+    homeRunsAllowedSeason: seasonStats?.homeRunsAllowed ?? null,
+    bb9Season: seasonStats?.bbPer9 ?? null,
+    recentStartsAvailable: recentStarts != null,
+    ipVarianceLast3: recentStarts?.ipVarianceLast3 ?? null,
+  };
+}
 import {
   getMoundSnapshot,
   setMoundSnapshot,
@@ -444,14 +467,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         // exact same expressions used for rawInputsAvailable below
         // (seasonStats != null / recentStarts != null), so this can never
         // disagree with that existing diagnostic.
-        const rawContactSupportingInputs: RawContactSupportingInputs = {
-          seasonStatsAvailable: seasonStats != null,
-          inningsPitchedSeason: seasonStats?.inningsPitched ?? null,
-          homeRunsAllowedSeason: seasonStats?.homeRunsAllowed ?? null,
-          bb9Season: seasonStats?.bbPer9 ?? null,
-          recentStartsAvailable: recentStarts != null,
-          ipVarianceLast3: recentStarts?.ipVarianceLast3 ?? null,
-        };
+        const rawContactSupportingInputs: RawContactSupportingInputs = buildRawContactSupportingInputs(seasonStats, recentStarts);
         const rawContactSnapshot = aggregateRawPitcherContactSnapshot(
           savant?.pitcherContactCsvSource ?? null,
           rawContactSupportingInputs,
