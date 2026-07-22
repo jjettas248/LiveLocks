@@ -37,9 +37,9 @@ const SESSION_DATE = "fresh-rt"; // isolated, throwaway sessionDate so this neve
 const BUILD_ID = "fresh-rt-build-1";
 
 const CURRENT_FACTORS: GradeFactorEntry[] = [
-  { key: "pitcherVulnerability", label: "Pitcher Vulnerability", value: 9.0, impact: 0.92, direction: "positive" },
-  { key: "lineupOpportunity", label: "Lineup Opportunity", value: 8.5, impact: 0.315, direction: "positive" },
-  { key: "matchupPenalty", label: "Matchup Penalty", value: -0.6, impact: -0.6, direction: "negative" },
+  { key: "pitcherVulnerability", label: "Pitcher Vulnerability", displayLabel: "High", tone: "attack", value: 9.0, impact: 0.92, direction: "positive" },
+  { key: "lineupOpportunity", label: "Lineup Opportunity", displayLabel: "Excellent", tone: "supporting", value: 8.5, impact: 0.315, direction: "positive" },
+  { key: "matchupPenalty", label: "Matchup Penalty", displayLabel: "Downgrade", tone: "risk", value: -0.6, impact: -0.6, direction: "negative" },
 ];
 
 function baseSignal(signalId: string, gradeFactorSummary: GradeFactorEntry[] | undefined): PregamePowerSignal {

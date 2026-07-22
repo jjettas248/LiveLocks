@@ -57,7 +57,7 @@ async function main() {
   //     recalculate or replace the frozen summary ─────────────────────────
   if (current) {
     const DIFFERENT_FACTORS = [
-      { key: "batterPower", label: "Batter Power", value: 1.0, impact: -1.0, direction: "negative" as const },
+      { key: "batterPower", label: "Batter Power", displayLabel: "Weak", tone: "risk", value: 1.0, impact: -1.0, direction: "negative" as const },
     ];
     // Simulate what a live rebuild would produce post-lock: same signal
     // identity, but the game has now gone final and a fresh evaluation
@@ -87,7 +87,7 @@ async function main() {
       ...legacy,
       gameStatus: "final" as const,
       status: "locked" as any,
-      diagnostics: { ...legacy.diagnostics, gradeFactorSummary: [{ key: "x", label: "x", value: 1, impact: 1, direction: "positive" as const }] },
+      diagnostics: { ...legacy.diagnostics, gradeFactorSummary: [{ key: "x", label: "x", displayLabel: "Strong", tone: "standout", value: 1, impact: 1, direction: "positive" as const }] },
     };
     carryForwardGradedState(freshRebuiltLegacy as any, legacy);
     ok(

@@ -23,10 +23,15 @@
 import { COMPONENT_WEIGHTS } from "./scoring";
 
 export type GradeFactorDirection = "positive" | "negative" | "neutral";
+export type GradeFactorTone = "standout" | "supporting" | "context" | "attack" | "risk" | "neutral";
 
 export interface GradeFactorEntry {
   key: string;
   label: string;
+  /** Plain-language compact-card value; raw numeric `value` remains available in expanded details. */
+  displayLabel: string;
+  /** Semantic compact-card color, stamped server-side so the client never interprets the factor. */
+  tone: GradeFactorTone;
   /** Display value: the component's own 0–10 score, or the adjustment's realized point impact. */
   value: number;
   /** Ranking metric used for selection only — not necessarily rendered. */
@@ -64,6 +69,110 @@ function round1(v: number): number {
   return Math.round(v * 10) / 10;
 }
 
+type GradeFactorKey = GradeFactorComponentInput["key"] | "bvpHistory" | "coverageCap" | "matchupPenalty";
+
+function componentDisplayLabel(key: GradeFactorComponentInput["key"], score: number): string {
+  switch (key) {
+    case "pitcherVulnerability":
+      if (score >= 8) return "High";
+      if (score >= 6) return "Elevated";
+      if (score < 3) return "Very Low";
+      if (score < 4.5) return "Low";
+      return "Neutral";
+    case "batterPower":
+      if (score >= 8.5) return "Elite";
+      if (score >= 7.5) return "Strong";
+      if (score >= 6) return "Solid";
+      if (score < 4.5) return "Weak";
+      return "Neutral";
+    case "matchupFit":
+      if (score >= 7) return "Favorable";
+      if (score >= 6) return "Supportive";
+      if (score < 4) return "Difficult";
+      return "Neutral";
+    case "parkWeather":
+      if (score >= 7) return "Hitter-Friendly";
+      if (score >= 6) return "Favorable";
+      if (score < 4) return "Suppressive";
+      return "Neutral";
+    case "lineupOpportunity":
+      if (score >= 8) return "Excellent";
+      if (score >= 7) return "Strong";
+      if (score >= 6) return "Favorable";
+      if (score < 4) return "Poor";
+      return "Neutral";
+    case "nearHrRecentForm":
+      if (score >= 8) return "Hot";
+      if (score >= 6.5) return "Strong";
+      if (score >= 5.5) return "Encouraging";
+      if (score < 4) return "Cold";
+      return "Neutral";
+  }
+}
+
+function adjustmentDisplayLabel(key: Exclude<GradeFactorKey, GradeFactorComponentInput["key"]>, direction: GradeFactorDirection): string {
+  if (key === "bvpHistory") {
+    if (direction === "positive") return "Helpful";
+    if (direction === "negative") return "Unfavorable";
+    return "Neutral";
+  }
+  if (key === "coverageCap") return direction === "negative" ? "Score Capped" : "No Effect";
+  return direction === "negative" ? "Downgrade" : "No Penalty";
+}
+
+function toneOf(key: GradeFactorKey, direction: GradeFactorDirection): GradeFactorTone {
+  if (direction === "negative") return "risk";
+  if (direction === "neutral") return "neutral";
+
+  switch (key) {
+    case "pitcherVulnerability": return "attack";
+    case "batterPower":
+    case "nearHrRecentForm": return "standout";
+    case "lineupOpportunity":
+    case "bvpHistory": return "supporting";
+    case "matchupFit":
+    case "parkWeather":
+    case "coverageCap":
+    case "matchupPenalty": return "context";
+  }
+}
+
+function componentEntry(component: GradeFactorComponentInput, impact: number): GradeFactorEntry {
+  const direction = directionOf(impact);
+  const value = round1(component.score);
+  const displayLabel = componentDisplayLabel(component.key, value);
+  return {
+    key: component.key,
+    label: component.label,
+    displayLabel,
+    // A qualitative "Neutral" label must also look neutral. Small mathematical
+    // impacts can exceed EPSILON for higher-weight components without being a
+    // meaningful user-facing advantage; do not pair neutral wording with a
+    // green/orange/rose chip.
+    tone: displayLabel === "Neutral" ? "neutral" : toneOf(component.key, direction),
+    value,
+    impact,
+    direction,
+  };
+}
+
+function adjustmentEntry(
+  key: "bvpHistory" | "coverageCap" | "matchupPenalty",
+  label: string,
+  impact: number,
+): GradeFactorEntry {
+  const direction = directionOf(impact);
+  return {
+    key,
+    label,
+    displayLabel: adjustmentDisplayLabel(key, direction),
+    tone: toneOf(key, direction),
+    value: round1(impact),
+    impact,
+    direction,
+  };
+}
+
 export interface RealizedImpacts {
   bvpImpact: number;
   coverageCapImpact: number;
@@ -98,13 +207,7 @@ export function buildGradeFactorSummary(input: GradeFactorSummaryInput): GradeFa
   const weightOf = (key: GradeFactorComponentInput["key"]): number => COMPONENT_WEIGHTS[key];
 
   const pvImpact = weightOf("pitcherVulnerability") * (pv.score - 5);
-  const pvEntry: GradeFactorEntry = {
-    key: pv.key,
-    label: pv.label,
-    value: round1(pv.score),
-    impact: pvImpact,
-    direction: directionOf(pvImpact),
-  };
+  const pvEntry = componentEntry(pv, pvImpact);
 
   // ── Candidate pool: the other 5 components (when available) + 3 realized
   //    score adjustments (BvP / coverage cap / matchup penalty). Built in a
@@ -114,17 +217,17 @@ export function buildGradeFactorSummary(input: GradeFactorSummaryInput): GradeFa
   for (const c of input.components) {
     if (c.key === "pitcherVulnerability" || !c.available) continue;
     const impact = weightOf(c.key) * (c.score - 5);
-    pool.push({ key: c.key, label: c.label, value: round1(c.score), impact, direction: directionOf(impact) });
+    pool.push(componentEntry(c, impact));
   }
 
   const { bvpImpact, coverageCapImpact, matchupImpact } = computeRealizedImpacts(input);
 
   if (input.bvpAvailable) {
-    pool.push({ key: "bvpHistory", label: "BvP History", value: round1(bvpImpact), impact: bvpImpact, direction: directionOf(bvpImpact) });
+    pool.push(adjustmentEntry("bvpHistory", "BvP History", bvpImpact));
   }
 
-  pool.push({ key: "coverageCap", label: "Data Coverage Cap", value: round1(coverageCapImpact), impact: coverageCapImpact, direction: directionOf(coverageCapImpact) });
-  pool.push({ key: "matchupPenalty", label: "Matchup Penalty", value: round1(matchupImpact), impact: matchupImpact, direction: directionOf(matchupImpact) });
+  pool.push(adjustmentEntry("coverageCap", "Data Coverage Cap", coverageCapImpact));
+  pool.push(adjustmentEntry("matchupPenalty", "Matchup Penalty", matchupImpact));
 
   const top2 = pool
     .slice()
