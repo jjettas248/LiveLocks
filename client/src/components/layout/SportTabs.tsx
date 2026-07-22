@@ -20,7 +20,7 @@ export interface SportTabsProps {
   nbaSubTab: NbaSubTab;
   onSelectNbaSubTab: (tab: NbaSubTab) => void;
   mlbSubTab: MlbSubTab;
-  onSelectMlbSubTab: (tab: "hr_radar" | "pregame_power") => void;
+  onSelectMlbSubTab: (tab: MlbSubTab) => void;
 }
 
 // Shared base for primary tab buttons. py-2 gives a comfortable mobile tap target.
@@ -158,9 +158,9 @@ export function SportTabs({
         <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
           {(
             [
+              { key: "live_feed", label: "Live Edge" },
               { key: "hr_radar", label: "HR Radar" },
               { key: "pregame_power", label: "Pre-Game" },
-              // Action Feed (live_feed) hidden for now — re-add this entry to restore.
             ] as const
           ).map((tab) => (
             <button
