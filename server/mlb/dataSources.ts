@@ -49,6 +49,33 @@ export interface BaseballSavantData {
   pitcherCswPct: number | null;
   pitcherWhiffPctByFamily: Partial<Record<"fastball" | "breaking" | "offspeed", number>>;
   pitcherMissesBatsFamily: { family: "fastball" | "breaking" | "offspeed"; whiffPct: number; usagePct: number } | null;
+  // Mound Radar PR 2 — narrow, column-presence-aware projection of the same
+  // pitcher-CSV rows already parsed above, feeding
+  // pregame/mound/rawPitcherContactSnapshot.ts's aggregateRawPitcherContactSnapshot.
+  // Null when the pitcher CSV fetch/parse failed entirely (not merely empty).
+  pitcherContactCsvSource: PitcherContactCsvSource | null;
+}
+
+// ── Pitcher contact-quality CSV projection (Mound Radar PR 2) ────────────────
+// Sole owner of this shape — server/mlb/pregame/mound/rawPitcherContactSnapshot.ts
+// imports these types/values rather than redefining them. This file must never
+// import from that downstream Mound-only module.
+export const PITCHER_CONTACT_FIELDS = [
+  "bb_type",
+  "launch_speed",
+  "launch_speed_angle",
+  "estimated_slg_using_speedangle",
+  "estimated_woba_using_speedangle",
+] as const;
+export type PitcherContactField = (typeof PITCHER_CONTACT_FIELDS)[number];
+// Optional-keyed: a key is only ever present when the source header for that
+// field actually existed — absence must remain distinguishable from an
+// existing-but-blank cell (see fieldsPresent below).
+export type PitcherContactRow = Partial<Record<PitcherContactField, string>>;
+export interface PitcherContactCsvSource {
+  rows: PitcherContactRow[];
+  /** True iff the CSV's header row actually contained this column. */
+  fieldsPresent: Record<PitcherContactField, boolean>;
 }
 
 // Cache for Savant data (updated infrequently — season stats)
@@ -378,21 +405,69 @@ function splitCSVRow(line: string): string[] {
   return cols;
 }
 
-function parseSavantCSV(text: string): Array<Record<string, string>> {
+export interface ParsedSavantCsv {
+  headers: string[];
+  rows: Array<Record<string, string>>;
+}
+
+// A handful of columns present on every real Savant `type=details` export
+// regardless of which optional/contact fields happen to be populated —
+// deliberately NOT any of PITCHER_CONTACT_FIELDS, so a legitimately-missing
+// contact column is still distinguishable from genuinely garbage/non-Savant
+// input (see buildPitcherContactCsvSource's fieldsPresent below).
+const KNOWN_SAVANT_HEADERS = ["game_pk", "game_date", "player_name", "pitch_type", "events"] as const;
+
+/**
+ * Returns null only when there is no valid, recognizable Savant header row at
+ * all (empty/garbage content). A header-only response (real headers, zero
+ * data lines) returns { headers, rows: [] } — NOT null.
+ */
+function parseSavantCsvDocument(text: string): ParsedSavantCsv | null {
   const lines = text.split("\n");
-  if (lines.length < 2) return [];
-  const headers = splitCSVRow(lines[0]).map((h) => h.toLowerCase().replace(/"/g, ""));
+  if (lines.length < 1 || !lines[0]?.trim()) return null;
+
+  // headerCells preserves original column positions — used for row
+  // construction. validHeaders (blank cells filtered) is used ONLY for the
+  // known-header validation check below; filtering headerCells itself before
+  // building rows would shift every later column's index whenever a genuinely
+  // blank header cell precedes a valid one.
+  const headerCells = splitCSVRow(lines[0]).map((header) =>
+    header.replace(/"/g, "").trim().toLowerCase(),
+  );
+  const validHeaders = headerCells.filter(Boolean);
+  if (validHeaders.length < 2 || !KNOWN_SAVANT_HEADERS.some((field) => validHeaders.includes(field))) {
+    return null;
+  }
+
   const rows: Array<Record<string, string>> = [];
   for (let i = 1; i < lines.length; i++) {
     if (!lines[i].trim()) continue;
-    const cols = splitCSVRow(lines[i]);
-    if (cols.length < headers.length * 0.5) continue;
+    const columns = splitCSVRow(lines[i]);
+    if (columns.length < headerCells.length * 0.5) continue;
     const row: Record<string, string> = {};
-    headers.forEach((h, idx) => { row[h] = cols[idx] ?? ""; });
+    headerCells.forEach((header, index) => {
+      if (header) row[header] = columns[index] ?? "";
+    });
     rows.push(row);
   }
-  return rows;
+  return { headers: validHeaders, rows };
 }
+
+/** Narrow, pure helper — callable directly on synthetic CSV text with no network access, for testing. */
+export function buildPitcherContactCsvSource(parsed: ParsedSavantCsv | null): PitcherContactCsvSource | null {
+  if (parsed == null) return null;
+  const fieldsPresent = Object.fromEntries(
+    PITCHER_CONTACT_FIELDS.map((f) => [f, parsed.headers.includes(f)]),
+  ) as Record<PitcherContactField, boolean>;
+  const rows: PitcherContactRow[] = parsed.rows.map((r) => {
+    const row: PitcherContactRow = {};
+    for (const f of PITCHER_CONTACT_FIELDS) if (fieldsPresent[f]) row[f] = r[f];
+    return row;
+  });
+  return { rows, fieldsPresent };
+}
+
+export { parseSavantCsvDocument };
 
 export async function fetchBaseballSavantData(
   mlbPlayerId: string,
@@ -424,6 +499,7 @@ export async function fetchBaseballSavantData(
     pitcherCswPct: null,
     pitcherWhiffPctByFamily: {},
     pitcherMissesBatsFamily: null,
+    pitcherContactCsvSource: null,
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -458,6 +534,7 @@ export async function fetchBaseballSavantData(
   let pitcherCswPct: number | null = null;
   let pitcherWhiffPctByFamily: BaseballSavantData["pitcherWhiffPctByFamily"] = {};
   let pitcherMissesBatsFamily: BaseballSavantData["pitcherMissesBatsFamily"] = null;
+  let pitcherContactCsvSource: BaseballSavantData["pitcherContactCsvSource"] = null;
 
   try {
     const currentYear = new Date().getFullYear();
@@ -480,7 +557,7 @@ export async function fetchBaseballSavantData(
 
     if (batterRes.status === "fulfilled" && batterRes.value.ok) {
       const text = await batterRes.value.text();
-      const rows = parseSavantCSV(text);
+      const rows = parseSavantCsvDocument(text)?.rows ?? [];
       if (rows.length > 0) {
         if (!savantColumnsLogged) {
           savantColumnsLogged = true;
@@ -622,7 +699,12 @@ export async function fetchBaseballSavantData(
 
     if (pitcherRes.status === "fulfilled" && pitcherRes.value.ok) {
       const text = await pitcherRes.value.text();
-      const rows = parseSavantCSV(text);
+      // Parsed exactly once and reused for both aggregatePitcherStuffMetrics
+      // (existing behavior) and buildPitcherContactCsvSource (new) — never
+      // re-parses the same CSV text twice.
+      const parsedPitcherDoc = parseSavantCsvDocument(text);
+      const rows = parsedPitcherDoc?.rows ?? [];
+      pitcherContactCsvSource = buildPitcherContactCsvSource(parsedPitcherDoc);
       if (rows.length > 0) {
         const velos: number[] = [];
         const spins: number[] = [];
@@ -693,6 +775,7 @@ export async function fetchBaseballSavantData(
       pitcherCswPct,
       pitcherWhiffPctByFamily,
       pitcherMissesBatsFamily,
+      pitcherContactCsvSource,
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
@@ -829,7 +912,7 @@ export async function fetchSavantGameFeed(gamePk: string): Promise<SavantGamePit
       return cached?.data ?? [];
     }
 
-    const rows = parseSavantCSV(text);
+    const rows = parseSavantCsvDocument(text)?.rows ?? [];
     const results: SavantGamePitchData[] = [];
 
     for (const row of rows) {
