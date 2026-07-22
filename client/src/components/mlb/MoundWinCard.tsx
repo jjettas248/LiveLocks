@@ -1,8 +1,13 @@
 // MLB Mound Radar — Record panel (public, wins-only).
 //
-// Mirrors PregameWinCard.tsx's MoundRadarRecord role. "Pitcher Props Cashed"
-// replaces "First-AB Cashes" — The Mound has no per-AB concept, so it must
-// NEVER render First-AB Cashes.
+// Mirrors PregameWinCard.tsx's MoundRadarRecord role. The Mound has no
+// per-AB concept, so it must NEVER render First-AB Cashes.
+//
+// "Cashed" is reserved exclusively for a real, market-graded (sportsbook
+// line) result — these counters are model-baseline aggregates (a pitcher's
+// final stat vs. their own season rate), so their labels read "Reads
+// Confirmed", never "Cashed" (locked product rule — no public Mound surface
+// may use "Cashed" for a baseline-graded outcome).
 
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -38,9 +43,9 @@ function slateDateET(): string {
 }
 
 /**
- * Mound Radar Record banner — "{wins} Wins Today · {cashed} Pitcher Props
- * Cashed · {flagged} Flagged Before First Pitch". Hidden until there is
- * something to show (no zero-state shouting "0 wins").
+ * Mound Radar Record banner — "{wins} Wins Today · {confirmed} Pitcher
+ * Reads Confirmed · {flagged} Flagged Before First Pitch". Hidden until
+ * there is something to show (no zero-state shouting "0 wins").
  */
 export function MoundRadarRecord() {
   const { data } = useQuery<MoundRadarPublicStats>({
@@ -62,7 +67,7 @@ export function MoundRadarRecord() {
         <Stat value={data.moundWinsToday} label="Wins Today" testid="mound-record-wins-today" />
         <Stat
           value={data.pitcherPropsCashedToday}
-          label="Pitcher Props Cashed"
+          label="Pitcher Reads Confirmed"
           testid="mound-record-props-cashed-today"
         />
         <Stat
@@ -101,7 +106,7 @@ export function MoundRadarFadeRecord() {
         <Stat value={data.moundFadeWinsToday} label="Fade Wins Today" testid="mound-record-fade-wins-today" accent="rose" />
         <Stat
           value={data.fadePropsCashedToday}
-          label="Pitcher Props Cashed"
+          label="Fade Reads Confirmed"
           testid="mound-record-fade-props-cashed-today"
           accent="rose"
         />

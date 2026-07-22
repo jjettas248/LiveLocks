@@ -86,6 +86,56 @@ async function main() {
     ok(signal?.moundDirection === "fade", "fade-pinned direction survives reconstruction");
   }
 
+  // ── Market-settlement + provenance fields round-trip through the same
+  // whole-object `outcomes` jsonb column, unchanged code path — no new
+  // rehydration logic needed since they're nested inside `outcomes`, not a
+  // separate column. ──
+  (storage as any).getMlbMoundRadarSignalsByDate = async () => [
+    makeRow({
+      signalId: "mlb-mound:2026-07-01:g1:p4",
+      buildId: "mound-current",
+      outcomes: {
+        outcome: "mound_win",
+        userVisible: true,
+        seasonBaselineValue: 6.0,
+        finalStrikeouts: 7,
+        marketOutcome: "cashed",
+        sportsbookLine: 6.5,
+        recommendedSide: "OVER",
+        lineSnapshotType: "final_pregame",
+        lineFrozenAt: "2026-07-01T18:00:00Z",
+        lineSource: "DraftKings",
+      },
+    }),
+  ];
+  {
+    const result = await loadMoundSnapshotFromDb("2026-07-01");
+    const signal = result?.signals.get("mlb-mound:2026-07-01:g1:p4");
+    ok(signal?.outcomes?.marketOutcome === "cashed", "marketOutcome survives DB round-trip");
+    ok(signal?.outcomes?.sportsbookLine === 6.5, "sportsbookLine survives DB round-trip");
+    ok(signal?.outcomes?.recommendedSide === "OVER", "recommendedSide survives DB round-trip");
+    ok(signal?.outcomes?.lineSnapshotType === "final_pregame", "lineSnapshotType survives DB round-trip");
+    ok(signal?.outcomes?.lineFrozenAt === "2026-07-01T18:00:00Z", "lineFrozenAt survives DB round-trip");
+    ok(signal?.outcomes?.lineSource === "DraftKings", "lineSource survives DB round-trip");
+    ok(signal?.outcomes?.outcome === "mound_win", "existing model-outcome fields untouched by the addition");
+  }
+
+  // ── A legacy row persisted before this feature shipped has no market
+  // fields at all — never fabricated, reconstructs as simply absent. ──
+  (storage as any).getMlbMoundRadarSignalsByDate = async () => [
+    makeRow({
+      signalId: "mlb-mound:2026-07-01:g1:p5",
+      buildId: "mound-current",
+      outcomes: { outcome: "mound_win", userVisible: true, seasonBaselineValue: 6.0, finalStrikeouts: 7 },
+    }),
+  ];
+  {
+    const result = await loadMoundSnapshotFromDb("2026-07-01");
+    const signal = result?.signals.get("mlb-mound:2026-07-01:g1:p5");
+    ok(signal?.outcomes?.marketOutcome === undefined, "pre-feature legacy row has no marketOutcome — absent, not fabricated");
+    ok(signal?.outcomes?.lineSource === undefined, "pre-feature legacy row has no lineSource — absent, not fabricated");
+  }
+
   // ── Build exists but no rows match its buildId → null, not an empty board ──
   (storage as any).getMlbMoundRadarSignalsByDate = async () => [
     makeRow({ signalId: "mlb-mound:2026-07-01:g1:p2", buildId: "mound-stale" }),

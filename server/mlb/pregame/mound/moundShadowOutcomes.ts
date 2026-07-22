@@ -13,12 +13,50 @@
 import { storage } from "../../../storage";
 import { mlbGameCache, getPitcherAppearanceOrder } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
-import { deriveMoundOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled } from "./moundOutcomeAttribution";
+import { deriveMoundOutcome, deriveMoundMarketOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled } from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMoundGradingMeasurements } from "./evaluationSnapshot";
-import type { MoundOutcome, MoundSignal } from "./types";
+import type { MoundOutcome, MoundSignal, MoundEvaluationSnapshot } from "./types";
 import type { MoundDirection } from "./moundDirection";
 import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
+
+/**
+ * Stamp the market-settlement fields (deriveMoundMarketOutcome) onto an
+ * outcome object, in the SAME write as the model-outcome fields it's called
+ * alongside — never a separate cycle, so the whole-object outcomes
+ * carry-forward can never drop one half of the pair. Reads the frozen
+ * pregame line from finalPregameSnapshot — never a live/current line, never
+ * refetched at grading time.
+ */
+function stampMarketOutcome(
+  outcome: MoundOutcome,
+  primaryMarket: MoundSignal["primaryMarket"],
+  moundDirection: MoundDirection,
+  finalPregameSnapshot: MoundEvaluationSnapshot | null,
+): MoundOutcome {
+  const frozenLine =
+    primaryMarket === "pitcher_strikeouts"
+      ? finalPregameSnapshot?.champion.postedLine.strikeouts ?? null
+      : finalPregameSnapshot?.champion.postedLine.outs ?? null;
+  const actual = primaryMarket === "pitcher_strikeouts" ? outcome.finalStrikeouts ?? null : outcome.finalOutsRecorded ?? null;
+
+  const market = deriveMoundMarketOutcome({
+    moundDirection,
+    frozenLine,
+    lineFrozenAt: finalPregameSnapshot?.frozenAt ?? null,
+    actual,
+  });
+
+  return {
+    ...outcome,
+    marketOutcome: market.marketOutcome,
+    sportsbookLine: market.sportsbookLine,
+    recommendedSide: market.recommendedSide,
+    lineSnapshotType: market.lineSnapshotType,
+    lineFrozenAt: market.lineFrozenAt,
+    lineSource: market.lineSource,
+  };
+}
 
 /**
  * Resolve final-game pitching-box-score outcome for a target, when available,
@@ -247,6 +285,10 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         if (signal.diagnostics.evaluation) {
           signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
         }
+        // First (and only) time market outcome is computed for this signal —
+        // gradedLive withheld it earlier for the same reason gradingMeasurements
+        // was withheld: partial live totals would misgrade against the line.
+        signal.outcomes = stampMarketOutcome(signal.outcomes, signal.primaryMarket, signal.moundDirection, finalPregameSnapshot);
       } catch (err: any) {
         console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed (refresh) ${signal.signalId}:`, err?.message ?? err);
       }
@@ -332,6 +374,10 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         if (signal.diagnostics.evaluation) {
           signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
         }
+        // Same write as the model outcome above (signal.outcomes was just set
+        // a few lines up) — never a separate cycle, so the carry-forward
+        // whole-object swap can never drop one half of the pair.
+        signal.outcomes = stampMarketOutcome(signal.outcomes!, signal.primaryMarket, signal.moundDirection, finalPregameSnapshot);
       } catch (err: any) {
         console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed ${signal.signalId}:`, err?.message ?? err);
       }

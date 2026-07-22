@@ -134,10 +134,14 @@ export function buildMoundEvaluationSnapshot(
           line: signal.marketEdgeContext?.line ?? null,
           lineUnavailableReason: signal.marketEdgeContext?.line != null ? null : "no_line_posted",
           sourceTimestamp: signal.marketEdgeContext?.oddsUpdatedAt ?? null,
+          // Provenance for the market-settlement contract (moundOutcomeAttribution.ts's
+          // deriveMoundMarketOutcome) — captured here, at freeze time, since
+          // marketEdgeContext itself is nulled on DB rehydration.
+          sportsbook: signal.marketEdgeContext?.sportsbook ?? null,
         },
         // No fetch/match path exists anywhere for pitcher_outs today — always
         // unavailable, never derived/cross-substituted from Strikeouts.
-        outs: { line: null, lineUnavailableReason: "no_data_source", sourceTimestamp: null },
+        outs: { line: null, lineUnavailableReason: "no_data_source", sourceTimestamp: null, sportsbook: null },
       },
       predictionTimeProjections: {
         matchupAdjustedStrikeouts: signal.matchupAdjustedStrikeouts,

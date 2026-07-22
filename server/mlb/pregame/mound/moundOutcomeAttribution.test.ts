@@ -1,8 +1,18 @@
 // Mound Radar — outcome attribution invariants (season-baseline settlement rule).
 // Run: npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts
 
-import { deriveMoundOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled, buildMoundWinItem, buildMoundFadeWinItem, buildDailyMoundWins } from "./moundOutcomeAttribution";
-import { MOUND_FADE_WIN_LABEL } from "../../../../shared/moundRadarWin";
+import {
+  deriveMoundOutcome,
+  deriveMoundMarketOutcome,
+  deriveModelOutcomeLabel,
+  buildMoundSettlementView,
+  isMoundOutcomeGradeableNow,
+  hasPitcherBeenPulled,
+  buildMoundWinItem,
+  buildMoundFadeWinItem,
+  buildDailyMoundWins,
+} from "./moundOutcomeAttribution";
+import { MOUND_FADE_WIN_LABEL, MOUND_WIN_COPY, MOUND_FADE_WIN_COPY } from "../../../../shared/moundRadarWin";
 import type { MoundSignal } from "./types";
 
 let passed = 0;
@@ -220,6 +230,143 @@ ok(hasPitcherBeenPulled("100", ["100", "200"]) === true, "a later pitcher appear
 ok(hasPitcherBeenPulled("100", ["100", "200", "300"]) === true, "multiple relievers since → pulled");
 ok(hasPitcherBeenPulled("999", ["100", "200"]) === false, "pitcher not present in order at all → not pulled (hasn't recorded a line)");
 ok(hasPitcherBeenPulled("200", ["100", "200"]) === false, "most recent entry → currently active, not pulled");
+
+// ── deriveMoundMarketOutcome: market settlement, SIBLING to deriveMoundOutcome ──
+// Follow + real frozen line: cashes when actual clears OVER, missed when it doesn't, push on exact tie.
+const followCash = deriveMoundMarketOutcome({
+  moundDirection: "follow",
+  frozenLine: { line: 5.5, lineUnavailableReason: null, sportsbook: "DraftKings" },
+  lineFrozenAt: "2026-07-03T18:00:00Z",
+  actual: 7,
+});
+ok(followCash.marketOutcome === "cashed", "Follow + actual 7 over line 5.5 → cashed");
+ok(followCash.recommendedSide === "OVER", "Follow → recommendedSide OVER");
+ok(followCash.sportsbookLine === 5.5, "sportsbookLine passed through");
+ok(followCash.lineSnapshotType === "final_pregame", "lineSnapshotType stamped when a real line resolves");
+ok(followCash.lineFrozenAt === "2026-07-03T18:00:00Z", "lineFrozenAt passed through");
+ok(followCash.lineSource === "DraftKings", "lineSource passed through from frozen postedLine.sportsbook");
+
+const followMiss = deriveMoundMarketOutcome({
+  moundDirection: "follow",
+  frozenLine: { line: 5.5, lineUnavailableReason: null },
+  lineFrozenAt: "2026-07-03T18:00:00Z",
+  actual: 4,
+});
+ok(followMiss.marketOutcome === "missed", "Follow + actual 4 under line 5.5 → missed");
+ok(followMiss.lineSource === null, "lineSource null when frozenLine has no sportsbook field");
+
+const followPush = deriveMoundMarketOutcome({
+  moundDirection: "follow",
+  frozenLine: { line: 6, lineUnavailableReason: null },
+  lineFrozenAt: "2026-07-03T18:00:00Z",
+  actual: 6,
+});
+ok(followPush.marketOutcome === "push", "Follow + actual === line (exact tie) → push (real market push)");
+
+// Fade: opposite comparison — cashes when actual lands UNDER the line.
+const fadeCash = deriveMoundMarketOutcome({
+  moundDirection: "fade",
+  frozenLine: { line: 6.5, lineUnavailableReason: null },
+  lineFrozenAt: "2026-07-03T18:00:00Z",
+  actual: 4,
+});
+ok(fadeCash.marketOutcome === "cashed", "Fade + actual 4 under line 6.5 → cashed");
+ok(fadeCash.recommendedSide === "UNDER", "Fade → recommendedSide UNDER");
+
+const fadeMiss = deriveMoundMarketOutcome({
+  moundDirection: "fade",
+  frozenLine: { line: 6.5, lineUnavailableReason: null },
+  lineFrozenAt: "2026-07-03T18:00:00Z",
+  actual: 8,
+});
+ok(fadeMiss.marketOutcome === "missed", "Fade + actual 8 over line 6.5 (wrong fade call) → missed");
+
+const fadePush = deriveMoundMarketOutcome({
+  moundDirection: "fade",
+  frozenLine: { line: 6, lineUnavailableReason: null },
+  lineFrozenAt: "2026-07-03T18:00:00Z",
+  actual: 6,
+});
+ok(fadePush.marketOutcome === "push", "Fade + exact tie → push");
+
+// Unavailable: no line, no direction, no actual — never fabricated, never a guessed side.
+const noLine = deriveMoundMarketOutcome({
+  moundDirection: "follow",
+  frozenLine: { line: null, lineUnavailableReason: "no_line_posted" },
+  lineFrozenAt: null,
+  actual: 7,
+});
+ok(noLine.marketOutcome === "unavailable", "no posted line → unavailable");
+ok(noLine.lineSnapshotType === null, "no provenance stamped when line is unavailable");
+
+const noDirection = deriveMoundMarketOutcome({
+  moundDirection: null,
+  frozenLine: { line: 5.5, lineUnavailableReason: null },
+  lineFrozenAt: "2026-07-03T18:00:00Z",
+  actual: 7,
+});
+ok(noDirection.marketOutcome === "unavailable", "unresolved direction → unavailable (never guesses a side, stricter than deriveMoundOutcome's Follow-default)");
+ok(noDirection.recommendedSide === null, "unresolved direction → null recommendedSide");
+
+const noActual = deriveMoundMarketOutcome({
+  moundDirection: "follow",
+  frozenLine: { line: 5.5, lineUnavailableReason: null },
+  lineFrozenAt: "2026-07-03T18:00:00Z",
+  actual: null,
+});
+ok(noActual.marketOutcome === "unavailable", "no final actual stat → unavailable");
+
+// ── deriveModelOutcomeLabel: additive display-only relabel, never mutates deriveMoundOutcome ──
+ok(deriveModelOutcomeLabel(7, 6.0, "follow") === "confirmed", "Follow + actual over baseline → confirmed");
+ok(deriveModelOutcomeLabel(4, 6.0, "follow") === "not_confirmed", "Follow + actual under baseline → not_confirmed");
+ok(deriveModelOutcomeLabel(6.0, 6.0, "follow") === "push", "Follow + exact baseline tie → push (baseline-tie, renders as 'Matched Engine Baseline' at the label layer, never literal 'Push')");
+ok(deriveModelOutcomeLabel(4, 6.0, "fade") === "confirmed", "Fade + actual under baseline → confirmed");
+ok(deriveModelOutcomeLabel(7, 6.0, "fade") === "not_confirmed", "Fade + actual over baseline → not_confirmed");
+ok(deriveModelOutcomeLabel(null, 6.0, "follow") === null, "missing actual → null, never guessed");
+ok(deriveModelOutcomeLabel(7, null, "follow") === null, "missing baseline → null");
+ok(deriveModelOutcomeLabel(7, 6.0, null) === null, "unresolved direction → null");
+
+// ── buildMoundSettlementView: the public contract, computed from persisted outcomes ──
+const settledCashed = buildMoundSettlementView(
+  {
+    outcome: "mound_win",
+    userVisible: true,
+    seasonBaselineValue: 6.0,
+    finalStrikeouts: 7,
+    marketOutcome: "cashed",
+    sportsbookLine: 6.5,
+    recommendedSide: "OVER",
+  },
+  "pitcher_strikeouts",
+  "follow",
+);
+ok(settledCashed.modelOutcome === "confirmed", "settlement view: modelOutcome derived independently of persisted `outcome`/`userVisible`");
+ok(settledCashed.modelBaseline === 6.0, "settlement view: modelBaseline mirrors seasonBaselineValue");
+ok(settledCashed.marketOutcome === "cashed", "settlement view: marketOutcome passed through");
+ok(settledCashed.sportsbookLine === 6.5, "settlement view: sportsbookLine passed through");
+ok(settledCashed.finalStat === 7, "settlement view: finalStat resolves finalStrikeouts for pitcher_strikeouts");
+
+const settledOutsUnavailable = buildMoundSettlementView(
+  { seasonBaselineValue: 18, finalOutsRecorded: 21 },
+  "pitcher_outs",
+  "follow",
+);
+ok(settledOutsUnavailable.marketOutcome === "unavailable", "settlement view: absent persisted marketOutcome defaults to unavailable — never fabricated");
+ok(settledOutsUnavailable.finalStat === 21, "settlement view: finalStat resolves finalOutsRecorded for pitcher_outs");
+ok(settledOutsUnavailable.modelOutcome === "confirmed", "settlement view: modelOutcome still computable from baseline alone when market is unavailable");
+
+const ungraded = buildMoundSettlementView(null, "pitcher_strikeouts", "follow");
+ok(ungraded.modelOutcome === null, "settlement view: null outcomes → null modelOutcome, never fabricated");
+ok(ungraded.marketOutcome === "unavailable", "settlement view: null outcomes → unavailable marketOutcome");
+ok(ungraded.finalStat === null, "settlement view: null outcomes → null finalStat");
+
+// ── Locked product rule: model-only aggregate copy never says "Cashed" ──────
+// "Cashed" is reserved exclusively for a real market-graded result — these
+// two constants back the model-baseline daily win/fade-win log copy, which
+// must never use that word (see MoundWinCard.tsx for the client-side
+// equivalent check).
+ok(!/cashed/i.test(MOUND_WIN_COPY), `MOUND_WIN_COPY never contains "cashed" (got: "${MOUND_WIN_COPY}")`);
+ok(!/cashed/i.test(MOUND_FADE_WIN_COPY), `MOUND_FADE_WIN_COPY never contains "cashed" (got: "${MOUND_FADE_WIN_COPY}")`);
 
 console.log(`\nmoundOutcomeAttribution.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

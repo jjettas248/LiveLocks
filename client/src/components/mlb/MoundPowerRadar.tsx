@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, ChevronDown, ChevronUp, Check } from "lucide-react";
 import { MoundRadarRecord, MoundRadarFadeRecord } from "./MoundWinCard";
 import { getSetupGrade } from "@/lib/mlb/setupGrade";
+import { baselineOnlyLabel } from "@/lib/mlb/moundSettlementLabels";
 
 type Tier = "track" | "watch" | "strong" | "elite" | "nuclear";
 type Market = "pitcher_strikeouts" | "pitcher_outs";
@@ -57,6 +58,23 @@ interface MoundOutcome {
   userVisible?: boolean;
   finalStrikeouts?: number | null;
   finalOutsRecorded?: number | null;
+  /** Internal model-calibration baseline (season K/9 or outs-per-start) — the number deriveMoundOutcome graded against. Never the settlement basis for "Cashed"; see MoundSettlementView. */
+  seasonBaselineValue?: number | null;
+}
+
+/**
+ * The public settlement-view contract — server-computed fresh per response
+ * (buildMoundSettlementView), the ONLY shape this card reads to decide
+ * Cashed/Missed/Push vs. the baseline-only fallback labels. Never re-derived
+ * client-side.
+ */
+interface MoundSettlementView {
+  modelOutcome: "confirmed" | "not_confirmed" | "push" | null;
+  modelBaseline: number | null;
+  marketOutcome: "cashed" | "missed" | "push" | "unavailable";
+  sportsbookLine: number | null;
+  recommendedSide: "OVER" | "UNDER" | null;
+  finalStat: number | null;
 }
 
 // Best-available real sportsbook line for pitcher_strikeouts, when posted.
@@ -125,6 +143,8 @@ interface MoundSignal {
   becameLiveReady?: boolean;
   becameLiveFire?: boolean;
   outcomes?: MoundOutcome | null;
+  /** Server-computed fresh per response — the sole source for Cashed/Missed/Push vs. baseline-only fallback labeling. */
+  settlementView?: MoundSettlementView | null;
   diagnostics: MoundDiagnosticsView;
   marketEdgeContext?: MoundMarketEdgeContext | null;
   /** Settlement baseline — decides mound_win/mound_calibration_miss. */
@@ -412,10 +432,33 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
   const isFade = direction === "fade";
   const isFollow = direction === "follow";
 
-  const isFadeCash = s.outcomes?.outcome === "mound_fade_win" && s.outcomes?.userVisible === true;
-  const cashed = (s.outcomes?.outcome === "mound_win" || isFadeCash) && s.outcomes?.userVisible === true;
+  // Was this signal ever a genuine public recommendation? Orthogonal to
+  // which grading basis decides the label — outcomes.userVisible already
+  // encodes "wasPubliclyFlagged" server-side for either direction.
+  const isPubliclyGraded = s.status === "graded" && s.outcomes?.userVisible === true;
+  const marketOutcome = s.settlementView?.marketOutcome ?? "unavailable";
+  // The ONLY thing allowed to drive "Cashed"/"Missed"/"Push" — never the
+  // baseline-graded outcomes.outcome, which is internal calibration only.
+  const cashed = isPubliclyGraded && marketOutcome === "cashed";
+  const isPush = isPubliclyGraded && marketOutcome === "push";
+  const isMissed = isPubliclyGraded && marketOutcome === "missed";
+  const isUnavailableFallback = isPubliclyGraded && marketOutcome === "unavailable";
+  const fallbackLabel = isUnavailableFallback
+    ? baselineOnlyLabel(s.settlementView?.modelOutcome ?? null, s.settlementView?.recommendedSide ?? null)
+    : null;
+  const isFadeCash = cashed && isFade;
   const cashedColor = "#10b981";
-  const accentColor = cashed ? cashedColor : isFade ? FADE_COLOR : style.color;
+  const pushColor = "#eab308";
+  const fallbackColor = "#38bdf8";
+  const accentColor = cashed
+    ? cashedColor
+    : isPush
+      ? pushColor
+      : isUnavailableFallback && fallbackLabel
+        ? fallbackColor
+        : isFade
+          ? FADE_COLOR
+          : style.color;
 
   const marketSetups: MarketSetup[] =
     s.marketSetups && s.marketSetups.length > 0
@@ -462,10 +505,31 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
                 <PartyPopper className="w-3 h-3" /> CASHED
               </span>
             )}
-            {/* Completed public Follow card that didn't cash — factual "Final"
-                marker so a graded miss stays visible as a completed row, not
-                erased. Follow only (Fade is publicly absent). */}
-            {s.status === "graded" && !cashed && isFollow && (
+            {/* A real frozen sportsbook line existed and landed exactly on it — reserved exclusively for a real market push, never the baseline-tie case (see baselineOnlyLabel). */}
+            {isPush && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300"
+                data-testid={`mound-push-${slug}`}
+              >
+                Push
+              </span>
+            )}
+            {/* No real sportsbook line was ever captured for this signal — never
+                "Cashed"/"Missed"/"Push" here, only the honest baseline-only
+                model-read label. */}
+            {isUnavailableFallback && fallbackLabel && (
+              <span
+                className="inline-flex items-center gap-1 text-[10px] font-semibold"
+                style={{ color: fallbackColor }}
+                data-testid={`mound-model-outcome-${slug}`}
+              >
+                {fallbackLabel}
+              </span>
+            )}
+            {/* Completed public Follow card that missed the market — factual
+                "Final" marker so a graded miss stays visible as a completed
+                row, not erased. Follow only (Fade is publicly absent). */}
+            {isMissed && isFollow && (
               <span
                 className="inline-flex items-center gap-1 text-[10px] font-semibold text-muted-foreground"
                 data-testid={`mound-final-${slug}`}
@@ -497,10 +561,26 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
             className="inline-flex items-center gap-1 text-[10px] font-semibold"
             style={{ color: accentColor }}
           >
-            {cashed ? <PartyPopper className="w-3 h-3" /> : isFade ? <ShieldAlert className="w-3 h-3" /> : <TierIcon className="w-3 h-3" />}
-            {cashed ? (isFadeCash ? "Faded — Cashed" : "Cashed") : isFade ? "Fade Candidate" : style.label}
+            {cashed ? (
+              <PartyPopper className="w-3 h-3" />
+            ) : isPush || (isUnavailableFallback && fallbackLabel) ? null : isFade ? (
+              <ShieldAlert className="w-3 h-3" />
+            ) : (
+              <TierIcon className="w-3 h-3" />
+            )}
+            {cashed
+              ? isFadeCash
+                ? "Faded — Cashed"
+                : "Cashed"
+              : isPush
+                ? "Push"
+                : isUnavailableFallback && fallbackLabel
+                  ? fallbackLabel
+                  : isFade
+                    ? "Fade Candidate"
+                    : style.label}
           </div>
-          {!cashed && (isFade || isFollow) && (
+          {!cashed && !isPush && !isUnavailableFallback && (isFade || isFollow) && (
             <div
               className="text-[9px] font-bold mt-0.5"
               style={{ color: isFade ? FADE_COLOR : FOLLOW_COLOR }}
@@ -511,6 +591,8 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
           )}
         </div>
       </div>
+
+      <SettlementRow signal={s} />
 
       <RunEnvironmentRow park={s.parkContext} />
       <StrikeoutLineRow
@@ -622,6 +704,79 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
         </div>
       )}
     </Card>
+  );
+}
+
+// Public settlement context, rendered directly beneath the header pill on
+// the compact card (never hidden behind Expand Details) — omitted entirely
+// when the signal isn't a graded, publicly-flagged recommendation, matching
+// this file's "missing data degrades to omitted" convention. Never re-derives
+// Cashed/Missed/Push/the fallback labels — reads settlementView verbatim.
+function SettlementRow({ signal: s }: { signal: MoundSignal }) {
+  const isPubliclyGraded = s.status === "graded" && s.outcomes?.userVisible === true;
+  if (!isPubliclyGraded) return null;
+
+  const settlement = s.settlementView;
+  const marketOutcome = settlement?.marketOutcome ?? "unavailable";
+  const marketLabel = MARKET_LABEL[s.primaryMarket];
+  const unit = s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs";
+
+  if (marketOutcome !== "unavailable") {
+    const sideLabel = settlement?.recommendedSide === "UNDER" ? "Under" : "Over";
+    const resultLabel = marketOutcome === "cashed" ? "Cashed" : marketOutcome === "missed" ? "Missed" : "Push";
+    return (
+      <div className="flex flex-col gap-0.5 mt-1.5 text-[11px]" data-testid="mound-settlement-row">
+        <div className="flex items-center gap-1.5 flex-wrap text-muted-foreground">
+          <span>
+            Official Side <span className="font-semibold text-foreground">{sideLabel} {marketLabel}</span>
+          </span>
+          {settlement?.sportsbookLine != null && (
+            <>
+              <span className="opacity-40">·</span>
+              <span>
+                Sportsbook Line <span className="font-semibold text-foreground">{settlement.sportsbookLine}</span>
+              </span>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap text-muted-foreground">
+          {settlement?.finalStat != null && (
+            <span>
+              Final <span className="font-semibold text-foreground">{settlement.finalStat} {unit}</span>
+            </span>
+          )}
+          <span className="opacity-40">·</span>
+          <span>
+            Result <span className="font-semibold text-foreground">{resultLabel}</span>
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // No real sportsbook line was ever captured — show the baseline-only
+  // model context instead. Never renders Cashed/Missed/Push here.
+  const fallbackLabel = baselineOnlyLabel(settlement?.modelOutcome ?? null, settlement?.recommendedSide ?? null);
+  if (fallbackLabel == null && settlement?.modelBaseline == null) return null;
+
+  return (
+    <div className="flex flex-col gap-0.5 mt-1.5 text-[11px]" data-testid="mound-settlement-row-fallback">
+      <div className="flex items-center gap-1.5 flex-wrap text-muted-foreground">
+        {settlement?.modelBaseline != null && (
+          <span>
+            Engine Baseline <span className="font-semibold text-foreground">{settlement.modelBaseline} {unit}</span>
+          </span>
+        )}
+        {settlement?.finalStat != null && (
+          <>
+            <span className="opacity-40">·</span>
+            <span>
+              Final <span className="font-semibold text-foreground">{settlement.finalStat} {unit}</span>
+            </span>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -907,6 +1062,70 @@ function MoundExpandedDetail({ signal: s }: { signal: MoundSignal }) {
           </div>
         )}
       </div>
+
+      {/* Additive two-section settlement block — never touches K Decomposition
+          above. MODEL EVALUATION is the internal calibration story (season
+          baseline); MARKET RESULT is the public settlement story (real
+          sportsbook line) and is omitted entirely — no placeholder — when no
+          real line was ever captured for this signal. */}
+      {s.status === "graded" && (
+        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Model Evaluation</div>
+          {s.settlementView?.modelBaseline != null && (
+            <div className="flex items-center justify-between gap-2 text-[10px]">
+              <span className="text-muted-foreground">Engine Baseline</span>
+              <span className="font-semibold">
+                {s.settlementView.modelBaseline} {s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs"}
+              </span>
+            </div>
+          )}
+          {s.settlementView?.finalStat != null && (
+            <div className="flex items-center justify-between gap-2 text-[10px]">
+              <span className="text-muted-foreground">Final Result</span>
+              <span className="font-semibold">
+                {s.settlementView.finalStat} {s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs"}
+              </span>
+            </div>
+          )}
+          {(() => {
+            const label = baselineOnlyLabel(s.settlementView?.modelOutcome ?? null, s.settlementView?.recommendedSide ?? null);
+            return label ? (
+              <div className="flex items-center justify-between gap-2 text-[10px]">
+                <span className="text-muted-foreground">Model Outcome</span>
+                <span className="font-semibold">{label}</span>
+              </div>
+            ) : null;
+          })()}
+        </div>
+      )}
+
+      {s.settlementView && s.settlementView.marketOutcome !== "unavailable" && (
+        <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20 space-y-1">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Market Result</div>
+          <div className="flex items-center justify-between gap-2 text-[10px]">
+            <span className="text-muted-foreground">Official Side</span>
+            <span className="font-semibold">
+              {s.settlementView.recommendedSide === "UNDER" ? "Under" : "Over"}
+              {s.settlementView.sportsbookLine != null ? ` ${s.settlementView.sportsbookLine}` : ""}
+              {" "}{s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs"}
+            </span>
+          </div>
+          {s.settlementView.finalStat != null && (
+            <div className="flex items-center justify-between gap-2 text-[10px]">
+              <span className="text-muted-foreground">Final Result</span>
+              <span className="font-semibold">
+                {s.settlementView.finalStat} {s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs"}
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2 text-[10px]">
+            <span className="text-muted-foreground">Market Outcome</span>
+            <span className="font-semibold">
+              {s.settlementView.marketOutcome === "cashed" ? "Cashed" : s.settlementView.marketOutcome === "missed" ? "Missed" : "Push"}
+            </span>
+          </div>
+        </div>
+      )}
 
       {allPositives.length > 0 && (
         <div className="rounded-lg p-2.5 bg-secondary/20 border border-border/20">
