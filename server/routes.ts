@@ -795,7 +795,7 @@ export async function registerRoutes(
       const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
         gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
         ...snapshot.coverage,
-      }, false);
+      }, false, false);
       return res.json(resp);
     } catch (err) {
       console.error("[mlb/mound-power-radar]", err);
@@ -827,7 +827,7 @@ export async function registerRoutes(
       const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
         gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
         ...snapshot.coverage,
-      }, true);
+      }, true, false);
       return res.json(resp);
     } catch (err) {
       console.error("[mlb/mound-power-radar/all-starters]", err);
@@ -853,7 +853,7 @@ export async function registerRoutes(
       const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
         gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
         ...snapshot.coverage,
-      }, true);
+      }, true, true);
       return res.json(resp);
     } catch (err) {
       console.error("[admin/mlb/mound-power-radar/debug]", err);

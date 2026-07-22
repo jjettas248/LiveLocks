@@ -177,6 +177,12 @@ interface PitcherSeasonStats {
   losses: number | null;
   /** Mound Radar input — season starts, used for Long Leash / avg-IP-per-start projection. */
   gamesStarted: number | null;
+  /**
+   * Season-to-date HR allowed (raw count) — captured from the same stat blob
+   * already read for era/whip/kPer9/bbPer9/inningsPitched below. Feeds Mound
+   * Radar's rawPitcherContactSnapshot.ts hr9Allowed only — no new fetch.
+   */
+  homeRunsAllowed: number | null;
   fetchedAt: number;
 }
 
@@ -1611,6 +1617,7 @@ export async function syncPitcherSeasonStats(pitcherId: string): Promise<void> {
         mlbPlayerCache.pitcherSeasonStats[pitcherId] = {
           era: null, whip: null, kPer9: null, bbPer9: null,
           inningsPitched: null, wins: null, losses: null, gamesStarted: null,
+          homeRunsAllowed: null,
           fetchedAt: Date.now(),
         };
       } else {
@@ -1635,6 +1642,7 @@ export async function syncPitcherSeasonStats(pitcherId: string): Promise<void> {
       wins: safeNum(stat.wins),
       losses: safeNum(stat.losses),
       gamesStarted: safeNum(stat.gamesStarted),
+      homeRunsAllowed: safeNum(stat.homeRuns),
       fetchedAt: Date.now(),
     };
 

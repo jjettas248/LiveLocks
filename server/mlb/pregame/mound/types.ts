@@ -184,6 +184,17 @@ export interface MoundEvaluationSnapshot {
     predictionTimeProjections: {
       matchupAdjustedStrikeouts: number | null;
     };
+    /**
+     * Frozen raw pitcher contact-quality measurement (PR 2/5, rawPitcherContactSnapshot.ts).
+     * Measurement only — never read by scoring, qualification, direction, or
+     * ranking. Lives ONLY here (never on MoundDiagnostics — see
+     * buildMlbMoundRadar.ts's build-local rawContactSnapshotsBySignalId map)
+     * so it is never duplicated and never leaks into a public response
+     * unless includeResearchInstrumentation=true. Optional: absent on
+     * champion objects built before this instrumentation shipped, and on a
+     * genuinely legacy carried-forward signal with no prior frozen value.
+     */
+    rawContactSnapshot?: import("./rawPitcherContactSnapshot").RawPitcherContactSnapshot;
   };
 }
 

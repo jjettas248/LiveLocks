@@ -57,6 +57,30 @@ import { computeMatchupAdjustedStrikeouts } from "./matchupAdjustedKs";
 import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
 import { applyMoundEvaluationSnapshots } from "./evaluationSnapshot";
+import { aggregateRawPitcherContactSnapshot, type RawContactSupportingInputs, type RawPitcherContactSnapshot } from "./rawPitcherContactSnapshot";
+
+/**
+ * Builds RawContactSupportingInputs from the already-resolved seasonStats/
+ * recentStarts objects. Exported as a thin, directly-testable extraction of
+ * exactly the expressions used in the per-pitcher build loop below — so a
+ * test can exercise this REAL construction (not a hand-mirrored copy) without
+ * running the full build orchestrator. seasonStatsAvailable/recentStartsAvailable
+ * intentionally reuse the identical `!= null` checks the existing
+ * rawInputsAvailable.pitcherSeasonStats/.pitcherRecentStarts diagnostics use.
+ */
+export function buildRawContactSupportingInputs(
+  seasonStats: { inningsPitched: number | null; homeRunsAllowed: number | null; bbPer9: number | null } | null,
+  recentStarts: { ipVarianceLast3: number | null } | null,
+): RawContactSupportingInputs {
+  return {
+    seasonStatsAvailable: seasonStats != null,
+    inningsPitchedSeason: seasonStats?.inningsPitched ?? null,
+    homeRunsAllowedSeason: seasonStats?.homeRunsAllowed ?? null,
+    bb9Season: seasonStats?.bbPer9 ?? null,
+    recentStartsAvailable: recentStarts != null,
+    ipVarianceLast3: recentStarts?.ipVarianceLast3 ?? null,
+  };
+}
 import {
   getMoundSnapshot,
   setMoundSnapshot,
@@ -153,6 +177,12 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
   // per pitcher this cycle so the post-loop evaluation-snapshot pass can
   // freeze them without a second data fetch.
   const seasonRatesByPitcherId = new Map<string, { seasonKPer9: number | null; seasonAvgInningsPerStart: number | null }>();
+  // Research instrumentation only (PR 2/5, rawPitcherContactSnapshot.ts) —
+  // held here, NOT written onto MoundDiagnostics, so it can never duplicate
+  // into every signal/public response. Threaded into applyMoundEvaluationSnapshots
+  // below, which places it directly into the frozen evaluation snapshot's
+  // champion object.
+  const rawContactSnapshotsBySignalId = new Map<string, RawPitcherContactSnapshot>();
 
   try {
     const games = await discoverTodaysGames();
@@ -431,6 +461,18 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           opposingLineupHandedness: opposingLineupConfirmed ? { left, right, switchHit } : null,
         });
 
+        // Research instrumentation only (PR 2/5) — reuses the same already-
+        // resolved seasonStats/recentStarts/savant inputs above; zero new
+        // fetches. seasonStatsAvailable/recentStartsAvailable mirror the
+        // exact same expressions used for rawInputsAvailable below
+        // (seasonStats != null / recentStarts != null), so this can never
+        // disagree with that existing diagnostic.
+        const rawContactSupportingInputs: RawContactSupportingInputs = buildRawContactSupportingInputs(seasonStats, recentStarts);
+        const rawContactSnapshot = aggregateRawPitcherContactSnapshot(
+          savant?.pitcherContactCsvSource ?? null,
+          rawContactSupportingInputs,
+        );
+
         const drivers: MoundDriver[] = [
           ...pitcherSkill.drivers,
           ...opponentKProfile.drivers,
@@ -512,6 +554,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         const weatherStatus: MoundWeatherStatus = isIndoors ? "roof" : weatherAvailable ? "estimated" : "unknown";
 
         const signalId = `mlb-mound:${sessionDate}:${game.gameId}:${starter.pitcherId}`;
+        rawContactSnapshotsBySignalId.set(signalId, rawContactSnapshot);
         const generatedAt = new Date().toISOString();
         const isLocked = !firstPitchLockEligible && (gameStatus === "live" || gameStatus === "final");
 
@@ -652,7 +695,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
   // Follow+Fade conflict resolves against the correctly-pinned direction.
   // Never affects score10/tier/drivers/marketScores or public sort/filter.
   try {
-    applyMoundEvaluationSnapshots(signals, prevSignals, buildId, seasonRatesByPitcherId);
+    applyMoundEvaluationSnapshots(signals, prevSignals, buildId, seasonRatesByPitcherId, rawContactSnapshotsBySignalId);
   } catch (err: any) {
     console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] buildId=${buildId} failed:`, err?.message ?? err);
   }

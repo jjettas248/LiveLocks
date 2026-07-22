@@ -28,6 +28,7 @@ import type {
   MoundGradingMeasurements,
 } from "./types";
 import type { MoundDirection } from "./moundDirection";
+import type { RawPitcherContactSnapshot } from "./rawPitcherContactSnapshot";
 import { projectedStrikeoutsFromKPer9, round1 } from "./scoreUtils";
 
 export interface MoundPopulationRank {
@@ -99,6 +100,7 @@ export function buildMoundEvaluationSnapshot(
   frozenAt: string,
   seasonKPer9: number | null,
   seasonAvgInningsPerStart: number | null,
+  rawContactSnapshot?: RawPitcherContactSnapshot,
 ): MoundEvaluationSnapshot {
   return {
     frozenAt,
@@ -146,6 +148,7 @@ export function buildMoundEvaluationSnapshot(
       predictionTimeProjections: {
         matchupAdjustedStrikeouts: signal.matchupAdjustedStrikeouts,
       },
+      rawContactSnapshot,
     },
   };
 }
@@ -301,6 +304,7 @@ export function applyMoundEvaluationSnapshots(
   prevSignals: Map<string, MoundSignal> | null,
   buildId: string,
   seasonRatesByPitcherId: Map<string, { seasonKPer9: number | null; seasonAvgInningsPerStart: number | null }>,
+  rawContactSnapshotsBySignalId: Map<string, RawPitcherContactSnapshot> = new Map(),
 ): void {
   const all = Array.from(signals.values());
   const ranks = computeMoundPopulationRanks(all);
@@ -309,6 +313,18 @@ export function applyMoundEvaluationSnapshots(
     const prev = prevSignals?.get(fresh.signalId);
     const rank = ranks.get(fresh.signalId)!;
     const seasonRates = seasonRatesByPitcherId.get(fresh.pitcherId) ?? { seasonKPer9: null, seasonAvgInningsPerStart: null };
+    // A signal genuinely rebuilt this cycle always has a fresh entry here
+    // (even if every field inside is null — the aggregator never returns
+    // undefined). A signal carried forward pre-lock by
+    // carryForwardDroppedFromMound (not re-evaluated this cycle) has no
+    // current-map entry, so it falls back to its own previously-frozen value
+    // rather than letting the pre-lock `finalPregameSnapshot = currentSnapshot`
+    // replacement below silently erase it with undefined. A genuinely legacy
+    // signal with neither a current entry nor prior frozen data stays
+    // undefined — never fabricated.
+    const rawContactSnapshot =
+      rawContactSnapshotsBySignalId.get(fresh.signalId) ??
+      prev?.diagnostics.evaluation?.finalPregameSnapshot?.champion.rawContactSnapshot;
     const currentSnapshot = buildMoundEvaluationSnapshot(
       fresh,
       rank,
@@ -317,6 +333,7 @@ export function applyMoundEvaluationSnapshots(
       frozenAt,
       seasonRates.seasonKPer9,
       seasonRates.seasonAvgInningsPerStart,
+      rawContactSnapshot,
     );
     const transition = detectMoundTransition(fresh, prev);
     const prevEvaluation = prev?.diagnostics?.evaluation ?? null;
