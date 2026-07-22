@@ -176,8 +176,9 @@ export interface MoundEvaluationSnapshot {
      * unavailable, never fabricated or cross-substituted from Strikeouts.
      */
     postedLine: {
-      strikeouts: { line: number | null; lineUnavailableReason: string | null; sourceTimestamp: string | null };
-      outs: { line: number | null; lineUnavailableReason: string | null; sourceTimestamp: string | null };
+      /** `sportsbook` is additive — absent/undefined on rows snapshotted before this field existed; never fabricated for those. */
+      strikeouts: { line: number | null; lineUnavailableReason: string | null; sourceTimestamp: string | null; sportsbook?: string | null };
+      outs: { line: number | null; lineUnavailableReason: string | null; sourceTimestamp: string | null; sportsbook?: string | null };
     };
     /** Prediction-time projections, for the projection-error measurement only (§7b measurement 3). */
     predictionTimeProjections: {
@@ -324,6 +325,14 @@ export interface MoundSignal {
   suppressedReasons: string[];
 
   outcomes?: MoundOutcome | null;
+  /**
+   * Computed fresh at API-response time by buildMoundResponse (diagnostics.ts)
+   * from `outcomes` — never persisted redundantly, never present on a signal
+   * read straight out of the in-memory store or the DB. The sole contract the
+   * client should read for card display; see moundOutcomeAttribution.ts's
+   * buildMoundSettlementView.
+   */
+  settlementView?: import("./moundOutcomeAttribution").MoundSettlementView | null;
   everPubliclyFlagged: boolean;
   /** Fade-track analog of everPubliclyFlagged above — see wasPubliclyFlaggedMoundFade (diagnostics.ts) for why Fade needs its own flag. Backed by its own dedicated DB column with the same SQL-level OR-upsert durability as everPubliclyFlagged (see storage.ts) — survives a server restart even if the in-memory carry-forward chain is lost. */
   everPubliclyFlaggedFade: boolean;
@@ -355,6 +364,28 @@ export interface MoundOutcome {
    * counting stats (finalStrikeouts/finalOutsRecorded/etc.) get updated.
    */
   gradedLive?: boolean;
+
+  // ── Market settlement (additive — never overwrites/repurposes the
+  // season-baseline `outcome` above; a distinct, separately-typed concept,
+  // stamped in the SAME grading write by moundShadowOutcomes.ts so it can
+  // never drift out of sync with the model outcome across rebuild cycles).
+  // Populated ONLY from a real sportsbook line frozen strictly pregame
+  // (finalPregameSnapshot — never fetched after the game, never a live
+  // line, never a projection or the season baseline standing in for one).
+  // "unavailable" whenever no such line was ever captured — permanently
+  // true for pitcher_outs today (no odds feed exists), sometimes true for
+  // pitcher_strikeouts (no book had posted a line before lock).
+  marketOutcome?: import("../../../../shared/moundRadarWin").MoundMarketOutcome | null;
+  /** Frozen pregame sportsbook line the market outcome was graded against. Null iff marketOutcome is "unavailable". */
+  sportsbookLine?: number | null;
+  /** Derived from moundDirection (fade→UNDER, follow→OVER). Null only if moundDirection was unresolved at grading time. */
+  recommendedSide?: "OVER" | "UNDER" | null;
+  /** Provenance — which frozen snapshot the line came from. Null iff marketOutcome is "unavailable". */
+  lineSnapshotType?: import("../../../../shared/moundRadarWin").MoundLineSnapshotType | null;
+  /** Provenance — finalPregameSnapshot.frozenAt (when OUR system froze this line, always strictly pregame). Null iff marketOutcome is "unavailable". */
+  lineFrozenAt?: string | null;
+  /** Provenance — sportsbook name captured at freeze time. Null when marketOutcome is "unavailable", AND null for any signal snapshotted before postedLine started capturing it (never fabricated retroactively). */
+  lineSource?: string | null;
 }
 
 /** Per-component scorer result. All scores are on a 0–10 scale. Mirrors Plate's ComponentScore shape but is a separate type. */

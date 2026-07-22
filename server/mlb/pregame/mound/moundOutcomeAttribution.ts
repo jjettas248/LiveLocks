@@ -16,11 +16,13 @@
 // Pure (no I/O). Mirrors pregamePowerRadar/winAttribution.ts's role and
 // structure for pitcher signals — no shared code.
 
-import type { MoundDriver, MoundSignal } from "./types";
+import type { MoundDriver, MoundSignal, MoundOutcome } from "./types";
 import type { MoundDirection } from "./moundDirection";
 import {
   type MoundRadarWinItem,
   type MoundOutcomeType,
+  type MoundMarketOutcome,
+  type MoundLineSnapshotType,
   MOUND_WIN_LABEL,
   MOUND_WIN_COPY,
   MOUND_FADE_WIN_LABEL,
@@ -80,6 +82,159 @@ export function deriveMoundOutcome(input: MoundOutcomeAttributionInput): MoundOu
     return { outcome: "mound_calibration_miss", userVisible: false, seasonBaselineValue: baseline };
   }
   return { outcome: "mound_win", userVisible: input.wasPubliclyFlagged === true, seasonBaselineValue: baseline };
+}
+
+/** A frozen pregame line reading for one market, as captured in MoundEvaluationSnapshot.champion.postedLine. */
+export interface FrozenLineInput {
+  line: number | null;
+  lineUnavailableReason: string | null;
+  sportsbook?: string | null;
+}
+
+export interface MoundMarketOutcomeInput {
+  moundDirection: MoundDirection;
+  /** The frozen postedLine reading for this signal's primaryMarket (strikeouts or outs) — never refetched, never a live line. */
+  frozenLine: FrozenLineInput | null;
+  /** When the frozen snapshot itself was taken (finalPregameSnapshot.frozenAt) — always strictly pregame. */
+  lineFrozenAt: string | null;
+  /** Final actual stat for the signal's primaryMarket (finalStrikeouts or finalOutsRecorded). */
+  actual: number | null;
+}
+
+export interface MoundMarketOutcomeResult {
+  marketOutcome: MoundMarketOutcome;
+  sportsbookLine: number | null;
+  recommendedSide: "OVER" | "UNDER" | null;
+  lineSnapshotType: MoundLineSnapshotType | null;
+  lineFrozenAt: string | null;
+  lineSource: string | null;
+}
+
+/**
+ * Market settlement — SIBLING to deriveMoundOutcome above, never a
+ * replacement for it. Grades the recommended side against a real sportsbook
+ * line frozen strictly pregame (finalPregameSnapshot) — never a later line,
+ * never the live/current line, never a projection or the season baseline
+ * standing in for a market line. "unavailable" whenever no such line was
+ * ever captured — this is the ONLY function allowed to produce
+ * "cashed"/"missed"/"push" for public display; deriveMoundOutcome's
+ * mound_win/mound_fade_win/mound_calibration_miss stays internal-only.
+ */
+export function deriveMoundMarketOutcome(input: MoundMarketOutcomeInput): MoundMarketOutcomeResult {
+  // Stricter than deriveMoundOutcome's Follow-default: an unresolved
+  // direction never gets a guessed side for this public-facing contract —
+  // mirrors MoundGradingMeasurements.championVsFrozenBaseline.directionResult's
+  // "null direction always yields unavailable" convention.
+  if (input.moundDirection == null) {
+    return {
+      marketOutcome: "unavailable",
+      sportsbookLine: input.frozenLine?.line ?? null,
+      recommendedSide: null,
+      lineSnapshotType: null,
+      lineFrozenAt: null,
+      lineSource: null,
+    };
+  }
+
+  const recommendedSide: "OVER" | "UNDER" = input.moundDirection === "fade" ? "UNDER" : "OVER";
+  const line = input.frozenLine?.line ?? null;
+
+  if (line == null || input.actual == null) {
+    return {
+      marketOutcome: "unavailable",
+      sportsbookLine: line,
+      recommendedSide,
+      lineSnapshotType: null,
+      lineFrozenAt: null,
+      lineSource: null,
+    };
+  }
+
+  const provenance = {
+    lineSnapshotType: "final_pregame" as MoundLineSnapshotType,
+    lineFrozenAt: input.lineFrozenAt,
+    lineSource: input.frozenLine?.sportsbook ?? null,
+  };
+
+  if (input.actual === line) {
+    return { marketOutcome: "push", sportsbookLine: line, recommendedSide, ...provenance };
+  }
+
+  const wentOver = input.actual > line;
+  const cashed = recommendedSide === "OVER" ? wentOver : !wentOver;
+  return { marketOutcome: cashed ? "cashed" : "missed", sportsbookLine: line, recommendedSide, ...provenance };
+}
+
+/**
+ * Additive, display-only relabeling of the existing season-baseline
+ * classification — never mutates deriveMoundOutcome/outcome/userVisible.
+ * Exposes the exact-tie case (folded into "win" internally via `>=`) as a
+ * distinct "push" for the new user-facing contract. The label layer (client)
+ * must render this tie case as "Matched Engine Baseline" — never the word
+ * "Push", which is reserved exclusively for a real market-line push.
+ */
+export function deriveModelOutcomeLabel(
+  actual: number | null,
+  seasonBaselineValue: number | null,
+  moundDirection: MoundDirection,
+): "confirmed" | "not_confirmed" | "push" | null {
+  if (actual == null || seasonBaselineValue == null || moundDirection == null) return null;
+  if (actual === seasonBaselineValue) return "push";
+  const wentOver = actual > seasonBaselineValue;
+  const confirmed = moundDirection === "fade" ? !wentOver : wentOver;
+  return confirmed ? "confirmed" : "not_confirmed";
+}
+
+/**
+ * Public settlement-view contract — the only shape the client should ever
+ * read for card display. Computed fresh at API-response time from the
+ * persisted `outcomes` object; never stored redundantly.
+ */
+export interface MoundSettlementView {
+  modelOutcome: "confirmed" | "not_confirmed" | "push" | null;
+  modelBaseline: number | null;
+  marketOutcome: MoundMarketOutcome;
+  sportsbookLine: number | null;
+  recommendedSide: "OVER" | "UNDER" | null;
+  finalStat: number | null;
+  /**
+   * Was this ever a genuine public recommendation, independent of which
+   * grading path (model vs. market) decided the outcome? `outcomes.userVisible`
+   * is NOT usable for this — deriveMoundOutcome always stamps it false
+   * whenever the BASELINE comparison misses, even for a signal that was
+   * genuinely publicly flagged and whose MARKET outcome cashed. Sourced
+   * instead from the durable, grading-basis-independent
+   * everPubliclyFlagged/everPubliclyFlaggedFade flags (mirrors the same
+   * direction-based selection resolveMoundOutcome uses for wasPubliclyFlagged).
+   */
+  isPublicRecommendation: boolean;
+}
+
+export function buildMoundSettlementView(
+  outcomes: MoundOutcome | null | undefined,
+  primaryMarket: "pitcher_strikeouts" | "pitcher_outs",
+  moundDirection: MoundDirection,
+  everPubliclyFlagged: boolean,
+  everPubliclyFlaggedFade: boolean,
+): MoundSettlementView {
+  const finalStat = primaryMarket === "pitcher_strikeouts" ? outcomes?.finalStrikeouts ?? null : outcomes?.finalOutsRecorded ?? null;
+  // Fallback for legacy/non-backfilled rows: outcomes.recommendedSide is only
+  // stamped once a market outcome has actually been derived (prospectively,
+  // or by the backfill script). A row with no resolvable frozen line never
+  // gets it — but moundDirection (the durable, sticky-upsert column) is
+  // always available, so the baseline-only fallback label is never misgendered
+  // (e.g. a legacy Fade result must never read as "Follow Read Confirmed").
+  const recommendedSide =
+    outcomes?.recommendedSide ?? (moundDirection === "fade" ? "UNDER" : moundDirection === "follow" ? "OVER" : null);
+  return {
+    modelOutcome: deriveModelOutcomeLabel(finalStat, outcomes?.seasonBaselineValue ?? null, moundDirection),
+    modelBaseline: outcomes?.seasonBaselineValue ?? null,
+    marketOutcome: outcomes?.marketOutcome ?? "unavailable",
+    sportsbookLine: outcomes?.sportsbookLine ?? null,
+    recommendedSide,
+    finalStat,
+    isPublicRecommendation: moundDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged,
+  };
 }
 
 /**

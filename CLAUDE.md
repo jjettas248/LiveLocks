@@ -46,10 +46,15 @@ npx tsx server/mlb/pregame/mound/contactRisk.test.ts # Mound Radar Hit/HR Suscep
 npx tsx server/mlb/pregame/mound/matchupAdjustedKs.test.ts # Mound Radar Matchup Adj. Ks enrichment + avgInningsPerStart swingman-inflation regression
 npx tsx server/mlb/pregame/mound/moundScoring.test.ts # Mound Radar component scorers + composite score10/tier invariants
 npx tsx server/mlb/pregame/mound/moundDirection.test.ts # Mound Radar Fade/Follow direction thresholds (server-stamped once at build time)
-npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts # Mound Radar settlement rule: Follow (Over) mound_win vs Fade (Under) mound_fade_win vs mound_calibration_miss
+npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts # Mound Radar settlement rule: Follow (Over) mound_win vs Fade (Under) mound_fade_win vs mound_calibration_miss (internal calibration, unchanged) + deriveMoundMarketOutcome/deriveModelOutcomeLabel/buildMoundSettlementView (additive market-settlement contract) + MOUND_WIN_COPY/MOUND_FADE_WIN_COPY never say "Cashed"
 npx tsx server/mlb/pregame/mound/moundCalibrationStats.test.ts # Mound Radar public/admin stats — Fade wins fully separate from Follow/Over win counters
 npx tsx server/mlb/pregame/mound/moundAnalyticsSeparation.test.ts # Mound vs Plate outcome-taxonomy + in-memory store isolation
 npx tsx server/mlb/pregame/mound/moundKDisplaySplit.test.ts # Mound Radar K Skill/K Matchup/K Projection/K Line Value display decomposition (never blend skill+platoon fit into one "Weak" badge; Over/Under sign guard)
+npx tsx server/mlb/pregame/mound/evaluationSnapshot.test.ts # Mound Radar frozen evaluation-snapshot invariants (Follow/Fade conflict handling, §7b shadow measurements) + postedLine.sportsbook provenance capture at freeze time
+npx tsx server/mlb/pregame/mound/loadMoundSnapshotFromDb.test.ts # Mound Radar boot-hydration reconstruction, incl. market-outcome/provenance fields surviving DB round-trip via the existing whole-object outcomes jsonb column
+npx tsx server/mlb/pregame/mound/moundMarketOutcomeBackfill.test.ts # Mound Radar market-outcome historical backfill planner — only backfills where a real frozen pregame line is provably persisted, never fabricated, idempotent
+npx tsx client/src/lib/mlb/moundSettlementLabels.test.ts # Mound Radar baseline-only fallback label — never renders the words Cashed/Missed/Push (reserved for a real market result); baseline tie reads "Matched Engine Baseline"
+npx tsx client/src/components/mlb/MoundWinCard.test.ts # Mound Radar daily-strip public copy — model-baseline aggregates never render "Cashed"
 npx tsx server/mlb/pregamePowerRadar/diagnostics.test.ts            # Pregame Radar public-visibility predicate (final-but-ungraded stays visible, graded miss hides, postponed hides)
 npx tsx server/mlb/pregamePowerRadar/slateDateRepair.test.ts # Pregame Radar slate-date repair planner (startsAt/gameDate correction, collision detection, no blanket day-shift)
 npx tsx server/mlb/pregamePowerRadar/nearHrRecentForm.test.ts # Pregame Radar near-HR recent-form component (retroactive nearHrContact reuse, recency weighting, consecutive-day bonus, leakage guard)

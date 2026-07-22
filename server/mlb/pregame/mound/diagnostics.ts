@@ -3,6 +3,7 @@
 
 import type { MoundSignal, MoundRadarResponse } from "./types";
 import { MOUND_PUBLISH_MIN_SCORE } from "./scoring";
+import { buildMoundSettlementView } from "./moundOutcomeAttribution";
 
 // contactRisk.ts's chips (cr_high/cr_low) are informational-only — like
 // marketSetups, they must never affect suppression/publish gating, only
@@ -152,13 +153,33 @@ export function buildMoundResponse(
 
   const out = includeSuppressed ? signals : publicSignals;
 
+  // Stamp the public settlement-view contract fresh per response — never
+  // persisted redundantly, computed from `outcomes` plus the durable
+  // public-flag pair (see moundOutcomeAttribution.ts's buildMoundSettlementView).
+  // everPubliclyFlagged/everPubliclyFlaggedFade — NOT outcomes.userVisible —
+  // are what decide isPublicRecommendation, since userVisible is stamped
+  // false by deriveMoundOutcome whenever the BASELINE comparison misses, even
+  // for a signal that was genuinely publicly flagged and whose MARKET outcome
+  // cashed. A shallow copy per signal — never mutates the in-memory
+  // snapshot's own signal objects.
+  const withSettlementView = out.map((s) => ({
+    ...s,
+    settlementView: buildMoundSettlementView(
+      s.outcomes,
+      s.primaryMarket,
+      s.moundDirection,
+      s.everPubliclyFlagged,
+      s.everPubliclyFlaggedFade,
+    ),
+  }));
+
   return {
     date,
     buildId,
     generatedAt,
     source,
     gamesScanned: counters.gamesScanned,
-    signals: out.slice().sort((a, b) => b.score10 - a.score10),
+    signals: withSettlementView.slice().sort((a, b) => b.score10 - a.score10),
     diagnostics: {
       starterCoverage: counters.starterCoverage,
       weatherCoverage: counters.weatherCoverage,

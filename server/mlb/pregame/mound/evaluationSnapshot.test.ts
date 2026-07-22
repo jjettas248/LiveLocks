@@ -212,6 +212,28 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
   ok(m.actualVsFrozenLine.line === null, "Outs grading measurement never uses the Ks line as a substitute");
 }
 
+// ── 10b. postedLine.strikeouts captures the sportsbook name at freeze time —
+// provenance for the new market-settlement contract (moundOutcomeAttribution.ts's
+// deriveMoundMarketOutcome), since marketEdgeContext itself is nulled on DB
+// rehydration and can't be read live at grading time. ──
+{
+  const withBook = buildMoundEvaluationSnapshot(
+    sig({ marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T12:00:00Z", sportsbook: "DraftKings" } }),
+    { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6,
+  );
+  ok(withBook.champion.postedLine.strikeouts.sportsbook === "DraftKings", "sportsbook name captured from marketEdgeContext into the frozen postedLine");
+
+  const withoutBook = buildMoundEvaluationSnapshot(
+    sig({ marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T12:00:00Z" } }),
+    { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6,
+  );
+  ok(withoutBook.champion.postedLine.strikeouts.sportsbook === null, "missing sportsbook on marketEdgeContext → null, never fabricated");
+
+  const noEdge = buildMoundEvaluationSnapshot(sig({ marketEdgeContext: null }), { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T00:00:00Z", 9, 6);
+  ok(noEdge.champion.postedLine.strikeouts.sportsbook === null, "no marketEdgeContext at all → sportsbook null");
+  ok(noEdge.champion.postedLine.outs.sportsbook === null, "Outs postedLine.sportsbook is always null — no fetch path exists");
+}
+
 // ── 11. Existing public classification (deriveMoundOutcome) is untouched and independent of the new shadow measurement ──
 // deriveMoundOutcome is moundOutcomeAttribution.ts's PRODUCTION function — not
 // modified by this instrumentation (see the diff). This test runs BOTH the
