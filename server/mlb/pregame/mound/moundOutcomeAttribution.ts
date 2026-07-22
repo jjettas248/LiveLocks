@@ -197,21 +197,43 @@ export interface MoundSettlementView {
   sportsbookLine: number | null;
   recommendedSide: "OVER" | "UNDER" | null;
   finalStat: number | null;
+  /**
+   * Was this ever a genuine public recommendation, independent of which
+   * grading path (model vs. market) decided the outcome? `outcomes.userVisible`
+   * is NOT usable for this — deriveMoundOutcome always stamps it false
+   * whenever the BASELINE comparison misses, even for a signal that was
+   * genuinely publicly flagged and whose MARKET outcome cashed. Sourced
+   * instead from the durable, grading-basis-independent
+   * everPubliclyFlagged/everPubliclyFlaggedFade flags (mirrors the same
+   * direction-based selection resolveMoundOutcome uses for wasPubliclyFlagged).
+   */
+  isPublicRecommendation: boolean;
 }
 
 export function buildMoundSettlementView(
   outcomes: MoundOutcome | null | undefined,
   primaryMarket: "pitcher_strikeouts" | "pitcher_outs",
   moundDirection: MoundDirection,
+  everPubliclyFlagged: boolean,
+  everPubliclyFlaggedFade: boolean,
 ): MoundSettlementView {
   const finalStat = primaryMarket === "pitcher_strikeouts" ? outcomes?.finalStrikeouts ?? null : outcomes?.finalOutsRecorded ?? null;
+  // Fallback for legacy/non-backfilled rows: outcomes.recommendedSide is only
+  // stamped once a market outcome has actually been derived (prospectively,
+  // or by the backfill script). A row with no resolvable frozen line never
+  // gets it — but moundDirection (the durable, sticky-upsert column) is
+  // always available, so the baseline-only fallback label is never misgendered
+  // (e.g. a legacy Fade result must never read as "Follow Read Confirmed").
+  const recommendedSide =
+    outcomes?.recommendedSide ?? (moundDirection === "fade" ? "UNDER" : moundDirection === "follow" ? "OVER" : null);
   return {
     modelOutcome: deriveModelOutcomeLabel(finalStat, outcomes?.seasonBaselineValue ?? null, moundDirection),
     modelBaseline: outcomes?.seasonBaselineValue ?? null,
     marketOutcome: outcomes?.marketOutcome ?? "unavailable",
     sportsbookLine: outcomes?.sportsbookLine ?? null,
-    recommendedSide: outcomes?.recommendedSide ?? null,
+    recommendedSide,
     finalStat,
+    isPublicRecommendation: moundDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged,
   };
 }
 

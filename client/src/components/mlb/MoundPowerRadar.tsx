@@ -75,6 +75,14 @@ interface MoundSettlementView {
   sportsbookLine: number | null;
   recommendedSide: "OVER" | "UNDER" | null;
   finalStat: number | null;
+  /**
+   * Was this ever a genuine public recommendation, independent of which
+   * grading path (model vs. market) decided the outcome. NEVER derive this
+   * from outcomes.userVisible client-side — that field is stamped false by
+   * the server whenever the baseline comparison misses, even for a signal
+   * that was genuinely publicly flagged and whose market outcome cashed.
+   */
+  isPublicRecommendation: boolean;
 }
 
 // Best-available real sportsbook line for pitcher_strikeouts, when posted.
@@ -433,9 +441,12 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
   const isFollow = direction === "follow";
 
   // Was this signal ever a genuine public recommendation? Orthogonal to
-  // which grading basis decides the label — outcomes.userVisible already
-  // encodes "wasPubliclyFlagged" server-side for either direction.
-  const isPubliclyGraded = s.status === "graded" && s.outcomes?.userVisible === true;
+  // which grading basis decides the label. NEVER outcomes.userVisible — the
+  // server stamps that false whenever the BASELINE comparison misses, even
+  // for a signal that was genuinely publicly flagged and whose MARKET
+  // outcome cashed. settlementView.isPublicRecommendation is sourced from
+  // the durable everPubliclyFlagged/everPubliclyFlaggedFade flags instead.
+  const isPubliclyGraded = s.status === "graded" && s.settlementView?.isPublicRecommendation === true;
   const marketOutcome = s.settlementView?.marketOutcome ?? "unavailable";
   // The ONLY thing allowed to drive "Cashed"/"Missed"/"Push" — never the
   // baseline-graded outcomes.outcome, which is internal calibration only.
@@ -713,7 +724,8 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
 // this file's "missing data degrades to omitted" convention. Never re-derives
 // Cashed/Missed/Push/the fallback labels — reads settlementView verbatim.
 function SettlementRow({ signal: s }: { signal: MoundSignal }) {
-  const isPubliclyGraded = s.status === "graded" && s.outcomes?.userVisible === true;
+  // NEVER outcomes.userVisible here — see MoundCard's identical gate for why.
+  const isPubliclyGraded = s.status === "graded" && s.settlementView?.isPublicRecommendation === true;
   if (!isPubliclyGraded) return null;
 
   const settlement = s.settlementView;

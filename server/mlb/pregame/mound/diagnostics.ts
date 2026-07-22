@@ -154,12 +154,23 @@ export function buildMoundResponse(
   const out = includeSuppressed ? signals : publicSignals;
 
   // Stamp the public settlement-view contract fresh per response — never
-  // persisted redundantly, computed from `outcomes` alone (see
-  // moundOutcomeAttribution.ts's buildMoundSettlementView). A shallow copy
-  // per signal — never mutates the in-memory snapshot's own signal objects.
+  // persisted redundantly, computed from `outcomes` plus the durable
+  // public-flag pair (see moundOutcomeAttribution.ts's buildMoundSettlementView).
+  // everPubliclyFlagged/everPubliclyFlaggedFade — NOT outcomes.userVisible —
+  // are what decide isPublicRecommendation, since userVisible is stamped
+  // false by deriveMoundOutcome whenever the BASELINE comparison misses, even
+  // for a signal that was genuinely publicly flagged and whose MARKET outcome
+  // cashed. A shallow copy per signal — never mutates the in-memory
+  // snapshot's own signal objects.
   const withSettlementView = out.map((s) => ({
     ...s,
-    settlementView: buildMoundSettlementView(s.outcomes, s.primaryMarket, s.moundDirection),
+    settlementView: buildMoundSettlementView(
+      s.outcomes,
+      s.primaryMarket,
+      s.moundDirection,
+      s.everPubliclyFlagged,
+      s.everPubliclyFlaggedFade,
+    ),
   }));
 
   return {
