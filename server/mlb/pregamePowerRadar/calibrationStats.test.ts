@@ -1,9 +1,10 @@
 // Pre-Game Power Radar — public stats + calibration stats invariants.
 // Run: npx tsx server/mlb/pregamePowerRadar/calibrationStats.test.ts
 
-import { buildPublicStats, buildCalibrationStats } from "./calibrationStats";
+import { buildPublicStats, buildCalibrationStats, buildAttackEnvironmentEliminationStats } from "./calibrationStats";
 import { wasPubliclyFlaggedPregame } from "./diagnostics";
 import type { PregameOutcome, PregamePowerSignal } from "./types";
+import type { AttackEnvironmentTier, AttackEnvironmentCohort } from "./attackEnvironment";
 
 let passed = 0;
 let failed = 0;
@@ -24,6 +25,9 @@ function makeSignal(over: {
   lineupStatus?: PregamePowerSignal["lineupStatus"];
   gameStatus?: PregamePowerSignal["gameStatus"];
   everPubliclyFlagged?: boolean;
+  suppressedReasons?: string[];
+  attackEnvironmentTier?: AttackEnvironmentTier;
+  attackEnvironmentCohort?: AttackEnvironmentCohort;
 }): PregamePowerSignal {
   const signal = {
     signalId: over.signalId,
@@ -66,7 +70,7 @@ function makeSignal(over: {
     isPregameTarget: true,
     status: over.outcome ? "graded" : "locked",
     suppressed: over.suppressed ?? false,
-    suppressedReasons: [],
+    suppressedReasons: over.suppressedReasons ?? [],
     outcomes: over.outcome ?? null,
     everPubliclyFlagged: false, // placeholder — computed below from the real predicate
     becameLiveReady: over.becameLiveReady ?? false,
@@ -75,6 +79,8 @@ function makeSignal(over: {
     diagnostics: {
       dataCoverageScore: 0.9,
       rawInputsAvailable: { batterPower: true, lineup: true, pitcherProfile: true, park: true, weather: true, bvp: false },
+      attackEnvironmentTier: over.attackEnvironmentTier,
+      attackEnvironmentCohort: over.attackEnvironmentCohort,
     } as any,
   } as PregamePowerSignal;
   // Mirror `carryForwardGradedState`'s freeze: everPubliclyFlagged reflects
@@ -249,6 +255,90 @@ ok(orderStats.laterAbWins === 2, "unknown-order regression: known-later win + th
 ok(orderStats.unknownOrderWins === 1, "unknown-order regression: exactly the one ambiguous win is tracked separately");
 // resolvedCount = wins(3) + misses(1) = 4; knownOrderResolvedCount = 4 - unknownOrderWins(1) = 3
 ok(orderStats.firstAbWinRate === 33.3, "unknown-order regression: rate excludes the unknown win from the denominator entirely, not just the numerator");
+
+// ── Attack Environment: byAttackEnvironmentTier / byAttackEnvironmentCohort ───
+const aeEliteWin = makeSignal({
+  signalId: "s-ae-elite", score10: 8.5, tier: "elite", everPubliclyFlagged: true,
+  attackEnvironmentTier: "ELITE", attackEnvironmentCohort: "pitcher_and_environment",
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true },
+});
+const aeNeutralMiss = makeSignal({
+  signalId: "s-ae-neutral", score10: 6.5, tier: "strong", everPubliclyFlagged: true,
+  attackEnvironmentTier: "NEUTRAL", attackEnvironmentCohort: "neither",
+  outcome: { hitHr: false, outcome: "calibration_miss", userVisible: false },
+});
+const aeStats = buildCalibrationStats([aeEliteWin, aeNeutralMiss], { startET: "2026-06-29", endET: "2026-06-29" });
+ok(aeStats.byAttackEnvironmentTier.ELITE?.targets === 1 && aeStats.byAttackEnvironmentTier.ELITE?.wins === 1, "byAttackEnvironmentTier.ELITE bucket correct");
+ok(aeStats.byAttackEnvironmentTier.NEUTRAL?.targets === 1 && aeStats.byAttackEnvironmentTier.NEUTRAL?.misses === 1, "byAttackEnvironmentTier.NEUTRAL bucket correct");
+ok(aeStats.byAttackEnvironmentCohort.pitcher_and_environment?.wins === 1, "byAttackEnvironmentCohort.pitcher_and_environment bucket correct");
+ok(aeStats.byAttackEnvironmentCohort.neither?.misses === 1, "byAttackEnvironmentCohort.neither bucket correct");
+
+// byDriver already iterates only positive-direction drivers — this locks that
+// an atkenv_* positive tag is picked up for free, while the negative
+// "Hostile Attack Environment" driver key is excluded, with no new code path.
+const aePositiveTagWin = makeSignal({
+  signalId: "s-ae-tag-win", score10: 8.6, tier: "elite", everPubliclyFlagged: true,
+  attackEnvironmentTier: "ELITE",
+  drivers: [
+    { key: "power", label: "Elite raw power", direction: "positive" },
+    { key: "atkenv_power_env", label: "Power Environment", direction: "positive", weight: 0 },
+    { key: "atkenv_hostile", label: "Hostile Attack Environment", direction: "negative", weight: 0 },
+  ],
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true },
+});
+const aeDriverStats = buildCalibrationStats([aePositiveTagWin], { startET: "2026-06-29", endET: "2026-06-29" });
+ok(aeDriverStats.byDriver.atkenv_power_env?.targets === 1 && aeDriverStats.byDriver.atkenv_power_env?.wins === 1, "byDriver picks up atkenv_power_env (positive) for free");
+ok(aeDriverStats.byDriver.atkenv_hostile === undefined, "byDriver never buckets atkenv_hostile (negative direction, excluded by the existing positive-only filter)");
+
+// ── buildAttackEnvironmentEliminationStats: matched comparison, HR-named fields ─
+// All five signals below carry an attackEnvironmentTier (evaluated=5). Only
+// three land in the matched [6.0, borderlineScore) band with no OTHER
+// suppression reason (comparisonEligible=3) — the out-of-band elite win and
+// the reason-unrelated suppression are both excluded from the comparison.
+const suppressedBorderlineMiss = makeSignal({
+  signalId: "s-elim-sup-miss", score10: 6.2, tier: "watch", everPubliclyFlagged: false,
+  suppressedReasons: ["attack_environment_hostile_borderline"], attackEnvironmentTier: "HOSTILE",
+  outcome: { hitHr: false, outcome: "calibration_miss", userVisible: false },
+});
+const suppressedBorderlineWin = makeSignal({
+  signalId: "s-elim-sup-win", score10: 6.3, tier: "watch", everPubliclyFlagged: false,
+  suppressedReasons: ["attack_environment_hostile_borderline"], attackEnvironmentTier: "HOSTILE",
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: false },
+});
+const retainedBorderlineWin = makeSignal({
+  signalId: "s-elim-retained-win", score10: 6.1, tier: "strong", everPubliclyFlagged: true,
+  suppressedReasons: [], attackEnvironmentTier: "NEUTRAL",
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true },
+});
+const outOfBandEliteWin = makeSignal({
+  signalId: "s-elim-out-of-band", score10: 9.0, tier: "elite", everPubliclyFlagged: true,
+  suppressedReasons: [], attackEnvironmentTier: "ELITE",
+  outcome: { hitHr: true, outcome: "pregame_win", userVisible: true },
+});
+const unrelatedSuppressionInBand = makeSignal({
+  signalId: "s-elim-unrelated", score10: 6.2, tier: "watch", everPubliclyFlagged: false,
+  suppressedReasons: ["insufficient_drivers"], attackEnvironmentTier: "NEUTRAL",
+  outcome: { hitHr: false, outcome: "calibration_miss", userVisible: false },
+});
+
+const elimStats = buildAttackEnvironmentEliminationStats([
+  suppressedBorderlineMiss, suppressedBorderlineWin, retainedBorderlineWin, outOfBandEliteWin, unrelatedSuppressionInBand,
+]);
+ok(elimStats.evaluated === 5, `all five signals carry an attackEnvironmentTier (got ${elimStats.evaluated})`);
+ok(elimStats.suppressedByAttackEnvironment === 2, `two signals suppressed by the attack-environment reason regardless of band (got ${elimStats.suppressedByAttackEnvironment})`);
+ok(elimStats.comparisonEligible === 3, `matched band excludes the out-of-band elite win and the unrelated-reason suppression (got ${elimStats.comparisonEligible})`);
+ok(elimStats.resolvedSuppressed === 2, `both borderline-suppressed signals are resolved (got ${elimStats.resolvedSuppressed})`);
+ok(elimStats.retainedResolved === 1, `exactly one matched-band retained signal (got ${elimStats.retainedResolved})`);
+ok(elimStats.suppressedHrWins === 1 && elimStats.suppressedHrMisses === 1, `suppressed side: 1 win, 1 miss (got wins=${elimStats.suppressedHrWins} misses=${elimStats.suppressedHrMisses})`);
+ok(elimStats.suppressedHrHitRate === 50, `suppressed HR hit rate 50% (got ${elimStats.suppressedHrHitRate})`);
+ok(elimStats.retainedHrWins === 1 && elimStats.retainedHrMisses === 0, `retained side: 1 win, 0 misses (got wins=${elimStats.retainedHrWins} misses=${elimStats.retainedHrMisses})`);
+ok(elimStats.retainedHrHitRate === 100, `retained HR hit rate 100% (got ${elimStats.retainedHrHitRate})`);
+// The whole point: a resolved signal that was NEVER publicly flagged is still
+// counted — proves this view does not rely on everPubliclyFlagged.
+ok(
+  !suppressedBorderlineMiss.everPubliclyFlagged && !suppressedBorderlineWin.everPubliclyFlagged,
+  "sanity: both suppressed fixtures are genuinely never-publicly-flagged",
+);
 
 console.log(`\ncalibrationStats.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

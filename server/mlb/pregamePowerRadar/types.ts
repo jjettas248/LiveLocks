@@ -159,6 +159,16 @@ export interface PregamePowerDiagnostics {
   /** Component 6 — retroactive near-HR contact form over the last 3 ET days. */
   nearHrRecentFormScore?: number | null;
 
+  // ── Attack Environment (pitcher × park/weather × matchup-fit interaction) ───
+  // Optional — old persisted/hydrated rows predate this feature and must not
+  // fabricate a value. Gate/tag only; never derived from or feeding score10.
+  attackEnvironmentTier?: "ELITE" | "FAVORABLE" | "NEUTRAL" | "HOSTILE";
+  attackEnvironmentDirection?: "positive" | "negative" | "mixed" | "neutral" | "unknown";
+  attackEnvironmentCohort?: "pitcher_and_environment" | "pitcher_only" | "environment_only" | "neither";
+  /** HOSTILE and not independently-elite — mirrors computeAttackEnvironment()'s
+   *  eliminationEligible verbatim; never re-derived here. */
+  attackEnvironmentEliminationEligible?: boolean;
+
   // ── Layer 1: pitcher vs the batter's lineup slot (allowed-by-slot) ───────────
   pitcherOrderSplitAvailable: boolean;
   pitcherOrderSplitScore: number | null;

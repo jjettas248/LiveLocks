@@ -5,6 +5,7 @@ import {
   composePregameScore,
   computeDataCoverage,
   tierFromScore,
+  PUBLISH_MIN_SCORE,
   type ScoringComponents,
   type ScoringFlags,
 } from "./scoring";
@@ -28,6 +29,8 @@ const fullFlags: ScoringFlags = {
   bvpAvailable: false,
   parkIsOnlyPositiveDriver: false,
   positiveDriverCount: 3,
+  attackEnvironmentTier: "NEUTRAL",
+  attackEnvironmentEliminationEligible: false,
 };
 
 // ── Tier mapping boundaries ───────────────────────────────────────────────────
@@ -55,11 +58,78 @@ const comps: ScoringComponents = {
   nearHrRecentFormScore: 8,
   bvpModifier: 0,
 };
-const r1 = composePregameScore(comps, fullFlags);
+// classifyTier's elite/nuclear branches now additionally require FAVORABLE-or-
+// better Attack Environment (§3 of the plan) — a NEUTRAL read caps an otherwise-
+// qualifying card at "strong". Use a FAVORABLE flag set here to exercise the
+// original "all-8 → elite" case; the NEUTRAL-caps-elite behavior is asserted
+// separately below.
+const favorableEnvFlags: ScoringFlags = { ...fullFlags, attackEnvironmentTier: "FAVORABLE" };
+const r1 = composePregameScore(comps, favorableEnvFlags);
 ok(approx(r1.score10, 8.0), `all-8 components → ~8.0 (got ${r1.score10})`);
 ok(r1.score10 >= 0 && r1.score10 <= 10, "score in [0,10]");
-ok(r1.tier === "elite", "all-8 → elite");
+ok(r1.tier === "elite", "all-8 + FAVORABLE env → elite");
 ok(!r1.suppressed, "strong all-8 not suppressed");
+
+// ── Attack Environment gate: NEUTRAL/HOSTILE cap an otherwise-elite card ──────
+const rNeutralEnv = composePregameScore(comps, fullFlags); // fullFlags.attackEnvironmentTier === "NEUTRAL"
+ok(rNeutralEnv.tier === "strong", "all-8 + NEUTRAL env → capped at strong, not elite");
+
+const rHostileEnv = composePregameScore(comps, { ...fullFlags, attackEnvironmentTier: "HOSTILE" });
+ok(rHostileEnv.tier === "strong", "all-8 + HOSTILE env → capped at strong, not elite");
+
+// ── Attack Environment gate: ELITE required for nuclear, FAVORABLE insufficient ─
+const nuclearComps: ScoringComponents = { ...comps, batterPowerScore: 9.5, pitcherVulnerabilityScore: 9.5, matchupFitScore: 9.5 };
+const rNuclearFavorable = composePregameScore(nuclearComps, favorableEnvFlags);
+ok(rNuclearFavorable.tier !== "nuclear", "FAVORABLE env insufficient for nuclear (needs ELITE)");
+const rNuclearElite = composePregameScore(nuclearComps, { ...fullFlags, attackEnvironmentTier: "ELITE" });
+ok(rNuclearElite.tier === "nuclear", "ELITE env unlocks nuclear when score/gates otherwise qualify");
+
+// ── HOSTILE does NOT participate in eliteBlocked/downgradeReasons ────────────
+// Regression: HOSTILE's own thresholds can never satisfy classifyTier's >=6.0
+// pitcher-vulnerability elite gate, so wiring it into eliteBlocked would change
+// nothing — assert matchupPenalty/downgradeReasons are identical whether the
+// flag is NEUTRAL or HOSTILE, all else equal.
+const rMatchupNeutral = composePregameScore(comps, fullFlags);
+const rMatchupHostile = composePregameScore(comps, { ...fullFlags, attackEnvironmentTier: "HOSTILE", attackEnvironmentEliminationEligible: true });
+ok(rMatchupNeutral.matchupPenalty === rMatchupHostile.matchupPenalty, "attackEnvironmentTier never changes matchupPenalty");
+ok(
+  JSON.stringify(rMatchupNeutral.downgradeReasons) === JSON.stringify(rMatchupHostile.downgradeReasons),
+  "attackEnvironmentTier never changes downgradeReasons",
+);
+
+// ── HOSTILE borderline suppression — the only behavioral effect of HOSTILE ────
+const borderlineComps: ScoringComponents = {
+  batterPowerScore: 6.2, pitcherVulnerabilityScore: 6.2, matchupFitScore: 6.2,
+  parkWeatherScore: 6.2, lineupOpportunityScore: 6.2, nearHrRecentFormScore: 6.2, bvpModifier: 0,
+};
+const rHostileBorderline = composePregameScore(borderlineComps, {
+  ...fullFlags, attackEnvironmentTier: "HOSTILE", attackEnvironmentEliminationEligible: true,
+});
+ok(
+  rHostileBorderline.score10 >= PUBLISH_MIN_SCORE && rHostileBorderline.score10 < 6.5,
+  `borderline fixture actually lands in [6.0,6.5) (got ${rHostileBorderline.score10})`,
+);
+ok(
+  rHostileBorderline.suppressedReasons.includes("attack_environment_hostile_borderline"),
+  "HOSTILE + eliminationEligible + borderline score → suppressed",
+);
+
+const rHostileClearScore = composePregameScore(
+  { ...borderlineComps, batterPowerScore: 8, pitcherVulnerabilityScore: 8, matchupFitScore: 8, parkWeatherScore: 8, lineupOpportunityScore: 8, nearHrRecentFormScore: 8 },
+  { ...fullFlags, attackEnvironmentTier: "HOSTILE", attackEnvironmentEliminationEligible: true },
+);
+ok(
+  !rHostileClearScore.suppressedReasons.includes("attack_environment_hostile_borderline"),
+  "HOSTILE + eliminationEligible but score10 >= 6.5 → not suppressed by this rule",
+);
+
+const rHostileIndependentlyElite = composePregameScore(borderlineComps, {
+  ...fullFlags, attackEnvironmentTier: "HOSTILE", attackEnvironmentEliminationEligible: false,
+});
+ok(
+  !rHostileIndependentlyElite.suppressedReasons.includes("attack_environment_hostile_borderline"),
+  "HOSTILE but eliminationEligible=false (independently elite) → never suppressed regardless of score",
+);
 
 // ── BvP can never push above a coverage cap ───────────────────────────────────
 const cappedFlags: ScoringFlags = { ...fullFlags, pitcherProfileAvailable: false };

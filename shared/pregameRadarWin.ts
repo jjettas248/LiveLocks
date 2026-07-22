@@ -131,6 +131,34 @@ export interface PregameCalibrationBucket {
   hitRate: number;
 }
 
+/**
+ * Admin-only shadow-elimination view: did the Attack Environment HOSTILE gate
+ * (server/mlb/pregamePowerRadar/attackEnvironment.ts) remove lower-performing
+ * candidates, or hide eventual winners? Uses ALL resolved signals, not only
+ * publicly-flagged ones — a suppressed candidate never becomes publicly
+ * flagged, so restricting to public targets would hide the gate's own effect.
+ * The suppressed/retained comparison is matched to the same otherwise-clean,
+ * same borderline score band — never compared against every tier.
+ *
+ * Field names are explicit about being HR-conversion rates: the underlying
+ * `pregame_win`/`calibration_miss` outcome is HR-based even for a Total-Bases-
+ * primary card (the grader's public outcome is "did the batter homer," not
+ * "did the TB line hit" — TB is graded separately/internally).
+ */
+export interface AttackEnvironmentEliminationStats {
+  evaluated: number;
+  comparisonEligible: number;
+  suppressedByAttackEnvironment: number;
+  resolvedSuppressed: number;
+  suppressedHrWins: number;
+  suppressedHrMisses: number;
+  suppressedHrHitRate: number;
+  retainedResolved: number;
+  retainedHrWins: number;
+  retainedHrMisses: number;
+  retainedHrHitRate: number;
+}
+
 export interface PregameRadarCalibrationStats {
   dateRange: {
     startET: string;
@@ -151,7 +179,10 @@ export interface PregameRadarCalibrationStats {
   byTier: Record<string, PregameCalibrationBucket>;
   byScoreBand: Record<string, PregameCalibrationBucket>;
   byDriver: Record<string, PregameCalibrationBucket>;
+  byAttackEnvironmentTier: Record<string, PregameCalibrationBucket>;
+  byAttackEnvironmentCohort: Record<string, PregameCalibrationBucket>;
   targetToLiveReadyRate: number;
   targetToLiveFireRate: number;
   targetToHrRate: number;
+  attackEnvironmentElimination: AttackEnvironmentEliminationStats;
 }

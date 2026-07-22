@@ -30,6 +30,7 @@ const baseFlags: ScoringFlags = {
   batterPowerAvailable: true, pitcherProfileAvailable: true, confirmedLineup: true,
   parkAvailable: true, weatherAvailable: true, bvpAvailable: false,
   parkIsOnlyPositiveDriver: false, positiveDriverCount: 4,
+  attackEnvironmentTier: "NEUTRAL", attackEnvironmentEliminationEligible: false,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,15 +96,23 @@ ok(powerOnly.tier === "power_watch", `elite power + weak pitcher → power_watch
 
 const elite = composePregameScore(
   { batterPowerScore: 8.0, pitcherVulnerabilityScore: 8.2, matchupFitScore: 7.5, parkWeatherScore: 7.5, lineupOpportunityScore: 8.0, nearHrRecentFormScore: 5, bvpModifier: 0 },
-  { ...baseFlags, bvpDirection: "neutral", pitcherOrderSplitDirection: "vulnerable", batterOrderSplitDirection: "strong" },
+  {
+    ...baseFlags, bvpDirection: "neutral", pitcherOrderSplitDirection: "vulnerable", batterOrderSplitDirection: "strong",
+    // classifyTier's elite/nuclear branches now additionally require FAVORABLE-or-
+    // better Attack Environment — this positive-control fixture needs it to still
+    // reach elite.
+    attackEnvironmentTier: "FAVORABLE",
+  },
 );
 ok(elite.tier === "elite" || elite.tier === "nuclear", `strong batter + vulnerable pitcher + good context → elite (got ${elite.tier})`);
 ok(elite.warningTags.length === 0 && elite.downgradeReasons.length === 0, "clean elite has no warnings/downgrades");
 
 // classifyTier units.
-ok(classifyTier(7.6, 8.6, 4.0, false) === "power_watch", "classifyTier: high power + weak pitcher → power_watch");
-ok(classifyTier(7.6, 8.0, 7.0, false) === "elite", "classifyTier: strong both, not blocked → elite");
-ok(classifyTier(7.6, 8.0, 7.0, true) === "strong", "classifyTier: blocked matchup caps elite → strong");
+ok(classifyTier(7.6, 8.6, 4.0, false, "NEUTRAL") === "power_watch", "classifyTier: high power + weak pitcher → power_watch");
+ok(classifyTier(7.6, 8.0, 7.0, false, "FAVORABLE") === "elite", "classifyTier: strong both + FAVORABLE env, not blocked → elite");
+ok(classifyTier(7.6, 8.0, 7.0, true, "FAVORABLE") === "strong", "classifyTier: blocked matchup caps elite → strong");
+ok(classifyTier(7.6, 8.0, 7.0, false, "NEUTRAL") === "strong", "classifyTier: strong both but NEUTRAL env caps at strong, not elite");
+ok(classifyTier(7.6, 8.0, 7.0, false, "HOSTILE") === "strong", "classifyTier: strong both but HOSTILE env caps at strong, not elite");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [5] Production path: pitcher order-split UNAVAILABLE must not help or fake it
