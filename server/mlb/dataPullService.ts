@@ -94,7 +94,7 @@ interface ContactDataCache {
   fetchedAt: number;
 }
 
-interface PitcherContextEntry {
+export interface PitcherContextEntry {
   pitchMix: PitchMixEntry[];
   avgVelocity: number | null;
   pitchCount: number;
@@ -148,6 +148,14 @@ export interface WeatherCache {
   hourlyForecast?: HourlyWeatherEntry[];
   utcOffsetSeconds?: number;
   gameStartWindDirection?: "in" | "out" | "cross" | "calm" | null;
+  // HR Radar Research (PR 2) — raw roof/condition strings, preserved verbatim
+  // so the research capture path can derive the hr_features_v1 `roofState`
+  // enum (open/closed/retractable_unknown/na), which the existing `isIndoors`
+  // boolean can't express (it's true for every retractable-roof park
+  // regardless of current roof position). Additive-only; no existing
+  // consumer reads these two fields.
+  roofTypeRaw?: string | null;
+  weatherConditionRaw?: string | null;
   windShiftDetected?: boolean;
 }
 
@@ -1446,6 +1454,8 @@ export async function syncWeather(statsPk: string, cacheKey?: string): Promise<v
       hourlyForecast: existing?.hourlyForecast,
       gameStartWindDirection: gameStartWindDir,
       windShiftDetected,
+      roofTypeRaw: venue.fieldInfo?.roofType ?? null,
+      weatherConditionRaw: weather.condition ?? null,
     };
 
     if (windShiftDetected && !existing?.windShiftDetected) {

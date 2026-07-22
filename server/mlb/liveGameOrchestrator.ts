@@ -36,6 +36,14 @@ import {
 } from "./dataPullService";
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { getMarketParkFactor, isVenueIndoors, mergePitchUsage } from "./dataSources";
+import {
+  detectHrEvaluationEpoch,
+  clearHrEpochDetectorStateForGame,
+  type HrDetectedEpoch,
+  type HrEpochGameStateSlice,
+} from "./hrRadarResearch/hrEvaluationEpochDetector";
+import { captureHrEvaluationEpoch, type HrCaptureBatterMaterials } from "./hrRadarResearch/hrEvaluationCapture";
+import { HR_RADAR_EVAL_CAPTURE_ENABLED, HR_RADAR_EVAL_CAPTURE_GAME_PERCENT } from "./hrRadarResearch/hrRadarResearchFlags";
 import { slgForSlot } from "./orderSplits";
 import { calculateMLBPropEdge, hasRealOdds, canShowSignal, updateSelfLearningCalibration } from "./markets";
 import { refreshFullSelfLearning, getLearnedRateAdjustment, getLearnedContactProfile, getContactQualityScore, getPitchTypeHrRisk, getAllCalibrationData } from "./selfLearning";
@@ -1896,6 +1904,40 @@ export class LiveGameOrchestrator {
       }
       // MLB Signals audit P2 — release per-game non-HR engine state entries.
       clearNonHrStatesForGame(gameId);
+      // HR Radar Research (PR 2) — release the epoch detector's per-game
+      // weather/batting-order memory at game-final so it doesn't grow across
+      // a season.
+      clearHrEpochDetectorStateForGame(gameId);
+    }
+
+    // HR Radar Research (PR 2) — deterministic evaluation-epoch detection.
+    // Computed once per tick, independent of (but reusing the output of) the
+    // state-change diff below. A detector failure must never block the real
+    // triggerEngine call, so it's fully isolated in its own try/catch.
+    const weatherForEpoch = mlbGameCache.weather[gameId];
+    const newWeatherRoofSignal = weatherForEpoch
+      ? {
+          roofTypeRaw: weatherForEpoch.roofTypeRaw ?? null,
+          weatherConditionRaw: weatherForEpoch.weatherConditionRaw ?? null,
+          isIndoors: weatherForEpoch.isIndoors,
+        }
+      : null;
+    function safeDetectHrEpoch(
+      prev: GameStateCache | null,
+      stateChangeTriggers: readonly string[],
+    ): HrDetectedEpoch | null {
+      try {
+        return detectHrEvaluationEpoch({
+          gameId,
+          prevState: prev as HrEpochGameStateSlice | null,
+          newState: newState as HrEpochGameStateSlice,
+          stateChangeTriggers,
+          newWeatherRoofSignal,
+        });
+      } catch (epochErr) {
+        console.warn(`[HR_RADAR_EVAL_CAPTURE] epoch detection failed gameId=${gameId} reason=${(epochErr as Error).message}`);
+        return null;
+      }
     }
 
     if (prevState) {
@@ -1907,7 +1949,8 @@ export class LiveGameOrchestrator {
           await syncBullpenUsage(statsPk, gameId);
         }
 
-        await this.triggerEngine(gameId, normalizedStatus, triggers);
+        const hrDetectedEpoch = safeDetectHrEpoch(prevState, triggers);
+        await this.triggerEngine(gameId, normalizedStatus, triggers, hrDetectedEpoch);
       } else if (normalizedStatus === "live") {
         // Freshness Integrity Fix #1 — never fake-refresh the cache timestamp.
         // If no real state-change trigger fired, decide whether to fire a real
@@ -1921,12 +1964,15 @@ export class LiveGameOrchestrator {
         // don't flat-line during natural between-PA gaps.
         if (ageMs > 25_000) {
           console.log(`[MLB HEARTBEAT_RECOMPUTE] game=${gameId} ageMs=${ageMs === Infinity ? "inf" : ageMs}`);
-          await this.triggerEngine(gameId, normalizedStatus, ["heartbeat_refresh"]);
+          // Heartbeat recomputes never generate a capture epoch — no
+          // unchanged-tick duplication (HR Radar Research PR 2 invariant #4).
+          await this.triggerEngine(gameId, normalizedStatus, ["heartbeat_refresh"], null);
         }
       }
     } else if (normalizedStatus === "live") {
       console.log(`[MLB orchestrator] First poll for live game ${gameId} (status=${normalizedStatus}, source=${statusSource}) — triggering engine`);
-      await this.triggerEngine(gameId, normalizedStatus);
+      const hrDetectedEpoch = safeDetectHrEpoch(null, []);
+      await this.triggerEngine(gameId, normalizedStatus, undefined, hrDetectedEpoch);
     }
 
     this.previousStates.set(gameId, { ...newState });
@@ -3722,7 +3768,7 @@ export class LiveGameOrchestrator {
     }
   }
 
-  async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown", triggers?: StateChangeTrigger[]): Promise<MLBPropOutput[]> {
+  async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown", triggers?: StateChangeTrigger[], hrDetectedEpoch?: HrDetectedEpoch | null): Promise<MLBPropOutput[]> {
     const outputs: MLBPropOutput[] = [];
     const qualifiedSignals: MLBQualifiedSignal[] = [];
     const allSignals: MLBQualifiedSignal[] = [];
@@ -3846,6 +3892,14 @@ export class LiveGameOrchestrator {
     // HR by that batter grades as called_miss (presence-only) instead of
     // uncalled_hr.
     const playersWithRealHrRow = new Set<string>();
+
+    // HR Radar Research (PR 2) — population-complete capture materials, one
+    // entry per lineup batter regardless of whether the champion evaluates
+    // them for HR this tick. Stashed below (market === "home_runs" pass,
+    // which every batter is visited for) and consumed only after every
+    // champion side effect for this tick has already completed (see the
+    // captureHrEvaluationEpoch call right before this function returns).
+    const hrCaptureMaterialsByPlayerId = new Map<string, HrCaptureBatterMaterials>();
 
     // ── Batter markets: evaluate each hitter in the starting lineup ────────────
     for (const market of BATTER_MARKETS) {
@@ -4010,6 +4064,32 @@ export class LiveGameOrchestrator {
         const batterOpponent = state.homeTeamAbbr && state.awayTeamAbbr
           ? (batter.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
           : "";
+
+        // HR Radar Research (PR 2) — population-complete capture materials.
+        // Gated on market==="home_runs" (every batter is visited once for
+        // this market per tick, independent of hrBuildScore) so this stashes
+        // exactly once per batter per tick, not once per market.
+        if (market === "home_runs") {
+          hrCaptureMaterialsByPlayerId.set(batter.playerId, {
+            batter: { playerId: batter.playerId, playerName: batter.playerName, team: batter.team, slot: batter.slot },
+            playerContact: playerContact ?? null,
+            rollingStats: rollingStats
+              ? {
+                  seasonHRRate: rollingStats.seasonHRRate ?? null,
+                  abSinceLastHR: rollingStats.abSinceLastHR ?? null,
+                  hrRateLast7: rollingStats.hrRateLast7 ?? null,
+                  hrRateLast15: rollingStats.hrRateLast15 ?? null,
+                  hrRateLast30: rollingStats.hrRateLast30 ?? null,
+                  seasonOps: rollingStats.seasonOps ?? null,
+                  seasonSlg: rollingStats.seasonSlg ?? null,
+                  seasonIBBRate: rollingStats.seasonIBBRate ?? null,
+                }
+              : null,
+            batterHand: resolvedBatterHand,
+            alreadyHomeredThisGame: isPlayerHrResolved(gameId, batter.playerId),
+            stillInBattingOrder: true,
+          });
+        }
 
         const input: MLBPropInput = {
           playerId: batter.playerId,
@@ -5408,6 +5488,46 @@ export class LiveGameOrchestrator {
         console.warn(`[LL_BUS_POPULATE] bus population failed gameId=${gameId} reason=${(busErr as Error).message}`);
       }
     }
+
+    // HR Radar Research (PR 2) — read-only evaluation capture. Strictly the
+    // LAST thing this function does: every champion mutation for this tick
+    // (storage writes, edge-cache write, signal-bus population above) has
+    // already completed, so nothing here can affect champion output. Only
+    // fires when an epoch was actually detected (no unchanged-tick capture),
+    // and captureHrEvaluationEpoch itself no-ops immediately when the
+    // capture flag/sampling gate is off. The observer returns nothing
+    // consumed by the champion.
+    if (hrDetectedEpoch) {
+      try {
+        const currentPitcher = state.pitcherInGame;
+        const capturePitcherCtx = currentPitcher ? pitcherCtxCache?.byPitcherId?.[currentPitcher.playerId] ?? null : null;
+        captureHrEvaluationEpoch({
+          gameId,
+          sessionDate: todayET(),
+          gameStatus: normalizedStatus,
+          state: {
+            inning: state.inning,
+            isTopInning: state.isTopInning,
+            pitchCount: state.pitchCount,
+            outs: state.outs,
+            homeScore: state.homeScore ?? null,
+            awayScore: state.awayScore ?? null,
+          },
+          detectedEpoch: hrDetectedEpoch,
+          batters: Array.from(hrCaptureMaterialsByPlayerId.values()),
+          pitcherCtx: capturePitcherCtx,
+          pitcherId: currentPitcher?.playerId ?? null,
+          pitcherHand: currentPitcher?.throws ?? null,
+          pitcherEraSeasonal: currentPitcher ? mlbPlayerCache.pitcherSeasonStats[currentPitcher.playerId]?.era ?? null : null,
+          weatherCache: weatherCache ?? null,
+          statsAsOfMs: Date.now(),
+          flags: { enabled: HR_RADAR_EVAL_CAPTURE_ENABLED, percent: HR_RADAR_EVAL_CAPTURE_GAME_PERCENT },
+        });
+      } catch (captureErr) {
+        console.warn(`[HR_RADAR_EVAL_CAPTURE] capture failed gameId=${gameId} reason=${(captureErr as Error).message}`);
+      }
+    }
+
     return outputs;
   }
 }

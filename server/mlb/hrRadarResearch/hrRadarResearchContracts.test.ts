@@ -73,19 +73,63 @@ function ok(cond: boolean, msg: string) {
   ok(snapshot.HR_RADAR_CHALLENGER_POLICY_ENABLED === false, "HR_RADAR_CHALLENGER_POLICY_ENABLED defaults false");
   ok(snapshot.HR_RADAR_CHALLENGER_GAME_PERCENT === 0, "HR_RADAR_CHALLENGER_GAME_PERCENT defaults 0");
   ok(snapshot.HR_RADAR_MODEL_VERSION === "", "HR_RADAR_MODEL_VERSION defaults empty string");
+  ok(snapshot.HR_RADAR_EVAL_CAPTURE_GAME_PERCENT === 0, "HR_RADAR_EVAL_CAPTURE_GAME_PERCENT defaults 0");
+
+  // HR_RADAR_EVAL_CAPTURE_GAME_PERCENT (PR 2) — separate flag/parse call from
+  // HR_RADAR_CHALLENGER_GAME_PERCENT; same fail-closed percent parser.
+  ok(parseHrResearchGamePercent("10") === 10, "eval-capture percent flag parses \"10\" as 10");
+  for (const raw of invalidPercents) {
+    ok(parseHrResearchGamePercent(raw) === 0, `eval-capture percent flag fails closed to 0 for "${raw}"`);
+  }
 }
 
 // ── (b) Derived feature vector — additiveness rule ──────────────────────────
 {
   const allNullFixture = {
     featureVersion: HR_FEATURES_V1,
-    batterPrior: { hrRatePriorSeasonal: null, hrRateCareer: null, barrelRatePriorSeasonal: null, hardHitRatePriorSeasonal: null, pullRatePrior: null, extra: {} },
-    liveForm: { exitVeloTodayAvg: null, barrelsToday: null, hardHitRateToday: null, recentFormStreakScore: null, extra: {} },
-    pitcherState: { pitcherHrRateAllowedSeasonal: null, pitcherFatigueScore: null, pitchCountToday: null, timesThroughOrder: null, extra: {} },
-    matchup: { handednessSplitFactor: null, platoonAdvantage: null, extra: {} },
-    opportunity: { battingOrderSlot: null, remainingPaEstimate: null, inning: null, extra: {} },
-    environment: { windOutFactor: null, temperatureF: null, parkHrFactor: null, roofState: null, extra: {} },
-    dataQuality: { missingInputs: ["batterPrior.hrRatePriorSeasonal"], overallQuality: "missing" as const },
+    batterPrior: {
+      hrRatePriorSeasonal: null, hrRateCareer: null, barrelRatePriorSeasonal: null, hardHitRatePriorSeasonal: null, pullRatePrior: null,
+      hardHitAirBallRatePriorSeasonal: null, flyBallRatePrior: null, hrPerFlyBallRatePrior: null, xSlgPrior: null, xIsoPrior: null, sweetSpotRatePrior: null,
+      extra: {},
+    },
+    liveForm: {
+      exitVeloTodayAvg: null, barrelsToday: null, hardHitRateToday: null, recentFormStreakScore: null,
+      maxExitVeloToday: null, evLaInteractionScore: null, estimatedHrQualityToday: null, maxEstimatedHrQualityToday: null,
+      avgBattedBallDistanceToday: null, parkAdjustedContactQualityToday: null, sprayPullFactorToday: null,
+      recencyWeightedContactScore: null, dangerousContactCountToday: null, contactQualityDeltaVsPrior: null, contactTrendSlope: null,
+      extra: {},
+    },
+    pitcherState: {
+      pitcherHrRateAllowedSeasonal: null, pitcherFatigueScore: null, pitchCountToday: null, timesThroughOrder: null,
+      battersFacedToday: null, velocityTrendSlope: null, velocityDropFromSeason: null, pitchMixShiftScore: null,
+      dangerousAerialContactAllowedToday: null, pitcherRemovalProbability: null,
+      extra: {},
+    },
+    matchup: {
+      handednessSplitFactor: null, platoonAdvantage: null,
+      shrunkBatterVsHandHrRate: null, shrunkPitcherVsHandHrRateAllowed: null, pitchFamilyPowerFitScore: null, arsenalProfileFitScore: null,
+      extra: {},
+    },
+    opportunity: {
+      battingOrderSlot: null, remainingPaEstimate: null, inning: null,
+      lineupDistanceToNextPa: null, remainingPaP25: null, remainingPaP50: null, remainingPaP75: null,
+      scoreDifferential: null, substitutionRiskScore: null, pitcherSurvivalUncertaintyScore: null,
+      extra: {},
+    },
+    environment: {
+      windOutFactor: null, temperatureF: null, parkHrFactor: null, roofState: null,
+      handednessParkHrFactor: null, wallDistanceFitScore: null, windVectorDegrees: null, windSpeedMph: null, humidityPercent: null, pressureHpa: null,
+      extra: {},
+    },
+    dataQuality: {
+      missingInputs: ["batterPrior.hrRatePriorSeasonal"], overallQuality: "missing" as const,
+      feedDegradationFlags: [], identityConfidence: null,
+    },
+    ablationInputs: {
+      xBaSeasonal: null, pitcherEraSeasonal: null, rawBvpHrRate: null, rawBvpPlateAppearances: null,
+      atBatsSinceLastHr: null, seasonIbbRate: null, genericHotLabel: null, leverageIndex: null,
+      extra: {},
+    },
   };
   ok(hrDerivedFeatureVectorV1Schema.safeParse(allNullFixture).success, "derived feature vector accepts an all-null-leaf fixture (null-but-present is allowed)");
 
@@ -97,7 +141,7 @@ function ok(cond: boolean, msg: string) {
     ...allNullFixture,
     batterPrior: { ...allNullFixture.batterPrior, hrRatePriorSeasonal: 0.045, barrelRatePriorSeasonal: 0.09 },
     liveForm: { ...allNullFixture.liveForm, exitVeloTodayAvg: 94.2, barrelsToday: 1 },
-    dataQuality: { missingInputs: [], overallQuality: "full" as const },
+    dataQuality: { missingInputs: [], overallQuality: "full" as const, feedDegradationFlags: [], identityConfidence: "confirmed" as const },
   };
   ok(hrDerivedFeatureVectorV1Schema.safeParse(fullyPopulatedFixture).success, "derived feature vector accepts a fully-populated fixture");
 }
