@@ -20,6 +20,7 @@ import {
   resolveMarketFitPresentation,
   getCarryPresentation,
   getWeatherSecondaryPresentations,
+  getPlateDriverDisplayPriority,
   type PlateTagTone,
 } from "@/lib/mlb/plateTagPresentation";
 
@@ -447,12 +448,15 @@ export function PregamePowerRadar({ selectedGameId = null }: { selectedGameId?: 
 function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const style = TIER_STYLE[s.tier];
   const TierIcon = s.tier === "nuclear" || s.tier === "elite" ? Flame : s.tier === "strong" ? Zap : Target;
-  // Sort standout tags before supporting/context so they aren't crowded out
-  // by the 4-tag cap when a card has more than 4 positive drivers. No driver
-  // currently resolves to "attack" (that tone is Grade-Factors-only, rendered
-  // via a separate path below) — ranked alongside "supporting" so the record
-  // stays exhaustive if one ever does.
-  const TONE_RANK: Record<PlateTagTone, number> = { standout: 0, supporting: 1, attack: 1, context: 2, risk: 3, neutral: 4 };
+  // Sort standout tags before supporting/context so they aren't crowded out by
+  // the 4-tag cap when a card has more than 4 positive drivers. Attack
+  // Environment (`atkenv_*`) chips always sort first — see
+  // getPlateDriverDisplayPriority — since by construction they're only ever
+  // emitted when they materially changed the card's qualification (see
+  // server/mlb/pregamePowerRadar/attackEnvironment.ts), so they must never be
+  // silently crowded off a busy card. Every other driver keeps its existing
+  // tone-based rank via the shared PLATE_TAG_TONE_RANK table.
+  const priority = (d: PowerDriver) => getPlateDriverDisplayPriority(d.key, getDriverPresentation(d, s.diagnostics).tone);
   // Pull is surfaced as its own dedicated "Pull Rate: X%" value below (never a
   // "Pull-Side Power" chip), so it's excluded from the 4-chip candidates — this
   // keeps a qualifying pull metric from being crowded off by the cap WITHOUT
@@ -461,10 +465,14 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const positiveDriversAll = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
   const positives = positiveDriversAll
     .slice()
-    .sort((a, b) => TONE_RANK[getDriverPresentation(a, s.diagnostics).tone] - TONE_RANK[getDriverPresentation(b, s.diagnostics).tone])
+    .sort((a, b) => priority(a) - priority(b))
     .slice(0, 4);
   const hiddenPositiveCount = Math.max(0, positiveDriversAll.length - positives.length);
-  const negatives = s.drivers.filter((d) => d.direction === "negative").slice(0, 4);
+  const negatives = s.drivers
+    .filter((d) => d.direction === "negative")
+    .slice()
+    .sort((a, b) => priority(a) - priority(b))
+    .slice(0, 4);
   const isLocked = s.status === "locked";
   const [expanded, setExpanded] = useState(false);
   const slug = s.batterName.replace(/\s+/g, "-").toLowerCase();

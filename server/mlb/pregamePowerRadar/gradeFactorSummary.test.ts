@@ -20,6 +20,8 @@ const fullFlags: ScoringFlags = {
   bvpAvailable: false,
   parkIsOnlyPositiveDriver: false,
   positiveDriverCount: 3,
+  attackEnvironmentTier: "NEUTRAL",
+  attackEnvironmentEliminationEligible: false,
 };
 
 function components(overrides: Partial<Record<GradeFactorComponentInput["key"], { score: number; available: boolean }>> = {}): GradeFactorComponentInput[] {

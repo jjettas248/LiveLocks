@@ -10,6 +10,8 @@
 
 import type { PregamePowerTier } from "./types";
 import { clamp10, round1 } from "./scoreUtils";
+import { ATTACK_ENVIRONMENT_THRESHOLDS, ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON } from "./attackEnvironment";
+import type { AttackEnvironmentTier } from "./attackEnvironment";
 
 export interface ScoringComponents {
   batterPowerScore: number;
@@ -39,6 +41,12 @@ export interface ScoringFlags {
   pitcherOrderSplitDirection?: "vulnerable" | "neutral" | "suppressive" | "unavailable";
   /** Batter's own production from today's lineup slot. */
   batterOrderSplitDirection?: "strong" | "neutral" | "weak" | "unavailable";
+  // ── Attack Environment (pitcher × park/weather × matchup-fit interaction) ────
+  /** Gate only — never adds/subtracts from score10. See classifyTier. */
+  attackEnvironmentTier: AttackEnvironmentTier;
+  /** Already-computed by computeAttackEnvironment() (includes the
+   *  independently-elite override) — must NOT be re-derived here. */
+  attackEnvironmentEliminationEligible: boolean;
 }
 
 export interface ScoringResult {
@@ -66,17 +74,35 @@ export const PUBLISH_MIN_SCORE = 6.0;
  * Gated public tier. "Elite Setup" REQUIRES both batter power AND positive
  * pitcher evidence — high batter power alone can only reach `power_watch`
  * ("Batter Power Only"). A negative BvP history blocks the elite/nuclear tiers.
+ *
+ * Attack Environment gate (added on top, never a numeric change to score10):
+ *   • "elite"/"nuclear" additionally require FAVORABLE-or-better Attack
+ *     Environment (pitcher vulnerability + park/weather + matchup fit all
+ *     aligned for this batter — not just raw batter power).
+ *   • "nuclear" additionally requires ELITE (the full three-way alignment).
+ *   • HOSTILE never appears in this gate — its thresholds
+ *     (pitcherVulnerabilityScore < 5.0) can never satisfy the >= 6.0 gate below
+ *     in the first place, so it has no effect here; its only behavioral effect
+ *     is the borderline-suppression rule in composePregameScore.
  */
 export function classifyTier(
   score10: number,
   batterPowerScore: number,
   pitcherVulnerabilityScore: number,
   eliteBlocked: boolean,
+  attackEnvironmentTier: AttackEnvironmentTier,
 ): PregamePowerTier {
   // Power-only: elite raw power but a weak pitcher matchup → never an elite setup.
   if (batterPowerScore >= 7.0 && pitcherVulnerabilityScore < 5.5) return "power_watch";
-  if (score10 >= 8.8 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 && !eliteBlocked) return "nuclear";
-  if (score10 >= 7.3 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 && !eliteBlocked) return "elite";
+  if (
+    score10 >= 8.8 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 &&
+    attackEnvironmentTier === "ELITE" && !eliteBlocked
+  ) return "nuclear";
+  if (
+    score10 >= 7.3 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 &&
+    (attackEnvironmentTier === "ELITE" || attackEnvironmentTier === "FAVORABLE") &&
+    !eliteBlocked
+  ) return "elite";
   if (score10 >= 6.8 && batterPowerScore >= 6.7 && pitcherVulnerabilityScore >= 5.5) return "strong";
   // Gates not met: cap at "strong" max so a high raw score can never label elite.
   if (score10 >= PUBLISH_MIN_SCORE) return "strong";
@@ -206,7 +232,13 @@ export function composePregameScore(
     batterOrderSplitDirection === "weak";
 
   const score10 = round1(clamp10(cappedScore - matchupPenalty));
-  const tier = classifyTier(score10, c.batterPowerScore, c.pitcherVulnerabilityScore, eliteBlocked);
+  const tier = classifyTier(
+    score10,
+    c.batterPowerScore,
+    c.pitcherVulnerabilityScore,
+    eliteBlocked,
+    flags.attackEnvironmentTier,
+  );
 
   // ── Downgrade tags (UI / debug) ─────────────────────────────────────────────
   if (matchupPenalty > 0 || eliteBlocked) warningTags.push("Matchup Downgrade");
@@ -218,6 +250,23 @@ export function composePregameScore(
   // for no-lineup / no-batter-identity / no-pitcher / postponed). Here:
   if (!flags.pitcherProfileAvailable) suppressedReasons.push("missing_pitcher_splits");
   if (flags.positiveDriverCount < 2) suppressedReasons.push("insufficient_drivers");
+
+  // Attack Environment HOSTILE elimination — the ONLY behavioral effect HOSTILE
+  // has anywhere. Must run AFTER every other suppressedReasons push above (a card
+  // already suppressed for another reason wasn't "eliminated by Attack
+  // Environment") and BEFORE the final PUBLISH_MIN_SCORE check (a card below the
+  // publish floor was never going to publish regardless of this feature).
+  // `attackEnvironmentEliminationEligible` already encodes the independently-elite
+  // override computed once by computeAttackEnvironment() — never re-derived here.
+  const otherwisePublishable = suppressedReasons.length === 0 && score10 >= PUBLISH_MIN_SCORE;
+  if (
+    flags.attackEnvironmentEliminationEligible &&
+    otherwisePublishable &&
+    score10 < ATTACK_ENVIRONMENT_THRESHOLDS.borderlineScore
+  ) {
+    suppressedReasons.push(ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON);
+  }
+
   if (score10 < PUBLISH_MIN_SCORE) {
     // Distinguish "held down by a data-quality cap" from "genuinely weak with full data".
     suppressedReasons.push(cap < 10 ? "capped_by_data_quality" : "below_threshold_after_full_data");

@@ -6,12 +6,17 @@
 import type { PregamePowerSignal } from "./types";
 import { flaggedBeforeFirstPitchPregame } from "./diagnostics";
 import { buildPregameRadarWinItem } from "./winAttribution";
+import { PUBLISH_MIN_SCORE } from "./scoring";
+import { ATTACK_ENVIRONMENT_THRESHOLDS, ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON } from "./attackEnvironment";
 import type {
+  AttackEnvironmentEliminationStats,
   PregameCalibrationBucket,
   PregameRadarCalibrationStats,
   PregameRadarPublicStats,
   PregameRadarWinItem,
 } from "../../../shared/pregameRadarWin";
+
+const ATTACK_SUPPRESSION_REASON = ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON;
 
 const SCORE_BANDS = ["<6", "6-7", "7-8", "8-9", "9-10"] as const;
 
@@ -122,6 +127,8 @@ export function buildCalibrationStats(
   const byTier: Record<string, MutableBucket> = {};
   const byScoreBand: Record<string, MutableBucket> = {};
   const byDriver: Record<string, MutableBucket> = {};
+  const byAttackEnvironmentTier: Record<string, MutableBucket> = {};
+  const byAttackEnvironmentCohort: Record<string, MutableBucket> = {};
 
   for (const signal of targets) {
     const win = isPublicPregameWin(signal);
@@ -142,6 +149,21 @@ export function buildCalibrationStats(
       driverBucket.targets++;
       if (win) driverBucket.wins++;
       if (miss) driverBucket.misses++;
+    }
+
+    // Optional — old persisted/hydrated rows predate Attack Environment and
+    // must not be bucketed under a fabricated value.
+    if (signal.diagnostics.attackEnvironmentTier != null) {
+      const aeTierBucket = ensureBucket(byAttackEnvironmentTier, signal.diagnostics.attackEnvironmentTier);
+      aeTierBucket.targets++;
+      if (win) aeTierBucket.wins++;
+      if (miss) aeTierBucket.misses++;
+    }
+    if (signal.diagnostics.attackEnvironmentCohort != null) {
+      const aeCohortBucket = ensureBucket(byAttackEnvironmentCohort, signal.diagnostics.attackEnvironmentCohort);
+      aeCohortBucket.targets++;
+      if (win) aeCohortBucket.wins++;
+      if (miss) aeCohortBucket.misses++;
     }
   }
 
@@ -165,8 +187,90 @@ export function buildCalibrationStats(
     byTier: finalizeBuckets(byTier),
     byScoreBand: finalizeBuckets(byScoreBand),
     byDriver: finalizeBuckets(byDriver),
+    byAttackEnvironmentTier: finalizeBuckets(byAttackEnvironmentTier),
+    byAttackEnvironmentCohort: finalizeBuckets(byAttackEnvironmentCohort),
     targetToLiveReadyRate: roundPct(targets.filter((s) => s.becameLiveReady === true).length, targetCount),
     targetToLiveFireRate: roundPct(targets.filter((s) => s.becameLiveFire === true).length, targetCount),
     targetToHrRate: roundPct(wins.length, resolvedCount),
+    attackEnvironmentElimination: buildAttackEnvironmentEliminationStats(signals),
+  };
+}
+
+/**
+ * Admin-only shadow-elimination view: did the Attack Environment HOSTILE gate
+ * remove lower-performing candidates, or did it hide eventual winners? Uses
+ * ALL resolved signals (NOT `signals.filter(s => s.everPubliclyFlagged)` —
+ * a candidate suppressed by the gate never becomes publicly flagged, so
+ * restricting to public targets would make the gate's own effect invisible).
+ *
+ * The comparison group is matched: both the suppressed and retained sides are
+ * restricted to otherwise-clean candidates in the same [PUBLISH_MIN_SCORE,
+ * borderlineScore) band, so the hit-rate comparison is apples-to-apples rather
+ * than comparing borderline candidates against every tier including Elite/
+ * Nuclear.
+ *
+ * The underlying `pregame_win`/`calibration_miss` outcome is HR-based even for
+ * Total-Bases-primary cards (the grader's public outcome is "did the batter
+ * homer," not "did the TB line hit" — TB is graded separately/internally), so
+ * these fields are named explicitly as HR-conversion rates.
+ *
+ * Suppressed/retained membership reads the FROZEN `everAttackEnvironmentSuppressed`
+ * flag (OR'd forward across rebuilds by `carryForwardGradedState`), never the
+ * live `suppressedReasons` array — `suppressedReasons` is recomputed from
+ * live-refetched data (weather, season stats, etc.) on every rebuild, so a
+ * candidate genuinely suppressed pre-lock could otherwise lose that reason on
+ * a later rebuild and get silently reclassified as "retained," corrupting the
+ * hit-rate comparison. For the same reason, a suppressed row's score-band
+ * membership uses its frozen `attackEnvironmentSuppressedScore10` snapshot
+ * (the score at the moment it was first suppressed) rather than a live
+ * `score10` that can keep drifting after the fact.
+ */
+export function buildAttackEnvironmentEliminationStats(
+  signals: PregamePowerSignal[],
+): AttackEnvironmentEliminationStats {
+  const evaluated = signals.filter((s) => s.diagnostics.attackEnvironmentTier != null);
+
+  const attackSuppressedAll = evaluated.filter((s) => s.everAttackEnvironmentSuppressed);
+
+  // Matched comparison population: same otherwise-clean, same borderline band,
+  // whether or not Attack Environment was the (only) reason it got suppressed.
+  const comparisonEligible = evaluated.filter((s) => {
+    const compareScore10 = s.everAttackEnvironmentSuppressed
+      ? s.attackEnvironmentSuppressedScore10 ?? s.score10
+      : s.score10;
+    // "Otherwise clean" still reads the live array minus the attack reason —
+    // this checks for a DIFFERENT, unrelated suppression cause, which isn't
+    // the frozen-state bug being guarded against here.
+    const nonAttackReasons = s.suppressedReasons.filter((r) => r !== ATTACK_SUPPRESSION_REASON);
+    return (
+      compareScore10 >= PUBLISH_MIN_SCORE &&
+      compareScore10 < ATTACK_ENVIRONMENT_THRESHOLDS.borderlineScore &&
+      nonAttackReasons.length === 0
+    );
+  });
+
+  const resolvedComparison = comparisonEligible.filter(
+    (s) => s.outcomes?.outcome === "pregame_win" || s.outcomes?.outcome === "calibration_miss",
+  );
+  const resolvedSuppressed = resolvedComparison.filter((s) => s.everAttackEnvironmentSuppressed);
+  const retainedResolved = resolvedComparison.filter((s) => !s.everAttackEnvironmentSuppressed);
+
+  const suppressedHrWins = resolvedSuppressed.filter((s) => s.outcomes?.outcome === "pregame_win").length;
+  const suppressedHrMisses = resolvedSuppressed.filter((s) => s.outcomes?.outcome === "calibration_miss").length;
+  const retainedHrWins = retainedResolved.filter((s) => s.outcomes?.outcome === "pregame_win").length;
+  const retainedHrMisses = retainedResolved.filter((s) => s.outcomes?.outcome === "calibration_miss").length;
+
+  return {
+    evaluated: evaluated.length,
+    comparisonEligible: comparisonEligible.length,
+    suppressedByAttackEnvironment: attackSuppressedAll.length,
+    resolvedSuppressed: resolvedSuppressed.length,
+    suppressedHrWins,
+    suppressedHrMisses,
+    suppressedHrHitRate: roundPct(suppressedHrWins, resolvedSuppressed.length),
+    retainedResolved: retainedResolved.length,
+    retainedHrWins,
+    retainedHrMisses,
+    retainedHrHitRate: roundPct(retainedHrWins, retainedResolved.length),
   };
 }

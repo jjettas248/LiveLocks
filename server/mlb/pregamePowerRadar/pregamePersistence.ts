@@ -12,6 +12,7 @@ import type {
 } from "@shared/schema";
 import type { PregameLineupStatus, PregamePowerSignal, PregameMarketSetup } from "./types";
 import { marketSetupLabel } from "./marketTagger";
+import { ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON } from "./attackEnvironment";
 
 /**
  * Rows persisted before the `confirmed`/`projected`/`unconfirmed` → `posted`/
@@ -74,6 +75,9 @@ export function signalToRow(s: PregamePowerSignal): InsertPregamePowerRadarSigna
     suppressedReasons: s.suppressedReasons,
     outcomes: s.outcomes ?? null,
     everPubliclyFlagged: s.everPubliclyFlagged,
+    everAttackEnvironmentSuppressed: s.everAttackEnvironmentSuppressed,
+    attackEnvironmentSuppressedScore10:
+      s.attackEnvironmentSuppressedScore10 != null ? String(s.attackEnvironmentSuppressedScore10) : null,
     becameLiveReady: s.becameLiveReady,
     becameLiveFire: s.becameLiveFire,
     convertedLiveAt: s.convertedLiveAt ? new Date(s.convertedLiveAt) : null,
@@ -134,6 +138,24 @@ export function rowToSignal(r: PregamePowerRadarSignalRow): PregamePowerSignal {
     suppressedReasons: (r.suppressedReasons as string[]) ?? [],
     outcomes: (r.outcomes as PregamePowerSignal["outcomes"]) ?? null,
     everPubliclyFlagged: r.everPubliclyFlagged,
+    // Read from the dedicated persisted column — durable across restarts,
+    // same discipline as everPubliclyFlagged above (carryForwardGradedState
+    // ORs it forward on every in-memory rebuild; this column is what survives
+    // a full process restart). Column is NOT NULL DEFAULT false, so this is
+    // never ambiguous even for rows written before this column existed.
+    everAttackEnvironmentSuppressed: r.everAttackEnvironmentSuppressed,
+    // Numeric column is nullable (no suppression → no snapshot); fall back to
+    // deriving from suppressedReasons/score10 only for the edge case of a row
+    // written between this column's migration landing and this read path
+    // being deployed — never needed in ordinary operation.
+    attackEnvironmentSuppressedScore10:
+      r.attackEnvironmentSuppressedScore10 != null
+        ? typeof r.attackEnvironmentSuppressedScore10 === "string"
+          ? parseFloat(r.attackEnvironmentSuppressedScore10)
+          : (r.attackEnvironmentSuppressedScore10 as number)
+        : ((r.suppressedReasons as string[]) ?? []).includes(ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON)
+          ? (typeof r.score10 === "string" ? parseFloat(r.score10) : (r.score10 as number))
+          : null,
     becameLiveReady: r.becameLiveReady,
     becameLiveFire: r.becameLiveFire,
     convertedLiveAt: r.convertedLiveAt ? new Date(r.convertedLiveAt).toISOString() : null,

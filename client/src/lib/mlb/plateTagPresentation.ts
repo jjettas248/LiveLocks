@@ -108,7 +108,45 @@ const KEY_MAP: Record<string, TagEntry> = {
   // Fixed key — the tiered near-HR driver uses a day-keyed key instead
   // (`near_hr_form_${dayKey}`), resolved via LABEL_MAP below.
   near_hr_form_consecutive: { tone: "standout", category: "form" },
+
+  // Attack Environment (server: attackEnvironment.ts) — emitted ONLY when the
+  // pitcher/park-weather/matchup-fit gate materially changed the outcome
+  // (unlocked a higher tier, or actually suppressed the candidate). "attack" is
+  // the distinct amber/orange tone reserved for pitcher-vulnerability/attack-
+  // condition context — see the priority guarantee in getPlateDriverDisplayPriority
+  // below, which keeps these chips from being crowded out of the 4-chip cap.
+  atkenv_power_env: { tone: "attack", category: "matchup" },
+  atkenv_extra_base_env: { tone: "attack", category: "matchup" },
+  atkenv_weak_pitcher_park: { tone: "attack", category: "matchup" },
+  atkenv_weak_pitcher_carry: { tone: "attack", category: "matchup" },
+  atkenv_hostile: { tone: "risk", category: "warning" },
 };
+
+/**
+ * Tone → display-priority rank (lower sorts first). Ties `"attack"` with
+ * `"supporting"` — mirrors the component's original TONE_RANK.
+ */
+export const PLATE_TAG_TONE_RANK: Record<PlateTagTone, number> = {
+  standout: 0,
+  supporting: 1,
+  attack: 1,
+  context: 2,
+  risk: 3,
+  neutral: 4,
+};
+
+/**
+ * Sort priority for a driver chip ahead of the component's 4-chip cap. An
+ * `atkenv_*` driver ALWAYS sorts first (below `standout`'s rank via -1) — by
+ * construction (see attackEnvironment.ts) it is only ever emitted when it
+ * materially changed the card's qualification, so it must never be silently
+ * crowded off a busy card. Every other driver keeps its existing tone-based
+ * rank, unchanged.
+ */
+export function getPlateDriverDisplayPriority(driverKey: string, tone: PlateTagTone): number {
+  if (driverKey.startsWith("atkenv_")) return -1;
+  return PLATE_TAG_TONE_RANK[tone];
+}
 
 const LABEL_MAP: Record<string, TagEntry> = {
   "Near-HR Contact (Strong)": { tone: "standout", category: "form" },

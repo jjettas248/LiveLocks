@@ -47,6 +47,12 @@ import { computeLineupOpportunity } from "./lineupOpportunity";
 import { computeNearHrRecentForm, type RecentContactEventRow } from "./nearHrRecentForm";
 import { computeMarketTags } from "./marketTagger";
 import { composePregameScore } from "./scoring";
+import {
+  computeAttackEnvironment,
+  getParkDirection,
+  appendAttackEnvironmentDrivers,
+  ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON,
+} from "./attackEnvironment";
 import { buildGradeFactorSummary } from "./gradeFactorSummary";
 import { auditPrimaryMarketFit } from "./marketFitAudit";
 import { carryForwardGradedState, carryForwardDroppedFromLineup } from "./gradedStateCarry";
@@ -524,7 +530,28 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           ...nearHrRecentForm.drivers,
           ...marketTags.drivers,
         ];
+        // Frozen here, BEFORE any Attack Environment driver is appended (further
+        // below, after scoring) — Attack Environment's own drivers must never be
+        // able to inflate this count or rescue a candidate from
+        // "insufficient_drivers".
         const positiveDriverCount = drivers.filter((d) => d.direction === "positive").length;
+
+        // ── Attack Environment (pitcher × park/weather × matchup-fit interaction) ──
+        // Computed BEFORE scoring (classifyTier needs the tier as an input) using
+        // only already-computed component scores/drivers — never raw stats, so
+        // pitcher/park/matchup evidence already feeding score10 via its own
+        // weighted component is never counted a second time here.
+        const attackEnvironment = computeAttackEnvironment({
+          batterPowerScore: batterPower.score10,
+          pitcherVulnerabilityScore,
+          matchupFitScore: matchupFit.score10,
+          parkDirection: getParkDirection(parkWeather.drivers), // parkWeather's own drivers only
+          carryType: parkWeather.carryType,
+          selectedMarketScore:
+            marketTags.primaryMarket === "home_runs"
+              ? marketTags.marketScores.home_runs ?? 0
+              : marketTags.marketScores.total_bases ?? 0,
+        });
 
         // "posted" = the official batting order has been posted for this game
         // (the only real signal available — MLB gives no separate confirmation
@@ -557,6 +584,12 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             bvpZeroProduction: matchupFit.bvpZeroProduction,
             pitcherOrderSplitDirection: pitcherOrderSplit.direction,
             batterOrderSplitDirection: batterOrderSplit.direction,
+            attackEnvironmentTier: attackEnvironment.tier,
+            // Pass the ALREADY-COMPUTED eliminationEligible boolean through
+            // verbatim — scoring.ts must never re-derive the independently-elite
+            // threshold itself; computeAttackEnvironment() is the one and only
+            // place that threshold is applied.
+            attackEnvironmentEliminationEligible: attackEnvironment.eliminationEligible,
           },
         );
         if (batterPower.available) batterWithPower++;
@@ -591,6 +624,12 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           if (existingLabels.has(tag)) continue;
           drivers.push({ key: `warn_${tag.replace(/\s+/g, "_").toLowerCase()}`, label: tag, direction: "negative", weight: 0 });
         }
+
+        // Attack Environment tags — appended STRICTLY AFTER scoring/positiveDriverCount
+        // above, and only emitted when the gate actually changed the outcome (see
+        // appendAttackEnvironmentDrivers). Never affects positiveDriverCount or
+        // insufficient_drivers, since positiveDriverCount was already frozen.
+        appendAttackEnvironmentDrivers(drivers, attackEnvironment, scoring, marketTags.primaryMarket);
 
         const warnings = [
           ...batterPower.warnings,
@@ -698,6 +737,15 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           suppressedReasons: scoring.suppressedReasons,
           outcomes: null,
           everPubliclyFlagged: false,
+          // Initial value for THIS build only — carryForwardGradedState OR's it
+          // forward against the previous same-slate copy so a later rebuild
+          // whose live-refetched inputs no longer trigger the reason can never
+          // erase an earlier true evaluation (same discipline as
+          // everPubliclyFlagged above).
+          everAttackEnvironmentSuppressed: scoring.suppressedReasons.includes(ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON),
+          attackEnvironmentSuppressedScore10: scoring.suppressedReasons.includes(ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON)
+            ? scoring.score10
+            : null,
           becameLiveReady: false,
           becameLiveFire: false,
           convertedLiveAt: null,
@@ -710,6 +758,10 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             lineupOpportunityScore: lineupOpp.available ? lineupOpp.score10 : null,
             marketFitScore: marketTags.score10,
             nearHrRecentFormScore: nearHrRecentForm.available ? nearHrRecentForm.score10 : null,
+            attackEnvironmentTier: attackEnvironment.tier,
+            attackEnvironmentDirection: attackEnvironment.direction,
+            attackEnvironmentCohort: attackEnvironment.cohort,
+            attackEnvironmentEliminationEligible: attackEnvironment.eliminationEligible,
             pitcherOrderSplitAvailable: pitcherOrderSplit.available,
             pitcherOrderSplitScore: pitcherOrderSplit.available ? pitcherOrderSplit.score10 : null,
             pitcherOrderSplitDirection: pitcherOrderSplit.direction,

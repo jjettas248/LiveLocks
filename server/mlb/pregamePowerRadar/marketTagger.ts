@@ -8,6 +8,15 @@
 import type { ComponentScore, PowerDriver, PregamePowerMarket } from "./types";
 import { round1, clamp10 } from "./scoreUtils";
 
+/**
+ * Markets `computeMarketTags` actually emits today (HR + Total Bases only — Hits/
+ * RBI are Phase-5 and not built). Narrower than the broader product/persistence
+ * type `PregamePowerMarket` so downstream power-family-only consumers (Attack
+ * Environment) get a compile-time guarantee that a Hits/RBI/HRR value can never
+ * reach them. `PregamePowerMarket` itself is untouched everywhere else.
+ */
+export type PregamePowerActiveMarket = Extract<PregamePowerMarket, "home_runs" | "total_bases">;
+
 export interface MarketTaggerInputs {
   batterPowerScore: number; // 0–10
   pitcherVulnerabilityScore: number; // 0–10
@@ -31,9 +40,9 @@ export interface MarketSetup {
 }
 
 export interface MarketTaggerResult extends ComponentScore {
-  primaryMarket: PregamePowerMarket;
-  marketTags: PregamePowerMarket[];
-  marketScores: Partial<Record<PregamePowerMarket, number>>;
+  primaryMarket: PregamePowerActiveMarket;
+  marketTags: PregamePowerActiveMarket[];
+  marketScores: Partial<Record<PregamePowerActiveMarket, number>>;
   marketSetups: MarketSetup[];
 }
 
@@ -63,7 +72,7 @@ export function computeMarketTags(inputs: MarketTaggerInputs): MarketTaggerResul
       inputs.pitcherVulnerabilityScore * 0.2,
   );
 
-  const marketScores: Partial<Record<PregamePowerMarket, number>> = {
+  const marketScores: Partial<Record<PregamePowerActiveMarket, number>> = {
     home_runs: round1(hrScore),
     total_bases: round1(tbScore),
   };
@@ -72,7 +81,7 @@ export function computeMarketTags(inputs: MarketTaggerInputs): MarketTaggerResul
   const eliteHrShape =
     (inputs.hrFBRatioPct != null && inputs.hrFBRatioPct >= 14) ||
     (inputs.xISO != null && inputs.xISO >= 0.2);
-  let primaryMarket: PregamePowerMarket;
+  let primaryMarket: PregamePowerActiveMarket;
   if (hrScore >= 6 && (eliteHrShape || hrScore >= tbScore)) {
     primaryMarket = "home_runs";
     drivers.push({ key: "mkt_hr", label: "HR Market Setup", direction: "positive", weight: Math.round(hrScore * 10) });
@@ -81,7 +90,7 @@ export function computeMarketTags(inputs: MarketTaggerInputs): MarketTaggerResul
     drivers.push({ key: "mkt_tb", label: "Total Bases Setup", direction: "positive", weight: Math.round(tbScore * 10) });
   }
 
-  const marketTags: PregamePowerMarket[] = [];
+  const marketTags: PregamePowerActiveMarket[] = [];
   if (hrScore >= 6) marketTags.push("home_runs");
   if (tbScore >= 6) marketTags.push("total_bases");
   if (marketTags.length === 0) marketTags.push(primaryMarket);

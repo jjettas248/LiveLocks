@@ -3282,6 +3282,19 @@ export class DatabaseStorage implements IStorage {
           suppressedReasons: row.suppressedReasons,
           outcomes: sql`COALESCE(excluded.outcomes, ${pregamePowerRadarSignals.outcomes})`,
           everPubliclyFlagged: sql`${pregamePowerRadarSignals.everPubliclyFlagged} OR excluded.ever_publicly_flagged`,
+          // Same durability discipline as everPubliclyFlagged directly above:
+          // suppressedReasons (written verbatim below) is recomputed fresh from
+          // live-refetched data on every rebuild, so the Attack Environment
+          // gate's reason could otherwise silently drop from a later upsert.
+          // OR against the EXISTING DB row so a genuinely-suppressed candidate
+          // can never be un-suppressed by a subsequent write, regardless of
+          // in-memory process state (covers a cold restart, not just the
+          // same-process carryForwardGradedState path).
+          everAttackEnvironmentSuppressed: sql`${pregamePowerRadarSignals.everAttackEnvironmentSuppressed} OR excluded.ever_attack_environment_suppressed`,
+          // First snapshot sticks — same "first value wins" pattern as
+          // lockedAt below, not convertedLiveAt's "latest fills a null gap"
+          // pattern, since this must never move once recorded.
+          attackEnvironmentSuppressedScore10: sql`COALESCE(${pregamePowerRadarSignals.attackEnvironmentSuppressedScore10}, excluded.attack_environment_suppressed_score_10)`,
           becameLiveReady: sql`${pregamePowerRadarSignals.becameLiveReady} OR excluded.became_live_ready`,
           becameLiveFire: sql`${pregamePowerRadarSignals.becameLiveFire} OR excluded.became_live_fire`,
           convertedLiveAt: sql`COALESCE(excluded.converted_live_at, ${pregamePowerRadarSignals.convertedLiveAt})`,

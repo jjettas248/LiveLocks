@@ -15,6 +15,7 @@ import {
   resolveMarketFitPresentation,
   getCarryPresentation,
   getWeatherSecondaryPresentations,
+  getPlateDriverDisplayPriority,
   type PlateTagTone,
 } from "@/lib/mlb/plateTagPresentation";
 
@@ -237,6 +238,39 @@ console.log("\ngetWeatherSecondaryPresentations(park, drivers) — driver-key aw
     [],
   );
   assert("no driver, no raw value → no pills", nothing.length === 0);
+}
+
+console.log("\ngetPlateTagPresentation — Attack Environment keys (server: attackEnvironment.ts)");
+{
+  assert("atkenv_power_env → attack", getPlateTagPresentation("atkenv_power_env", "positive").tone === "attack");
+  assert("atkenv_extra_base_env → attack", getPlateTagPresentation("atkenv_extra_base_env", "positive").tone === "attack");
+  assert("atkenv_weak_pitcher_park → attack", getPlateTagPresentation("atkenv_weak_pitcher_park", "positive").tone === "attack");
+  assert("atkenv_weak_pitcher_carry → attack", getPlateTagPresentation("atkenv_weak_pitcher_carry", "positive").tone === "attack");
+  assert("atkenv_hostile → risk", getPlateTagPresentation("atkenv_hostile", "negative").tone === "risk");
+  const power = getPlateTagPresentation("atkenv_power_env", "positive");
+  assert("atkenv_power_env classes trace to the attack palette", power.classes === getPlateToneClasses("attack"));
+  assert("attack tone classes distinct from supporting (same rank, different color)", getPlateToneClasses("attack") !== getPlateToneClasses("supporting"));
+}
+
+console.log("\ngetPlateDriverDisplayPriority — Attack Environment chips survive the 4-chip cap");
+{
+  assert("atkenv_* always outranks standout", getPlateDriverDisplayPriority("atkenv_power_env", "attack") < getPlateDriverDisplayPriority("power_iso", "standout"));
+  assert("atkenv_* always outranks risk", getPlateDriverDisplayPriority("atkenv_hostile", "risk") < getPlateDriverDisplayPriority("pw_wind_in", "risk"));
+  assert("non-atkenv driver keeps its ordinary tone rank (standout < supporting)", getPlateDriverDisplayPriority("power_iso", "standout") < getPlateDriverDisplayPriority("power_barrel", "supporting"));
+  assert("non-atkenv attack-toned driver ties with supporting (unchanged from PLATE_TAG_TONE_RANK)", getPlateDriverDisplayPriority("some_future_key", "attack") === getPlateDriverDisplayPriority("power_barrel", "supporting"));
+
+  // Regression: on a card with 4 standout drivers already present, an
+  // atkenv_* driver must still sort into the top 4 by simple ascending sort —
+  // this is the concrete scenario the priority override exists to prevent.
+  const chips = [
+    { key: "power_iso", tone: "standout" as PlateTagTone },
+    { key: "power_hrfb", tone: "standout" as PlateTagTone },
+    { key: "fit_platoon", tone: "standout" as PlateTagTone },
+    { key: "lo_top", tone: "standout" as PlateTagTone },
+    { key: "atkenv_power_env", tone: "attack" as PlateTagTone },
+  ];
+  const sorted = chips.slice().sort((a, b) => getPlateDriverDisplayPriority(a.key, a.tone) - getPlateDriverDisplayPriority(b.key, b.tone));
+  assert("atkenv_power_env sorts first even against 4 standout chips", sorted[0].key === "atkenv_power_env", JSON.stringify(sorted.map((c) => c.key)));
 }
 
 console.log("\n=== " + (pass + fail) + " total, " + pass + " passed, " + fail + " failed ===");
