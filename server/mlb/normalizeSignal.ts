@@ -6,6 +6,7 @@ import { buildMlbDrivers } from "../services/driverBuilder";
 import { toCanonicalFromMlb } from "../services/canonicalMapper";
 import { registerSignal } from "../services/liveSignalBus";
 import { freezeCanonical } from "../services/signalMutationGuard";
+import { getHrAlertState } from "./hrAlertEngine";
 
 export interface NormalizeContext {
   gameId: string;
@@ -433,6 +434,37 @@ function buildBaseMLBSignal(
   const smartTags = generateSmartTags(qs, raw, normalizedMkt);
   const primaryReason = generatePrimaryReason(qs, raw, normalizedMkt);
 
+  // HR Radar bridge (2026-07 consolidation) — read the HR alert engine's own
+  // dynamic state via its pure getter (no reordering of the orchestrator's
+  // per-tick loop needed: recomputeHrAlertState already ran earlier in this
+  // same tick). Populates the wire-shape `hrAlert` field so canonicalMapper's
+  // lifecycle bridge and buildMlbDrivers' HR-specific driver source — both
+  // previously dead because this field was never set — start working.
+  const hrAlertSnapshot = normalizedMkt === "home_runs"
+    ? getHrAlertState(ctx.gameId, qs.playerId)
+    : null;
+  const hrAlert: MLBSignal["hrAlert"] = hrAlertSnapshot && hrAlertSnapshot.isInitialized ? {
+    currentState: hrAlertSnapshot.currentState,
+    hrReadinessScore: hrAlertSnapshot.hrReadinessScore,
+    hrConversionProbabilityRaw: hrAlertSnapshot.hrConversionProbabilityRaw,
+    hrConversionProbabilityCalibrated: hrAlertSnapshot.hrConversionProbabilityCalibrated,
+    remainingPAExpectation: hrAlertSnapshot.remainingPAExpectation,
+    positiveDrivers: hrAlertSnapshot.positiveDrivers,
+    negativeSuppressors: hrAlertSnapshot.negativeSuppressors,
+    cooldownReason: hrAlertSnapshot.cooldownReason,
+    lastStateChangeAt: hrAlertSnapshot.lastStateChangeAt,
+    dataFreshnessMs: hrAlertSnapshot.dataFreshnessMs,
+    peakScore: hrAlertSnapshot.peakScore,
+    peakState: hrAlertSnapshot.peakState,
+    peakAt: hrAlertSnapshot.peakAt,
+    detectedInning: hrAlertSnapshot.detectedInning,
+    currentInning: hrAlertSnapshot.currentInning,
+    pitcherHrVulnerability: hrAlertSnapshot.pitcherHrVulnerability,
+    decayFactor: hrAlertSnapshot.decayFactor,
+    tickCount: hrAlertSnapshot.tickCount,
+    lastRecomputeAt: hrAlertSnapshot.lastRecomputeAt,
+  } : null;
+
   const drivers = qs.drivers ?? {};
   let pitchMatchupRatings: Record<string, PitchMatchupRating> | null = null;
   if (pitchMix && Array.isArray(pitchMix) && pitchMix.length > 0) {
@@ -549,6 +581,7 @@ function buildBaseMLBSignal(
     hrFactors: raw?.hrFactors ?? null,
     hrBuildScore: raw?.hrBuildScore ?? null,
     hrIntensity: raw?.hrIntensity ?? null,
+    hrAlert,
     rollingForm: qs.rollingForm ?? null,
 
     pitcherAnalysis: qs.pitcherAnalysis ?? raw?.pitcherAnalysis ?? null,
@@ -665,6 +698,10 @@ export function applyDisplayContract(
     displayDrivers,
     playerName: sig.playerName,
     market: sig.market,
+    // sig (post-buildBaseMLBSignal) carries hrAlert; qs (pre-normalization,
+    // spread above) never does — without this override Source 2 of the
+    // driver merge (qs.hrAlert?.positiveDrivers) is permanently dead.
+    hrAlert: sig.hrAlert,
   });
 
   const stamped: MLBSignal = {
