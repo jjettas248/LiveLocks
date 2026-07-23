@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, ChevronDown, ChevronUp, Check } from "lucide-react";
 import { MoundRadarRecord, MoundRadarFadeRecord } from "./MoundWinCard";
 import { getSetupGrade } from "@/lib/mlb/setupGrade";
-import { baselineOnlyLabel } from "@/lib/mlb/moundSettlementLabels";
+import { baselineOnlyLabel, moundResultLabel, moundFinalStatLabel } from "@/lib/mlb/moundSettlementLabels";
 
 type Tier = "track" | "watch" | "strong" | "elite" | "nuclear";
 type Market = "pitcher_strikeouts" | "pitcher_outs";
@@ -457,7 +457,14 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
   const fallbackLabel = isUnavailableFallback
     ? baselineOnlyLabel(s.settlementView?.modelOutcome ?? null, s.settlementView?.recommendedSide ?? null)
     : null;
-  const isFadeCash = cashed && isFade;
+  // The single recommendation-result string — rendered ONLY beneath the
+  // grade on the right (see moundResultLabel's doc comment). Never
+  // duplicated on the left, which shows the factual final stat instead.
+  const resultLabel = isPubliclyGraded
+    ? moundResultLabel(marketOutcome, s.settlementView?.modelOutcome ?? null, s.settlementView?.recommendedSide ?? null)
+    : null;
+  const finalStatUnit: "Ks" | "Outs" = s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs";
+  const finalStatLabel = isPubliclyGraded ? moundFinalStatLabel(s.settlementView?.finalStat ?? null, finalStatUnit) : null;
   const cashedColor = "#10b981";
   const pushColor = "#eab308";
   const fallbackColor = "#38bdf8";
@@ -508,44 +515,17 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
             <span className="text-[11px] text-muted-foreground">
               {s.team} vs {s.opponent}
             </span>
-            {cashed && (
-              <span
-                className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-300 animate-pulse"
-                data-testid={`mound-cashed-${slug}`}
-              >
-                <PartyPopper className="w-3 h-3" /> CASHED
-              </span>
-            )}
-            {/* A real frozen sportsbook line existed and landed exactly on it — reserved exclusively for a real market push, never the baseline-tie case (see baselineOnlyLabel). */}
-            {isPush && (
-              <span
-                className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-300"
-                data-testid={`mound-push-${slug}`}
-              >
-                Push
-              </span>
-            )}
-            {/* No real sportsbook line was ever captured for this signal — never
-                "Cashed"/"Missed"/"Push" here, only the honest baseline-only
-                model-read label. */}
-            {isUnavailableFallback && fallbackLabel && (
-              <span
-                className="inline-flex items-center gap-1 text-[10px] font-semibold"
-                style={{ color: fallbackColor }}
-                data-testid={`mound-model-outcome-${slug}`}
-              >
-                {fallbackLabel}
-              </span>
-            )}
-            {/* Completed public Follow card that missed the market — factual
-                "Final" marker so a graded miss stays visible as a completed
-                row, not erased. Follow only (Fade is publicly absent). */}
-            {isMissed && isFollow && (
+            {/* Factual final performance — mirrors the batting card's
+                HOMERED/No HR position on the left. Identical regardless of
+                Follow/Fade or Cashed/Missed/Push/fallback: the recommendation
+                RESULT lives once, on the right beneath the grade (see
+                resultLabel below) — never duplicated here. */}
+            {finalStatLabel && (
               <span
                 className="inline-flex items-center gap-1 text-[10px] font-semibold text-muted-foreground"
                 data-testid={`mound-final-${slug}`}
               >
-                Final
+                {finalStatLabel}
               </span>
             )}
             {isLocked && !cashed && (
@@ -574,24 +554,17 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
           >
             {cashed ? (
               <PartyPopper className="w-3 h-3" />
-            ) : isPush || (isUnavailableFallback && fallbackLabel) ? null : isFade ? (
+            ) : isMissed || isPush || (isUnavailableFallback && fallbackLabel) ? null : isFade ? (
               <ShieldAlert className="w-3 h-3" />
             ) : (
               <TierIcon className="w-3 h-3" />
             )}
-            {cashed
-              ? isFadeCash
-                ? "Faded — Cashed"
-                : "Cashed"
-              : isPush
-                ? "Push"
-                : isUnavailableFallback && fallbackLabel
-                  ? fallbackLabel
-                  : isFade
-                    ? "Fade Candidate"
-                    : style.label}
+            {/* Exactly one recommendation-result string, shown here and only
+                here — the left side (finalStatLabel above) shows the
+                factual final performance instead, never this. */}
+            {resultLabel ? resultLabel : isFade ? "Fade Candidate" : style.label}
           </div>
-          {!cashed && !isPush && !isUnavailableFallback && (isFade || isFollow) && (
+          {!isPubliclyGraded && (isFade || isFollow) && (
             <div
               className="text-[9px] font-bold mt-0.5"
               style={{ color: isFade ? FADE_COLOR : FOLLOW_COLOR }}
@@ -735,59 +708,41 @@ function SettlementRow({ signal: s }: { signal: MoundSignal }) {
 
   if (marketOutcome !== "unavailable") {
     const sideLabel = settlement?.recommendedSide === "UNDER" ? "Under" : "Over";
-    const resultLabel = marketOutcome === "cashed" ? "Cashed" : marketOutcome === "missed" ? "Missed" : "Push";
+    // Final stat and the Cashed/Missed/Push result now live on the compact
+    // card's left (finalStatLabel) and right (resultLabel) respectively —
+    // this row's sole remaining job is the side/line context found nowhere
+    // else on the card, never repeating either.
     return (
-      <div className="flex flex-col gap-0.5 mt-1.5 text-[11px]" data-testid="mound-settlement-row">
-        <div className="flex items-center gap-1.5 flex-wrap text-muted-foreground">
-          <span>
-            Official Side <span className="font-semibold text-foreground">{sideLabel} {marketLabel}</span>
-          </span>
-          {settlement?.sportsbookLine != null && (
-            <>
-              <span className="opacity-40">·</span>
-              <span>
-                Sportsbook Line <span className="font-semibold text-foreground">{settlement.sportsbookLine}</span>
-              </span>
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap text-muted-foreground">
-          {settlement?.finalStat != null && (
+      <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] text-muted-foreground" data-testid="mound-settlement-row">
+        <span>
+          Official Side <span className="font-semibold text-foreground">{sideLabel} {marketLabel}</span>
+        </span>
+        {settlement?.sportsbookLine != null && (
+          <>
+            <span className="opacity-40">·</span>
             <span>
-              Final <span className="font-semibold text-foreground">{settlement.finalStat} {unit}</span>
+              Sportsbook Line <span className="font-semibold text-foreground">{settlement.sportsbookLine}</span>
             </span>
-          )}
-          <span className="opacity-40">·</span>
-          <span>
-            Result <span className="font-semibold text-foreground">{resultLabel}</span>
-          </span>
-        </div>
+          </>
+        )}
       </div>
     );
   }
 
   // No real sportsbook line was ever captured — show the baseline-only
-  // model context instead. Never renders Cashed/Missed/Push here.
+  // model context instead. Never renders Cashed/Missed/Push here. The final
+  // stat already lives on the card's left (finalStatLabel), so this row is
+  // just the baseline number itself, nothing repeated.
   const fallbackLabel = baselineOnlyLabel(settlement?.modelOutcome ?? null, settlement?.recommendedSide ?? null);
   if (fallbackLabel == null && settlement?.modelBaseline == null) return null;
 
   return (
-    <div className="flex flex-col gap-0.5 mt-1.5 text-[11px]" data-testid="mound-settlement-row-fallback">
-      <div className="flex items-center gap-1.5 flex-wrap text-muted-foreground">
-        {settlement?.modelBaseline != null && (
-          <span>
-            Engine Baseline <span className="font-semibold text-foreground">{settlement.modelBaseline} {unit}</span>
-          </span>
-        )}
-        {settlement?.finalStat != null && (
-          <>
-            <span className="opacity-40">·</span>
-            <span>
-              Final <span className="font-semibold text-foreground">{settlement.finalStat} {unit}</span>
-            </span>
-          </>
-        )}
-      </div>
+    <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] text-muted-foreground" data-testid="mound-settlement-row-fallback">
+      {settlement?.modelBaseline != null && (
+        <span>
+          Engine Baseline <span className="font-semibold text-foreground">{settlement.modelBaseline} {unit}</span>
+        </span>
+      )}
     </div>
   );
 }

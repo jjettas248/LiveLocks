@@ -24,3 +24,39 @@ export function baselineOnlyLabel(modelOutcome: MoundModelOutcome, recommendedSi
   if (modelOutcome === "confirmed") return isFade ? "Fade Read Confirmed" : "Follow Read Confirmed";
   return isFade ? "Performed Above Baseline" : "Performed Below Baseline";
 }
+
+export type MoundMarketOutcome = "cashed" | "missed" | "push" | "unavailable";
+
+/**
+ * The single recommendation-result label shown beneath the letter grade on
+ * the RIGHT side of the settled card — the only place this concept ever
+ * renders. Mirrors the batting card's single "Cashed"/"Batter Power Only"
+ * result slot: exactly one of these eight strings, never duplicated
+ * elsewhere on the card (the left side shows the factual final performance
+ * instead — see moundFinalStatLabel). Returns null only when the signal
+ * isn't actually settled (no modelOutcome to fall back to either).
+ */
+export function moundResultLabel(
+  marketOutcome: MoundMarketOutcome,
+  modelOutcome: MoundModelOutcome,
+  recommendedSide: "OVER" | "UNDER" | null,
+): string | null {
+  if (marketOutcome === "cashed") return "Cashed";
+  if (marketOutcome === "missed") return "Missed";
+  if (marketOutcome === "push") return "Push";
+  return baselineOnlyLabel(modelOutcome, recommendedSide);
+}
+
+/**
+ * The factual final-performance text shown beneath the pitcher name on the
+ * LEFT side of the settled card — mirrors the batting card's "HOMERED"/
+ * "No HR" position, but as a plain counting stat (Mound has no single
+ * discrete event to name). Always this exact "{stat} {unit} · Final" shape,
+ * identical regardless of Follow/Fade or Cashed/Missed/Push/fallback — the
+ * factual outcome never changes based on how it graded. Null when there's no
+ * final stat to show (never a placeholder).
+ */
+export function moundFinalStatLabel(finalStat: number | null, unit: "Ks" | "Outs"): string | null {
+  if (finalStat == null) return null;
+  return `${finalStat} ${unit} · Final`;
+}
