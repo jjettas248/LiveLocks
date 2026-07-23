@@ -61,7 +61,7 @@ function bookmakerRow(bookKey: string, marketKey: string, players: Array<{ name:
   };
 }
 
-// ── A: provider URL never includes in_play; only the 3 MLB books ──────────────
+// ── A: provider URL never includes in_play; requests the widened MLB book list ─
 {
   fetchCalls = [];
   fetchBookmakers = [bookmakerRow("draftkings", "batter_hits", [{ name: "Test Player A", line: 1.5 }])];
@@ -70,7 +70,11 @@ function bookmakerRow(bookKey: string, marketKey: string, players: Array<{ name:
   const url = fetchCalls[0]?.url ?? "";
   check("A2: URL never includes in_play", !url.includes("in_play"), url);
   const bmParam = new URL(url).searchParams.get("bookmakers") ?? "";
-  check("A3: URL requests exactly draftkings,fanduel,hardrockbet", bmParam === "draftkings,fanduel,hardrockbet", bmParam);
+  check(
+    "A3: URL requests exactly the widened 10-book MLB_PROP_BOOKMAKERS list",
+    bmParam === "draftkings,fanduel,hardrockbet,prizepicks,underdogfantasy,betonlineag,bovada,williamhill_us,caesars,hard_rock",
+    bmParam,
+  );
 }
 
 // ── B: pregame and live access produce the SAME raw cache key ─────────────────
@@ -176,10 +180,18 @@ function bookmakerRow(bookKey: string, marketKey: string, players: Array<{ name:
     JSON.stringify(nbaBooks),
   );
 
+  // MLB was widened back from the original 3-book cost-optimized list to 10
+  // (3 preferred + 7 fallback) to reduce staleOdds line-resolution gaps on
+  // non-HR markets — see server/mlb/marketStarvationGuard.ts and the
+  // MLB_PROP_BOOKMAKERS comment in this file for the tradeoff rationale.
   const mlbBooks = getAllPriorityBooks("mlb");
   check(
-    "G3: MLB book list reduced to exactly draftkings, fanduel, hardrockbet",
-    mlbBooks.length === 3 && ["draftkings", "fanduel", "hardrockbet"].every((b) => mlbBooks.includes(b)),
+    "G3: MLB book list widened to 10 (3 preferred + 7 fallback)",
+    mlbBooks.length === 10 &&
+      [
+        "draftkings", "fanduel", "hardrockbet",
+        "prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us", "caesars", "hard_rock",
+      ].every((b) => mlbBooks.includes(b)),
     JSON.stringify(mlbBooks),
   );
 
