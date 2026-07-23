@@ -1170,10 +1170,14 @@ export async function getSGOPlayerLine(
 const MLB_BASE_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb";
 
 // MLB Live Edge books — deliberately its own constant, NOT the NBA-shared
-// PROP_BOOKMAKERS above. Narrowing this list cuts MLB Odds API credit spend
-// roughly in half (one bookmaker billing group instead of two) without
-// touching NBA, which keeps using PROP_BOOKMAKERS everywhere.
-const MLB_PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet";
+// PROP_BOOKMAKERS above. Widened from the original 3-book cost-optimized list
+// (draftkings/fanduel/hardrockbet) back up to 10 to reduce staleOdds
+// line-resolution gaps on non-HR markets (see marketStarvationGuard.ts) —
+// accepts higher Odds API spend in exchange for more consistent book-line
+// coverage. Must stay a superset of PREFERRED_BOOKS_BY_SPORT.mlb ∪
+// FALLBACK_BOOKS_BY_SPORT.mlb in server/odds/oddsConfig.ts (those lists only
+// rank preference among books that pass this gate — they don't request/filter).
+const MLB_PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet,prizepicks,underdogfantasy,betonlineag,bovada,williamhill_us,caesars,hard_rock";
 const MLB_PROP_BOOKMAKERS_SET = new Set(MLB_PROP_BOOKMAKERS.split(","));
 
 // MLB game status as understood by the odds-cache layer. "unknown" means the

@@ -63,6 +63,7 @@ npx tsx server/mlb/pregamePowerRadar/nearHrRecentForm.test.ts # Pregame Radar ne
 npx tsx server/utils/dateUtils.test.ts               # slateDateET() 6am-ET rollover + toEtDateKey() ET calendar-date conversion invariants
 npx tsx server/dbMigrations/hrRadarResearchPersistence.test.ts       # HR Radar research schema bootstrap idempotence + constraint + no-destructive-SQL guard
 npx tsx server/mlb/hrRadarResearch/hrRadarResearchContracts.test.ts  # HR Radar research Zod contracts (feature/trigger/eligibility/label/artifact/policy) + fail-closed flag parsing
+npx tsx server/mlb/marketStarvationGuard.test.ts     # market-starvation evaluator threshold logic + never-throws guarantee + cooldown/recovery logging
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
@@ -155,6 +156,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | MLB Pre-Game Power Radar + Win Attribution | `server/mlb/pregamePowerRadar/` — `shadowOutcomes.ts` (grading + `pregame_win`/`calibration_miss` attribution + public/admin stat getters), `winAttribution.ts` (pure attribution + daily-log builders), `calibrationStats.ts` (pure public/admin stat builders), `scoring.ts` (6-component weighted composite), `nearHrRecentForm.ts` (Component 6 — retroactive near-HR contact form via `nearHrContact.ts`, last 3 ET days, recency-weighted + consecutive-day bonus), `shared/pregameRadarWin.ts` (transport contracts: `DailyCashedLogResponse`, `PregameRadarPublicStats`, `PregameRadarCalibrationStats`); client `PregameWinCard.tsx` (public record + wins) + `components/admin/PregameRadarCalibrationCard.tsx` (admin calibration) |
 | MLB orchestrator (per-tick driver) | `server/mlb/liveGameOrchestrator.ts` |
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |
+| MLB qualification audit + market-starvation guard | `server/mlb/qualificationAudit.ts` (passive rejection/qualification recorder, feeds `/api/admin/mlb-qualification`), `server/mlb/marketStarvationGuard.ts` (per-market staleOdds threshold guard, log-only), `client/src/components/admin/MlbQualificationAuditCard.tsx` (admin card) |
 | NBA playoff rotation truth | `server/services/nbaRotationHistoryService.ts` |
 | Analytics (read-only) | `server/analytics/` |
 | HR Board Studio (admin growth, read-only) | `server/growth/hrBoardStudioCore.ts` (pure builders), `server/growth/hrBoardStudioService.ts` (live gatherers), `server/growth/hrBoardStudioRoutes.ts`, `server/growth/hrBoardCompliance.ts`, `server/growth/hrBoardAnalytics.ts`, `shared/hrBoardStudio.ts`, `client/src/components/admin/HrBoard*.tsx`, `client/src/pages/admin/hr-board-studio.tsx` |
@@ -181,6 +183,7 @@ The codebase emits one-line bracketed tags as the primary observability surface.
 - **HR Radar:** `[HR_RADAR_TRANSITION]`, `[HR_RADAR_READY]`, `[HR_RADAR_FIRE]`, `[HR_RADAR_INACTIVE]`
 - **Shadow:** `[LL_SHADOW_SIGNAL_QUALIFIED]`, `[LL_SHADOW_OUTCOME_RESOLVED|MISSING|PUSH|EXPIRED]`, `[LL_SHADOW_SIGNAL_CASHED|MISSED]`
 - **Goldmaster:** `[MLB_GOLDMASTER_LOCK]` (boot), `[MLB_SIGNAL_PARITY]` (per cycle), `[MLB_DRIFT_WARNING]`
+- **Qualification:** `[MLB_MARKET_STARVED]` / `[MLB_MARKET_STARVED_RECOVERED]` — a market's rolling-window staleOdds rejectRate crossed/cleared the starvation threshold (missing sportsbook lines, not engine drift)
 - **Alerts:** `[LL_ALERT_QUEUED]`, `[LL_ALERT_SENT]`, `[LL_ALERT_DEDUPE]`, `[LL_ALERT_SUPPRESSED]`, `[LL_ALERT_OPENED]`, `[LL_ALERT_CLICKED]`
 - **Analytics:** `[LL_ANALYTICS_AGGREGATE]`, `[LL_ANALYTICS_HR_RADAR]`, `[LL_ANALYTICS_DRIVER]`, `[LL_ANALYTICS_SHADOW]`
 - **PWA:** `[LL_PWA_REFRESH]`, `[LL_PWA_CACHE_INVALIDATE]`, `[LL_NOTIFICATION_ROUTE]`
