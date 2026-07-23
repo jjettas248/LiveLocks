@@ -15,6 +15,7 @@ import { FeedbackModal } from "@/components/feedback-modal";
 import { ManageSubscriptionModal } from "@/components/manage-subscription-modal";
 import { AppHeader } from "@/components/layout/AppHeader";
 import { SportTabs } from "@/components/layout/SportTabs";
+import { SHOW_HR_RADAR_TAB } from "@/lib/mlb/hrRadarFeatureFlag";
 import { GamesStrip } from "@/components/mlb/GamesStrip";
 import { NCAABAdminTab } from "@/components/ncaab-admin-tab";
 import MlbLivePage from "@/pages/mlb-live";
@@ -557,7 +558,7 @@ export default function Dashboard() {
 
   const [activeTab, setActiveTab] = useState<"calculator" | "ncaab" | "analytics" | "mlb">("calculator");
   const [nbaSubTab, setNbaSubTab] = useState<"live" | "halftime">("live");
-  const [mlbSubTab, setMlbSubTab] = useState<"live_feed" | "hr_radar" | "pregame_power">("hr_radar");
+  const [mlbSubTab, setMlbSubTab] = useState<"live_feed" | "hr_radar" | "pregame_power">("live_feed");
   const [expandToGameId, setExpandToGameId] = useState<string | null>(null);
   const [showWelcomeBanner, setShowWelcomeBanner] = useState(false);
   const [showSportPicker, setShowSportPicker] = useState(false);
@@ -2371,6 +2372,7 @@ export default function Dashboard() {
             onSelectNbaSubTab={setNbaSubTab}
             mlbSubTab={mlbSubTab}
             onSelectMlbSubTab={setMlbSubTab}
+            showHrRadarTab={SHOW_HR_RADAR_TAB}
           />
 
 
@@ -4146,7 +4148,7 @@ export default function Dashboard() {
         })()}
 
         {/* MLB Live Tab — all authenticated users (preview gated on backend) */}
-        {activeTab === "mlb" && <MlbLivePage activeSubTab={mlbSubTab} />}
+        {activeTab === "mlb" && <MlbLivePage activeSubTab={mlbSubTab} showHrRadarTab={SHOW_HR_RADAR_TAB} />}
 
       </main>
 

@@ -21,6 +21,8 @@ export interface SportTabsProps {
   onSelectNbaSubTab: (tab: NbaSubTab) => void;
   mlbSubTab: MlbSubTab;
   onSelectMlbSubTab: (tab: MlbSubTab) => void;
+  /** Legacy Home Run Radar tab, retired from normal navigation. Defaults to hidden. */
+  showHrRadarTab?: boolean;
 }
 
 // Shared base for primary tab buttons. py-2 gives a comfortable mobile tap target.
@@ -33,6 +35,22 @@ const TAB_INACTIVE = "text-muted-foreground hover:text-foreground";
 const SUB_BASE = "px-4 py-2 rounded-lg text-xs font-semibold transition-all";
 const SUB_ACTIVE = "bg-background text-foreground shadow-surface-sm";
 const SUB_INACTIVE = "text-muted-foreground hover:text-foreground";
+
+/**
+ * The MLB sub-tab list actually rendered. Pulled out as a pure function (not
+ * inlined in JSX) so the "HR Radar is retired from navigation by default"
+ * contract is directly unit-testable without mounting the component — see
+ * hrRadarFeatureFlag.test.ts.
+ */
+export function getMlbSubTabList(
+  showHrRadarTab: boolean,
+): ReadonlyArray<{ key: MlbSubTab; label: string }> {
+  return [
+    { key: "live_feed", label: "Live Edge" },
+    ...(showHrRadarTab ? [{ key: "hr_radar" as const, label: "HR Radar" }] : []),
+    { key: "pregame_power", label: "Pre-Game" },
+  ];
+}
 
 /**
  * Sport navigation (primary tabs) + per-sport sub-tabs. Extracted from
@@ -55,6 +73,7 @@ export function SportTabs({
   onSelectNbaSubTab,
   mlbSubTab,
   onSelectMlbSubTab,
+  showHrRadarTab = false,
 }: SportTabsProps) {
   return (
     <>
@@ -156,13 +175,7 @@ export function SportTabs({
 
       {activeTab === "mlb" && (
         <div className="flex gap-1 mt-2 w-fit bg-secondary/40 border border-border/60 rounded-xl p-1">
-          {(
-            [
-              { key: "live_feed", label: "Live Edge" },
-              { key: "hr_radar", label: "HR Radar" },
-              { key: "pregame_power", label: "Pre-Game" },
-            ] as const
-          ).map((tab) => (
+          {getMlbSubTabList(showHrRadarTab).map((tab) => (
             <button
               key={tab.key}
               data-testid={`tab-mlb-${tab.key}`}
