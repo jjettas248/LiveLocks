@@ -14,6 +14,7 @@ import { HR_RADAR_STAGE_COPY, hrRadarConsumerLabelForPlayability } from "@/compo
 import { PregameHub } from "@/components/mlb/pregame/PregameHub";
 import { AbLogRows, type AbRow } from "@/components/mlb/AbLogRows";
 import { HrQuickDecide } from "@/components/mlb/HrQuickDecide";
+import { shouldMountHrRadarTab } from "@/lib/mlb/hrRadarFeatureFlag";
 import { type MlbPlayerStat } from "@/components/mlb/MlbBoxScore";
 import { MlbSlateRibbon } from "@/components/mlb/MlbSlateRibbon";
 import { LiveEdgePreview } from "@/components/dashboard/LiveEdgePreview";
@@ -511,7 +512,7 @@ function HRRadarAnalyzeModal({ playerId, gameId, onClose }: { playerId: string; 
   );
 }
 
-function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar" | "pregame_power" }) {
+function MlbLiveInner({ activeSubTab, showHrRadarTab = false }: { activeSubTab: "live_feed" | "hr_radar" | "pregame_power"; showHrRadarTab?: boolean }) {
   const { user, isLoading: authLoading } = useAuth();
   const [selectedGameId, setSelectedGameId] = useState<string | null>(null);
   const [liveFeedSub, setLiveFeedSub] = useState<"all" | "3rd" | "5th" | "7th">("all");
@@ -1025,7 +1026,7 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
         </div>
       )}
 
-      {activeSubTab === "hr_radar" && (
+      {shouldMountHrRadarTab(activeSubTab, showHrRadarTab) && (
         <div className="space-y-4">
           {/* Quick Decide / Full Ladder toggle */}
           <div className="flex items-center gap-1 p-1 bg-muted/30 rounded-lg border border-border/50">
@@ -1154,10 +1155,16 @@ function MlbLiveInner({ activeSubTab }: { activeSubTab: "live_feed" | "hr_radar"
   );
 }
 
-export default function MlbLivePage({ activeSubTab = "live_feed" }: { activeSubTab?: "live_feed" | "hr_radar" | "pregame_power" }) {
+export default function MlbLivePage({
+  activeSubTab = "live_feed",
+  showHrRadarTab = false,
+}: {
+  activeSubTab?: "live_feed" | "hr_radar" | "pregame_power";
+  showHrRadarTab?: boolean;
+}) {
   return (
     <MLBErrorBoundary>
-      <MlbLiveInner activeSubTab={activeSubTab} />
+      <MlbLiveInner activeSubTab={activeSubTab} showHrRadarTab={showHrRadarTab} />
     </MLBErrorBoundary>
   );
 }
