@@ -851,6 +851,43 @@ app.use((req, res, next) => {
         }
       }, 15 * 60 * 1000);
 
+      // Tighter cadence in the final pre-lock window only. Odds/oddsEventId
+      // are cache-only reads on the main build path (buildMlbMoundRadar.ts) —
+      // a cache miss just warms the cache for the NEXT cycle, it never
+      // blocks the current one. At the standard 15-min cadence, a sportsbook
+      // K line posted less than ~15-30 min before first pitch is structurally
+      // likely to never get captured into the frozen evaluation snapshot
+      // before the signal locks (finalPregameSnapshot stops refreshing at
+      // lock — a miss here is permanent for that signal). This runs the SAME
+      // safe, non-blocking buildMlbMoundRadar() more often, but ONLY while at
+      // least one signal is genuinely in its closing window, so it stays a
+      // rare, narrow addition rather than a broad frequency increase.
+      const MOUND_CLOSING_WINDOW_MS = 20 * 60 * 1000;
+      setInterval(() => {
+        try {
+          const snap = getMoundSnapshot();
+          if (!snap) return;
+          const now = Date.now();
+          let closingWindow = false;
+          for (const s of Array.from(snap.signals.values())) {
+            if (s.status === "locked" || s.status === "graded" || s.status === "expired") continue;
+            if (!s.startsAt) continue;
+            const t = Date.parse(s.startsAt);
+            if (Number.isFinite(t) && t - now > 0 && t - now < MOUND_CLOSING_WINDOW_MS) {
+              closingWindow = true;
+              break;
+            }
+          }
+          if (closingWindow) {
+            buildMlbMoundRadar().catch((e) =>
+              console.warn("[MLB_PREGAME_MOUND_TARGETS] closing-window build failed:", e?.message),
+            );
+          }
+        } catch (e) {
+          console.warn("[MLB_PREGAME_MOUND_TARGETS] closing-window tick error:", (e as Error).message);
+        }
+      }, 3 * 60 * 1000);
+
       const { gradeMoundOutcomes } = await import("./mlb/pregame/mound/moundShadowOutcomes");
       setInterval(() => {
         gradeMoundOutcomes().catch((e) =>

@@ -598,7 +598,11 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           gameStatus,
           firstPitchLockEligible,
           lockedAt: isLocked ? generatedAt : null,
-          hasMarketLine: false,
+          // Was previously hardcoded false regardless of marketEdgeContext —
+          // dead field, made it impossible to tell "no line ever posted"
+          // apart from "a line existed but the frozen snapshot capture
+          // missed it" at grading time. Now reflects reality.
+          hasMarketLine: marketEdgeContext?.line != null,
           isOfficialPlay: false,
           isPregameTarget: true,
           marketEdgeContext,
