@@ -34,7 +34,7 @@ import {
   mapMlbSignalToUi,
   type HrRadarCardUi,
 } from "@/lib/mlbUiMappers";
-import { MODE_STYLES, resolveMlbSignalTier, TIER_COLORS_BY_SIGNAL_TIER } from "@/lib/mlbFormatters";
+import { MODE_STYLES, resolveMlbSignalTier, TIER_COLORS_BY_SIGNAL_TIER, formatMlbMarketLabel } from "@/lib/mlbFormatters";
 import {
   buildSignalViewModel, buildHrRadarViewModel, buildGameViewModel,
   buildAtBatLogViewModel, buildPitchMatchupViewModel,
@@ -55,6 +55,28 @@ function tierFirstSort(a: MlbSignalData, b: MlbSignalData): number {
   if (ta !== tb) return tb - ta;
   return (b.signalScore ?? 0) - (a.signalScore ?? 0);
 }
+
+// Signal-first market filter (LiveLocks MLB UX — smart filters). Mirrors
+// ALL_MLB_MARKETS (server/mlb/types.ts) — kept as a local literal list
+// since server/ types aren't importable client-side, same approach
+// MoundPowerRadar/PregamePowerRadar already use for their own market
+// filter chips. Labels reuse the canonical formatMlbMarketLabel dictionary
+// rather than inventing new chip-specific text.
+type MlbMarketFilterKey =
+  | "hits" | "total_bases" | "home_runs" | "hrr"
+  | "pitcher_strikeouts" | "hits_allowed" | "pitcher_outs";
+
+const MLB_LIVE_MARKET_FILTERS: Array<{ key: MlbMarketFilterKey; label: string }> = [
+  { key: "hits", label: formatMlbMarketLabel("hits") },
+  { key: "total_bases", label: formatMlbMarketLabel("total_bases") },
+  { key: "home_runs", label: formatMlbMarketLabel("home_runs") },
+  { key: "hrr", label: formatMlbMarketLabel("hrr") },
+  { key: "pitcher_strikeouts", label: formatMlbMarketLabel("pitcher_strikeouts") },
+  { key: "hits_allowed", label: formatMlbMarketLabel("hits_allowed") },
+  { key: "pitcher_outs", label: formatMlbMarketLabel("pitcher_outs") },
+];
+
+const BEST_PLAYS_LIMIT = 5;
 
 class MLBErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; message: string }> {
   constructor(props: { children: ReactNode }) {
@@ -520,6 +542,13 @@ function MlbLiveInner({ activeSubTab, showHrRadarTab = false }: { activeSubTab: 
   // Independent of `liveFeedSub` (legacy 3rd/5th/7th feedTag filter) so
   // we can keep both controls during rollout. Default "all".
   const [inningWindowFilter, setInningWindowFilter] = useState<"all" | "early" | "mid" | "late">("all");
+  // Signal-first market filter + Best Plays quick filter (smart filters).
+  // Both are pure client-side presentation filters over already server-
+  // stamped MarketSignalViewModel fields — no new query params, no
+  // engine/bus involvement. See the hoisted marketRows/marketFilteredRows/
+  // liveFeedRows derivation below.
+  const [marketFilter, setMarketFilter] = useState<"all" | MlbMarketFilterKey>("all");
+  const [bestPlaysOnly, setBestPlaysOnly] = useState(false);
   const [signalSortBy, setSignalSortBy] = useState<"signalScore" | "enginePct">("signalScore");
   const mlbUpgradeNeeded = false;
   const [mlbSlipPicks, setMlbSlipPicks] = useState<Array<{ playerId: string; playerName: string; market: string; line: number; side: string; sportsbook: string; edge: number | null; enginePct: number; gameId: string; overOdds?: number | null; underOdds?: number | null; overProbability?: number | null; underProbability?: number | null; engineConfidence?: number | null; source?: "engine" | "calculator" }>>([]);
@@ -579,6 +608,33 @@ function MlbLiveInner({ activeSubTab, showHrRadarTab = false }: { activeSubTab: 
   // edgeFeedResp.access === "preview". Downstream code keeps using the same
   // `marketSignalsResp` name/shape it always has.
   const marketSignalsResp = marketSignalsRespRaw?.access === "full" ? marketSignalsRespRaw : undefined;
+
+  // ── Smart filters: market + Best Plays (hoisted, 3 tiers) ────────────
+  // Computed once here so every consumer (chip counts, the "N live"
+  // indicator, and the LiveFeed render) reads from the tier that actually
+  // matches what it's describing, instead of each independently re-slicing
+  // marketSignalsResp.rows with different (and easily inconsistent) scope.
+  //
+  // Tier 1 — server already applied the inning-window filter. Base for
+  // market chip counts (a facet count answers "what if I switched to this
+  // facet," not "how many survive my current selection").
+  const marketRows = marketSignalsResp?.rows ?? [];
+  // Tier 2 — + the market chip filter. Drives the "N live" indicator
+  // (describes the current combined inning+market view) and is the
+  // candidate pool Best Plays caps down from.
+  const marketFilteredRows = marketFilter === "all"
+    ? marketRows
+    : marketRows.filter(r => r.market === marketFilter);
+  // Tier 3 — + Best Plays. What actually reaches <LiveFeed>. RESOLVED rows
+  // are excluded from the pool before slicing — a "best play right now"
+  // must still be live. sortPriority already ranks RESOLVED last, but a
+  // short, quiet-slate array can still get padded up to BEST_PLAYS_LIMIT
+  // with cashed/missed rows without this exclusion.
+  const liveFeedRows = bestPlaysOnly
+    ? marketFilteredRows.filter(r => r.displayGroup !== "RESOLVED").slice(0, BEST_PLAYS_LIMIT)
+    : marketFilteredRows;
+  const mlbFiltersActive = marketFilter !== "all" || bestPlaysOnly;
+
   const rawSignals: MlbSignalData[] = edgeFeedResp?.access === "full" && Array.isArray(edgeFeedResp.signals)
     ? edgeFeedResp.signals.map(s => mapMlbSignalToUi(s) as unknown as MlbSignalData)
     : [];
@@ -834,18 +890,20 @@ function MlbLiveInner({ activeSubTab, showHrRadarTab = false }: { activeSubTab: 
         <div className="space-y-4">
           {/* Signal-first inning window filter (LiveLocks MLB UX Phase 1). */}
           {(() => {
-            // Compute per-window counts from marketSignalsResp for pill badges.
-            // Only shown when we have loaded data; undefined = loading.
-            const allRows = marketSignalsResp?.rows ?? [];
-            const liveTotal = allRows.filter(r => r.displayGroup === "ACTION_NOW" || r.displayGroup === "BUILDING").length;
+            // Per-window counts read tier-1 marketRows (server-side inning
+            // filter only) — a facet count answers "what if I switched to
+            // this window," so it must stay independent of the market /
+            // Best Plays filters. The "N live" pulse below reads tier-2
+            // marketFilteredRows instead, since it sits right next to the
+            // new chips and describes the current combined view.
             return (
               <div className="flex items-center gap-2 flex-wrap" data-testid="mlb-inning-filter-row">
                 <div className="flex gap-1.5 flex-wrap flex-1">
                   {(["all", "early", "mid", "late"] as const).map(win => {
                     const dotColor = win === "early" ? "#a78bfa" : win === "mid" ? "#94a3b8" : win === "late" ? "#ef4444" : null;
                     const count = win === "all"
-                      ? allRows.length
-                      : allRows.filter(r => r.inningWindow === win).length;
+                      ? marketRows.length
+                      : marketRows.filter(r => r.inningWindow === win).length;
                     return (
                       <button
                         key={`win-${win}`}
@@ -866,25 +924,95 @@ function MlbLiveInner({ activeSubTab, showHrRadarTab = false }: { activeSubTab: 
                     );
                   })}
                 </div>
-                {/* Live pulse with active signal count */}
-                {marketSignalsResp !== undefined && (
-                  <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
-                    {liveTotal > 0
-                      ? <><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" /><span className="text-green-400 font-semibold">{liveTotal} live</span></>
-                      : <><span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" /><span>Engine scoring</span></>
-                    }
-                  </div>
-                )}
+                {/* Live pulse with active signal count — reflects the current
+                    market filter (tier 2) so it never contradicts the cards
+                    visibly rendered just below it. Not capped by Best Plays
+                    (see mlbFiltersActive derivation) — a pulse that collapses
+                    to <=5 the instant Best Plays is on would misrepresent how
+                    much is actually live. */}
+                {marketSignalsResp !== undefined && (() => {
+                  const liveTotal = marketFilteredRows.filter(r => r.displayGroup === "ACTION_NOW" || r.displayGroup === "BUILDING").length;
+                  return (
+                    <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground shrink-0">
+                      {liveTotal > 0
+                        ? <><span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" /><span className="text-green-400 font-semibold">{liveTotal} live</span></>
+                        : <><span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40" /><span>Engine scoring</span></>
+                      }
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
+          {/* Smart filters — market + Best Plays. Client-side only, AND-
+              composed with the inning window filter above. Reuses the
+              hoisted marketRows (tier 1, for chip counts) / bestPlaysOnly
+              toggle state; the actual filtering happens in the hoisted
+              marketFilteredRows / liveFeedRows derivation. */}
+          <div className="flex items-center gap-1.5 flex-wrap" data-testid="mlb-market-filter-row">
+            <button
+              data-testid="tab-best-plays-toggle"
+              onClick={() => setBestPlaysOnly(v => !v)}
+              className={`flex items-center gap-1 px-3 py-2 min-h-[36px] text-xs font-semibold rounded-full border transition-all ${
+                bestPlaysOnly
+                  ? "bg-amber-500/15 text-amber-300 border-amber-400/50 shadow-sm"
+                  : "border-border/50 text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              ⭐ Best Plays
+            </button>
+            <span className="w-px h-4 bg-border/50 mx-0.5" />
+            {(["all", ...MLB_LIVE_MARKET_FILTERS.map(m => m.key)] as const).map(key => {
+              const label = key === "all" ? "All Markets" : MLB_LIVE_MARKET_FILTERS.find(m => m.key === key)?.label ?? key;
+              const count = key === "all" ? marketRows.length : marketRows.filter(r => r.market === key).length;
+              return (
+                <button
+                  key={`market-${key}`}
+                  data-testid={`tab-market-filter-${key}`}
+                  onClick={() => setMarketFilter(key)}
+                  className={`flex items-center gap-1 px-3 py-2 min-h-[36px] text-xs font-semibold rounded-full border transition-all ${
+                    marketFilter === key ? "bg-background text-foreground border-primary/50 shadow-sm" : "border-border/50 text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {label}
+                  {marketSignalsResp !== undefined && count > 0 && (
+                    <span className={`text-[9px] font-bold px-1 py-0.5 rounded-full ml-0.5 ${
+                      marketFilter === key ? "bg-primary/20 text-primary" : "bg-border/40 text-muted-foreground"
+                    }`}>{count}</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
           {(() => {
             // Signal-first surface: render LiveFeed whenever the market-signals
             // endpoint has responded (even with 0 rows — the LiveFeed component
             // has its own narrative empty state). Falls back to legacy view only
             // during initial load before the query has fired.
             if (marketSignalsResp !== undefined) {
-              const marketRows = marketSignalsResp.rows ?? [];
+              // Honest empty state: when a market/Best-Plays filter (not the
+              // engine) is why liveFeedRows is empty, don't let LiveFeed's
+              // "Engine Building Conviction" narrative claim the engine
+              // found nothing — it might have plenty, just not matching the
+              // current filter. Short-circuits before the sigIndex work
+              // below since none of it is needed in this branch.
+              if (liveFeedRows.length === 0 && mlbFiltersActive) {
+                return (
+                  <div
+                    className="rounded-xl border border-border/40 bg-secondary/20 p-6 text-center space-y-3"
+                    data-testid="mlb-filtered-empty-state"
+                  >
+                    <p className="text-sm text-muted-foreground">No signals match the current filter.</p>
+                    <button
+                      onClick={() => { setMarketFilter("all"); setBestPlaysOnly(false); }}
+                      data-testid="button-clear-mlb-filters"
+                      className="text-xs font-semibold text-primary hover:underline"
+                    >
+                      Clear filters
+                    </button>
+                  </div>
+                );
+              }
               // Build a fast lookup from view-model signalId → MlbSignalData.
               // Also index by canonicalSignalId to handle cases where the bus
               // signalId differs from the manually-constructed key.
@@ -911,7 +1039,7 @@ function MlbLiveInner({ activeSubTab, showHrRadarTab = false }: { activeSubTab: 
               return (
                 <div className="space-y-6">
                   <LiveFeed
-                    rows={marketRows}
+                    rows={liveFeedRows}
                     resolveSignal={resolveSignal}
                     onAddToSlip={handleAddToSlip}
                     isElite={isElite}
