@@ -72,11 +72,14 @@ import {
 import { evaluateShadowBatterOver } from "./shadowQualification";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
-import { resolveMLBOddsEventId, getMLBPlayerOdds } from "../oddsService";
+import { resolveMLBOddsEventIdFromCache, readMLBPlayerOddsFromCache } from "../oddsService";
 import { assignMlbTier, assignAndCheckPoll, markPolled, clearGame as clearScheduler, logTierAssignment, type MlbGameContext } from "../odds/oddsScheduler";
 import { clearTier } from "../odds/oddsDiagnostics";
-import { readOddsSnapshot, readLastKnownGood } from "../odds/oddsCache";
-import { rankBook } from "../odds/oddsConfig";
+import {
+  registerMarketInterest as registerMLBMarketInterest,
+  removeGameInterests as removeMLBGameInterests,
+  warmEventId as warmMLBEventId,
+} from "../odds/mlbOddsRefreshCoordinator";
 import {
   classifyBatterArchetype,
   classifyPitcherArchetype,
@@ -992,10 +995,6 @@ const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hit
 // Key: "oddsEventId|playerNameNorm|market" — Value: last known real line
 const priorResolvedLines = new Map<string, number>();
 
-// Preferred bookmaker order for deterministic line selection (matches manual flow).
-// First match wins; unlisted bookmakers are used only as a last resort.
-const PREFERRED_BOOKMAKERS = ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"];
-
 type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" | "cache" | "lkg" };
 
 // Phase 2 — most-recent resolved batter_home_runs prices per (gameId, playerId).
@@ -1016,14 +1015,21 @@ function getCachedHrOdds(gameId: string, playerId: string): { overOdds: number |
 
 // ── Resolve a real book line for a player/market ──────────────────────────────
 // Precedence:
-//   (1) Odds service live/cached line (getMLBPlayerOdds) — preferred book order
-//       isDegraded=true when odds service served a stale last-known-good cache
+//   (1) Unified MLB raw-odds cache (readMLBPlayerOddsFromCache) — cache-only,
+//       NEVER calls fetch(). isDegraded=true when the cached snapshot is
+//       older than the live freshness requirement (see isMLBSnapshotFresh).
 //   (2) Previously resolved line cache (real market line from earlier in session)
 //       isDegraded=true since it is not the current live quote
 //   (3) null — no compliant line available; caller must skip this market
 //
 // Synthetic/default hardcoded lines are NOT used. Markets without a real line
 // are explicitly skipped to avoid invalidated edge calculations.
+//
+// This function never issues a provider request itself. A cache miss or a
+// stale hit both register market interest with the independent refresh
+// coordinator (fire-and-forget — never awaited) and the tick moves on with
+// whatever is already cached; the next tick picks up any fresher snapshot
+// once that refresh has completed on its own schedule.
 async function resolveBookLine(
   oddsEventId: string | null,
   playerName: string,
@@ -1032,89 +1038,30 @@ async function resolveBookLine(
   const normName = playerName.toLowerCase().trim();
   const cacheKey = oddsEventId ? `${oddsEventId}|${normName}|${market}` : `unknown|${normName}|${market}`;
 
-  // (0) Cache-first: serve from shared odds cache when fresh — avoids API hit.
-  //     Try in-play first (more relevant during live games), then pre-game.
+  // triggerEngine only ever runs for normalizedStatus==="live" (see the guard
+  // at its entry point), so every call here is in a live context.
   if (oddsEventId) {
-    for (const inPlay of [true, false]) {
-      const snap = readOddsSnapshot({ sport: "mlb", eventId: oddsEventId, market, player: playerName, isLive: inPlay });
-      if (snap && snap.freshness === "fresh") {
-        const bookKeys = Object.keys(snap.books);
-        const preferred = bookKeys.slice().sort((a, b) => rankBook("mlb", a) - rankBook("mlb", b))[0];
-        const entry = snap.books[preferred];
-        if (entry && typeof entry.line === "number" && isFinite(entry.line) && entry.line > 0) {
-          priorResolvedLines.set(cacheKey, entry.line);
-          pLog(oddsEventId, `odds:bookLine:cache:${inPlay ? "inPlay" : "pre"}`, { player: playerName, market, line: entry.line, book: preferred, ageMs: snap.ageMs, freshness: snap.freshness });
-          return {
-            line: entry.line,
-            overOdds: typeof entry.overOdds === "number" && isFinite(entry.overOdds) ? entry.overOdds : null,
-            underOdds: typeof entry.underOdds === "number" && isFinite(entry.underOdds) ? entry.underOdds : null,
-            isDegraded: false,
-            source: "cache",
-          };
-        }
-      }
-    }
-  }
+    const cached = readMLBPlayerOddsFromCache(oddsEventId, playerName, market, "live");
 
-  // (1) Try odds service — first pre-game, then in-play
-  //     Only short-circuit on non-degraded pre-game lines; if pre-game returns
-  //     degraded/stale data, continue to try in-play for a fresher quote.
-  if (oddsEventId) {
-    let bestDegraded: ResolvedLine | null = null;
-    for (const inPlay of [false, true]) {
-      try {
-        const oddsResult = await getMLBPlayerOdds(oddsEventId, playerName, market, inPlay);
-        const bookKeys = Object.keys(oddsResult).filter(k => !k.startsWith("_"));
-        const isOddsDegraded = !!(oddsResult._isDegraded);
-        if (bookKeys.length > 0) {
-          const preferred = PREFERRED_BOOKMAKERS.find(b => bookKeys.includes(b)) ?? bookKeys[0];
-          const entry = oddsResult[preferred];
-          const line = entry.line;
-          if (typeof line === "number" && isFinite(line) && line > 0) {
-            const resolved: ResolvedLine = {
-              line,
-              overOdds: typeof entry.overOdds === "number" && isFinite(entry.overOdds) ? entry.overOdds : null,
-              underOdds: typeof entry.underOdds === "number" && isFinite(entry.underOdds) ? entry.underOdds : null,
-              isDegraded: isOddsDegraded,
-              source: isOddsDegraded ? "prior" : "live",
-            };
-            if (!isOddsDegraded) {
-              priorResolvedLines.set(cacheKey, line);
-              pLog(oddsEventId, `odds:bookLine:${inPlay ? "inPlay" : "live"}`, { player: playerName, market, line, book: preferred });
-              return resolved;
-            }
-            if (!bestDegraded) bestDegraded = resolved;
-          }
-        }
-      } catch (err: any) {
-        console.warn(`[MLB orchestrator] resolveBookLine odds error for ${playerName}/${market} (inPlay=${inPlay}):`, err.message);
-      }
-    }
-    if (bestDegraded) {
-      priorResolvedLines.set(cacheKey, bestDegraded.line);
-      pLog(oddsEventId, "odds:bookLine:degraded", { player: playerName, market, line: bestDegraded.line });
-      return bestDegraded;
-    }
+    registerMLBMarketInterest({
+      eventId: oddsEventId,
+      market,
+      gameStatus: "live",
+      stale: !cached || cached.isDegraded,
+    });
 
-    // (1.5) Last-known-good fallback from shared cache — even if stale/expired.
-    for (const inPlay of [true, false]) {
-      const lkg = readLastKnownGood({ sport: "mlb", eventId: oddsEventId, market, player: playerName, isLive: inPlay });
-      if (lkg) {
-        const bookKeys = Object.keys(lkg.books);
-        const preferred = bookKeys.slice().sort((a, b) => rankBook("mlb", a) - rankBook("mlb", b))[0];
-        const entry = lkg.books[preferred];
-        if (entry && typeof entry.line === "number" && isFinite(entry.line) && entry.line > 0) {
-          priorResolvedLines.set(cacheKey, entry.line);
-          pLog(oddsEventId, "odds:bookLine:lkg", { player: playerName, market, line: entry.line, book: preferred, ageMs: lkg.ageMs, freshness: lkg.freshness });
-          return {
-            line: entry.line,
-            overOdds: typeof entry.overOdds === "number" && isFinite(entry.overOdds) ? entry.overOdds : null,
-            underOdds: typeof entry.underOdds === "number" && isFinite(entry.underOdds) ? entry.underOdds : null,
-            isDegraded: true,
-            source: "lkg",
-          };
-        }
-      }
+    if (cached) {
+      priorResolvedLines.set(cacheKey, cached.line);
+      pLog(oddsEventId, `odds:bookLine:${cached.isDegraded ? "degraded" : "cache"}`, {
+        player: playerName, market, line: cached.line, book: cached.book, ageMs: cached.ageMs,
+      });
+      return {
+        line: cached.line,
+        overOdds: cached.overOdds,
+        underOdds: cached.underOdds,
+        isDegraded: cached.isDegraded,
+        source: cached.isDegraded ? "prior" : "cache",
+      };
     }
   }
 
@@ -3785,6 +3732,13 @@ export class LiveGameOrchestrator {
     const game = getGame(gameId);
 
     if (normalizedStatus !== "live") {
+      // Game-final: permanently stop refresh scheduling for this event — the
+      // independent MLB odds refresh coordinator otherwise has no other
+      // signal that this game is done. Cache-only lookup; never fetches.
+      if (normalizedStatus === "final" && game) {
+        const finalEventId = resolveMLBOddsEventIdFromCache(game.awayTeam, game.homeTeam);
+        if (finalEventId) removeMLBGameInterests(finalEventId);
+      }
       console.log(`[MLB orchestrator] triggerEngine skipped for game ${gameId}: normalizedStatus=${normalizedStatus ?? "undefined"} (must be "live")`);
       return outputs;
     }
@@ -3831,15 +3785,14 @@ export class LiveGameOrchestrator {
     }
 
     // ── Resolve MLB odds event ID once per game ────────────────────────────────
+    // Cache-only — this NEVER fetches from inside the engine tick. warmMLBEventId
+    // is fire-and-forget and throttled internally; it's the only remaining path
+    // in the live-engine flow allowed to hit the provider for the event list.
     let oddsEventId: string | null = null;
     if (game) {
-      try {
-        oddsEventId = await resolveMLBOddsEventId(game.awayTeam, game.homeTeam);
-        pLog(gameId, "oddsEventId", { resolved: oddsEventId, home: game.homeTeam, away: game.awayTeam });
-      } catch (err: any) {
-        console.warn(`[MLB orchestrator] Could not resolve odds event ID for game ${gameId}:`, err.message);
-        pLog(gameId, "oddsEventId:error", { error: err.message });
-      }
+      oddsEventId = resolveMLBOddsEventIdFromCache(game.awayTeam, game.homeTeam);
+      pLog(gameId, "oddsEventId", { resolved: oddsEventId, home: game.homeTeam, away: game.awayTeam, source: "cache" });
+      warmMLBEventId(game.awayTeam, game.homeTeam);
     }
 
     // HR Radar Research (PR 2) — population-complete capture materials, one

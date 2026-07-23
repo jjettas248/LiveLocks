@@ -1,6 +1,7 @@
 import { updateOddsHealth } from "./services/dataHealth";
 import { writeOddsSnapshot } from "./odds/oddsCache";
 import { recordApiFetch, recordApiFailure, logFetch } from "./odds/oddsDiagnostics";
+import { getPreferredBooks } from "./odds/oddsConfig";
 
 const ODDS_API_KEYS = [
   process.env.ODDS_API_KEY,
@@ -1168,6 +1169,38 @@ export async function getSGOPlayerLine(
 
 const MLB_BASE_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb";
 
+// MLB Live Edge books — deliberately its own constant, NOT the NBA-shared
+// PROP_BOOKMAKERS above. Narrowing this list cuts MLB Odds API credit spend
+// roughly in half (one bookmaker billing group instead of two) without
+// touching NBA, which keeps using PROP_BOOKMAKERS everywhere.
+const MLB_PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet";
+const MLB_PROP_BOOKMAKERS_SET = new Set(MLB_PROP_BOOKMAKERS.split(","));
+
+// MLB game status as understood by the odds-cache layer. "unknown" means the
+// caller could not yet determine pregame/live/final — never spend quota in
+// that state, just read whatever is already cached.
+export type MlbGameStatus = "pregame" | "live" | "final" | "unknown";
+
+// Status-based freshness requirement for the single unified MLB raw-odds
+// snapshot (§3 of the Live Edge cache redesign). This is a freshness
+// classification only — it never triggers a fetch by itself; refresh timing
+// is owned entirely by the independent MLB odds refresh coordinator
+// (server/odds/mlbOddsRefreshCoordinator.ts). Reuses MLB_ODDS_TTL/
+// MLB_ODDS_LIVE_TTL (declared below) so the two concepts can't drift apart.
+export function isMLBSnapshotFresh(gameStatus: MlbGameStatus, ageMs: number): boolean {
+  if (gameStatus === "final") return true;   // immutable — nothing fresher will ever arrive
+  if (gameStatus === "unknown") return false; // cache-only — freshness can't be confirmed
+  const thresholdMs = gameStatus === "live" ? MLB_ODDS_LIVE_TTL : MLB_ODDS_TTL;
+  return ageMs <= thresholdMs;
+}
+
+// Single unified raw-odds cache key — event + market ONLY. No pregame/live
+// split, no player dimension. One provider response covers every player in
+// the market, so this is the only key the provider-response cache needs.
+function mlbRawOddsCacheKey(oddsEventId: string, marketKey: string): string {
+  return `mlb_odds:${oddsEventId}:${marketKey}`;
+}
+
 export const MLB_TEAM_FULL_NAMES: Record<string, string> = {
   ARI: "Arizona Diamondbacks",
   ATL: "Atlanta Braves",
@@ -1323,12 +1356,35 @@ export function resolveMLBOddsEventIdFromCache(
   }
 }
 
-async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = false): Promise<any> {
-  const cacheKey = `mlb_odds_${inPlay ? "live" : "pre"}_${oddsEventId}_${marketKey}`;
-  const cached = cache.get(cacheKey);
-  const ttl = inPlay ? MLB_ODDS_LIVE_TTL : MLB_ODDS_TTL;
-  if (isFresh(cached, ttl)) return cached!.data;
+// Single-flight lock — concurrent callers asking for the same event+market
+// while a fetch is already in flight all await the SAME promise instead of
+// each issuing their own provider request. Keyed identically to the raw
+// cache itself so the two can never disagree.
+const mlbRawOddsInFlight = new Map<string, Promise<any>>();
 
+async function getMLBRawOdds(oddsEventId: string, marketKey: string): Promise<any> {
+  const cacheKey = mlbRawOddsCacheKey(oddsEventId, marketKey);
+  const cached = cache.get(cacheKey);
+  // Floor TTL: never issue more than one provider fetch per event+market
+  // within the tightest (live) freshness window, no matter who's asking.
+  // Actual refresh cadence beyond this floor is owned by the independent
+  // MLB odds refresh coordinator (server/odds/mlbOddsRefreshCoordinator.ts),
+  // not by this function.
+  if (isFresh(cached, MLB_ODDS_LIVE_TTL)) return cached!.data;
+
+  const inFlight = mlbRawOddsInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const fetchPromise = fetchMLBRawOddsFromProvider(oddsEventId, marketKey, cacheKey);
+  mlbRawOddsInFlight.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    mlbRawOddsInFlight.delete(cacheKey);
+  }
+}
+
+async function fetchMLBRawOddsFromProvider(oddsEventId: string, marketKey: string, cacheKey: string): Promise<any> {
   const triedKeys = new Set<number>();
   const maxAttempts = ODDS_API_KEYS.length;
   let sawQuotaExhaustion = false;
@@ -1349,8 +1405,11 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
       continue;
     }
 
-    const inPlayParam = inPlay ? "&in_play=true" : "";
-    const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${mlbApiKey}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${PROP_BOOKMAKERS}&oddsFormat=american${inPlayParam}`;
+    // No in_play param — pregame and live reads hit the exact same provider
+    // URL and land in the exact same raw cache entry (§2 of the Live Edge
+    // cache redesign). MLB_PROP_BOOKMAKERS (not the NBA-shared
+    // PROP_BOOKMAKERS) keeps this request to DraftKings/FanDuel/Hard Rock Bet.
+    const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${mlbApiKey}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${MLB_PROP_BOOKMAKERS}&oddsFormat=american`;
 
     let res: Response;
     try {
@@ -1435,7 +1494,7 @@ async function getMLBRawOdds(oddsEventId: string, marketKey: string, inPlay = fa
           })
           .slice(0, 5);
         const keys = bms.map((b: any) => b?.key).slice(0, 8);
-        console.log(`[MLB ODDS DIAG] event=${oddsEventId} market=${marketKey} inPlay=${inPlay} key=${usedKeyIndex + 1}/${ODDS_API_KEYS.length} remaining=${requestsRemaining ?? "?"} bookmakers=${bms.length} sampleKeys=[${keys.join(",")}] sampleAgesSec=[${ages.join(",")}] staleThresholdSec=${Math.round(BOOKMAKER_STALE_MS / 1000)}`);
+        console.log(`[MLB ODDS DIAG] event=${oddsEventId} market=${marketKey} key=${usedKeyIndex + 1}/${ODDS_API_KEYS.length} remaining=${requestsRemaining ?? "?"} bookmakers=${bms.length} sampleKeys=[${keys.join(",")}] sampleAgesSec=[${ages.join(",")}] staleThresholdSec=${Math.round(BOOKMAKER_STALE_MS / 1000)}`);
       }
     } catch {}
 
@@ -1485,54 +1544,27 @@ const MLB_LAST_KNOWN_TTL = 30 * 60 * 1000; // 30 min — extended fallback for q
 const mlbDiagLastLog = new Map<string, number>();
 const MLB_DIAG_THROTTLE_MS = 60 * 1000; // emit each diag line at most once per minute per key
 
-export async function getMLBPlayerOdds(
-  oddsEventId: string,
+interface MLBBookmakerFilterResult {
+  result: MLBOddsResult;
+  cntFilteredOutByBookmaker: number;
+  cntStaleRejected: number;
+  cntNoMatchingMarket: number;
+  cntNoMatchingPlayer: number;
+  cntNoOverUnder: number;
+  cntAccepted: number;
+  sampleOutcomeNames: string[];
+}
+
+// Shared bookmaker/player filter — used by BOTH getMLBPlayerOdds (post-fetch)
+// and readMLBPlayerOddsFromCache (cache-only, never fetches) so the two paths
+// can never disagree about which books/outcomes count as a real line.
+function filterMLBBookmakersForPlayer(
+  mlbBookmakers: any[],
   playerName: string,
   statType: string,
-  inPlay = false
-): Promise<MLBOddsResult> {
+  marketKey: string,
+): MLBBookmakerFilterResult {
   const normName = normPlayerName(playerName);
-  const lastKnownKey = `${oddsEventId}|${normName}|${statType}`;
-
-  const marketKey = MLB_MARKET_MAP[statType];
-  if (!marketKey) return {};
-
-  let oddsData: any;
-  try {
-    oddsData = await getMLBRawOdds(oddsEventId, marketKey, inPlay);
-  } catch (fetchErr) {
-    const lk = lastKnownMLBOdds.get(lastKnownKey);
-    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
-      console.warn(`[MLB Odds Fallback] Network error for ${playerName} (${statType}) — using last-known (degraded)`);
-      return makeDegradedMLBResult(lk.data);
-    }
-    throw fetchErr;
-  }
-
-  if (oddsData?._quotaExhausted) {
-    const lk = lastKnownMLBOdds.get(lastKnownKey);
-    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
-      console.warn(`[MLB Odds Fallback] Quota exhausted for ${playerName} (${statType}) — using last-known (degraded)`);
-      return makeDegradedMLBResult(lk.data);
-    }
-    const exhausted: MLBOddsResult = {};
-    exhausted._quotaExhausted = true;
-    return exhausted;
-  }
-
-  // _isDegraded set by getMLBRawOdds when serving raw stale data
-  const isDegradedRaw = !!(oddsData?._isDegraded);
-
-  const mlbBookmakers: any[] = Array.isArray(oddsData?.bookmakers) ? oddsData.bookmakers : [];
-  if (mlbBookmakers.length === 0) {
-    const lk = lastKnownMLBOdds.get(lastKnownKey);
-    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
-      console.warn(`[MLB Odds Fallback] Empty/malformed bookmakers for ${playerName} (${statType}) — using last-known (degraded)`);
-      return makeDegradedMLBResult(lk.data);
-    }
-    return {};
-  }
-
   const nameParts = normName.split(" ");
   const firstName = nameParts[0];
   const lastName = nameParts[nameParts.length - 1];
@@ -1547,11 +1579,11 @@ export async function getMLBPlayerOdds(
   let cntNoMatchingPlayer = 0;
   let cntNoOverUnder = 0;
   let cntAccepted = 0;
-  let sampleOutcomeNames: string[] = [];
+  const sampleOutcomeNames: string[] = [];
 
   for (const bookmaker of mlbBookmakers) {
     const bKey: string = bookmaker.key ?? "";
-    if (!PROP_BOOKMAKERS_SET.has(bKey)) { cntFilteredOutByBookmaker++; continue; }
+    if (!MLB_PROP_BOOKMAKERS_SET.has(bKey)) { cntFilteredOutByBookmaker++; continue; }
 
     const market = (bookmaker.markets ?? []).find(
       (m: any) => m.key === marketKey || isMLBPropKey(m.key ?? "", statType)
@@ -1605,14 +1637,85 @@ export async function getMLBPlayerOdds(
     }
   }
 
+  return {
+    result,
+    cntFilteredOutByBookmaker,
+    cntStaleRejected,
+    cntNoMatchingMarket,
+    cntNoMatchingPlayer,
+    cntNoOverUnder,
+    cntAccepted,
+    sampleOutcomeNames,
+  };
+}
+
+export async function getMLBPlayerOdds(
+  oddsEventId: string,
+  playerName: string,
+  statType: string,
+  inPlay = false
+): Promise<MLBOddsResult> {
+  const normName = normPlayerName(playerName);
+  const lastKnownKey = `${oddsEventId}|${normName}|${statType}`;
+
+  const marketKey = MLB_MARKET_MAP[statType];
+  if (!marketKey) return {};
+
+  let oddsData: any;
+  try {
+    oddsData = await getMLBRawOdds(oddsEventId, marketKey);
+  } catch (fetchErr) {
+    const lk = lastKnownMLBOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
+      console.warn(`[MLB Odds Fallback] Network error for ${playerName} (${statType}) — using last-known (degraded)`);
+      return makeDegradedMLBResult(lk.data);
+    }
+    throw fetchErr;
+  }
+
+  if (oddsData?._quotaExhausted) {
+    const lk = lastKnownMLBOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
+      console.warn(`[MLB Odds Fallback] Quota exhausted for ${playerName} (${statType}) — using last-known (degraded)`);
+      return makeDegradedMLBResult(lk.data);
+    }
+    const exhausted: MLBOddsResult = {};
+    exhausted._quotaExhausted = true;
+    return exhausted;
+  }
+
+  // _isDegraded set by getMLBRawOdds when serving raw stale data
+  const isDegradedRaw = !!(oddsData?._isDegraded);
+
+  const mlbBookmakers: any[] = Array.isArray(oddsData?.bookmakers) ? oddsData.bookmakers : [];
+  if (mlbBookmakers.length === 0) {
+    const lk = lastKnownMLBOdds.get(lastKnownKey);
+    if (lk && Date.now() - lk.timestamp < MLB_LAST_KNOWN_TTL) {
+      console.warn(`[MLB Odds Fallback] Empty/malformed bookmakers for ${playerName} (${statType}) — using last-known (degraded)`);
+      return makeDegradedMLBResult(lk.data);
+    }
+    return {};
+  }
+
+  const {
+    result,
+    cntFilteredOutByBookmaker,
+    cntStaleRejected,
+    cntNoMatchingMarket,
+    cntNoMatchingPlayer,
+    cntNoOverUnder,
+    cntAccepted,
+    sampleOutcomeNames,
+  } = filterMLBBookmakersForPlayer(mlbBookmakers, playerName, statType, marketKey);
+
   // Emit a one-line filter-outcome diag whenever the result for this player ends
-  // up empty. Throttle per (event,market,inPlay) to avoid log spam.
+  // up empty. Throttle per (event,market) to avoid log spam.
   if (cntAccepted === 0) {
-    const diagKey = `diag_filter_${oddsEventId}_${marketKey}_${inPlay ? 1 : 0}`;
+    const diagKey = `diag_filter_${oddsEventId}_${marketKey}`;
     const lastDiag = mlbDiagLastLog.get(diagKey) ?? 0;
     if (Date.now() - lastDiag > MLB_DIAG_THROTTLE_MS) {
       mlbDiagLastLog.set(diagKey, Date.now());
-      console.log(`[MLB ODDS DIAG-FILTER] event=${oddsEventId} market=${marketKey} inPlay=${inPlay} player="${playerName}" normName="${normName}" totalBooks=${mlbBookmakers.length} bookmakerNotAllowed=${cntFilteredOutByBookmaker} staleRejected=${cntStaleRejected} noMatchingMarket=${cntNoMatchingMarket} noMatchingPlayer=${cntNoMatchingPlayer} noOverUnder=${cntNoOverUnder} sampleOutcomeNames=[${sampleOutcomeNames.map(s => `"${s}"`).join(",")}]`);
+      console.log(`[MLB ODDS DIAG-FILTER] event=${oddsEventId} market=${marketKey} player="${playerName}" normName="${normName}" totalBooks=${mlbBookmakers.length} bookmakerNotAllowed=${cntFilteredOutByBookmaker} staleRejected=${cntStaleRejected} noMatchingMarket=${cntNoMatchingMarket} noMatchingPlayer=${cntNoMatchingPlayer} noOverUnder=${cntNoOverUnder} sampleOutcomeNames=[${sampleOutcomeNames.map(s => `"${s}"`).join(",")}]`);
     }
   }
 
@@ -1639,6 +1742,76 @@ export async function getMLBPlayerOdds(
 
   if (isDegradedRaw) result._isDegraded = true;
   return result;
+}
+
+// ── Cache-only MLB player-line read ────────────────────────────────────────────
+// Reads the SAME unified raw cache getMLBRawOdds/getMLBPlayerOdds populate —
+// this function must NEVER call fetch(). Freshness is derived purely from
+// (gameStatus, snapshot age) via isMLBSnapshotFresh; it never re-checks the
+// provider. The engine tick calls this instead of getMLBPlayerOdds so a
+// player lookup — hit or miss — can never turn into another provider attempt.
+export interface CachedMLBPlayerLine {
+  line: number;
+  overOdds: number | null;
+  underOdds: number | null;
+  book: string;
+  isDegraded: boolean;
+  ageMs: number;
+  fetchedAt: number;
+}
+
+export function readMLBPlayerOddsFromCache(
+  oddsEventId: string,
+  playerName: string,
+  statType: string,
+  gameStatus: MlbGameStatus,
+): CachedMLBPlayerLine | null {
+  const marketKey = MLB_MARKET_MAP[statType];
+  if (!marketKey) return null;
+
+  const entry = cache.get(mlbRawOddsCacheKey(oddsEventId, marketKey));
+  if (!entry) return null;
+
+  const bookmakers: any[] = Array.isArray(entry.data?.bookmakers) ? entry.data.bookmakers : [];
+  if (bookmakers.length === 0) return null;
+
+  const { result } = filterMLBBookmakersForPlayer(bookmakers, playerName, statType, marketKey);
+  const bookKeys = Object.keys(result).filter(k => !k.startsWith("_"));
+  if (bookKeys.length === 0) return null;
+
+  const preferred = getPreferredBooks("mlb").find(b => bookKeys.includes(b)) ?? bookKeys[0];
+  const line = result[preferred];
+  const ageMs = Math.max(0, Date.now() - entry.timestamp);
+
+  return {
+    line: line.line,
+    overOdds: line.overOdds ?? null,
+    underOdds: line.underOdds ?? null,
+    book: preferred,
+    isDegraded: !isMLBSnapshotFresh(gameStatus, ageMs),
+    ageMs,
+    fetchedAt: entry.timestamp,
+  };
+}
+
+// Thin wrapper the independent MLB odds refresh coordinator calls to warm a
+// single event+market. One provider fetch covers every player in that
+// market, so refresh interest is tracked per event+market, never per player.
+export async function refreshMLBMarketOdds(
+  oddsEventId: string,
+  statType: string,
+): Promise<{ ok: boolean; bookmakerCount: number }> {
+  const marketKey = MLB_MARKET_MAP[statType];
+  if (!marketKey) return { ok: false, bookmakerCount: 0 };
+  try {
+    const data = await getMLBRawOdds(oddsEventId, marketKey);
+    if (data?._quotaExhausted) return { ok: false, bookmakerCount: 0 };
+    const bookmakers = Array.isArray(data?.bookmakers) ? data.bookmakers : [];
+    return { ok: true, bookmakerCount: bookmakers.length };
+  } catch (err: any) {
+    console.warn(`[MLB Odds] refreshMLBMarketOdds failed for ${oddsEventId}/${statType}:`, err?.message ?? err);
+    return { ok: false, bookmakerCount: 0 };
+  }
 }
 
 // Bust the event cache (call after a game starts or for testing)

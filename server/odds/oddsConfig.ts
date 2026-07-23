@@ -65,14 +65,18 @@ export function getPollingCadenceMs(tier: PollingTier, sport?: Sport): number {
   return POLLING_CADENCE_MS[tier];
 }
 
+// MLB Live Edge (Odds API credit reduction) — MLB books are intentionally
+// narrowed to the three books actually used for MLB Live Edge lines. This is
+// MLB-only: NBA/NCAAB keep their full book lists so this reduction can never
+// unintentionally remove NBA/NCAAB sources.
 const PREFERRED_BOOKS_BY_SPORT: Record<Sport, string[]> = {
-  mlb:   ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"],
+  mlb:   ["draftkings", "fanduel", "hardrockbet"],
   nba:   ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"],
   ncaab: ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"],
 };
 
 const FALLBACK_BOOKS_BY_SPORT: Record<Sport, string[]> = {
-  mlb:   ["prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us"],
+  mlb:   [],
   nba:   ["prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us"],
   ncaab: ["betonlineag", "bovada", "williamhill_us"],
 };
