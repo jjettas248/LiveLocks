@@ -43,7 +43,12 @@ console.log("\n[Recent form + IBB feared-slugger] running cases\n");
     `hot=${hot.hrConversionProbability} base=${baseline.hrConversionProbability}`);
   assert("Cold streak → lower prob than baseline", cold.hrConversionProbability < baseline.hrConversionProbability,
     `cold=${cold.hrConversionProbability} base=${baseline.hrConversionProbability}`);
-  // Overlay delta component captures recency signal (replaced recentFormMult).
+  // Overlay delta component captures the OPS-based half of recency (recentOps
+  // vs seasonOps). The HR-rate-streak half (hrRateLast7/15 vs seasonHRRate) is
+  // NOT covered by overlay — it survives as a separate, trimmed
+  // computeRecentFormMultiplier (2026-07 consolidation: the OPS half of that
+  // function was removed as a duplicate of overlay's delta; only the streak
+  // half remains, exposed via components.recentFormMult).
   assert("Hot streak → overlay delta positive", hot.overlay.components.delta.score > 0,
     `delta=${hot.overlay.components.delta.score}`);
   assert("Cold streak → overlay delta negative", cold.overlay.components.delta.score < 0,
@@ -52,6 +57,13 @@ console.log("\n[Recent form + IBB feared-slugger] running cases\n");
     `delta=${hot.overlay.components.delta.score}`);
   assert("Overlay delta winsorized ≥ -1.0", cold.overlay.components.delta.score >= -1.0,
     `delta=${cold.overlay.components.delta.score}`);
+  assert("Hot HR-rate streak → recentFormMult > 1.0 (not double-counted by overlay)",
+    hot.components.recentFormMult > 1.0, `mult=${hot.components.recentFormMult}`);
+  assert("Cold HR-rate streak → recentFormMult < 1.0",
+    cold.components.recentFormMult < 1.0, `mult=${cold.components.recentFormMult}`);
+  assert("recentFormMult capped within [0.93, 1.08]",
+    hot.components.recentFormMult <= 1.08 && cold.components.recentFormMult >= 0.93,
+    `hot=${hot.components.recentFormMult} cold=${cold.components.recentFormMult}`);
 }
 
 // ── IBB feared-slugger season prior raises probability (positive-only) ────

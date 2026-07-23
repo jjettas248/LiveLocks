@@ -1,6 +1,6 @@
 import type { HRBuildResult, ClassifiedContact } from "./HRSignalBuilder";
 import { estimateRichPADistribution } from "./paDistribution";
-import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits } from "./types";
+import type { PitchMixEntry, PitcherHandednessSplits, BatterHandednessSplits, PitcherDeteriorationContext } from "./types";
 import { getPitchFamily } from "./pitchTypeNormalizer";
 import { computeHROverlay } from "./hr/hrOverlay";
 import type { HROverlayResult, SeasonStatBundle, PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
@@ -9,22 +9,10 @@ import { computePlayerParkWindFit } from "./parkWindFit";
 
 export type { SeasonStatBundle, PitchTypeBatterSplit };
 
-export interface PitcherDeteriorationContext {
-  velocityDrop: number | null;
-  avgVelocity: number | null;
-  seasonAvgVelocity: number | null;
-  isReliever: boolean;
-  relieverEra: number | null;
-  starterEra: number | null;
-  bullpenEra: number | null;
-  bullpenUsageLast3Days: number | null;
-  relieversUsedCount: number;
-  // Lane 3.3: recent in-game fastball velocity trend (mph) = avg(last N pitches)
-  // − avg(prior N). Negative = velo actively falling now — a fresher decline
-  // signal than the whole-game first/second-half `velocityDrop`. Optional —
-  // no-op when null.
-  veloTrendSlope?: number | null;
-}
+// Moved to ./types (shared with MLBPropInput.pitcherDeterioration) so the
+// Live Edge engine layer and the HR Radar engine layer construct this from
+// the same shape. Re-exported here so existing imports keep working.
+export type { PitcherDeteriorationContext };
 
 export interface HRConversionInput {
   hrBuildScore: number;
@@ -148,6 +136,7 @@ export interface HRConversionResult {
     entryAdjustedRate: number;
     overlayMultiplier: number;
     ibbRespectMult: number;
+    recentFormMult: number;
     finalPerPARate: number;
     paDist: Record<number, number>;
     pZeroHR: number;
@@ -233,7 +222,7 @@ const CALIBRATION_TABLE: Array<{ rawMin: number; rawMax: number; calibrated: num
 // not. The static table (≤0.46) already lives under this ceiling — untouched.
 export const EMPIRICAL_CALIBRATION_CEILING = 0.50;
 
-function calibrate(rawProb: number): { value: number; source: "static_table" | "empirical_buckets"; bucketLabel: string | null; samples: number } {
+export function calibrate(rawProb: number): { value: number; source: "static_table" | "empirical_buckets"; bucketLabel: string | null; samples: number } {
   // Phase 4: prefer empirical buckets when available; fall back to static table.
   if (EMPIRICAL_BUCKETS.length > 0) {
     const eb = EMPIRICAL_BUCKETS.find(b => rawProb >= b.min && rawProb < b.max);
@@ -437,70 +426,16 @@ function describePitcherDeteriorationState(input: HRConversionInput): string {
 }
 
 
-// Gaps 7–9: structural HR power profile multiplier from Savant season stats.
-// Applied after environment to keep layers orthogonal. Cap at ×1.20 / floor 0.88.
-function computePowerProfileMultiplier(input: HRConversionInput): number {
-  let mult = 1.0;
-  const LEAGUE_AVG_HR_FB = 11;    // ~11% league avg
-  const LEAGUE_AVG_FB_PCT = 35;   // ~35% fly ball rate
-
-  // Improvement 5: park-normalize fly ball stats (~50% home game assumption).
-  const parkBias = 0.5 + 0.5 * (input.parkFactor ?? 1.0);
-
-  const hrFB = input.hrFBRatio != null ? input.hrFBRatio / parkBias : null;
-  if (hrFB != null) {
-    if (hrFB >= 18) mult *= 1.20;
-    else if (hrFB >= 14) mult *= 1.12;
-    else if (hrFB >= LEAGUE_AVG_HR_FB) mult *= 1.04;
-    else if (hrFB <= 8) mult *= 0.90;
-    else if (hrFB <= LEAGUE_AVG_HR_FB) mult *= 0.96;
-  }
-
-  const fbPct = input.flyBallPercent != null ? input.flyBallPercent / Math.sqrt(parkBias) : null;
-  if (fbPct != null) {
-    if (fbPct >= 42) mult *= 1.12;
-    else if (fbPct >= 38) mult *= 1.05;
-    else if (fbPct <= 28) mult *= 0.90;
-    else if (fbPct <= LEAGUE_AVG_FB_PCT) mult *= 0.96;
-  }
-
-  const xISO = input.xISO;
-  if (xISO != null) {
-    if (xISO >= 0.220) mult *= 1.15;
-    else if (xISO >= 0.180) mult *= 1.08;
-    else if (xISO >= 0.140) mult *= 1.02;
-    else if (xISO <= 0.100) mult *= 0.92;
-  }
-
-  const xwoba = input.xwOBA;
-  if (xwoba != null) {
-    if (xwoba >= 0.380) mult *= 1.08;
-    else if (xwoba >= 0.340) mult *= 1.03;
-    else if (xwoba <= 0.280) mult *= 0.93;
-  }
-
-  // SlateRadar gap #6: pull rate. Pull-side power clears fences more often; a
-  // short pull-side porch (handedness park split) amplifies it. League pull
-  // rate on BIP is ~40%. Capped, no-op when null.
-  const pull = input.pullRatePercent;
-  if (pull != null) {
-    const parkHrBias = (input.parkFactor ?? 1.0) >= 1.05;
-    if (pull >= 48) mult *= parkHrBias ? 1.10 : 1.07;
-    else if (pull >= 43) mult *= parkHrBias ? 1.05 : 1.03;
-    else if (pull <= 32) mult *= 0.95;
-  }
-
-  return Math.min(1.28, Math.max(0.88, mult));
-}
-
-// Gap 6: lineup slot weight for HR markets.
-// Cleanup hitters (3–5) produce HRs at structurally higher rates.
-function computeLineupSlotHRMultiplier(slot: number): number {
-  if (slot >= 3 && slot <= 5) return 1.06;
-  if (slot === 2 || slot === 6) return 1.02;
-  if (slot === 1) return 0.97;   // leadoff — speed/OBP, not power focus
-  return 0.94;                    // 7–9: weakest HR production
-}
+// Gaps 7–9 (structural HR power profile: hrFBRatio/flyBallPercent/xISO/
+// xwOBA/pullRatePercent) and Gap 6 (lineup slot weight) used to live here as
+// computePowerProfileMultiplier/computeLineupSlotHRMultiplier. Removed
+// (2026-07 consolidation) — computeHROverlay's Ψ/Θ sub-engines already cover
+// the same ground via xwOBAcon/fbPct/pullAirPct/battingOrderSlot/
+// battingOrderSlgSplit (see the overlayResult = computeHROverlay({...}) call
+// below), and keeping both was double-counting the same signal. Only
+// hrFBRatio and xISO were genuinely unique to the removed functions; if that
+// coverage is wanted, add a small purpose-built multiplier for just those
+// two terms rather than reintroducing the whole superseded function.
 
 function computePitcherMultiplier(input: HRConversionInput): number {
   let multiplier = 1.0;
@@ -784,16 +719,20 @@ function computePitcherEntryFatigueMultiplier(input: HRConversionInput): number 
 
 // Recent form multiplier — a batter's hot/cold streak.
 // Two orthogonal signals, combined multiplicatively:
-//   1. HR-rate streak: blended recent HR rate (0.4*L7 + 0.6*L15, skipping nulls)
-//      relative to season HR rate. A hot run pulls the per-PA rate up; a cold
-//      stretch pulls it down (regression cuts both ways).
-//   2. AVG/OPS form: recent (L15) OPS relative to season OPS — broader contact
-//      form independent of HR specifically.
-// Capped [0.90, 1.15]; no-op (1.0) when neither signal has data.
+//   HR-rate streak: blended recent HR rate (0.4*L7 + 0.6*L15, skipping nulls)
+//   relative to season HR rate. A hot run pulls the per-PA rate up; a cold
+//   stretch pulls it down (regression cuts both ways).
+// Capped [0.93, 1.08]; no-op (1.0) when absent.
+//
+// Consolidation (2026-07): this used to also fold in a broader AVG/OPS-form
+// term (recent L15 OPS vs season OPS), but computeHROverlay's Δ (recency
+// delta) sub-engine already takes recentOPS/seasonOPS directly (see the
+// `overlayResult = computeHROverlay({...})` call below) — keeping both would
+// double-count that signal. Only the HR-rate streak survives here; it has no
+// equivalent anywhere in the overlay's inputs.
 function computeRecentFormMultiplier(input: HRConversionInput): number {
   let mult = 1.0;
 
-  // HR-rate streak vs season.
   const season = input.seasonHRRate;
   if (season != null && season > 0) {
     const l7 = input.hrRateLast7;
@@ -811,18 +750,7 @@ function computeRecentFormMultiplier(input: HRConversionInput): number {
     }
   }
 
-  // Broader AVG/OPS form: recent L15 OPS vs season OPS.
-  const recentOps = input.recentOps;
-  const seasonOps = input.seasonOps;
-  if (recentOps != null && seasonOps != null && seasonOps > 0) {
-    const opsRatio = recentOps / seasonOps;
-    if (opsRatio >= 1.15) mult *= 1.05;
-    else if (opsRatio >= 1.07) mult *= 1.02;
-    else if (opsRatio <= 0.85) mult *= 0.95;
-    else if (opsRatio <= 0.93) mult *= 0.98;
-  }
-
-  return Math.min(1.15, Math.max(0.90, mult));
+  return Math.min(1.08, Math.max(0.93, mult));
 }
 
 // Intentional-walk "feared slugger" prior — positive-only (floor 1.0).
@@ -1276,8 +1204,14 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
   const ibbRespectMult = computeIbbRespectMultiplier(input);
   const ibbAdjustedRate = overlayAdjustedRate * ibbRespectMult;
 
+  // Recent HR-rate streak (2026-07 consolidation) — the one signal from the
+  // old power-profile/lineup-slot/recent-form chain that overlay doesn't
+  // already cover (see computeRecentFormMultiplier's own comment).
+  const recentFormMult = computeRecentFormMultiplier(input);
+  const recentFormAdjustedRate = ibbAdjustedRate * recentFormMult;
+
   // Phase 4: tightened final per-PA cap (0.25 → 0.12) to prevent runaway probabilities.
-  const finalPerPARate = Math.max(0.005, Math.min(0.12, ibbAdjustedRate));
+  const finalPerPARate = Math.max(0.005, Math.min(0.12, recentFormAdjustedRate));
 
   const paDist = estimateRichPADistribution(
     input.inning,
@@ -1354,6 +1288,7 @@ export function computeHRConversionProbability(input: HRConversionInput): HRConv
       entryAdjustedRate: Math.round(entryAdjustedRate * 10000) / 10000,
       overlayMultiplier: Math.round(overlayResult.overlayMultiplier * 10000) / 10000,
       ibbRespectMult: Math.round(ibbRespectMult * 1000) / 1000,
+      recentFormMult: Math.round(recentFormMult * 1000) / 1000,
       finalPerPARate: Math.round(finalPerPARate * 10000) / 10000,
       paDist,
       pZeroHR: Math.round(pZeroHR * 10000) / 10000,

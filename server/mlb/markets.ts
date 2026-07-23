@@ -11,6 +11,8 @@ import { getPlayer, getPlayerByName } from "./rosterService";
 import { isDeepFly } from "./statcastXBA";
 import { mlbGameCache } from "./dataPullService";
 import { buildHRSignal } from "./HRSignalBuilder";
+import { computeHRConversionProbability } from "./hrConversionModel";
+import type { HRConversionInput, HRConversionResult } from "./hrConversionModel";
 
 const selfLearningCalibration: Record<string, { shrinkFactor: number; sampleSize: number; lastUpdated: number }> = {};
 const CALIBRATION_REFRESH_MS = 30 * 60 * 1000;
@@ -103,7 +105,6 @@ import {
   computeHitRate,
   computeHitTypeDistribution,
   computeKRatePerBF,
-  computeHRRatePerPA,
   determineProjectionSource,
   determineProjectionQuality,
   computeTrustScore,
@@ -1358,20 +1359,94 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const currentHR = hrInput.currentStatValue ?? 0;
 
   const hrBuild = buildHRSignal(hrInput);
-  const hrRatePerPA = computeHRRatePerPA(hrInput);
 
-  const paDist = estimateRichPADistribution(
-    hrInput.inning,
-    hrInput.lineup.battingOrderSlot,
-    hrInput.currentRuns ?? 4.5,
-    hrInput.leagueAvgRuns ?? 4.5,
-    hrInput.isTopInning
-  );
+  // ── Consolidation (2026-07): home_runs sources its probability from the
+  // HR Radar conversion model (server/mlb/hrConversionModel.ts) — the same
+  // engine that powers HR Radar's own alerting — instead of the generic
+  // distribution+calibration chain every other market uses. Per CLAUDE.md
+  // §7a this is an intentional engine-layer change (goldmaster re-baselined);
+  // it replaces computeHRRatePerPA + the generic calibrateDistributionProb
+  // pass for this market only. Fields not available on MLBPropInput are
+  // left null/undefined — additive, no-op per §7a rule 2, matching how the
+  // HR Radar engine's own orchestrator-side input construction already
+  // treats them.
+  const seasonHRRate = hrInput.hrTrend?.seasonTotalAB
+    ? hrInput.hrTrend.seasonTotalHR / hrInput.hrTrend.seasonTotalAB
+    : null;
+  const hrConversionInput: HRConversionInput = {
+    hrBuildScore: hrBuild.score,
+    factors: hrBuild.factors,
+    inning: hrInput.inning,
+    isTopInning: hrInput.isTopInning,
+    battingOrderSlot: hrInput.lineup.battingOrderSlot,
+    currentRuns: hrInput.currentRuns ?? 4.5,
+    leagueAvgRuns: hrInput.leagueAvgRuns ?? 4.5,
+    pitchCount: hrInput.pitcher.pitchCount,
+    timesThrough: hrInput.pitcher.timesThrough,
+    isPitcherCollapsing: hrInput.pitcher.isPitcherCollapsing,
+    era: hrInput.pitcher.era,
+    parkFactor: hrInput.weatherPark.parkFactor,
+    windDirection: hrInput.weatherPark.windDirection,
+    windSpeed: hrInput.weatherPark.windSpeed,
+    temperature: hrInput.weatherPark.temperature,
+    humidity: hrInput.weatherPark.humidity,
+    pressure: hrInput.weatherPark.pressure,
+    isIndoors: hrInput.weatherPark.isIndoors,
+    venueName: hrInput.weatherPark.venueName,
+    windString: hrInput.weatherPark.windString,
+    windDegrees: hrInput.weatherPark.windDegrees,
+    fieldOrientation: hrInput.weatherPark.fieldOrientation,
+    batterHand: hrInput.batterHand,
+    pitcherThrows: hrInput.pitcherThrows ?? hrInput.pitcher.throws ?? null,
+    seasonHRRate,
+    barrelRate: hrInput.contactQuality.barrelRateProxySeason,
+    hardHitRate: hrInput.contactQuality.hardHitRateSeason,
+    xSLG: hrInput.contactQuality.xSLG,
+    pitcherDeterioration: hrInput.pitcherDeterioration ?? null,
+    pitchMix: hrInput.pitcher.pitchMix,
+    lastStartPitchCount: hrInput.pitcherEntryFatigue?.lastStartPitchCount,
+    daysSinceLastStart: hrInput.pitcherEntryFatigue?.daysSinceLastStart,
+    last3StartERA: hrInput.pitcherEntryFatigue?.last3StartERA,
+    pitcherHandednessSplits: hrInput.pitcherHandednessSplits,
+    batterHandednessSplits: hrInput.batterHandednessSplits,
+    flyBallPercent: hrInput.contactQuality.flyBallPercent,
+    hrFBRatio: hrInput.contactQuality.hrFBRatio,
+    xwOBA: hrInput.contactQuality.xwOBASeason,
+    xISO: hrInput.contactQuality.xISOSeason,
+    sweetSpotPercent: hrInput.contactQuality.sweetSpotPercent,
+    pullRatePercent: hrInput.contactQuality.pullRatePercent,
+    hrRateLast7: hrInput.hrTrend?.hrRateLast7,
+    hrRateLast15: hrInput.hrTrend?.hrRateLast15,
+    hrRateLast30: hrInput.hrTrend?.hrRateLast30,
+    recentOps: hrInput.rollingForm?.last15Ops ?? hrInput.rollingForm?.last7Ops ?? null,
+    seasonOps: hrInput.rollingForm?.seasonOps,
+    seasonIBBRate: hrInput.ibbContext?.seasonIBBRate,
+    firstBaseOpen: hrInput.ibbContext?.firstBaseOpen,
+    runnerInScoringPosition: hrInput.ibbContext?.runnerInScoringPosition,
+    scoreDifferential: hrInput.ibbContext?.scoreDifferential,
+    maxEV: hrInput.maxEV,
+    toppedPercent: hrInput.toppedPercent,
+    seasonSLG: hrInput.seasonSLG,
+    recentSLG: hrInput.recentSLG,
+    battingOrderSlgSplit: hrInput.battingOrderSlgSplit,
+    seasonBundles: hrInput.seasonBundles,
+    pitchTypeSplits: hrInput.pitchTypeSplits,
+  };
+  const hrConversionResult = computeHRConversionProbability(hrConversionInput);
 
+  // Reuse the conversion model's own PA distribution + per-PA rate for the
+  // projection/expectedHR fields below, rather than recomputing a second,
+  // independent distribution — one engine, one set of numbers.
+  const hrRatePerPA = hrConversionResult.perPAHRRate;
+  const paDist = hrConversionResult.components.paDist;
   const distResult = computeHRDistribution(paDist, hrRatePerPA, currentHR, hrInput.bookLine);
 
-  const rawOverProb = distResult.overProbability;
-  const rawUnderProb = distResult.underProbability;
+  // hrConversionProbability is the model's raw (pre-calibration) P(HR>=1);
+  // hrOccurrenceProbability is the same value post-calibration and post
+  // evidence-quality ceiling — both already on the model's own low-range
+  // calibration curve, not the generic 50-centered one.
+  const rawOverProb = hrConversionResult.hrConversionProbability * 100;
+  const rawUnderProb = 100 - rawOverProb;
   const isOverFavored = rawOverProb >= rawUnderProb;
   const dominantRaw = Math.max(rawOverProb, rawUnderProb);
 
@@ -1380,8 +1455,10 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const projResult = projectBaseValue(hrInput);
   const trustScore = computeTrustScore(projQuality, projSource, projResult.fallbackUsed);
 
-  const calibratedOver = calibrateDistributionProb(rawOverProb, "home_runs");
-  const calibratedUnder = calibrateDistributionProb(rawUnderProb, "home_runs");
+  // Phase 1.5 cap still binds above the conversion model's own calibration,
+  // per CLAUDE.md §7a rule 4 (home_runs cap = 90, MARKET_PROBABILITY_CAPS).
+  const calibratedOver = applyProbabilityCeiling(hrConversionResult.hrOccurrenceProbability * 100, "home_runs");
+  const calibratedUnder = 100 - calibratedOver;
   const calibratedDominant = Math.max(calibratedOver, calibratedUnder);
   const calibratedSided = calibratedOver;
 
@@ -1468,6 +1545,7 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
     hrFactors: { count: hrFactors.count, labels: hrFactors.labels, build: hrBuild.factors, preHrDangerScore: hrBuild.preHrDangerScore, dangerFlags: hrBuild.dangerFlags },
     hrBuildScore: hrBuild.score,
     hrIntensity: hrBuild.intensity,
+    hrConversion: hrConversionResult,
     contextScore: Math.round(computeStrongContextScore(hrInput) * 100) / 100,
     matchupTag: hrInput.pitcher.timesThrough >= 3 ? "vs 3rd Time Through" : hrInput.pitcher.pitchCount >= 80 ? "vs Fatigue" : hrInput.pitcher.throws ? `vs ${hrInput.pitcher.throws}HP` : null,
     featureScores: {

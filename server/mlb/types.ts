@@ -1,3 +1,6 @@
+import type { SeasonStatBundle, PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
+import type { HRConversionResult } from "./hrConversionModel";
+
 export type MLBMarket =
   | "hits"
   | "total_bases"
@@ -209,12 +212,43 @@ export interface WeatherParkContext {
   isIndoors: boolean;
   parkHistoryFactor: number | null;
   windShiftDetected?: boolean;
+  // HR conversion model park/wind fit — optional, no-op when absent. Lets the
+  // HR engine map wind sector (LF/RF/CF) to a hitter's hand/pull profile
+  // instead of treating wind as equal for everyone.
+  venueName?: string | null;
+  windString?: string | null;
+  windDegrees?: number | null;
+  fieldOrientation?: number | null;
+  // Lane 3.2: surface barometric pressure hPa. Lower pressure → thinner air →
+  // more carry. Optional — no-op when null.
+  pressure?: number | null;
 }
 
 export interface BullpenContext {
   bullpenEra: number | null;
   bullpenUsageLastThreeDays: number | null;
   isTopRelieverAvailable: boolean;
+}
+
+// Pitcher decline context shared by the HR conversion model and the HR Radar
+// alert engine — moved here (rather than duplicated in each) so both the
+// Live Edge engine layer and the HR Radar engine layer construct it from the
+// same shape.
+export interface PitcherDeteriorationContext {
+  velocityDrop: number | null;
+  avgVelocity: number | null;
+  seasonAvgVelocity: number | null;
+  isReliever: boolean;
+  relieverEra: number | null;
+  starterEra: number | null;
+  bullpenEra: number | null;
+  bullpenUsageLast3Days: number | null;
+  relieversUsedCount: number;
+  // Lane 3.3: recent in-game fastball velocity trend (mph) = avg(last N pitches)
+  // − avg(prior N). Negative = velo actively falling now — a fresher decline
+  // signal than the whole-game first/second-half `velocityDrop`. Optional —
+  // no-op when null.
+  veloTrendSlope?: number | null;
 }
 
 export interface BatterVsPitcherHistory {
@@ -333,6 +367,21 @@ export interface MLBPropInput {
     confidenceBoost: number;
     tags: string[];
   };
+
+  // ── HR conversion model inputs (Consolidation: one engine for home_runs) ──
+  // All optional, no-op when absent, per CLAUDE.md §7a rule 2. Most of what
+  // computeHRConversionProbability() needs is already covered by existing
+  // fields (contactQuality.*, weatherPark.*, hrTrend, ibbContext,
+  // pitcherEntryFatigue, pitcherHandednessSplits/batterHandednessSplits) —
+  // these are the genuinely new ones.
+  pitcherDeterioration?: PitcherDeteriorationContext | null;
+  maxEV?: number | null;
+  toppedPercent?: number | null;
+  seasonSLG?: number | null;
+  recentSLG?: number | null;
+  battingOrderSlgSplit?: number | null;
+  seasonBundles?: SeasonStatBundle[] | null;
+  pitchTypeSplits?: PitchTypeBatterSplit[] | null;
 }
 
 export interface ModifierBreakdown {
@@ -423,6 +472,11 @@ export interface MLBPropOutput {
   hrFactors?: { count: number; labels: string[]; build?: Record<string, any>; preHrDangerScore?: number; dangerFlags?: string[] };
   hrBuildScore?: number;
   hrIntensity?: "weak" | "watch" | "strong" | "imminent";
+  // Consolidation (2026-07): full HR conversion model result, attached so
+  // downstream consumers (the HR Radar alert engine, diagnostics) can reuse
+  // it instead of recomputing. Engine-internal — not part of the public
+  // MLBSignal wire contract.
+  hrConversion?: HRConversionResult;
   contextScore: number;
   matchupTag: string | null;
   featureScores?: Record<string, number>;

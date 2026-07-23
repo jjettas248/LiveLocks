@@ -27,12 +27,26 @@ export function deriveMlbLifecycleState(sig: MLBSignal): LifecycleState {
   if (sig.alreadyHit === true) return "cashed";
 
   // HR Radar bridge — promote watch→build→strong→elite cleanly so the
-  // lifecycle store can transition without duplicate entries.
-  const hrTier = (sig as any).hrAlert?.tier as string | undefined;
-  if (hrTier === "fire" || hrTier === "elite") return "elite";
-  if (hrTier === "ready" || hrTier === "strong") return "strong";
-  if (hrTier === "live"  || hrTier === "build")  return "build";
-  if (hrTier === "monitor" || hrTier === "watch") return "watch";
+  // lifecycle store can transition without duplicate entries. Reads the HR
+  // alert engine's real dynamic state (WATCH/PREPARE/BET_NOW/COOLED_OFF/
+  // CLOSED, hrAlertEngine.ts's DynamicHRState) — the previous `.tier` check
+  // here was dead: MLBSignal.hrAlert has no `.tier` field, and even a typo-
+  // free version would have checked a stage vocabulary
+  // (fire/elite/ready/strong/live/build/monitor/watch) that hrAlert has
+  // never produced.
+  const hrState = (sig as any).hrAlert?.currentState as string | undefined;
+  if (hrState === "BET_NOW") return "elite";
+  if (hrState === "PREPARE") return "strong";
+  if (hrState === "WATCH") return "watch";
+  // COOLED_OFF is not terminal in hrAlertEngine's own FSM (a batter can
+  // re-promote from it), so it maps back to the base "watch" rung rather
+  // than an end state.
+  if (hrState === "COOLED_OFF") return "watch";
+  // CLOSED is terminal, but alreadyHit===true already returned "cashed"
+  // above when the market actually resolved for this signal; a CLOSED
+  // hrAlert with alreadyHit still false means the engine gave up watching
+  // (e.g. game ended) without the market resolving in the batter's favor.
+  if (hrState === "CLOSED") return "expired";
 
   // Non-HR markets: bettable + strong/elite tier → strong; bettable + lean → build;
   // watch tier OR not bettable → watch. NOTE: this is the lifecycle's

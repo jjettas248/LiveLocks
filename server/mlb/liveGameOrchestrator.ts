@@ -4235,6 +4235,12 @@ export class LiveGameOrchestrator {
             isIndoors: weatherCache?.isIndoors ?? isVenueIndoors(weatherCache?.venueName),
             parkHistoryFactor: null,
             windShiftDetected: resolvedWindShift,
+            // HR conversion model park/wind fit inputs — optional, no-op when
+            // absent (mirrors buildHRAlertInput's venueName/windString/windDegrees).
+            venueName: weatherCache?.venueName ?? null,
+            windString: weatherCache?.windString ?? null,
+            windDegrees: weatherCache?.windDegrees ?? null,
+            pressure: weatherCache?.pressure ?? null,
           },
           bullpen: {
             bullpenEra: bullpenCache?.bullpenEra ?? null,
@@ -4265,6 +4271,52 @@ export class LiveGameOrchestrator {
             if (ps.status === "fulfilled" && ps.value) input.pitcherHandednessSplits = ps.value;
             if (bs.status === "fulfilled" && bs.value) input.batterHandednessSplits = bs.value;
           }).catch(() => {});
+
+          // Consolidation (2026-07): thread the remaining HR conversion model
+          // inputs through, mirroring buildHRAlertInput's own mapping
+          // (this file, ~3170-3231) so calculateHREdge and the HR Radar
+          // alert engine draw from the same evidence. All optional/no-op
+          // when a given source cache is empty.
+          const isRelieverForHR = bullpenCache?.relieversUsed?.some(
+            r => r.playerId === pitcher?.playerId
+          ) ?? false;
+          let relieverEraForHR: number | null = null;
+          if (isRelieverForHR && pitcher?.playerId) {
+            relieverEraForHR = pitcherSeasonStats?.era ?? null;
+          }
+          let starterEraForHR: number | null = null;
+          if (isRelieverForHR && pitcherCtxCache?.byPitcherId && pitcher?.team) {
+            const allPitcherIdsForHR = Object.keys(pitcherCtxCache.byPitcherId);
+            const relieverIdsForHR = new Set((bullpenCache?.relieversUsed ?? []).map(r => r.playerId));
+            for (const pid of allPitcherIdsForHR) {
+              if (pid === pitcher.playerId) continue;
+              if (relieverIdsForHR.has(pid)) continue;
+              const sStats = mlbPlayerCache.pitcherSeasonStats[pid];
+              if (sStats?.era != null) { starterEraForHR = sStats.era; break; }
+            }
+          }
+          input.pitcherDeterioration = {
+            velocityDrop: pitcherCtx?.velocityDrop ?? null,
+            avgVelocity: pitcherCtx?.avgVelocity ?? null,
+            seasonAvgVelocity: pitcherCtx?.seasonAvgVelocity ?? null,
+            isReliever: isRelieverForHR,
+            relieverEra: relieverEraForHR,
+            starterEra: isRelieverForHR ? starterEraForHR : (pitcherSeasonStats?.era ?? null),
+            bullpenEra: bullpenCache?.bullpenEra ?? null,
+            bullpenUsageLast3Days: bullpenCache?.bullpenUsageLastThreeDays ?? null,
+            relieversUsedCount: bullpenCache?.relieversUsed?.length ?? 0,
+            veloTrendSlope: pitcherCtx?.recentVeloTrend ?? null,
+          };
+          input.maxEV = playerContact?.maxEV
+            ?? maxFinite((playerContact?.priorABResults ?? []).map((ab: any) => ab?.exitVelocity));
+          input.toppedPercent = playerContact?.toppedPct ?? null;
+          input.seasonSLG = rollingStats?.seasonSlg ?? null;
+          input.recentSLG = rollingStats?.last15?.slg ?? null;
+          input.battingOrderSlgSplit = slgForSlot(
+            mlbPlayerCache.batterOrderSplits[batter.playerId] ?? { splits: [], overallSlg: null },
+            batter.slot,
+          );
+          input.pitchTypeSplits = mergePitchUsage(playerContact?.batterPitchSplits, pitcherCtx?.pitchMix);
         }
 
         input.liveInterpretation = buildLiveEventInterpretation(input);
