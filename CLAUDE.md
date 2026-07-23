@@ -36,6 +36,8 @@ npx tsx server/mlb/hrOccurrenceEngine.test.ts       # occurrence engine: edge de
 npx tsx server/mlb/hrEvGate.test.ts                 # edge/EV decoupling — HR Radar tier is odds-independent
 npx tsx server/mlb/hrRadarFreshnessOverlay.test.ts  # canonical-store freshness overlay (re-bucket/surface/terminal-safety)
 npx tsx server/mlb/hrRadarRuntimeSmoke.test.ts      # read-only contract smoke (freshness + FIRE-only record)
+npx tsx server/oddsService.test.ts                   # MLB Live Edge unified raw-odds cache: single key (no pregame/live split), no in_play, 3-book allowlist, single-flight, cache-only reads, status-based freshness, NBA unaffected
+npx tsx server/odds/mlbOddsRefreshCoordinator.test.ts # MLB odds refresh coordinator: interest dedup/priority/immediate-fire, final stops scheduling, per-game cleanup
 npx tsx server/analytics/hrRadarOfficialSplit.test.ts # analytics official(FIRE) vs shadow(watch) split
 npx tsx server/growth/hrBoardStudio.test.ts          # HR Board Studio: no-link copy, compliance, movement purity, recap, admin-auth gate
 npx tsx server/mlb/pregamePowerRadar/winAttribution.test.ts  # Pregame Radar Win Attribution (pregame_win public vs calibration_miss internal; first-AB label; daily-log grouping)
@@ -97,6 +99,14 @@ NBA, MLB, NCAAB engines live in `server/engines/`, `server/mlb/`, `server/nba/`,
 ### 3.2a HR Radar canonical state machine
 `hrRadarStateMachine.ts` owns the **pure transition graph** for HR Radar lifecycle: `inactive → watch → build → ready → fire → cashed|missed|model_review|expired`. Terminal states are sticky. `hrRadarCanonicalStore.ts` owns in-memory persistence. `hrRadarSection.ts` provides section/outcome helpers for the API layer. `nonHrSignalState.ts` mirrors the same pattern for non-HR markets (`BUILDING → ACTIVE → COOLING → CLOSED`). No UI component may derive lifecycle state — all read from server-stamped values.
 
+### 3.2b MLB odds cache (Live Edge) — engine ticks never fetch
+MLB Live Edge is narrowed to three books (`draftkings,fanduel,hardrockbet` — `MLB_PROP_BOOKMAKERS` in `server/oddsService.ts`, `PREFERRED_BOOKS_BY_SPORT.mlb`/`FALLBACK_BOOKS_BY_SPORT.mlb` in `server/odds/oddsConfig.ts`). This is **MLB-only** — NBA keeps its own separate `PROP_BOOKMAKERS`/book lists untouched.
+- **One raw cache key per event+market, no player/live/pregame dimension:** `mlb_odds:${eventId}:${marketKey}` (`getMLBRawOdds` in `server/oddsService.ts`). No `in_play` param is ever sent to the provider. A single-flight `Map<string, Promise<...>>` collapses concurrent callers for the same key into one provider request.
+- **Freshness is status-based, not TTL-based, and never itself triggers a fetch:** `isMLBSnapshotFresh(gameStatus, ageMs)` — pregame=2min, live=30s, final=immutable (always fresh), unknown=cache-only (never confirmed fresh). A snapshot can be stale without that stale-ness causing a provider call.
+- **The engine tick never calls fetch().** `resolveBookLine()` in `server/mlb/liveGameOrchestrator.ts` reads via `readMLBPlayerOddsFromCache(eventId, playerName, market, gameStatus)` (cache-only, pure) and registers refresh interest with the independent coordinator — fire-and-forget, never awaited. `triggerEngine()` resolves the odds event ID via the cache-only `resolveMLBOddsEventIdFromCache`, never the fetching `resolveMLBOddsEventId`.
+- **Refresh is interest-driven**, not a blanket per-tick sweep: `server/odds/mlbOddsRefreshCoordinator.ts` (deliberately separate from `oddsScheduler.ts`, which stays game-state-polling-only). Dedup by `eventId:market`. Watched=2min cadence, near-actionable (live + stale)=30s with an immediate fire on promotion. `final` status removes all scheduled interest for that event.
+- A derived per-player snapshot cache (`server/odds/oddsCache.ts`, keyed by event+market+**player**) still exists for presentation/last-known-good display — that layer is unrelated to the provider-response cache above and was not narrowed.
+
 ### 3.3 The signal pipeline (single source of truth)
 ```
 ENGINE  →  NORMALIZER  →  LiveSignalBus  →  Lifecycle Store  →  UI / Alerts
@@ -132,6 +142,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | Canonical signal contract | `shared/canonicalSignal.ts`, `shared/signalDrivers.ts` |
 | MLB engine | `server/mlb/signalScore.ts`, `server/mlb/markets.ts`, `server/mlb/probabilityEngine.ts` |
 | MLB normalizer + display contract | `server/mlb/normalizeSignal.ts` |
+| MLB odds cache (Live Edge, unified raw cache + single-flight + status-based freshness) | `server/oddsService.ts` (`getMLBRawOdds`, `readMLBPlayerOddsFromCache`, `isMLBSnapshotFresh`), `server/odds/mlbOddsRefreshCoordinator.ts` (interest-driven refresh, independent of `oddsScheduler.ts`), `server/odds/oddsConfig.ts` (`PREFERRED_BOOKS_BY_SPORT`/`FALLBACK_BOOKS_BY_SPORT`) |
 | MLB signal bus + lifecycle | `server/services/liveSignalBus.ts`, `server/services/lifecycleStore.ts`, `server/services/lifecycleEngine.ts` |
 | MLB HR Radar engine | `server/mlb/hrAlertEngine.ts`, `server/mlb/hrRadarUserStage.ts`, `server/mlb/hrConversionModel.ts` |
 | MLB HR Radar state machine | `server/mlb/hrRadarStateMachine.ts`, `server/mlb/hrRadarCanonicalStore.ts`, `server/mlb/hrRadarSection.ts`, `server/mlb/hrRadarOutcomeStamp.ts` |
