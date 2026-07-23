@@ -56,7 +56,7 @@ interface CycleCounters {
   // Top reasons (free-form sub-reasons)
   reasons: Record<string, number>;
   // Per-market rejection counts (which markets bottleneck)
-  byMarket: Record<string, { rejected: number; qualified: number }>;
+  byMarket: Record<string, { rejected: number; qualified: number; staleOddsRejected: number }>;
   // Threshold currently applied for the dominant family (informational)
   thresholdsApplied: {
     batterOverAbsoluteFloor: number;
@@ -134,7 +134,7 @@ export function recordRawCandidate(gameId: string): void {
 export function recordNormalizedCandidate(gameId: string, market: string): void {
   bump(gameId, (c) => {
     c.normalizedCandidates++;
-    if (!c.byMarket[market]) c.byMarket[market] = { rejected: 0, qualified: 0 };
+    if (!c.byMarket[market]) c.byMarket[market] = { rejected: 0, qualified: 0, staleOddsRejected: 0 };
   });
 }
 
@@ -150,8 +150,9 @@ export function recordRejection(
     c.rejections[category]++;
     c.reasons[reason] = (c.reasons[reason] ?? 0) + 1;
     if (market) {
-      if (!c.byMarket[market]) c.byMarket[market] = { rejected: 0, qualified: 0 };
+      if (!c.byMarket[market]) c.byMarket[market] = { rejected: 0, qualified: 0, staleOddsRejected: 0 };
       c.byMarket[market].rejected++;
+      if (category === "staleOdds") c.byMarket[market].staleOddsRejected++;
     }
     if (ctx?.probability != null && Number.isFinite(ctx.probability)) {
       c.probabilities.push(ctx.probability);
@@ -168,7 +169,7 @@ export function recordQualified(
 ): void {
   bump(gameId, (c) => {
     c.qualifiedSignals++;
-    if (!c.byMarket[signal.market]) c.byMarket[signal.market] = { rejected: 0, qualified: 0 };
+    if (!c.byMarket[signal.market]) c.byMarket[signal.market] = { rejected: 0, qualified: 0, staleOddsRejected: 0 };
     c.byMarket[signal.market].qualified++;
     if (Number.isFinite(signal.probability)) c.probabilities.push(signal.probability);
     if (Number.isFinite(signal.signalScore)) c.signalScores.push(signal.signalScore);
@@ -184,7 +185,7 @@ export function recordQualified(
 export function recordWatchSurfaced(gameId: string, market: string): void {
   bump(gameId, (c) => {
     c.watchSignals++;
-    if (!c.byMarket[market]) c.byMarket[market] = { rejected: 0, qualified: 0 };
+    if (!c.byMarket[market]) c.byMarket[market] = { rejected: 0, qualified: 0, staleOddsRejected: 0 };
   });
 }
 
@@ -245,7 +246,14 @@ export interface AuditSummary {
   rejectionsByCategory: Record<RejectionCategory, number>;
   rejectionsByCategoryPct: Record<RejectionCategory, number>;
   topRejectionReasons: Array<{ reason: string; count: number }>;
-  qualificationBottlenecks: Array<{ market: string; rejected: number; qualified: number; rejectRate: number }>;
+  qualificationBottlenecks: Array<{
+    market: string;
+    rejected: number;
+    qualified: number;
+    rejectRate: number;
+    staleOddsRejected: number;
+    staleOddsRejectRate: number;
+  }>;
   suppressionBottlenecks: Array<{ reason: string; count: number }>;
   probabilityDistribution: Record<string, number>;
   signalScoreDistribution: Record<string, number>;
@@ -268,7 +276,7 @@ export function getAuditSummary(): AuditSummary {
   const rejectionsByCategory = {} as Record<RejectionCategory, number>;
   for (const c of ALL_CATEGORIES) rejectionsByCategory[c] = 0;
   const reasons: Record<string, number> = {};
-  const byMarket: Record<string, { rejected: number; qualified: number }> = {};
+  const byMarket: Record<string, { rejected: number; qualified: number; staleOddsRejected: number }> = {};
   const probs: number[] = [];
   const scores: number[] = [];
   const edges: number[] = [];
@@ -286,9 +294,10 @@ export function getAuditSummary(): AuditSummary {
     for (const c of ALL_CATEGORIES) rejectionsByCategory[c] += cyc.rejections[c];
     for (const [k, v] of Object.entries(cyc.reasons)) reasons[k] = (reasons[k] ?? 0) + v;
     for (const [m, v] of Object.entries(cyc.byMarket)) {
-      if (!byMarket[m]) byMarket[m] = { rejected: 0, qualified: 0 };
+      if (!byMarket[m]) byMarket[m] = { rejected: 0, qualified: 0, staleOddsRejected: 0 };
       byMarket[m].rejected += v.rejected;
       byMarket[m].qualified += v.qualified;
+      byMarket[m].staleOddsRejected += v.staleOddsRejected;
     }
     probs.push(...cyc.probabilities);
     scores.push(...cyc.signalScores);
@@ -305,10 +314,21 @@ export function getAuditSummary(): AuditSummary {
     .slice(0, 10)
     .map(([reason, count]) => ({ reason, count }));
 
+  // home_runs naturally reports staleOddsRejected≈0 here — not a special case,
+  // just a reflection of its odds-independent occurrence fallback in the
+  // orchestrator (a missing book line never produces a staleOdds rejection for
+  // home_runs the way it does for every other market).
   const qualificationBottlenecks = Object.entries(byMarket)
     .map(([market, v]) => {
       const denom = v.rejected + v.qualified;
-      return { market, rejected: v.rejected, qualified: v.qualified, rejectRate: pct(v.rejected, denom) };
+      return {
+        market,
+        rejected: v.rejected,
+        qualified: v.qualified,
+        rejectRate: pct(v.rejected, denom),
+        staleOddsRejected: v.staleOddsRejected,
+        staleOddsRejectRate: pct(v.staleOddsRejected, denom),
+      };
     })
     .sort((a, b) => b.rejected - a.rejected)
     .slice(0, 10);

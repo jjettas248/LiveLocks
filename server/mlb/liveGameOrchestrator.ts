@@ -59,6 +59,7 @@ import type { HrRadarLifecycleEvent } from "./hrRadarStateMachine";
 import { rankOf } from "./hrRadarStateMachine";
 import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 import { recordDriftSnapshot } from "./goldmasterGuard";
+import { checkMarketStarvation } from "./marketStarvationGuard";
 import {
   beginCycle as auditBeginCycle,
   endCycle as auditEndCycle,
@@ -5382,6 +5383,7 @@ export class LiveGameOrchestrator {
       } as any);
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=0 rejected=${signalsRejected} PRESERVED ${existingCache.allSignals.length} existing signals (this cycle blank, last good cycle within ${Math.round(cacheAge/1000)}s) — updatedAt unchanged, isDegraded=true`);
       auditEndCycle(gameId);
+      checkMarketStarvation();
 
       // Phase 1 Gold Master — drift snapshot for the PRESERVED-cache branch.
       // Without this, sustained empty cycles would silently stop emitting
@@ -5414,6 +5416,7 @@ export class LiveGameOrchestrator {
       const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
       auditEndCycle(gameId);
+      checkMarketStarvation();
 
       // Phase 1 Gold Master — record drift snapshot for this cycle.
       // Passive observation only; never mutates engine math or surfacing.

@@ -75,8 +75,19 @@ const PREFERRED_BOOKS_BY_SPORT: Record<Sport, string[]> = {
   ncaab: ["draftkings", "fanduel", "hardrockbet", "betmgm", "betrivers", "espnbet"],
 };
 
+// NOTE (MLB only): PREFERRED_BOOKS_BY_SPORT/FALLBACK_BOOKS_BY_SPORT no longer
+// gate which books' MLB data survives — that gate is MLB_PROP_BOOKMAKERS /
+// MLB_PROP_BOOKMAKERS_SET in server/oddsService.ts (both the `bookmakers=`
+// request param and the post-fetch filter). These two lists here are used only
+// for *preference ranking* among books that already passed that gate
+// (getPreferredBooks/rankBook, consumed by readMLBPlayerOddsFromCache). A book
+// listed as preferred/fallback here but missing from MLB_PROP_BOOKMAKERS would
+// never have data to prefer among — keep MLB_PROP_BOOKMAKERS a superset of
+// PREFERRED_BOOKS_BY_SPORT.mlb ∪ FALLBACK_BOOKS_BY_SPORT.mlb. (NBA/NCAAB are
+// unaffected by this split — they still use the shared PROP_BOOKMAKERS in
+// server/oddsService.ts directly, so this list still gates NBA/NCAAB requests.)
 const FALLBACK_BOOKS_BY_SPORT: Record<Sport, string[]> = {
-  mlb:   [],
+  mlb:   ["prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us", "caesars", "hard_rock"],
   nba:   ["prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us"],
   ncaab: ["betonlineag", "bovada", "williamhill_us"],
 };

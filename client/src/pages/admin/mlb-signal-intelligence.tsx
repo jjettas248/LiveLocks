@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Activity, AlertCircle, BarChart3, Target, Zap, Bell, Layers } from "lucide-react";
 import { PregameRadarCalibrationCard } from "@/components/admin/PregameRadarCalibrationCard";
 import { HrMissDiagnosticsCard } from "@/components/admin/HrMissDiagnosticsCard";
+import { MlbQualificationAuditCard } from "@/components/admin/MlbQualificationAuditCard";
 
 interface RoiBucket {
   cashed: number;
@@ -497,6 +498,9 @@ export default function MlbSignalIntelligencePage() {
 
       {/* 9. HR Miss Diagnostics — LLM payload generator (read-only) */}
       <HrMissDiagnosticsCard />
+
+      {/* 10. MLB Qualification Audit — per-market bottleneck/staleOdds breakdown (read-only) */}
+      <MlbQualificationAuditCard />
     </div>
   );
 }
