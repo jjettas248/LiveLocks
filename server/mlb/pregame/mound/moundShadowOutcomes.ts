@@ -16,22 +16,26 @@ import { getMoundSnapshot } from "./mlbMoundRadarStore";
 import { deriveMoundOutcome, deriveMoundMarketOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled } from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMoundGradingMeasurements } from "./evaluationSnapshot";
+import { deriveFrozenMoundMarketRecommendation } from "./marketRecommendation";
 import type { MoundOutcome, MoundSignal, MoundEvaluationSnapshot } from "./types";
 import type { MoundDirection } from "./moundDirection";
 import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
 
 /**
- * Stamp the market-settlement fields (deriveMoundMarketOutcome) onto an
- * outcome object, in the SAME write as the model-outcome fields it's called
- * alongside — never a separate cycle, so the whole-object outcomes
- * carry-forward can never drop one half of the pair. Reads the frozen
- * pregame line from finalPregameSnapshot — never a live/current line, never
- * refetched at grading time.
+ * Stamp real-market settlement fields onto the same outcome object as the
+ * engine-baseline classification. The two decisions are intentionally
+ * independent:
+ *
+ *   model read:   moundDirection (Follow/Fade vs stable season baseline)
+ *   market read:  frozen matchup projection vs frozen sportsbook line
+ *
+ * A Follow can therefore legitimately produce an UNDER market read, and a
+ * Fade can produce an OVER read. The market side is derived exclusively from
+ * the final pregame snapshot and can never drift at grading time.
  */
 function stampMarketOutcome(
   outcome: MoundOutcome,
   primaryMarket: MoundSignal["primaryMarket"],
-  moundDirection: MoundDirection,
   finalPregameSnapshot: MoundEvaluationSnapshot | null,
 ): MoundOutcome {
   const frozenLine =
@@ -39,9 +43,16 @@ function stampMarketOutcome(
       ? finalPregameSnapshot?.champion.postedLine.strikeouts ?? null
       : finalPregameSnapshot?.champion.postedLine.outs ?? null;
   const actual = primaryMarket === "pitcher_strikeouts" ? outcome.finalStrikeouts ?? null : outcome.finalOutsRecorded ?? null;
+  const recommendation = deriveFrozenMoundMarketRecommendation(primaryMarket, finalPregameSnapshot);
+
+  // deriveMoundMarketOutcome's input type predates the separation and names the
+  // side carrier `moundDirection`. Adapt the frozen MARKET side only; never pass
+  // the signal's actual Follow/Fade model read into market settlement.
+  const marketSettlementDirection: MoundDirection =
+    recommendation.side === "OVER" ? "follow" : recommendation.side === "UNDER" ? "fade" : null;
 
   const market = deriveMoundMarketOutcome({
-    moundDirection,
+    moundDirection: marketSettlementDirection,
     frozenLine,
     lineFrozenAt: finalPregameSnapshot?.frozenAt ?? null,
     actual,
@@ -80,10 +91,6 @@ function resolveMoundOutcome(
   const line = box?.byPitcherId?.[signal.pitcherId];
   if (!line) return null;
 
-  // everPubliclyFlagged's underlying predicate (wasPubliclyFlaggedMound)
-  // structurally excludes "track" tier, so a Fade-direction signal must be
-  // checked against its own parallel flag (everPubliclyFlaggedFade) —
-  // otherwise a correct Fade call could never become userVisible.
   const wasPubliclyFlagged = signal.moundDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged;
 
   const attribution = deriveMoundOutcome({
@@ -93,8 +100,8 @@ function resolveMoundOutcome(
     seasonKPer9,
     seasonAvgInningsPerStart,
     wasPubliclyFlagged,
-    // Read as-stamped at build time — never recomputed here (see
-    // moundDirection.ts's discipline comment).
+    // Model direction stays exactly as stamped pregame. This affects ONLY the
+    // stable engine-baseline classification above, never sportsbook side.
     moundDirection: signal.moundDirection,
   });
 
@@ -115,17 +122,6 @@ function resolveMoundOutcome(
  * pitcher's outing is complete (pulled, or the whole game went final): pull
  * the latest box-score line and refresh ONLY the raw counting stats (final
  * Ks/outs/BB/ER) + resolvedAt.
- *
- * Deliberately does NOT re-derive outcome/userVisible/seasonBaselineValue —
- * those decided the win and are locked in at the moment it was granted. The
- * counting stats (strikeouts, outs recorded) are monotonic-safe to refresh
- * because they only ever climb, but the season baseline they were compared
- * against is refetched live each tick and can drift (e.g. the pitcher's
- * season K/9 cache updates from an earlier game finalizing mid-day) —
- * re-deriving the outcome against a shifted baseline risks silently
- * revoking an already-public win, which this codebase's settlement
- * philosophy (a calibration_miss is never a public loss) treats as strictly
- * worse than a display number that lags until final.
  */
 function refreshMoundWinCountingStats(signal: MoundSignal): MoundOutcome | null {
   const box = mlbGameCache.gamePitchingBoxScore[signal.gameId];
@@ -143,13 +139,7 @@ function refreshMoundWinCountingStats(signal: MoundSignal): MoundOutcome | null 
   };
 }
 
-/**
- * Persist a signal's current in-memory state. `gradedAt` is passed through
- * as-is — callers pass `new Date()` only on the tick that first sets
- * `status: "graded"`, and `null` on a later counting-stat refresh, so the
- * upsert's `COALESCE(excluded.graded_at, existing)` (storage.ts) preserves
- * the original first-graded timestamp instead of sliding it forward.
- */
+/** Persist a signal's current in-memory state. */
 async function persistMoundSignal(signal: MoundSignal, gradedAt: Date | null): Promise<void> {
   await storage.upsertMlbMoundRadarSignal({
     signalId: signal.signalId,
@@ -206,14 +196,6 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
   let graded = 0;
   let refreshed = 0;
 
-  // Rehydrate durable state from the DB before grading: the two boolean
-  // flags AND moundDirection are all OR/sticky-upsert-protected columns
-  // (storage.ts) — the in-memory snapshot alone can be missing carry-forward
-  // history (e.g. a process restart left this game's first post-restart
-  // build with no prevSignals to pin against, so a fresh rebuild could
-  // recompute a DIFFERENT direction than what was actually shown pre-game).
-  // Best-effort: grading still proceeds on in-memory-only state if this
-  // read fails.
   let persistedState = new Map<string, { everPubliclyFlagged: boolean; everPubliclyFlaggedFade: boolean; moundDirection: MoundDirection }>();
   try {
     const rows = await storage.getMlbMoundRadarSignalsByDate(snapshot.sessionDate);
@@ -232,33 +214,21 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
   }
 
   for (const signal of Array.from(snapshot.signals.values())) {
-    // A live-graded mound_win is terminal for classification but still
-    // awaiting its final counting-stat refresh — everything else that's
-    // already "graded" (final-graded wins, fade wins, misses) is fully done.
     const pendingLiveWinRefresh = signal.status === "graded" && signal.outcomes?.gradedLive === true;
     if (signal.status === "graded" && !pendingLiveWinRefresh) continue;
 
-    // Grading needs box-score data, which only exists once the game is live
-    // or final — skip pre-game signals outright (cheaper than fetching
-    // season stats below for every scheduled game on every 5-min tick).
     const isFinal = signal.gameStatus === "final";
     if (!isFinal && signal.gameStatus !== "live") continue;
 
-    // A pitcher's own outing can be certainly over well before the whole
-    // game reaches final (bullpen innings can run for hours afterward) —
-    // see hasPitcherBeenPulled's doc comment. Only meaningful to check while
-    // live; a final game is already outingComplete regardless.
     const pitcherPulled =
       !isFinal &&
       hasPitcherBeenPulled(signal.pitcherId, getPitcherAppearanceOrder(signal.gameId, signal.team));
     const outingComplete = isFinal || pitcherPulled;
 
     if (pendingLiveWinRefresh) {
-      // No point re-fetching the line repeatedly while the pitcher is still
-      // actively in the game — only refresh once their outing is over.
       if (!outingComplete) continue;
       const refreshedOutcome = refreshMoundWinCountingStats(signal);
-      if (!refreshedOutcome) continue; // box score not available this tick — retry next tick, stays "graded"+gradedLive
+      if (!refreshedOutcome) continue;
       signal.outcomes = refreshedOutcome;
       refreshed++;
       console.log(
@@ -266,12 +236,6 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
           `k=${refreshedOutcome.finalStrikeouts} outs=${refreshedOutcome.finalOutsRecorded}`,
       );
 
-      // Research instrumentation (§7b) — an earlier monotonic-safe live win
-      // never computed gradingMeasurements (see below: withheld while
-      // gradedLive), so this is the FIRST and only time they're computed for
-      // this signal, now that outingComplete is genuinely true and
-      // refreshedOutcome carries the true final counting stats — never
-      // partial live totals.
       try {
         const finalPregameSnapshot = signal.diagnostics.evaluation?.finalPregameSnapshot ?? null;
         const gradingMeasurements = computeMoundGradingMeasurements(
@@ -285,10 +249,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         if (signal.diagnostics.evaluation) {
           signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
         }
-        // First (and only) time market outcome is computed for this signal —
-        // gradedLive withheld it earlier for the same reason gradingMeasurements
-        // was withheld: partial live totals would misgrade against the line.
-        signal.outcomes = stampMarketOutcome(signal.outcomes, signal.primaryMarket, signal.moundDirection, finalPregameSnapshot);
+        signal.outcomes = stampMarketOutcome(signal.outcomes, signal.primaryMarket, finalPregameSnapshot);
       } catch (err: any) {
         console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed (refresh) ${signal.signalId}:`, err?.message ?? err);
       }
@@ -301,22 +262,13 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
       continue;
     }
 
-    // Season baseline inputs are re-derived from the diagnostics stamped at
-    // build time (finalScoreCap/rawInputsAvailable don't carry the raw rate —
-    // approximate from diagnostics' pitcherSkillScore is NOT used here; the
-    // true season rate is refetched from the live cache so settlement always
-    // uses current season stats, not a stale build-time snapshot).
     const { mlbPlayerCache } = await import("../../dataPullService");
     const seasonStats = mlbPlayerCache.pitcherSeasonStats[signal.pitcherId] ?? null;
     const seasonAvgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
 
     const persisted = persistedState.get(signal.signalId);
 
-    // Pin the persisted direction FIRST (before computing the flags below,
-    // same ordering discipline as carryForwardMoundGradedState's in-memory
-    // sticky-pin) — once a signal was legitimately shown with a direction,
-    // a later rebuild recomputing a different one must not silently flip
-    // which settlement rule it grades against.
+    // Pin the persisted MODEL direction before grading the stable baseline.
     if (signal.moundDirection !== "fade" && persisted?.moundDirection === "fade" && persisted.everPubliclyFlaggedFade === true) {
       signal.moundDirection = "fade";
     } else if (signal.moundDirection !== "follow" && persisted?.moundDirection === "follow" && persisted.everPubliclyFlagged === true) {
@@ -325,41 +277,19 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
 
     const everPubliclyFlagged = signal.everPubliclyFlagged || (persisted?.everPubliclyFlagged ?? false);
     const everPubliclyFlaggedFade = signal.everPubliclyFlaggedFade || (persisted?.everPubliclyFlaggedFade ?? false);
-    // Self-heal the in-memory snapshot too, not just this grading pass — a
-    // later re-read of the same in-memory signal (stats service, another
-    // grading tick) should see the rehydrated state as well.
     signal.everPubliclyFlagged = everPubliclyFlagged;
     signal.everPubliclyFlaggedFade = everPubliclyFlaggedFade;
 
     const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart, everPubliclyFlagged, everPubliclyFlaggedFade);
     if (!outcome) continue;
 
-    // See isMoundOutcomeGradeableNow's doc comment: a Follow/Over mound_win
-    // is monotonic-safe to grade live; everything else waits for outingComplete
-    // (game final OR this pitcher already pulled).
     if (!isMoundOutcomeGradeableNow(outingComplete, outcome.outcome)) continue;
 
-    // gradedLive (needs a later counting-stat refresh) only applies to a win
-    // granted mid-outing via the monotonic-safe path — a win/miss graded at
-    // outingComplete already reflects this pitcher's true final line, since
-    // pulled/final both mean their Ks/outs can no longer change.
     const gradedLive = !outingComplete && outcome.outcome === "mound_win";
     signal.outcomes = { ...outcome, gradedLive };
     signal.status = "graded";
     graded++;
 
-    // Research instrumentation (§7b, three separate measurements) — shadow-
-    // only, computed alongside but never altering the public classification
-    // above. Withheld entirely while gradedLive: an early monotonic-safe
-    // Follow win reflects PARTIAL, still-climbing live totals
-    // (outcome.finalStrikeouts/finalOutsRecorded are the CURRENT box-score
-    // line, not the true final one) — computing projection error, the
-    // production-baseline result, or the posted-line result from those would
-    // be misleading. They are computed exactly once, either here (when the
-    // outing was already complete at classification time) or in the
-    // pendingLiveWinRefresh branch above (once a gradedLive win's outing
-    // later completes) — never both, since gradedLive and outingComplete are
-    // mutually exclusive by construction (see gradedLive's definition above).
     if (!gradedLive) {
       try {
         const finalPregameSnapshot = signal.diagnostics.evaluation?.finalPregameSnapshot ?? null;
@@ -374,10 +304,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         if (signal.diagnostics.evaluation) {
           signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
         }
-        // Same write as the model outcome above (signal.outcomes was just set
-        // a few lines up) — never a separate cycle, so the carry-forward
-        // whole-object swap can never drop one half of the pair.
-        signal.outcomes = stampMarketOutcome(signal.outcomes!, signal.primaryMarket, signal.moundDirection, finalPregameSnapshot);
+        signal.outcomes = stampMarketOutcome(signal.outcomes!, signal.primaryMarket, finalPregameSnapshot);
       } catch (err: any) {
         console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed ${signal.signalId}:`, err?.message ?? err);
       }
@@ -408,7 +335,6 @@ export function getMoundCalibrationRecord(): MoundCalibrationRecord {
   let wins = 0;
   let calibrationMisses = 0;
   let internalWins = 0;
-  // Fully separate from wins/internalWins above — never blended.
   let fadeWins = 0;
   let internalFadeWins = 0;
 
