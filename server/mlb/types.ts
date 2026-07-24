@@ -601,6 +601,11 @@ export interface MLBQualifiedSignal {
   side: MLBRecommendedSide;
   sportsbook: string | null;
   line: number;
+  // Pricing provenance (home_runs / HR-occurrence lane). True only when a REAL
+  // cached sportsbook line backed this signal this tick. When false, `line`
+  // holds the internal 0.5 HR-occurrence threshold for math only; the normalizer
+  // nulls all public pricing and the signal can never be bettable/persisted.
+  hasRealSportsbookLine?: boolean;
   impliedProbability: number | null;
   engineProbability: number;
   engineProbabilityDominant?: number;

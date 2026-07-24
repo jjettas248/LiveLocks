@@ -137,6 +137,27 @@ export function actionabilityToDisplayGroup(a: MarketActionability): MarketDispl
   return "MONITOR";
 }
 
+/**
+ * HR ACTION_NOW firewall. home_runs may enter ACTION_NOW (urgent/actionable)
+ * ONLY under the official FIRE condition — which `isBettable` already encodes
+ * (real sportsbook line + BET_NOW + not resolved/suppressed). A PATH-only
+ * `attack` (or BET_NOW without a real line) still carries elite conviction
+ * (signalTier/canonicalStage), so the max-of rule in `deriveMarketActionability`
+ * would otherwise route a NON-bettable HR to ACTION_NOW while the wager is not
+ * executable. Cap it at `forming` (BUILDING) so the surface never claims FIRE
+ * for a non-bettable HR. Non-HR markets and resolved/monitor/forming pass
+ * through untouched.
+ */
+export function deriveHrMarketActionability(
+  market: string,
+  actionability: MarketActionability,
+  isBettable: boolean,
+): MarketActionability {
+  if (market !== "home_runs" || isBettable) return actionability;
+  if (actionability === "urgent" || actionability === "actionable") return "forming";
+  return actionability;
+}
+
 const ACTIONABILITY_RANK: Record<MarketActionability, number> = {
   resolved: 0,   // intentionally lowest — resolved sinks to bottom
   monitor: 1,
@@ -233,7 +254,12 @@ export function toMarketSignalViewModel(
     );
   }
 
-  const marketActionability = deriveMarketActionability(signalTier, lifecycleState);
+  // Executability (official FIRE) — canonical carries it post-bus; fall back to
+  // the signal's own flag. Strict `=== true` so a missing value fails safe.
+  const isBettable = (canonical?.isBettable ?? sig.isBettable) === true;
+  const rawActionability = deriveMarketActionability(signalTier, lifecycleState);
+  // HR firewall: a non-bettable home_runs can never surface as ACTION_NOW.
+  const marketActionability = deriveHrMarketActionability(sig.market, rawActionability, isBettable);
   const displayGroup = actionabilityToDisplayGroup(marketActionability);
 
   const inningPri = getMlbInningWindowPriority(inningWindow);

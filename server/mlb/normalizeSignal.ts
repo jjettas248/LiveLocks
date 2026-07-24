@@ -445,6 +445,9 @@ function buildBaseMLBSignal(
     : null;
   const hrAlert: MLBSignal["hrAlert"] = hrAlertSnapshot && hrAlertSnapshot.isInitialized ? {
     currentState: hrAlertSnapshot.currentState,
+    // Unified canonical stage (FSM ⊕ PATH merge) — carried so canonicalMapper's
+    // lifecycle bridge reads the merged stage, not just the FSM currentState.
+    canonicalStage: hrAlertSnapshot.canonicalStage,
     hrReadinessScore: hrAlertSnapshot.hrReadinessScore,
     hrConversionProbabilityRaw: hrAlertSnapshot.hrConversionProbabilityRaw,
     hrConversionProbabilityCalibrated: hrAlertSnapshot.hrConversionProbabilityCalibrated,
@@ -475,20 +478,29 @@ function buildBaseMLBSignal(
     } catch {}
   }
 
+  // Pricing provenance — when HR ran occurrence-only (no real cached sportsbook
+  // line), `qs.line` holds the internal 0.5 HR-occurrence threshold. That
+  // synthetic value, the substituted book, and any derived edge must NEVER
+  // surface publicly. Default true for every other market/case (undefined ⇒
+  // real line); suppress public pricing only for the explicit HR no-line case.
+  const hasRealSportsbookLine = qs.hasRealSportsbookLine !== false;
+  const suppressPublicPricing = normalizedMkt === "home_runs" && !hasRealSportsbookLine;
+
   return {
     playerId: qs.playerId,
     playerName: qs.playerName,
     gameId: ctx.gameId,
     market: normalizedMkt,
-    sportsbook: qs.sportsbook ?? null,
+    sportsbook: suppressPublicPricing ? null : (qs.sportsbook ?? null),
+    hasRealSportsbookLine,
 
-    bookLine: qs.line ?? null,
+    bookLine: suppressPublicPricing ? null : (qs.line ?? null),
     projection: qs.projection ?? null,
     enginePct: Math.round(sidedProb * 10) / 10,
     calibratedProbabilityOver: calibProbOver,
     calibratedProbabilityUnder: calibProbUnder,
-    edge: raw ? Math.round(raw.edge * 100) / 100 : null,
-    evPct: raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null,
+    edge: suppressPublicPricing ? null : (raw ? Math.round(raw.edge * 100) / 100 : null),
+    evPct: suppressPublicPricing ? null : (raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null),
     recommendedSide: qs.side,
     signalScore: qs.signalScore ?? 0,
     confidenceTier: qs.confidenceTier ?? "WATCHLIST",
@@ -538,9 +550,9 @@ function buildBaseMLBSignal(
     engineStatePeakScore: qs.engineStatePeakScore,
     decayFactor: qs.decayFactor,
 
-    overOdds: qs.overOdds ?? raw?.overOdds ?? null,
-    underOdds: qs.underOdds ?? raw?.underOdds ?? null,
-    bookImplied: qs.bookImplied ?? null,
+    overOdds: suppressPublicPricing ? null : (qs.overOdds ?? raw?.overOdds ?? null),
+    underOdds: suppressPublicPricing ? null : (qs.underOdds ?? raw?.underOdds ?? null),
+    bookImplied: suppressPublicPricing ? null : (qs.bookImplied ?? null),
     oddsTimestamp: qs.oddsTimestamp ?? null,
 
     signalTags: qs.signalTags ?? [],
@@ -633,6 +645,14 @@ export function normalizeMLBSignal(
  * disagrees with the higher of OVER/UNDER probability (e.g. recommendedSide=
  * OVER at 32% probability), or when bettable+low-prob combinations slip
  * through. These logs are admin-only diagnostics.
+ *
+ * home_runs is an OCCURRENCE market and is special-cased: bettability comes
+ * ONLY from the official FIRE condition (hasRealSportsbookLine AND
+ * hrAlert.currentState === "BET_NOW" AND not resolved/suppressed), never from
+ * `displayProbability >= 50` — a legitimate HR FIRE sits ~15-30%. The two
+ * probability-shape diagnostics (`bettable_below_50`,
+ * `recommended_side_lower_probability`) are therefore skipped for home_runs so
+ * a correct sub-50% HR FIRE (UNDER prob naturally > OVER) does not false-fire.
  */
 export function applyDisplayContract(
   sig: MLBSignal,
@@ -653,7 +673,14 @@ export function applyDisplayContract(
   const displayProbability = displaySide === "OVER" ? overProb : underProb;
   const tier: "watch" | "lean" | "strong" | "elite" = sig.signalTier ?? "watch";
   const displayGrade = deriveDisplayGrade(tier, sig.signalScore ?? 0);
-  const isBettable = displayProbability >= 50 && (tier as string) !== "watch";
+  // home_runs bettability is the OFFICIAL FIRE condition only: a real cached
+  // sportsbook line, the unified FSM at BET_NOW, and not resolved/suppressed.
+  // Every other market keeps the generic (prob >= 50 AND tier != watch) rule.
+  const isHrMarket = sig.market === "home_runs";
+  const hrState = sig.hrAlert?.currentState;
+  const isBettable = isHrMarket
+    ? (sig.hasRealSportsbookLine === true && hrState === "BET_NOW" && sig.alreadyHit !== true)
+    : (displayProbability >= 50 && (tier as string) !== "watch");
   const isWatchOnly = !isBettable || (tier as string) === "watch";
   const displayDrivers = buildDisplayDrivers(qs, sig.market);
 
@@ -662,10 +689,13 @@ export function applyDisplayContract(
   // contract so the orchestrator team can fix them at the engine layer.
   const oppositeProb = displaySide === "OVER" ? underProb : overProb;
   const mismatchReasons: string[] = [];
-  if (displayProbability < 50 && isBettable) {
+  // home_runs is an occurrence market — a bettable HR is EXPECTED below 50%, and
+  // its UNDER probability legitimately exceeds OVER. Skip both probability-shape
+  // checks for HR so a correct sub-50% FIRE does not trip the mismatch log.
+  if (!isHrMarket && displayProbability < 50 && isBettable) {
     mismatchReasons.push("bettable_below_50");
   }
-  if (oppositeProb > displayProbability + 5) {
+  if (!isHrMarket && oppositeProb > displayProbability + 5) {
     mismatchReasons.push("recommended_side_lower_probability");
   }
   if (displayGrade === "A+" && (sig.signalScore ?? 0) < 80) {

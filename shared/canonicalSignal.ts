@@ -66,6 +66,15 @@ export interface CanonicalSignal {
   signalTier: "watch" | "lean" | "strong" | "elite";
   signalScore: number;
 
+  // Executability (IMMUTABLE post-bus) ------------------------------
+  // Whether the signal is a live, priceable wager RIGHT NOW. Distinct from
+  // signalTier (raw conviction) and lifecycleState (progression). Optional on
+  // the shared cross-sport contract so NBA/NCAAB builders/fixtures need not
+  // change; MLB always stamps it explicitly (toCanonicalFromMlb). Consumers
+  // (UI, alerts, analytics) MUST test `isBettable === true` so a missing/legacy
+  // value fails safe (treated as not-bettable).
+  isBettable?: boolean;
+
   // Explainability (IMMUTABLE post-bus) -----------------------------
   drivers: SignalDriver[];
   triggerSummary: string | null;
@@ -116,6 +125,7 @@ export const IMMUTABLE_FIELDS: ReadonlyArray<keyof CanonicalSignal> = [
   "bookLine",
   "signalTier",
   "signalScore",
+  "isBettable",
   "drivers",
   "triggerSummary",
 ];

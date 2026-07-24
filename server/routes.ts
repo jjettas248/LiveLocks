@@ -2160,13 +2160,19 @@ export async function registerRoutes(
         if (bestQualified && bestMarketProb === null) {
           logMlbPersistReject("missing_engine_probability", bestQualified);
         }
+        // Pricing provenance — an occurrence-only home_runs signal carries the
+        // internal 0.5 HR threshold as `line`; it must NEVER surface as a real
+        // sportsbook line/odds/edge on the game card. Null public pricing when
+        // no real cached line backed it (bettability/persistence already gated).
+        const bestNoRealLine = bestQualified?.market === "home_runs"
+          && (bestQualified as any).hasRealSportsbookLine !== true;
         const bestMarket = bestQualified ? {
-          line: bestQualified.line,
-          odds: bestRawOutput && (bestRawOutput.overOdds !== null || bestRawOutput.underOdds !== null)
+          line: bestNoRealLine ? null : bestQualified.line,
+          odds: bestNoRealLine ? null : (bestRawOutput && (bestRawOutput.overOdds !== null || bestRawOutput.underOdds !== null)
             ? { overOdds: bestRawOutput.overOdds, underOdds: bestRawOutput.underOdds }
-            : null,
+            : null),
           projection: bestQualified.projection,
-          edge: bestRawOutput?.edge ?? null,
+          edge: bestNoRealLine ? null : (bestRawOutput?.edge ?? null),
           probability: bestMarketProb,
           probabilitySemantics: "recommended_side_calibrated" as const,
           oddsUpdatedAt: bestRawOutput ? new Date(bestRawOutput.oddsUpdatedAt).toISOString() : null,

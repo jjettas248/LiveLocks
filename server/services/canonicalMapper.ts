@@ -34,19 +34,43 @@ export function deriveMlbLifecycleState(sig: MLBSignal): LifecycleState {
   // free version would have checked a stage vocabulary
   // (fire/elite/ready/strong/live/build/monitor/watch) that hrAlert has
   // never produced.
-  const hrState = (sig as any).hrAlert?.currentState as string | undefined;
-  if (hrState === "BET_NOW") return "elite";
-  if (hrState === "PREPARE") return "strong";
-  if (hrState === "WATCH") return "watch";
-  // COOLED_OFF is not terminal in hrAlertEngine's own FSM (a batter can
-  // re-promote from it), so it maps back to the base "watch" rung rather
-  // than an end state.
-  if (hrState === "COOLED_OFF") return "watch";
-  // CLOSED is terminal, but alreadyHit===true already returned "cashed"
-  // above when the market actually resolved for this signal; a CLOSED
-  // hrAlert with alreadyHit still false means the engine gave up watching
-  // (e.g. game ended) without the market resolving in the batter's favor.
-  if (hrState === "CLOSED") return "expired";
+  const hrAlert = (sig as any).hrAlert as
+    | { currentState?: string; canonicalStage?: string }
+    | undefined;
+  if (hrAlert) {
+    const currentState = hrAlert.currentState;
+    // Drive lifecycle from the UNIFIED canonicalStage (the PATH-merge of the
+    // dynamic FSM and the PATH evaluator), not from currentState alone — so the
+    // PATH-merge half of the unified HR state is not silently dropped. Fall back
+    // to a stage derived from the FSM state only when an older snapshot lacks it.
+    const stage =
+      hrAlert.canonicalStage ??
+      (currentState === "BET_NOW"
+        ? "attack"
+        : currentState === "PREPARE"
+        ? "building"
+        : currentState === "COOLED_OFF"
+        ? "cooling"
+        : currentState === "CLOSED"
+        ? "closed"
+        : "watch");
+    // Official FIRE = an executable wager RIGHT NOW. ONLY this reaches the
+    // elite/execution rung; a PATH-only `attack` (or `BET_NOW` without a real,
+    // priceable line) stays at `build` so the lifecycle — and the alerts /
+    // view model that read it — never falsely claim FIRE. `isBettable` already
+    // encodes (hasRealSportsbookLine ∧ BET_NOW ∧ not resolved/suppressed) for HR.
+    const officialFire = stage === "attack" && currentState === "BET_NOW" && sig.isBettable === true;
+    if (stage === "attack") return officialFire ? "elite" : "build";
+    if (stage === "building") return "build";
+    // COOLED_OFF/cooling is not terminal in hrAlertEngine's own FSM (a batter
+    // can re-promote), so it maps back to the base "watch" rung.
+    if (stage === "cooling") return "watch";
+    // CLOSED is terminal; alreadyHit===true already returned "cashed" above when
+    // the market actually resolved. A closed stage with alreadyHit still false
+    // means the engine stopped watching (e.g. game ended) unresolved → expired.
+    if (stage === "closed") return "expired";
+    return "watch";
+  }
 
   // Non-HR markets: bettable + strong/elite tier → strong; bettable + lean → build;
   // watch tier OR not bettable → watch. NOTE: this is the lifecycle's
@@ -100,6 +124,11 @@ export function toCanonicalFromMlb(sig: MLBSignal, now: number = Date.now()): Ca
 
     signalTier: sig.signalTier ?? "watch",
     signalScore: sig.signalScore ?? 0,
+
+    // Executability carried onto the canonical contract so every post-bus
+    // consumer (UI, alerts, analytics) reads one authoritative flag. Strict
+    // `=== true` so a missing/legacy value fails safe (not bettable).
+    isBettable: sig.isBettable === true,
 
     drivers: sig.canonicalDrivers ?? [],
     triggerSummary: sig.triggerSummary ?? null,

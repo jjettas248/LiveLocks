@@ -44,6 +44,11 @@ export interface MLBSignal {
   //                          (signalTier × signalScore) per the contract
   //                          spec. NEVER from liveScore or raw probability.
   //   isBettable           = displayProbability >= 50 AND signalTier != "watch"
+  //                          EXCEPT home_runs (an occurrence market): HR is
+  //                          bettable ONLY on the official FIRE condition —
+  //                          hasRealSportsbookLine AND hrAlert.currentState ===
+  //                          "BET_NOW" AND not resolved/suppressed — never from
+  //                          the >= 50 probability rule (HR sits ~15-30%).
   //   isWatchOnly          = !isBettable OR signalTier == "watch"
   //   displayDrivers       = up to 3 short driver labels for the badge row
   displaySide?: "OVER" | "UNDER";
@@ -54,6 +59,13 @@ export interface MLBSignal {
   isBettable?: boolean;
   isWatchOnly?: boolean;
   displayDrivers?: string[];
+  // Pricing provenance (home_runs / HR-occurrence lane). True only when a REAL
+  // cached sportsbook line backed this signal this tick. When false, the HR ran
+  // occurrence-only (internal 0.5 threshold) and the normalizer nulls all public
+  // pricing (bookLine/sportsbook/overOdds/underOdds/edge/evPct) so the synthetic
+  // threshold never surfaces as a market line, and the signal can never be
+  // bettable or persisted as a wager.
+  hasRealSportsbookLine?: boolean;
 
   // ── Phase 5 — Signal Explainability Engine ────────────────────────────
   // Server-built canonical driver envelope. Optional during rollout —
@@ -164,6 +176,11 @@ export interface MLBSignal {
 
   hrAlert?: {
     currentState: "WATCH" | "PREPARE" | "BET_NOW" | "COOLED_OFF" | "CLOSED";
+    // Unified canonical stage (the PATH-merge of the dynamic FSM and the PATH
+    // evaluator, from computeUnifiedCanonicalStage). This is the authoritative
+    // WATCH→BUILD→FIRE stage; lifecycle mapping reads THIS, not currentState
+    // alone, so the PATH-merge half of the unified state is not dropped.
+    canonicalStage?: "watch" | "building" | "attack" | "cooling" | "closed";
     hrReadinessScore: number;
     hrConversionProbabilityRaw: number;
     hrConversionProbabilityCalibrated: number;

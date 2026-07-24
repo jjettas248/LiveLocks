@@ -18,7 +18,7 @@ import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 // ── Locked baseline version ────────────────────────────────────────────────
 // Bump this string only when MLB engine behavior changes intentionally.
 // The boot log line carries this value so prod logs are self-describing.
-export const MLB_GOLDMASTER_VERSION = "mlb-goldmaster-v25-2026-07-hr-engine-consolidation-phase2";
+export const MLB_GOLDMASTER_VERSION = "mlb-goldmaster-v26-2026-07-hr-live-edge-unified-lane";
 
 // Rolling drift snapshot ring buffer.
 const MAX_SNAPSHOTS = 50;

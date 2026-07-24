@@ -40,6 +40,19 @@ export function isEligibleForAlert(
 
   // MLB-specific gating — All Sports tier required for MLB alerts.
   if (canonical.sport === "mlb") {
+    // home_runs is an occurrence market: its raw conviction (elite tier / attack
+    // stage) can outrun executability. A NORMAL wager alert (tier/lifecycle
+    // upgrade) must therefore require the official FIRE condition, carried as
+    // canonical.isBettable — NOT tier alone. HR-watch informational triggers are
+    // explicitly watch-lifecycle notifications and remain allowed regardless.
+    if (
+      canonical.market === "home_runs" &&
+      trigger !== "hr_watch_detected" &&
+      trigger !== "hr_watch_upgraded" &&
+      canonical.isBettable !== true
+    ) {
+      return false;
+    }
     return (
       tier === "all_sports" &&
       (canonical.signalTier === "strong" ||
@@ -147,6 +160,27 @@ export function notifyLifecycleChange(
     _alertMetrics.suppressed++;
     console.log(
       `[LL_ALERT_SUPPRESSED] signalId=${canonical.signalId} reason=terminal-lifecycle state=${canonical.lifecycleState}`
+    );
+    return;
+  }
+
+  // Suppression policy — HR (home_runs) canonical/alert FIRE firewall. A PATH
+  // merge can drive canonicalStage=attack (→ elite tier/conviction) while the
+  // FSM is only at PREPARE, or with no real sportsbook line — a non-executable
+  // state. Such a signal must NOT emit a normal wager/tier/lifecycle alert while
+  // the UI (C5) shows only Building. Require the official FIRE condition
+  // (canonical.isBettable) for normal HR triggers; HR-watch informational
+  // triggers remain allowed.
+  if (
+    canonical.sport === "mlb" &&
+    canonical.market === "home_runs" &&
+    trigger !== "hr_watch_detected" &&
+    trigger !== "hr_watch_upgraded" &&
+    canonical.isBettable !== true
+  ) {
+    _alertMetrics.suppressed++;
+    console.log(
+      `[LL_ALERT_SUPPRESSED] signalId=${canonical.signalId} reason=hr-not-bettable tier=${canonical.signalTier} lifecycle=${canonical.lifecycleState}`
     );
     return;
   }
