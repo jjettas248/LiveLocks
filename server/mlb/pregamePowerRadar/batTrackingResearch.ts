@@ -4,8 +4,9 @@
 // adapter can reuse this without inventing metrics or changing the scorer.
 //
 // Official Statcast definitions used here:
-//   fast swing        = bat_speed >= 75 mph
-//   ideal attack angle= 5° <= attack_angle <= 20°
+//   average bat speed  = average of the hitter's top 90% swing speeds
+//   fast swing         = bat_speed >= 75 mph
+//   ideal attack angle = 5° <= attack_angle <= 20°
 //
 // We do NOT synthesize Squared-Up or Blast rates. Those are distinct official
 // Statcast metrics and remain null until their real source columns are ingested.
@@ -50,6 +51,16 @@ function stddev(xs: number[]): number | null {
   return Math.sqrt(variance);
 }
 
+function statcastAverageBatSpeed(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  // Statcast excludes the slowest 10% of a hitter's tracked swings from Average
+  // Bat Speed. Sort high-to-low and retain the top 90%; ceil avoids discarding
+  // more than 10% on small valid samples.
+  const sorted = xs.slice().sort((a, b) => b - a);
+  const keep = Math.max(1, Math.ceil(sorted.length * 0.9));
+  return mean(sorted.slice(0, keep));
+}
+
 export function aggregateBatTrackingResearch(
   rows: Array<Record<string, string>>,
 ): BatTrackingResearchSnapshot {
@@ -76,7 +87,7 @@ export function aggregateBatTrackingResearch(
   const enoughAttack = attackAngles.length >= MIN_ATTACK_SAMPLE;
   const enoughPath = pathTilts.length >= MIN_PATH_SAMPLE;
 
-  const avgBatSpeed = enoughSwings ? round1(mean(batSpeeds)) : null;
+  const avgBatSpeed = enoughSwings ? round1(statcastAverageBatSpeed(batSpeeds)) : null;
   const fastSwingRatePct = enoughSwings
     ? round1((batSpeeds.filter((v) => v >= 75).length / batSpeeds.length) * 100)
     : null;
