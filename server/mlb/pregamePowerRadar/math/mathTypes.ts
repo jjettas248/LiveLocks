@@ -47,19 +47,22 @@ export interface BatterTruePowerInputs {
  * - ideal attack angle: 5–20 degrees
  * - squared-up/blasts are official Statcast metrics only; NEVER derive them from
  *   bat speed or attack angle when the source does not provide them.
+ *
+ * Newer fields are optional so historical fixtures and frozen v2 inputs remain
+ * readable without backfilling fabricated nulls.
  */
 export interface BatTrackingInputs {
   avgBatSpeed: number | null;
   fastSwingRatePct: number | null;
   avgSwingLength: number | null;
   /** Mean attack angle at contact, degrees. */
-  avgAttackAngle: number | null;
+  avgAttackAngle?: number | null;
   /** Share of tracked contact swings with attack angle inside Statcast's 5–20° ideal band. */
-  idealAttackAngleRatePct: number | null;
+  idealAttackAngleRatePct?: number | null;
   /** Standard deviation of attack angle; context/consistency feature, not required. */
-  attackAngleStdDev: number | null;
+  attackAngleStdDev?: number | null;
   /** Mean swing-path tilt over the 40 ms before contact. Kept diagnostic until fitted. */
-  avgSwingPathTilt: number | null;
+  avgSwingPathTilt?: number | null;
   squaredUpPerSwingPct: number | null;
   blastPerSwingPct: number | null;
   swingSample: number | null;
@@ -119,13 +122,13 @@ export interface ParkWeatherSprayInputs {
   /** Batter pull-air share [0,1] — used to gate wind/park pull benefit. */
   batterPullAirShare: number | null;
   /** Pull-side wall geometry resolved from the 2026 Statcast dimensions table. */
-  pullFenceDistanceFt: number | null;
-  pullFenceHeightFt: number | null;
+  pullFenceDistanceFt?: number | null;
+  pullFenceHeightFt?: number | null;
   /** Whole-park references from Statcast, used so geometry is relative to the park itself. */
-  avgFenceDistanceFt: number | null;
-  avgFenceHeightFt: number | null;
+  avgFenceDistanceFt?: number | null;
+  avgFenceHeightFt?: number | null;
   /** Statcast's average distance required for a HR after fence height is included. */
-  avgHrDistanceFt: number | null;
+  avgHrDistanceFt?: number | null;
 }
 
 /** K. Lineup / opportunity / volume (confirmed lineup + market totals). */
