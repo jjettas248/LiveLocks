@@ -32,11 +32,6 @@ export function scoreParkWeatherSprayInteraction(
 
   const pullGate = inp.batterPullAirShare != null ? clamp01(inp.batterPullAirShare / 0.45) : 0.5;
 
-  // Physical pull-side fence geometry. Compare the sector the hitter is most
-  // likely to challenge against the park's own average fence, which avoids
-  // treating a universally deep/shallow park twice. Positive delta = shorter
-  // and/or lower than the park average. Wall height gets less weight than raw
-  // distance because its HR effect is not one-for-one with feet of depth.
   if (
     inp.pullFenceDistanceFt != null &&
     inp.avgFenceDistanceFt != null &&
@@ -58,25 +53,21 @@ export function scoreParkWeatherSprayInteraction(
     parts.push({ value: clamp(heightFit, -1, 1), weight: 0.7, key: "fenceHeight" });
   }
 
-  // Whole-park HR distance requirement is a small independent physical sanity
-  // check. This is Statcast's fence-distance+height summary, not batted-ball
-  // outcome data from the game being scored. Lower required distance is better.
+  // Whole-park HR distance requirement is a small physical sanity check. Lower
+  // required distance is favorable, so invert a normal increasing signed map.
   if (inp.avgHrDistanceFt != null && Number.isFinite(inp.avgHrDistanceFt)) {
-    parts.push({ value: signed(inp.avgHrDistanceFt, 398, 382, 370), weight: 0.7, key: "avgHrDistance" });
+    parts.push({ value: -signed(inp.avgHrDistanceFt, 370, 382, 398), weight: 0.7, key: "avgHrDistance" });
   }
 
-  // Wind — only outdoors and only with usable speed/direction.
   if (!inp.isIndoors && inp.weatherAvailable && inp.windSpeedMph != null && inp.windDirection) {
     const speed = clamp(inp.windSpeedMph, 0, 25);
-    const speedNorm = clamp01(speed / 18); // ~18mph ≈ full effect
+    const speedNorm = clamp01(speed / 18);
     let windSigned = 0;
     if (inp.windDirection === "out") windSigned = +speedNorm * (0.5 + 0.5 * pullGate);
     else if (inp.windDirection === "in") windSigned = -speedNorm;
-    else windSigned = 0; // cross / calm → neutral
     parts.push({ value: clamp(windSigned, -1, 1), weight: 2, key: "wind" });
   }
 
-  // Temperature — warmer air carries. Mid ~72°F. Outdoors only meaningfully.
   if (inp.weatherAvailable && inp.temperatureF != null && !inp.isIndoors) {
     parts.push({ value: signed(inp.temperatureF, 50, 72, 92), weight: 1, key: "temperature" });
   }
