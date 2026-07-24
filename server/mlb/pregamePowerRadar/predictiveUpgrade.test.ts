@@ -44,7 +44,8 @@ const shortPorch = scoreParkWeatherSprayInteraction({ ...parkBase, pullFenceDist
 const deepWall = scoreParkWeatherSprayInteraction({ ...parkBase, pullFenceDistanceFt: 400, pullFenceHeightFt: 14 });
 ok(shortPorch.logOdds > deepWall.logOdds, "short/lower pull fence > deep/tall pull fence");
 
-// Raw bat tracking uses official 75mph fast-swing and 5–20° ideal-angle bands.
+// Raw bat tracking uses official top-90% Average Bat Speed, 75mph Fast Swing,
+// and 5–20° ideal Attack Angle definitions.
 const rows: Array<Record<string, string>> = [];
 for (let i = 0; i < 30; i++) {
   rows.push({
@@ -55,6 +56,7 @@ for (let i = 0; i < 30; i++) {
   });
 }
 const bt = aggregateBatTrackingResearch(rows);
+ok(bt.avgBatSpeed === 76.4, "average bat speed uses the top 90% of tracked swings");
 ok(bt.fastSwingRatePct === 80, "fast swing rate uses 75mph threshold");
 ok(bt.idealAttackAngleRatePct === 70, "ideal attack angle uses 5-20 degree band");
 ok(bt.squaredUpPerSwingPct === null && bt.blastPerSwingPct === null, "squared-up/blasts are never fabricated");
