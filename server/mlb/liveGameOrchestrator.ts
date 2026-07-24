@@ -4557,7 +4557,12 @@ export class LiveGameOrchestrator {
               playerContact,
               rollingStats,
             });
-            const alertResult = evaluateHRAlert(alertInput);
+            // Consolidation (2026-07): reuse calculateHREdge's already-computed
+            // HRConversionResult (output.hrConversion, from the same tick's
+            // same `input`) instead of having evaluateHRAlert recompute it
+            // independently via its own buildConversionInput — one engine,
+            // one computation per batter per tick.
+            const alertResult = evaluateHRAlert(alertInput, output.hrConversion);
 
             const hrDynSnap = recomputeHrAlertState(alertInput, {
               gameFinal: (normalizedStatus as string) === "final",
