@@ -32,7 +32,7 @@ export interface ScoringFlags {
   weatherAvailable: boolean;
   bvpAvailable: boolean;
   parkIsOnlyPositiveDriver: boolean;
-  /** Legacy diagnostics input. Public quality now counts independent component families instead of raw chips. */
+  /** Legacy chip count retained as a veto for compatibility; it can suppress, never rescue, the independent-family gate. */
   positiveDriverCount: number;
   // ── Matchup-quality context (optional; default neutral/unavailable) ─────────
   /** Direction of the batter-vs-pitcher history. */
@@ -159,7 +159,6 @@ export function composePregameScore(
   );
 
   const bvpAdjustedScore = clamp10(baseScore + c.bvpModifier);
-
   const dataCoverageScore = computeDataCoverage(flags);
 
   // ── Coverage caps (applied AFTER BvP — BvP can never beat a cap) ────────────
@@ -186,11 +185,6 @@ export function composePregameScore(
   const cappedScore = Math.min(bvpAdjustedScore, cap);
 
   // ── Matchup penalty (visible) + elite gate ──────────────────────────────────
-  // Three matchup layers downgrade the score AND (via classifyTier) block elite
-  // labeling, so batter power is never enough on its own to mint "Elite Setup":
-  //   1. pitcher vs the batter's lineup slot (allowed-by-slot)
-  //   2. batter's own production from today's slot
-  //   3. batter-vs-pitcher (BvP) history, incl. the zero-production rule
   const bvpDirection = flags.bvpDirection ?? "neutral";
   const bvpZeroProduction = flags.bvpZeroProduction ?? false;
   const pitcherOrderSplitDirection = flags.pitcherOrderSplitDirection ?? "unavailable";
@@ -225,8 +219,6 @@ export function composePregameScore(
   }
   matchupPenalty = round1(Math.min(matchupPenalty, 2.5));
 
-  // Elite is blocked by any meaningful pitcher/order/BvP downgrade OR a weak slot
-  // context (Elite requires favorable/neutral slot context + no downgrade).
   const eliteBlocked =
     bvpDirection === "negative" ||
     bvpZeroProduction ||
@@ -248,8 +240,6 @@ export function composePregameScore(
   if (!flags.pitcherProfileAvailable) warningTags.push("Needs Live Confirmation");
 
   // ── Suppression (public eligibility) ────────────────────────────────────────
-  // Hard suppression is reserved for FATAL missing data (handled by the caller
-  // for no-lineup / no-batter-identity / no-pitcher / postponed). Here:
   if (!flags.pitcherProfileAvailable) suppressedReasons.push("missing_pitcher_splits");
   const evidenceFamilyCount = countPositivePregameEvidenceFamilies({
     batterPowerScore: flags.batterPowerAvailable ? c.batterPowerScore : null,
@@ -259,15 +249,16 @@ export function composePregameScore(
     lineupOpportunityScore: flags.confirmedLineup ? c.lineupOpportunityScore : null,
     nearHrRecentFormScore: c.nearHrRecentFormScore,
   });
-  if (evidenceFamilyCount < 2) suppressedReasons.push("insufficient_drivers");
+  // Independent families are the authority. Keep the historical chip count as
+  // a one-way veto only: it can suppress an intentionally constructed one-chip
+  // case, but can never rescue a candidate with <2 independent model families.
+  if (evidenceFamilyCount < 2 || flags.positiveDriverCount < 2) {
+    suppressedReasons.push("insufficient_drivers");
+  }
 
   // Attack Environment HOSTILE elimination — the ONLY behavioral effect HOSTILE
-  // has anywhere. Must run AFTER every other suppressedReasons push above (a card
-  // already suppressed for another reason wasn't "eliminated by Attack
-  // Environment") and BEFORE the final PUBLISH_MIN_SCORE check (a card below the
-  // publish floor was never going to publish regardless of this feature).
-  // `attackEnvironmentEliminationEligible` already encodes the independently-elite
-  // override computed once by computeAttackEnvironment() — never re-derived here.
+  // has anywhere. Must run after every other suppression reason and before the
+  // final score-floor check.
   const otherwisePublishable = suppressedReasons.length === 0 && score10 >= PUBLISH_MIN_SCORE;
   if (
     flags.attackEnvironmentEliminationEligible &&
@@ -278,7 +269,6 @@ export function composePregameScore(
   }
 
   if (score10 < PUBLISH_MIN_SCORE) {
-    // Distinguish "held down by a data-quality cap" from "genuinely weak with full data".
     suppressedReasons.push(cap < 10 ? "capped_by_data_quality" : "below_threshold_after_full_data");
   }
 
