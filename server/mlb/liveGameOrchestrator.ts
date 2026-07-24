@@ -2084,9 +2084,19 @@ export class LiveGameOrchestrator {
     let bypassedAsEarly = false;
     let earlyBypassTag: "HR_VS_ELITE_PITCHER" | "PITCHER_NEAR_MISS" | null = null;
 
-    if (isBatterOver) {
+    if (output.market === "home_runs") {
+      // ── Unified HR lane — NO generic probability floor ──────────────────
+      // home_runs sources its probability from the HR occurrence model
+      // (computeHRConversionProbability), where a legitimately elevated batter
+      // sits at ~15-30% P(HR>=1) — far below the 40 batter_over floor that
+      // Hits/TB assume. Existence in Live Edge is decided by the unified HR
+      // engine's meaningful-live-evidence gate at emission time (not here), and
+      // sportsbook odds decide bettability only. HARD INVARIANT: home_runs is
+      // never rejected by prob_below_batter_over_floor. (hrr keeps the generic
+      // batter_over floor below — it is a combo market, not the HR lane.)
+    } else if (isBatterOver) {
       let absFloor = 40;
-      const isHrFamily = output.market === "hrr" || output.market === "home_runs";
+      const isHrFamily = output.market === "hrr";
       if (isHrFamily) {
         const pitcherEra = (input as any)?.pitcher?.era ?? null;
         const pitcherK9 = (input as any)?.pitcher?.kPer9 ?? null;
@@ -2124,21 +2134,27 @@ export class LiveGameOrchestrator {
       }
     }
 
-    const hydrationOk = canShowSignal({
-      line: output.bookLine,
-      odds: (output.overOdds !== null || output.underOdds !== null)
-        ? { overOdds: output.overOdds, underOdds: output.underOdds }
-        : null,
-      projection: output.projection,
-      oddsUpdatedAt: output.oddsUpdatedAt,
-      projectionUpdatedAt: output.projectionUpdatedAt,
-      calibratedProbabilityOver: output.calibratedProbabilityOver,
-      calibratedProbabilityUnder: output.calibratedProbabilityUnder,
-    });
-    if (!hydrationOk) {
-      console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — hydration gate failed`);
-      auditRecordRejection(gameId, "staleOdds", output.market, "hydration_gate_failed");
-      return null;
+    // home_runs is exempt from the odds-dependent hydration gate: the unified
+    // HR lane may run occurrence-only (no cached line, low P(HR>=1)), which the
+    // generic gate (prob>=60 OR fresh real odds) would reject. HR existence is
+    // gated by live evidence at emission; odds affect bettability only.
+    if (output.market !== "home_runs") {
+      const hydrationOk = canShowSignal({
+        line: output.bookLine,
+        odds: (output.overOdds !== null || output.underOdds !== null)
+          ? { overOdds: output.overOdds, underOdds: output.underOdds }
+          : null,
+        projection: output.projection,
+        oddsUpdatedAt: output.oddsUpdatedAt,
+        projectionUpdatedAt: output.projectionUpdatedAt,
+        calibratedProbabilityOver: output.calibratedProbabilityOver,
+        calibratedProbabilityUnder: output.calibratedProbabilityUnder,
+      });
+      if (!hydrationOk) {
+        console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — hydration gate failed`);
+        auditRecordRejection(gameId, "staleOdds", output.market, "hydration_gate_failed");
+        return null;
+      }
     }
 
     if (((output.market as string) === "hr" || output.market === "home_runs") && output.recommendedSide === "UNDER") {
@@ -2147,7 +2163,11 @@ export class LiveGameOrchestrator {
       return null;
     }
 
-    if (isBatterOver) {
+    if (output.market === "home_runs") {
+      // No projection-vs-line consistency gate for home_runs: HR projection is a
+      // count (~0.2-0.3) and is legitimately below the 0.5 line/threshold, so the
+      // batter_over "OVER but proj < line" check would wrongly reject every HR.
+    } else if (isBatterOver) {
       const tolerance = ({ hits: 0.08, total_bases: 0.15, home_runs: 0.05, hrr: 0.15, batter_strikeouts: 0.10 } as Record<string, number>)[output.market] ?? 0.10;
       if (output.recommendedSide === "OVER" && output.projection < output.bookLine - tolerance) {
         console.log(`[MLB QUALIFY REJECT][${gameId}] ${output.playerName}/${output.market} — side inconsistency: OVER but proj=${output.projection} < line=${output.bookLine} - ${tolerance} tolerance (batter_over)`);
@@ -4421,7 +4441,11 @@ export class LiveGameOrchestrator {
             hrProbability: lastAB?.hrProbability ?? 0,
           } : null;
 
-          if (!hrRadarOnly) {
+          // home_runs is emitted ONCE from the unified HR lane below (after
+          // hrDynSnap exists), never from this pre-FSM qualification point — so
+          // there is no old WATCH signal coexisting with the canonical HR signal
+          // and no tick of stale lifecycle. Every other market qualifies here.
+          if (!hrRadarOnly && market !== "home_runs") {
             const qResult = this.qualifySignal(gameId, input, output);
             if (qResult && !isEarlySignalMode) {
               qResult.currentStats = batterStats;
@@ -4808,6 +4832,49 @@ export class LiveGameOrchestrator {
               // a real HR-radar row for this player; the presence-floor pass
               // below must skip them so a real row is never downgraded.
               playersWithRealHrRow.add(batter.playerId);
+
+              // ── Unified HR lane → Live Edge emission (exactly ONE) ─────────
+              // Build a single canonical Live Edge HR signal from the unified
+              // snapshot that already exists here (hrDynSnap + canonicalStage +
+              // output), AFTER the FSM has recomputed — so there is never an old
+              // WATCH signal plus a new canonical HR signal, and never a tick of
+              // stale lifecycle. Gated on meaningful LIVE evidence
+              // (engineHasLiveAB — a real live-contact PATH row), so presence-
+              // only / pregame-seed rows never enter Live Edge. Emitted for BOTH
+              // odds-present and hrRadarOnly; sportsbook odds decide bettability
+              // ONLY (in normalizeSignal / canonicalMapper), never existence.
+              if (engineHasLiveAB) {
+                try {
+                  const hrLiveEdge = this.qualifySignal(gameId, input, output);
+                  if (hrLiveEdge) {
+                    // Pricing provenance — false ⇒ occurrence-only; the
+                    // normalizer nulls all public pricing so the synthetic 0.5
+                    // threshold never surfaces as a market line, and the signal
+                    // can never be bettable or persisted as a wager.
+                    hrLiveEdge.hasRealSportsbookLine = !hrRadarOnly;
+                    // FSM state stamp — read by the autoPersist HR firewall
+                    // (only a real-line BET_NOW may become a persisted play).
+                    (hrLiveEdge as any).hrCurrentState = hrDynSnap?.currentState ?? null;
+                    if (hrRadarOnly) hrLiveEdge.sportsbook = null;
+                    // signalTier reflects the unified canonicalStage conviction
+                    // (raw axis): watch→watch, building→lean, attack→elite.
+                    // signalScore is unchanged. Executability is gated downstream
+                    // by isBettable (C3 normalizer / C5 view / C6 alerts), never
+                    // by this tier.
+                    if (canonicalStage === "attack") hrLiveEdge.signalTier = "elite";
+                    else if (canonicalStage === "building") hrLiveEdge.signalTier = "lean";
+                    else if (canonicalStage === "watch" || canonicalStage === "cooling") hrLiveEdge.signalTier = "watch";
+                    hrLiveEdge.currentStats = batterStats;
+                    hrLiveEdge.lastABContact = lastABContact;
+                    qualifiedSignals.push(hrLiveEdge);
+                    allSignals.push(hrLiveEdge);
+                    signalsQualified++;
+                    console.log(`[HR_LIVE_EDGE_EMIT][${gameId}] ${batter.playerName} stage=${canonicalStage ?? "?"} state=${hrDynSnap?.currentState ?? "?"} realLine=${!hrRadarOnly} tier=${hrLiveEdge.signalTier}`);
+                  }
+                } catch (emitErr) {
+                  console.warn(`[HR_LIVE_EDGE_EMIT] failed player=${batter.playerName} reason=${(emitErr as Error).message}`);
+                }
+              }
             }
           }
         } catch (err: any) {
@@ -5590,6 +5657,19 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
   let skipReasons: Record<string, number> = {};
 
   for (const sig of qualifiedSignals) {
+    // ── HR persistence firewall: canonical propagation ≠ wager persistence ──
+    // home_runs rides the canonical bus at WATCH/PREPARE and even when
+    // occurrence-only (no real line), but ONLY an official FIRE — a real cached
+    // sportsbook line AND the unified FSM at BET_NOW — may become a persisted
+    // play. Otherwise the substituted "odds_api" book + synthetic 0.5 line would
+    // fabricate a bet. (isBatterOverWatch below intentionally exempts HR from the
+    // watchlist skip, so this explicit guard is required.)
+    if (sig.market === "home_runs") {
+      const hrState = (sig as any).hrCurrentState;
+      if (sig.hasRealSportsbookLine !== true || hrState !== "BET_NOW") {
+        skipped++; skipReasons["hr_not_fire"] = (skipReasons["hr_not_fire"] ?? 0) + 1; continue;
+      }
+    }
     const isBatterOverWatch = sig.marketFamily === "batter_over" && sig.mode === "watch";
     if ((sig.watchlist && !isBatterOverWatch) || sig.isEarlySignal) { skipped++; skipReasons["watchlist"] = (skipReasons["watchlist"] ?? 0) + 1; continue; }
     const sbk = sig.sportsbook && sig.sportsbook.trim() !== "" ? sig.sportsbook : "odds_api";

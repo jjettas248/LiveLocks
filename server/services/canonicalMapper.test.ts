@@ -129,12 +129,23 @@ console.log("\n=== canonicalMapper.deriveMlbLifecycleState — hrAlert bridge ==
 
 // ── The bridge now fires on real hrAlert.currentState values ───────────────
 check(
-  "BET_NOW -> elite",
-  deriveMlbLifecycleState(makeSig({ hrAlert: makeHrAlert({ currentState: "BET_NOW" }) })) === "elite",
+  "BET_NOW + bettable (official FIRE) -> elite",
+  deriveMlbLifecycleState(makeSig({ isBettable: true, hrAlert: makeHrAlert({ currentState: "BET_NOW", canonicalStage: "attack" }) })) === "elite",
+);
+// Official-FIRE gate: BET_NOW/attack WITHOUT executability (no real line) stays
+// at build — the lifecycle must not claim FIRE for a non-bettable HR.
+check(
+  "BET_NOW + NOT bettable (no odds) -> build",
+  deriveMlbLifecycleState(makeSig({ isBettable: false, hrAlert: makeHrAlert({ currentState: "BET_NOW", canonicalStage: "attack" }) })) === "build",
+);
+// PATH-only attack (FSM only at PREPARE) is not executable -> build, never elite.
+check(
+  "PATH attack + FSM PREPARE (not bettable) -> build",
+  deriveMlbLifecycleState(makeSig({ isBettable: false, hrAlert: makeHrAlert({ currentState: "PREPARE", canonicalStage: "attack" }) })) === "build",
 );
 check(
-  "PREPARE -> strong",
-  deriveMlbLifecycleState(makeSig({ hrAlert: makeHrAlert({ currentState: "PREPARE" }) })) === "strong",
+  "PREPARE -> build (was strong; PREPARE now maps to BUILDING, never ACTION_NOW)",
+  deriveMlbLifecycleState(makeSig({ hrAlert: makeHrAlert({ currentState: "PREPARE" }) })) === "build",
 );
 check(
   "WATCH -> watch",
