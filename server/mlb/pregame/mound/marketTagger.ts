@@ -5,12 +5,11 @@
 // Outs-market strength (workload). Mirrors Plate's marketTagger.ts role, no
 // shared code.
 //
-// Also stamps kStuffScore/kStuffLabel (pure pitcher skill) and
-// platoonKFitScore/platoonKFitLabel (pure platoon-matchup fit) so the UI can
-// show each independently instead of only the blended kScore — a pitcher can
-// have elite skill and only an average matchup, and the old single blended
-// badge collapsed that into a single misleading "Weak" grade. See
-// buildMlbMoundRadar.ts and MoundPowerRadar.tsx for how these are surfaced.
+// Also stamps kStuffScore/kStuffLabel (pure pitcher skill) and the historical
+// `platoonKFit*` fields, whose user-facing label remains "K Matchup". The K
+// matchup now includes BOTH pitcher handedness K tendency and the confirmed
+// opposing hitters' K propensity vs the starter's throwing hand, so it must no
+// longer claim a weak read is specifically a "poor handedness fit".
 
 import type { MoundMarket, MoundMarketSetup } from "./types";
 import { round1 } from "./scoreUtils";
@@ -30,12 +29,10 @@ export interface MarketTagResult {
   kStuffLabel: "Elite" | "Strong" | "Solid" | "Weak";
   platoonKFitScore: number;
   platoonKFitLabel: "Elite" | "Strong" | "Solid" | "Weak";
+  /** Legacy field retained for payload compatibility. Null because K Matchup is no longer a handedness-only read. */
   platoonKFitReason?: "poor handedness fit" | null;
 }
 
-// Four grades — Elite/Strong/Solid/Weak. "Solid" is the full middle band
-// (5.5-7.49) so an ordinary-but-real setup (e.g. 6.8) doesn't flatten to the
-// same "Weak" as a genuinely poor one (e.g. 2.0).
 export function marketSetupLabel(score10: number): "Elite" | "Strong" | "Solid" | "Weak" {
   if (score10 >= 8.5) return "Elite";
   if (score10 >= 7.5) return "Strong";
@@ -43,14 +40,10 @@ export function marketSetupLabel(score10: number): "Elite" | "Strong" | "Solid" 
   return "Weak";
 }
 
-// Distinct from marketSetupLabel's boundaries — opponentKProfileScore's lin()
-// scale (opponentKProfile.ts) places true league-average platoon performance
-// well below the scale midpoint (~2.9-4.2/10, see scoring.ts's own comment),
-// so applying marketSetupLabel's 8.5/7.5/5.5 boundaries verbatim would
-// flatten nearly every ordinary matchup to "Weak" — recreating the exact
-// flattening bug this split exists to fix. An ordinary/league-average
-// matchup (and the flat-5 unconfirmed-lineup default) must land in "Solid",
-// the neutral case, not "Weak".
+// Distinct from marketSetupLabel's boundaries. The opponent K-profile score is
+// centered below 5 at a league-average matchup, so an ordinary matchup belongs
+// in Solid rather than being flattened into the same Weak bucket as a true
+// contact-heavy suppression matchup.
 export function platoonKFitLabel(score10: number): "Elite" | "Strong" | "Solid" | "Weak" {
   if (score10 >= 8.0) return "Elite";
   if (score10 >= 6.5) return "Strong";
@@ -59,7 +52,7 @@ export function platoonKFitLabel(score10: number): "Elite" | "Strong" | "Solid" 
 }
 
 export function computeMarketTags(inputs: MarketTagInputs): MarketTagResult {
-  const kScore = (inputs.pitcherSkillScore * 0.6 + inputs.opponentKProfileScore * 0.4);
+  const kScore = inputs.pitcherSkillScore * 0.6 + inputs.opponentKProfileScore * 0.4;
   const outsScore = inputs.workloadScore;
 
   const primaryMarket: MoundMarket = kScore >= outsScore ? "pitcher_strikeouts" : "pitcher_outs";
@@ -79,7 +72,6 @@ export function computeMarketTags(inputs: MarketTagInputs): MarketTagResult {
 
   const platoonKFitScore = round1(inputs.opponentKProfileScore);
   const platoonKFitLabelValue = platoonKFitLabel(inputs.opponentKProfileScore);
-  const platoonKFitReason: "poor handedness fit" | null = platoonKFitLabelValue === "Weak" ? "poor handedness fit" : null;
 
   return {
     primaryMarket,
@@ -90,6 +82,6 @@ export function computeMarketTags(inputs: MarketTagInputs): MarketTagResult {
     kStuffLabel,
     platoonKFitScore,
     platoonKFitLabel: platoonKFitLabelValue,
-    platoonKFitReason,
+    platoonKFitReason: null,
   };
 }
