@@ -84,7 +84,7 @@ export function scoreBatTrackingPower(inp: BatTrackingInputs | null | undefined)
   };
 }
 
-function feat(v: number | null, lo: number, mid: number, hi: number): number | null {
+function feat(v: number | null | undefined, lo: number, mid: number, hi: number): number | null {
   if (v == null || !Number.isFinite(v)) return null;
   return signed(v, lo, mid, hi);
 }

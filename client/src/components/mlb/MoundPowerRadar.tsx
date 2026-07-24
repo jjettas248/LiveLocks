@@ -231,8 +231,8 @@ const FILTERS: Array<{ key: FilterKey; label: string }> = [
   { key: "weak_lineup", label: "Weak Lineup" },
   { key: "run_suppression", label: "Run Suppression" },
   { key: "risk", label: "Risk Warnings" },
-  { key: "follow", label: "Follow (Over)" },
-  { key: "fade", label: "Fade (Under)" },
+  { key: "follow", label: "Follow Read" },
+  { key: "fade", label: "Fade Read" },
 ];
 
 function hasDriver(s: MoundSignal, predicate: (d: MoundDriver) => boolean): boolean {
@@ -570,7 +570,7 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
               style={{ color: isFade ? FADE_COLOR : FOLLOW_COLOR }}
               data-testid={`mound-direction-${isFade ? "fade" : "follow"}`}
             >
-              {isFade ? "▼ Fade (Under)" : "▲ Follow (Over)"}
+              {isFade ? "▼ Fade Read" : "▲ Follow Read"}
             </div>
           )}
         </div>

@@ -37,14 +37,19 @@ const baseFlags: ScoringFlags = {
 // [1] BvP zero-production rule (Colson Montgomery vs Bibee)
 // ─────────────────────────────────────────────────────────────────────────────
 console.log("\n[1] BvP zero-production + shrinkage");
+// Reduced BvP authority (PR #137): a hard zero-production block now requires a
+// meaningful 15+ AB sample, and a negative direction that can independently
+// block Elite requires 25+ AB. Use a real 0-for-28 history so this still
+// exercises the zero-production downgrade invariant under the new thresholds.
+// (The small-sample informational-only path is covered in predictiveUpgrade.test.ts.)
 const colsonBvp = computeMatchupFit({
   batterHand: "L", pitcherThrows: "R", batterOpsVsHand: 0.85, batterXslgVsDominantFamily: null,
   pullRatePct: 55, parkFavorsPull: true,
-  bvpPlateAppearances: 8, bvpHr: 0, bvpHits: 0, bvpAtBats: 7, bvpStrikeouts: 4, bvpOps: 0.125, bvpAvg: 0.0,
+  bvpPlateAppearances: 31, bvpHr: 0, bvpHits: 0, bvpAtBats: 28, bvpStrikeouts: 14, bvpOps: 0.0, bvpAvg: 0.0,
 });
-ok(colsonBvp.bvpDirection === "negative", `0-for-7, 4 K → negative BvP (got ${colsonBvp.bvpDirection})`);
+ok(colsonBvp.bvpDirection === "negative", `0-for-28, 14 K → negative BvP (got ${colsonBvp.bvpDirection})`);
 ok(colsonBvp.bvpZeroProduction && colsonBvp.zeroProductionFlags.length >= 2, `zero-production flagged (${colsonBvp.zeroProductionFlags.join("/")})`);
-ok(colsonBvp.bvpModifier < 0 && colsonBvp.bvpModifier >= -0.4, `small-sample penalty modest, not a hard veto (got ${colsonBvp.bvpModifier})`);
+ok(colsonBvp.bvpModifier < 0 && colsonBvp.bvpModifier >= -0.4, `meaningful-sample penalty modest, not a hard veto (got ${colsonBvp.bvpModifier})`);
 
 // 0 HR ALONE (with hits + decent OPS) must NOT read negative.
 const zeroHrOnly = computeMatchupFit({
