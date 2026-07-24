@@ -12,6 +12,7 @@ import type { PregamePowerTier } from "./types";
 import { clamp10, round1 } from "./scoreUtils";
 import { ATTACK_ENVIRONMENT_THRESHOLDS, ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON } from "./attackEnvironment";
 import type { AttackEnvironmentTier } from "./attackEnvironment";
+import { countPositivePregameEvidenceFamilies } from "./evidenceFamilies";
 
 export interface ScoringComponents {
   batterPowerScore: number;
@@ -31,15 +32,16 @@ export interface ScoringFlags {
   weatherAvailable: boolean;
   bvpAvailable: boolean;
   parkIsOnlyPositiveDriver: boolean;
+  /** Legacy diagnostics input. Public quality now counts independent component families instead of raw chips. */
   positiveDriverCount: number;
   // ── Matchup-quality context (optional; default neutral/unavailable) ─────────
   /** Direction of the batter-vs-pitcher history. */
   bvpDirection?: "positive" | "neutral" | "negative";
-  /** 5+ AB with ≥2 key BvP production fields at .000 (hard block on clean Elite). */
+  /** Meaningful-sample BvP zero production (hard block on clean Elite). */
   bvpZeroProduction?: boolean;
   /** Pitcher's allowed production to the batter's slot. */
   pitcherOrderSplitDirection?: "vulnerable" | "neutral" | "suppressive" | "unavailable";
-  /** Batter's own production from today's lineup slot. */
+  /** Batter's own production from today's slot. */
   batterOrderSplitDirection?: "strong" | "neutral" | "weak" | "unavailable";
   // ── Attack Environment (pitcher × park/weather × matchup-fit interaction) ────
   /** Gate only — never adds/subtracts from score10. See classifyTier. */
@@ -249,7 +251,15 @@ export function composePregameScore(
   // Hard suppression is reserved for FATAL missing data (handled by the caller
   // for no-lineup / no-batter-identity / no-pitcher / postponed). Here:
   if (!flags.pitcherProfileAvailable) suppressedReasons.push("missing_pitcher_splits");
-  if (flags.positiveDriverCount < 2) suppressedReasons.push("insufficient_drivers");
+  const evidenceFamilyCount = countPositivePregameEvidenceFamilies({
+    batterPowerScore: flags.batterPowerAvailable ? c.batterPowerScore : null,
+    pitcherVulnerabilityScore: flags.pitcherProfileAvailable ? c.pitcherVulnerabilityScore : null,
+    matchupFitScore: c.matchupFitScore,
+    parkWeatherScore: flags.parkAvailable ? c.parkWeatherScore : null,
+    lineupOpportunityScore: flags.confirmedLineup ? c.lineupOpportunityScore : null,
+    nearHrRecentFormScore: c.nearHrRecentFormScore,
+  });
+  if (evidenceFamilyCount < 2) suppressedReasons.push("insufficient_drivers");
 
   // Attack Environment HOSTILE elimination — the ONLY behavioral effect HOSTILE
   // has anywhere. Must run AFTER every other suppressedReasons push above (a card
