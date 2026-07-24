@@ -2,8 +2,7 @@
 // Pre-Game Power Radar — v2 SHADOW math contracts
 //
 // This module defines the data contracts for the v2 pregame HR math core. It is
-// SHADOW-ONLY: nothing here is wired into the production build/scoring path. The
-// production engine (scoring.ts / buildPregamePowerRadar.ts) is unchanged.
+// SHADOW-ONLY: nothing here is wired into the production build/scoring path.
 //
 // Design rules (mirror CLAUDE.md §3.1/§7 + module intent):
 //   • Pure types only — no I/O, no imports from sport engines, no hrConversionModel.
@@ -11,12 +10,10 @@
 //   • Every feature input is nullable and additive: absent → no-op contribution.
 //   • All probabilities are MODELLED, not CALIBRATED. Coefficients are documented,
 //     literature-informed DEFAULT PRIORS — they are NOT fitted to historical
-//     outcomes. Empirical calibration is an explicitly deferred future phase
-//     (see docs/audits/pregame-power-v2-math-framework.md → "Future phases").
+//     outcomes. Empirical calibration remains a promotion prerequisite.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** v2 shadow tier. Distinct from the production `PregamePowerTier` — returned in
- *  diagnostics/report artifacts only, never stamped onto a production signal. */
+/** v2 shadow tier. Distinct from the production `PregamePowerTier`. */
 export type PregameMathTier = "elite" | "strong" | "watch" | "neutral" | "suppressed";
 
 export type Handedness = "L" | "R" | "S" | null;
@@ -42,11 +39,27 @@ export interface BatterTruePowerInputs {
   paSample: number | null;
 }
 
-/** B. Bat-tracking / swing-quality skill (season aggregates only). */
+/**
+ * B. Bat-tracking / swing-quality skill (season aggregates only).
+ *
+ * Statcast definitions used by this contract:
+ * - fast swing: bat speed >= 75 mph
+ * - ideal attack angle: 5–20 degrees
+ * - squared-up/blasts are official Statcast metrics only; NEVER derive them from
+ *   bat speed or attack angle when the source does not provide them.
+ */
 export interface BatTrackingInputs {
   avgBatSpeed: number | null;
   fastSwingRatePct: number | null;
   avgSwingLength: number | null;
+  /** Mean attack angle at contact, degrees. */
+  avgAttackAngle: number | null;
+  /** Share of tracked contact swings with attack angle inside Statcast's 5–20° ideal band. */
+  idealAttackAngleRatePct: number | null;
+  /** Standard deviation of attack angle; context/consistency feature, not required. */
+  attackAngleStdDev: number | null;
+  /** Mean swing-path tilt over the 40 ms before contact. Kept diagnostic until fitted. */
+  avgSwingPathTilt: number | null;
   squaredUpPerSwingPct: number | null;
   blastPerSwingPct: number | null;
   swingSample: number | null;
@@ -94,7 +107,7 @@ export interface ZoneLocationInputs {
   pitcherHangerRate: number | null;
 }
 
-/** I/J. Park + weather + spray fit (pre-game forecast only). */
+/** I/J. Park + weather + spray + physical fence geometry (pre-game only). */
 export interface ParkWeatherSprayInputs {
   parkHrFactor: number | null;
   parkHrFactorHand: number | null;
@@ -105,6 +118,14 @@ export interface ParkWeatherSprayInputs {
   windDirection: "in" | "out" | "cross" | "calm" | null;
   /** Batter pull-air share [0,1] — used to gate wind/park pull benefit. */
   batterPullAirShare: number | null;
+  /** Pull-side wall geometry resolved from the 2026 Statcast dimensions table. */
+  pullFenceDistanceFt: number | null;
+  pullFenceHeightFt: number | null;
+  /** Whole-park references from Statcast, used so geometry is relative to the park itself. */
+  avgFenceDistanceFt: number | null;
+  avgFenceHeightFt: number | null;
+  /** Statcast's average distance required for a HR after fence height is included. */
+  avgHrDistanceFt: number | null;
 }
 
 /** K. Lineup / opportunity / volume (confirmed lineup + market totals). */
@@ -173,7 +194,7 @@ export interface LogOddsTerm {
   note?: string;
 }
 
-/** Canonical v2 SHADOW output (superset alignment with the task spec). */
+/** Canonical v2 SHADOW output. */
 export interface PregameMathModelResult {
   playerId: string;
   gameId: string;
