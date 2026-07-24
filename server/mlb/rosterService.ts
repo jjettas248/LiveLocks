@@ -29,7 +29,11 @@ interface MLBPitcher {
   pitcherId: string;
   pitcherName: string;
   team: string;
-  throws: "L" | "R";
+  // Null when the pitcher isn't yet in the (boot + 24h-cadence) player pool —
+  // must never be guessed. A wrong guess here silently corrupts matchup-fit's
+  // platoon edge for every batter facing him, and pitcher-vulnerability's
+  // side-split for switch hitters, while still reading as "available."
+  throws: "L" | "R" | null;
   pitchCount: number;
   starterOrReliever: "starter" | "reliever";
   bullpenRole?: string;
@@ -261,7 +265,9 @@ export async function updateStartingPitchers(gameId: string): Promise<void> {
       if (!pitcherId) continue;
 
       const pitcherName: string = probable?.fullName ?? getPlayer(pitcherId)?.playerName ?? "";
-      const throwsHand = getPlayer(pitcherId)?.throws ?? "R";
+      // Genuinely unknown (pitcher not yet in the roster pool) must stay null,
+      // not default to a guessed hand — see the MLBPitcher.throws doc comment.
+      const throwsHand = getPlayer(pitcherId)?.throws ?? null;
       const pitchCount =
         liveData.boxscore?.teams?.[side]?.players?.[`ID${pitcherId}`]?.stats?.pitching
           ?.numberOfPitches ?? 0;

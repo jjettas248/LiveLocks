@@ -1,4 +1,4 @@
-// Component 4 — Park / Weather (weight 0.15).
+// Component 4 — Park / Weather (weight 0.14).
 //
 // Pure scorer over park HR factor + weather (temp, wind, roof). Park alone can
 // never surface a signal (the build layer flags "park is only positive driver"

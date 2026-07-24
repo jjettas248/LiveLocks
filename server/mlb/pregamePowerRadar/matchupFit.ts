@@ -1,4 +1,4 @@
-// Component 3 — Matchup Fit (weight 0.20).
+// Component 3 — Matchup Fit (weight 0.18).
 //
 // Pure scorer combining: handedness platoon edge, batter pitch-type strength vs
 // pitcher mix, and a CAPPED BvP supporting modifier. BvP is returned separately

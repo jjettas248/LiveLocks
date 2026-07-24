@@ -1,4 +1,4 @@
-// Component 5 — Lineup Opportunity (weight 0.10).
+// Component 5 — Lineup Opportunity (weight 0.09).
 //
 // Pure scorer. Batting slot is OPPORTUNITY context (plate-appearance volume,
 // run environment, RBI setup) — NOT "pitcher weakness to slot" (that has no
