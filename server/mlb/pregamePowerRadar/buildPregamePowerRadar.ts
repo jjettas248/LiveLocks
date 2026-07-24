@@ -16,17 +16,27 @@ import {
   updateStartingLineups,
   updateStartingPitchers,
 } from "../rosterService";
-import { fetchBaseballSavantData, getMarketParkFactor, isVenueIndoors } from "../dataSources";
+import { fetchBaseballSavantData, getMarketParkFactor, isVenueIndoors, isVenueResolved } from "../dataSources";
 import {
   fetchPitcherHandednessSplits,
   fetchBatterHandednessSplits,
   fetchRecentContactEventsForBatters,
+  fetchPitcherRecentStarts,
   syncWeather,
+  syncOpenMeteoWeather,
   syncBvPMatchup,
   syncBatterOrderSplits,
   mlbGameCache,
   mlbPlayerCache,
 } from "../dataPullService";
+// Reuses Mound Radar's already-built, already-tested pure contact-quality
+// aggregator (no I/O of its own — operates on an already-fetched Savant CSV)
+// so the barrel/hard-hit/fly-ball-allowed signal isn't reimplemented a second
+// time. This is a one-way, leaf-to-leaf dependency between two sibling MLB
+// pregame engines (not the NBA/MLB/NCAAB cross-sport boundary CLAUDE.md
+// forbids) — server/mlb/dataSources.ts documents itself as the shape's sole
+// owner and must never import back from Mound.
+import { aggregateRawPitcherContactSnapshot } from "../pregame/mound/rawPitcherContactSnapshot";
 import type {
   PregamePowerSignal,
   PregameGameStatus,
@@ -151,6 +161,7 @@ function savantToPowerInputs(s: Awaited<ReturnType<typeof fetchBaseballSavantDat
     pullRatePct: s.pullRatePercent,
     sweetSpotPct: s.sweetSpotPercent,
     xwOBA: s.xwOBASeason,
+    battedBallEvents: s.battedBallEvents,
   };
 }
 
@@ -270,7 +281,18 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         await Promise.all([
           updateStartingLineups(gamePk),
           updateStartingPitchers(gamePk),
-          syncWeather(gamePk, game.gameId),
+          // Open-Meteo is a forecast fallback for when MLB's own live feed
+          // hasn't posted weather yet — exactly the common case for a
+          // pregame build running hours before first pitch. Mirrors the
+          // live in-game orchestrator's own syncWeather→syncOpenMeteoWeather
+          // chaining pattern (liveGameOrchestrator.ts) so this radar gets the
+          // same fallback instead of just taking the coverage hit.
+          syncWeather(gamePk, game.gameId).then(async () => {
+            const w = mlbGameCache.weather[game.gameId];
+            if (w?.venueName) {
+              await syncOpenMeteoWeather(game.gameId, w.venueName);
+            }
+          }),
         ]);
       } catch {
         /* hydration failures degrade to empty/neutral below */
@@ -315,9 +337,65 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           `status=${gameStatus} lineup=${lineup.length} starters=${sideStarters.length} weather=${weatherAvailable}`,
       );
 
+      // Pitcher-side contact-quality + recent-form data — fetched ONCE per
+      // game per starter (not per batter; every batter facing the same
+      // starter would otherwise repeat the same lookup). Both are additive/
+      // optional: absence degrades pitcherVulnerability to its existing
+      // neutral path, exactly as when pitcherSplits is unavailable.
+      const pitcherContactByPitcher = new Map<string, ReturnType<typeof aggregateRawPitcherContactSnapshot>>();
+      const pitcherRecentFormByPitcher = new Map<string, Awaited<ReturnType<typeof fetchPitcherRecentStarts>>>();
+      for (const starter of sideStarters) {
+        try {
+          // Same fetchBaseballSavantData call the batter side already makes,
+          // but keyed by the PITCHER's own id (mirroring buildMlbMoundRadar.ts)
+          // — the batter-keyed call above never returns real pitcher-side
+          // fields since Savant resolves batter/pitcher CSVs by whatever id
+          // it's given.
+          const pitcherSavant = await fetchBaseballSavantData(starter.pitcherId, gamePk);
+          pitcherContactByPitcher.set(
+            starter.pitcherId,
+            aggregateRawPitcherContactSnapshot(pitcherSavant.pitcherContactCsvSource, {
+              // Only the 5 Statcast-derived fields (barrel/hard-hit/fly-ball/
+              // xSLG/xwOBA allowed) are used below, and those depend solely on
+              // `source` — hr9Allowed/bb9/ipVariance (the only fields these
+              // inputs affect) are ignored here, so leaving them honestly
+              // "unavailable" costs nothing.
+              seasonStatsAvailable: false,
+              inningsPitchedSeason: null,
+              homeRunsAllowedSeason: null,
+              bb9Season: null,
+              recentStartsAvailable: false,
+              ipVarianceLast3: null,
+            }),
+          );
+        } catch {
+          /* contact-quality data is optional/additive — ignore failures */
+        }
+        try {
+          pitcherRecentFormByPitcher.set(starter.pitcherId, await fetchPitcherRecentStarts(starter.pitcherId));
+        } catch {
+          /* recent-form data is optional/additive — ignore failures */
+        }
+      }
+
+      // Tracks batters actually resolved+scored this cycle — deliberately NOT
+      // just `lineup.map(l => l.playerId)`. A batter whose id isn't yet in the
+      // (boot + 24h-cadence) roster pool must look "dropped" to the
+      // end-of-game carryForwardDroppedFromLineup call below, not "still
+      // present," so an earlier successful signal for them (e.g. built before
+      // a later team-roster resync filtered them out) can still be rescued
+      // instead of silently vanishing.
+      const resolvedBatterIds = new Set<string>();
+
       for (const slot of lineup) {
         const player = getPlayer(slot.playerId);
-        if (!player) continue;
+        if (!player) {
+          console.log(
+            `[PREGAME_POWER_RADAR_PLAYER_UNRESOLVED] game=${game.gameId} pk=${gamePk} playerId=${slot.playerId} slot=${slot.battingOrderSlot} — not in roster pool, skipped this cycle`,
+          );
+          continue;
+        }
+        resolvedBatterIds.add(player.playerId);
         battersEvaluated++;
 
         const batterTeam = slot.team;
@@ -379,10 +457,19 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           : {
               xISO: null, xSLG: null, barrelRatePct: null, hardHitRatePct: null,
               exitVelocity: null, maxEV: null, flyBallPct: null, hrFBRatioPct: null,
-              pullRatePct: null, sweetSpotPct: null, xwOBA: null,
+              pullRatePct: null, sweetSpotPct: null, xwOBA: null, battedBallEvents: null,
             };
         const batterPower = computeBatterPowerProfile(powerInputs);
+        // computeBatterPowerProfile's own hasCore check is satisfied by xSLG
+        // alone, so a Savant fetch that degraded to the bare 2-of-11-input
+        // MLB-API fallback (batterDataQuality !== "full") still reports
+        // available:true off a genuinely thin read. The coverage/cap
+        // mechanism this flag feeds is meant to catch exactly that thinness,
+        // so it must not be fooled by it.
+        const batterPowerFullyAvailable = batterPower.available && savant?.batterDataQuality === "full";
 
+        const pitcherContact = opposingPitcher ? pitcherContactByPitcher.get(opposingPitcher.pitcherId) : undefined;
+        const pitcherRecentForm = opposingPitcher ? pitcherRecentFormByPitcher.get(opposingPitcher.pitcherId) : undefined;
         const pitcherVuln = computePitcherVulnerability({
           pitcherKnown,
           batterHand: player.bats,
@@ -391,6 +478,11 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           hrPer9VsRHB: pitcherSplits?.hrPer9VsRHB ?? null,
           eraVsLHB: pitcherSplits?.eraVsLHB ?? null,
           eraVsRHB: pitcherSplits?.eraVsRHB ?? null,
+          barrelAllowedPct: pitcherContact?.barrelAllowedPct ?? null,
+          hardHitAllowedPct: pitcherContact?.hardHitAllowedPct ?? null,
+          flyBallAllowedPct: pitcherContact?.flyBallAllowedPct ?? null,
+          last3StartERA: pitcherRecentForm?.last3StartERA ?? null,
+          daysSinceLastStart: pitcherRecentForm?.daysSinceLastStart ?? null,
         });
 
         const parkHrFactor = venueName
@@ -572,10 +664,15 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             bvpModifier: matchupFit.bvpModifier,
           },
           {
-            batterPowerAvailable: batterPower.available,
+            batterPowerAvailable: batterPowerFullyAvailable,
             pitcherProfileAvailable,
             confirmedLineup: lineupStatus === "posted",
-            parkAvailable: parkHrFactor != null,
+            // NOT `parkHrFactor != null` — getMarketParkFactor always returns
+            // a number (1.0 fallback for both "no venue" and "unmatched
+            // venue"), so that check was true whenever a venue name string
+            // existed at all, matched park or not. isVenueResolved is the
+            // honest check.
+            parkAvailable: isVenueResolved(venueName),
             weatherAvailable,
             bvpAvailable: matchupFit.bvpAvailable,
             parkIsOnlyPositiveDriver: parkWeather.parkIsOnlyPositiveDriver,
@@ -705,7 +802,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           pitcherName: opposingPitcher?.pitcherName ?? null,
           battingOrderSlot: slot.battingOrderSlot,
           handednessMatchup: opposingPitcher
-            ? `${player.bats} vs ${opposingPitcher.throws}`
+            ? `${player.bats} vs ${opposingPitcher.throws ?? "?"}`
             : null,
           primaryMarket: marketTags.primaryMarket,
           marketTags: marketTags.marketTags,
@@ -790,9 +887,9 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             },
             rawInputsAvailable: {
               lineup: lineupStatus === "posted",
-              batterPower: batterPower.available,
+              batterPower: batterPowerFullyAvailable,
               pitcherProfile: pitcherProfileAvailable,
-              park: parkHrFactor != null,
+              park: isVenueResolved(venueName),
               weather: weatherAvailable,
               bvp: matchupFit.bvpAvailable,
               nearHrRecentForm: nearHrRecentForm.available,
@@ -829,10 +926,9 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
       // still in `lineup`; without this pass a subbed-out batter's signal
       // (including any already-stamped HR outcome) is silently absent from
       // the rebuilt Map.
-      const lineupBatterIds = new Set(lineup.map((l) => l.playerId));
       const carriedOver = carryForwardDroppedFromLineup(
         game.gameId,
-        lineupBatterIds,
+        resolvedBatterIds,
         prevSignalsByGame.get(game.gameId) ?? [],
         gameStatus,
         firstPitchLockEligible,

@@ -54,6 +54,20 @@ export interface BaseballSavantData {
   // pregame/mound/rawPitcherContactSnapshot.ts's aggregateRawPitcherContactSnapshot.
   // Null when the pitcher CSV fetch/parse failed entirely (not merely empty).
   pitcherContactCsvSource: PitcherContactCsvSource | null;
+  // Season batted-ball-event count backing hardHitRateSeason/
+  // barrelRateProxySeason/flyBallPercent/sweetSpotPercent (all share this
+  // denominator). Null when no BIP-rate stats were computable at all (zero
+  // batted balls parsed, or the degraded xBA/xSLG-only fallback below, which
+  // isn't BIP-derived in the first place).
+  battedBallEvents: number | null;
+  // "full" = real per-pitch Statcast CSV parsed successfully (every field above
+  // can be populated). "partial_fallback" = the CSV fetch failed and this
+  // result came from the bare MLB Stats API season-stats fallback (xBA/xSLG
+  // only — every other batter-power field stays null). "unavailable" = no
+  // fetch was attempted at all (invalid player id). Exists so callers can tell
+  // "batter power data is present but is a 2-of-11-input stub" apart from a
+  // real, full read — the two used to be indistinguishable to the caller.
+  batterDataQuality: "full" | "partial_fallback" | "unavailable";
 }
 
 // ── Pitcher contact-quality CSV projection (Mound Radar PR 2) ────────────────
@@ -366,6 +380,20 @@ export function getVenueParkFactors(venueName: string | null | undefined): ParkF
   return resolveVenue(venueName);
 }
 
+/**
+ * True only when `venueName` actually resolved to a real park-factor profile.
+ * `getMarketParkFactor` returns its 1.0 neutral fallback both when there's no
+ * venue name at all AND when a venue name exists but never matched any known
+ * park/alias/fuzzy-match — those two cases are indistinguishable from its
+ * return value alone. Callers that need an honest "do we really know this
+ * park" coverage flag (rather than "did getMarketParkFactor return a number,"
+ * which it always does) should use this instead.
+ */
+export function isVenueResolved(venueName: string | null | undefined): boolean {
+  if (!venueName) return false;
+  return resolveVenue(venueName) != null;
+}
+
 // Canonical list of every MLB venue the engine ships a park profile for. Used by
 // the shared park/wind fit module (and its regression test) to guarantee full
 // venue coverage. Alternate/temporary venues resolve through VENUE_ALIASES /
@@ -500,6 +528,8 @@ export async function fetchBaseballSavantData(
     pitcherWhiffPctByFamily: {},
     pitcherMissesBatsFamily: null,
     pitcherContactCsvSource: null,
+    battedBallEvents: null,
+    batterDataQuality: "unavailable",
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -527,6 +557,7 @@ export async function fetchBaseballSavantData(
   let xISOSeason: number | null = null;
   let sweetSpotPercent: number | null = null;
   let pullRatePercent: number | null = null;
+  let battedBallEvents: number | null = null;
   let batterPitchSplits: PitchTypeBatterSplit[] | null = null;
   let toppedPct: number | null = null;
   let maxEV: number | null = null;
@@ -535,6 +566,10 @@ export async function fetchBaseballSavantData(
   let pitcherWhiffPctByFamily: BaseballSavantData["pitcherWhiffPctByFamily"] = {};
   let pitcherMissesBatsFamily: BaseballSavantData["pitcherMissesBatsFamily"] = null;
   let pitcherContactCsvSource: BaseballSavantData["pitcherContactCsvSource"] = null;
+  // Defaults to the degraded state — only the full-CSV success branch below
+  // upgrades it to "full", so any early return / unhandled path never
+  // silently overstates quality.
+  let batterDataQuality: BaseballSavantData["batterDataQuality"] = "partial_fallback";
 
   try {
     const currentYear = new Date().getFullYear();
@@ -661,6 +696,7 @@ export async function fetchBaseballSavantData(
         if (totalBIP > 0) {
           hardHitRateSeason = parseFloat(((hardHits / totalBIP) * 100).toFixed(1));
           barrelRateProxySeason = parseFloat(((barrels / totalBIP) * 100).toFixed(1));
+          battedBallEvents = totalBIP;
         }
         if (xbaCount > 0) xBA = parseFloat((xbaSum / xbaCount).toFixed(3));
         if (xslgCount > 0) xSLG = parseFloat((xslgSum / xslgCount).toFixed(3));
@@ -679,8 +715,18 @@ export async function fetchBaseballSavantData(
         batterPitchSplits = agg.batterPitchSplits;
         toppedPct = agg.toppedPct;
         maxEV = agg.maxEV;
+
+        // Real per-pitch CSV parsed successfully — every batter-power field
+        // above had a chance to populate (an empty in-season sample still
+        // counts as "full": the fetch mechanism worked, there's just
+        // genuinely nothing there yet — computeBatterPowerProfile's own
+        // hasCore check already handles that case correctly).
+        batterDataQuality = "full";
       }
     } else {
+      // Degraded path: the rich CSV is unavailable and every field below stays
+      // null except xBA/xSLG from the bare season-stats fallback — leave
+      // batterDataQuality at its "partial_fallback" default.
       console.warn("[Savant] Batter CSV fetch failed — trying MLB Stats API fallback");
       try {
         const fallbackUrl = `https://statsapi.mlb.com/api/v1/people/${mlbPlayerId}/stats?stats=season&group=hitting&season=${new Date().getFullYear()}&gameType=R`;
@@ -776,6 +822,8 @@ export async function fetchBaseballSavantData(
       pitcherWhiffPctByFamily,
       pitcherMissesBatsFamily,
       pitcherContactCsvSource,
+      battedBallEvents,
+      batterDataQuality,
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
@@ -808,6 +856,7 @@ export async function fetchBaseballSavantData(
           fallbackResult.xBA = safeNum(s.avg);
           fallbackResult.xSLG = safeNum(s.slg);
           if (fallbackResult.xBA != null || fallbackResult.xSLG != null) {
+            fallbackResult.batterDataQuality = "partial_fallback";
             savantCache.set(cacheKey, { data: fallbackResult, fetchedAt: Date.now() });
             console.log(`[Savant] MLB API fallback for ${mlbPlayerId}: BA=${fallbackResult.xBA} SLG=${fallbackResult.xSLG}`);
           }

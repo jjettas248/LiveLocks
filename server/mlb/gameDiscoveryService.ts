@@ -3,7 +3,7 @@
 // Includes ALL games regardless of status (pregame + live).
 // Maps ESPN event IDs to MLB Stats API gamePk for downstream data pulls.
 
-import { slateDateET } from "../utils/dateUtils";
+import { slateDateET, daysAgoET } from "../utils/dateUtils";
 
 export interface MLBGame {
   gameId: string;
@@ -81,11 +81,13 @@ interface MlbScheduleEntry {
 }
 
 function yesterdayDateStrMlb(): string {
-  const d = new Date(Date.now() - 86_400_000);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
+  // Was raw `new Date(Date.now() - 86_400_000)` + local (server-timezone)
+  // date getters — never converted to ET at all, unlike every other date
+  // computation in this engine (CLAUDE.md §3.4). daysAgoET(1) is the correct
+  // ET calendar-date walk (this is a plain calendar-date schedule lookup
+  // against MLB's date-keyed endpoint, not a slate-day concept, so
+  // slateDaysAgoET's 6am rollover doesn't apply here).
+  return daysAgoET(1);
 }
 
 async function fetchMlbGamePkMap(dateStr: string): Promise<Map<string, MlbScheduleEntry[]>> {
