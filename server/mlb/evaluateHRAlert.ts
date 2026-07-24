@@ -437,7 +437,7 @@ function buildConversionInput(input: HRAlertInput): HRConversionInput {
   };
 }
 
-function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
+function evaluateHRAlertCore(input: HRAlertInput, precomputedHrConversion?: HRConversionResult): HRAlertResult {
   const { hrBuildScore, factors, inning, priorABResults } = input;
 
   const classified = factors.contactClasses && factors.contactClasses.length > 0
@@ -458,12 +458,20 @@ function evaluateHRAlertCore(input: HRAlertInput): HRAlertResult {
   const pitcherFatigueState = describePitcherState(input);
   const environmentContext = describeEnvironment(input);
 
-  let hrConversion: HRConversionResult | null = null;
-  try {
-    const convInput = buildConversionInput(input);
-    hrConversion = computeHRConversionProbability(convInput);
-  } catch (err: any) {
-    console.warn(`[HR_CONVERSION] computation failed for ${input.playerName}: ${err.message}`);
+  // Consolidation (2026-07): when the caller already computed this batter's
+  // HRConversionResult this same tick (calculateHREdge, in markets.ts, fed
+  // by the same orchestrator caches as this HRAlertInput), reuse it instead
+  // of recomputing — one engine, one computation per batter per tick. Falls
+  // back to computing fresh when absent (e.g. the contact-event-driven call
+  // site, which has no same-tick calculateHREdge result to reuse).
+  let hrConversion: HRConversionResult | null = precomputedHrConversion ?? null;
+  if (!precomputedHrConversion) {
+    try {
+      const convInput = buildConversionInput(input);
+      hrConversion = computeHRConversionProbability(convInput);
+    } catch (err: any) {
+      console.warn(`[HR_CONVERSION] computation failed for ${input.playerName}: ${err.message}`);
+    }
   }
 
   const convProb = hrConversion?.calibratedProbability ?? hrConversion?.hrConversionProbability ?? null;
@@ -1547,8 +1555,8 @@ export function deviggedMarketHrProb(
   return over / (over + under);
 }
 
-export function evaluateHRAlert(input: HRAlertInput): HRAlertResult {
-  const result = evaluateHRAlertCore(input);
+export function evaluateHRAlert(input: HRAlertInput, precomputedHrConversion?: HRConversionResult): HRAlertResult {
+  const result = evaluateHRAlertCore(input, precomputedHrConversion);
   // ── HR occurrence engine — edge decoupled (2026-06) ───────────────────────
   // HR Radar tiers are a function of HR OCCURRENCE probability + baseball
   // evidence, NOT of sportsbook edge/value. The previous EV-gate demoted the
