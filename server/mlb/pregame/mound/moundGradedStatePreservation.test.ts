@@ -125,13 +125,25 @@ const gradedWin: MoundOutcome = {
   ok(fresh.outcomes === newerOutcome, "already-graded rebuilt copy keeps its own outcome");
 }
 
+// Public-quality flagging now counts independent predictive-evidence families
+// (diagnostics component scores), not raw positive driver chips. A signal whose
+// families all fall below their thresholds intrinsically fails
+// wasPubliclyFlaggedMound, isolating the carry-forward OR from the live intrinsic
+// recompute. sig({})'s rich default diagnostics WOULD qualify on their own, so
+// starve them here.
+function starveEvidence(s: MoundSignal): MoundSignal {
+  s.diagnostics.pitcherSkillScore = 0;
+  s.diagnostics.opponentKProfileScore = 0;
+  s.diagnostics.workloadScore = 0;
+  s.diagnostics.runEnvironmentScore = 0;
+  s.diagnostics.recentFormScore = 0;
+  return s;
+}
+
 // ── 7. everPubliclyFlagged ORs forward across same-slate rebuilds ────────────
 {
-  // sig({})'s default drivers: [] intrinsically fails wasPubliclyFlaggedMound
-  // (needs positive drivers), isolating the carry-forward OR from the live
-  // intrinsic recompute.
   const prev = sig({ everPubliclyFlagged: true });
-  const fresh = sig({});
+  const fresh = starveEvidence(sig({}));
   carryForwardMoundGradedState(fresh, prev);
   ok(fresh.everPubliclyFlagged === true, "everPubliclyFlagged ORs forward across rebuilds");
 }
@@ -142,7 +154,7 @@ const gradedWin: MoundOutcome = {
     signalId: "mlb-mound:2026-06-30:g1:p1", sessionDate: "2026-06-30",
     everPubliclyFlagged: true,
   });
-  const fresh = sig({});
+  const fresh = starveEvidence(sig({}));
   carryForwardMoundGradedState(fresh, prevDay);
   ok(fresh.everPubliclyFlagged === false, "everPubliclyFlagged does not leak across slate days");
 }

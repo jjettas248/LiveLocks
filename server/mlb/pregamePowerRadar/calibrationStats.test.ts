@@ -92,6 +92,16 @@ function makeSignal(over: {
     convertedLiveAt: null,
     diagnostics: {
       dataCoverageScore: 0.9,
+      // Public-quality flagging now counts independent predictive-evidence
+      // families (component scores), not raw driver chips. Give the default
+      // fixture two clearing families (batter power ≥6.5, park/weather ≥6.0) to
+      // mirror its default "power" + "park" positive drivers.
+      batterPowerScore: 8,
+      pitcherVulnerabilityScore: 4,
+      matchupFitScore: 4,
+      parkWeatherScore: 7,
+      lineupOpportunityScore: 4,
+      nearHrRecentFormScore: null,
       rawInputsAvailable: { batterPower: true, lineup: true, pitcherProfile: true, park: true, weather: true, bvp: false },
       attackEnvironmentTier: over.attackEnvironmentTier,
       attackEnvironmentCohort: over.attackEnvironmentCohort,

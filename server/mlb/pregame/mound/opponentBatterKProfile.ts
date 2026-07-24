@@ -151,7 +151,7 @@ export async function fetchOpponentLineupKProfile(
       if (!splits) return null;
       const resolved = resolveVsHand(splits, pitcherThrows);
       if (resolved.rate == null || resolved.pa <= 0) return null;
-      return { ...resolved, weight: orderWeight(entry.battingOrderSlot) };
+      return { rate: resolved.rate, pa: resolved.pa, weight: orderWeight(entry.battingOrderSlot) };
     }),
   );
 
