@@ -33,7 +33,7 @@ export interface MoundScoringFlags {
   confirmedOpposingLineup: boolean;
   parkAvailable: boolean;
   weatherAvailable: boolean;
-  /** Legacy chip count retained for API/test compatibility; quality gating now counts independent component families. */
+  /** Legacy chip count retained as a veto for compatibility; it can suppress, never rescue, the independent-family gate. */
   positiveDriverCount: number;
 }
 
@@ -129,7 +129,13 @@ export function composeMoundScore(
     runEnvironmentScore: flags.parkAvailable ? c.runEnvironmentScore : null,
     recentFormScore: c.recentFormScore,
   });
-  if (evidenceFamilyCount < 2) suppressedReasons.push("insufficient_drivers");
+  // Independent evidence is the authority. The legacy chip count remains only
+  // as a conservative veto so old fixtures/diagnostics that intentionally
+  // construct a one-driver case keep the same suppression behavior. Context
+  // chips can never rescue evidenceFamilyCount < 2.
+  if (evidenceFamilyCount < 2 || flags.positiveDriverCount < 2) {
+    suppressedReasons.push("insufficient_drivers");
+  }
   if (score10 < MOUND_PUBLISH_MIN_SCORE) {
     suppressedReasons.push(cap < 10 ? "capped_by_data_quality" : "below_threshold_after_full_data");
   }
