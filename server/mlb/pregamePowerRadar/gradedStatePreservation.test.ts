@@ -122,13 +122,26 @@ const gradedWin: PregameOutcome = {
   ok(fresh.outcomes === newerOutcome, "already-graded rebuilt copy keeps its own outcome");
 }
 
+// Public-quality flagging now counts independent predictive-evidence families
+// (diagnostics component scores), not raw positive driver chips. Starve the
+// families below their thresholds so the fresh signal intrinsically fails
+// wasPubliclyFlaggedPregame — isolating the carry-forward OR from the live
+// intrinsic recompute. sig({})'s rich default component scores WOULD qualify.
+function starveEvidence(s: PregamePowerSignal): PregamePowerSignal {
+  const d = s.diagnostics as any;
+  d.batterPowerScore = 0;
+  d.pitcherVulnerabilityScore = 0;
+  d.matchupFitScore = 0;
+  d.parkWeatherScore = 0;
+  d.lineupOpportunityScore = 0;
+  d.nearHrRecentFormScore = null;
+  return s;
+}
+
 // ── 7. everPubliclyFlagged ORs forward across same-slate rebuilds ────────────
 {
-  // sig({})'s default drivers: [] intrinsically fails wasPubliclyFlaggedPregame
-  // (needs >=2 positive drivers), isolating the carry-forward OR from the
-  // live intrinsic recompute.
   const prev = sig({ everPubliclyFlagged: true });
-  const fresh = sig({});
+  const fresh = starveEvidence(sig({}));
   carryForwardGradedState(fresh, prev);
   ok(fresh.everPubliclyFlagged === true, "everPubliclyFlagged ORs forward across rebuilds");
 }
@@ -139,7 +152,7 @@ const gradedWin: PregameOutcome = {
     signalId: "mlb-pregame:2026-06-30:g1:b1", sessionDate: "2026-06-30",
     everPubliclyFlagged: true,
   });
-  const fresh = sig({});
+  const fresh = starveEvidence(sig({}));
   carryForwardGradedState(fresh, prevDay);
   ok(fresh.everPubliclyFlagged === false, "everPubliclyFlagged does not leak across slate days");
 }

@@ -1,9 +1,9 @@
 // Component 3 — Matchup Fit (weight 0.18).
 //
 // Pure scorer combining: handedness platoon edge, batter pitch-type strength vs
-// pitcher mix, and a CAPPED BvP supporting modifier. BvP is returned separately
-// as a final-score point modifier (applied in scoring.ts) so it can never
-// override the composite or surface a signal on its own.
+// pitcher mix, and a tightly-capped BvP supporting modifier. BvP is returned
+// separately as a final-score point modifier (applied in scoring.ts) so it can
+// never override the composite or surface a signal on its own.
 
 import type { ComponentScore, PowerDriver } from "./types";
 import { lin, weightedAvg, round1, clamp } from "./scoreUtils";
@@ -43,7 +43,7 @@ export interface MatchupFitResult extends ComponentScore {
   bvpDirection: BvpDirection;
   /** Which key production fields are .000 (AVG/SLG/OPS) — drives the zero-prod rule. */
   zeroProductionFlags: string[];
-  /** True when 5+ AB and ≥2 key production fields are .000 (blocks a clean Elite). */
+  /** True only on a meaningful sample (15+ AB) with ≥2 key production fields at .000. */
   bvpZeroProduction: boolean;
 }
 
@@ -78,15 +78,25 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
   if (sOps != null && sOps >= 7) {
     drivers.push({ key: "fit_ops_hand", label: "Strong vs Pitcher Hand", direction: "positive", weight: Math.round(sOps * 10), evidence: `OPS ${round1(inputs.batterOpsVsHand ?? 0)}` });
   }
+  if (sFamily != null && sFamily >= 7) {
+    drivers.push({
+      key: "fit_pitch_family",
+      label: "Strong vs Primary Pitch Shape",
+      direction: "positive",
+      weight: Math.round(sFamily * 10),
+      evidence: `xSLG ${inputs.batterXslgVsDominantFamily?.toFixed(3)}`,
+    });
+  }
   if (sPullPark != null && sPullPark >= 7) {
     drivers.push({ key: "fit_pull_park", label: "Pull Profile Fits Park", direction: "positive", weight: Math.round(sPullPark * 10) });
   }
 
-  // ── BvP supporting context (capped points modifier + direction) ─────────────
-  // BvP is a LOW/MEDIUM-confidence context signal. Sample-size shrinkage keeps a
-  // tiny sample from overriding the model: <5 AB is informational only; 5–10 is a
-  // small nudge; 10–25 moderate; 25+ stronger. It can never surface a signal on
-  // its own and never beats a coverage cap (applied later in scoring.ts).
+  // ── BvP supporting context (strictly capped points modifier + direction) ─────
+  // BvP is low-confidence context, not a core skill signal. 5–9 AB is display
+  // only; 10–24 can nudge the score by at most ±0.20; 25–49 by ±0.35; 50+ by
+  // ±0.50. It cannot independently block Elite until 25+ AB, and a hard
+  // zero-production block requires 15+ AB. This keeps noisy matchup history
+  // subordinate to repeatable batter/pitcher traits.
   let bvpModifier = 0;
   let bvpAvailable = false;
   let bvpScore: number | null = null;
@@ -107,54 +117,57 @@ export function computeMatchupFit(inputs: MatchupFitInputs): MatchupFitResult {
     const hitRate = denom > 0 ? inputs.bvpHits / denom : 0; // ~0.25 neutral
     const kRate = inputs.bvpStrikeouts != null && ab > 0 ? inputs.bvpStrikeouts / ab : null;
 
-    // ── Zero-production flags (AVG / SLG / OPS = .000) ─────────────────────────
-    // With cache fields (no TB), 0 hits ⇒ both AVG and SLG are .000. OPS is its
-    // own field. 0 HR ALONE is NOT a zero-production flag (most small samples are).
+    // Zero-production flags. 0 HR alone is never a negative signal.
     const avg = inputs.bvpAvg ?? (ab > 0 ? inputs.bvpHits / ab : null);
     if (avg === 0 || inputs.bvpHits === 0) zeroProductionFlags.push("AVG .000");
-    if (inputs.bvpHits === 0) zeroProductionFlags.push("SLG .000"); // no hits ⇒ no total bases
+    if (inputs.bvpHits === 0) zeroProductionFlags.push("SLG .000");
     if (inputs.bvpOps != null && inputs.bvpOps === 0) zeroProductionFlags.push("OPS .000");
-    bvpZeroProduction = sample >= 5 && zeroProductionFlags.length >= 2;
+    bvpZeroProduction = sample >= 15 && zeroProductionFlags.length >= 2;
 
-    // Directional 0–10 score from OPS + HR rate, penalized by a high K rate, then
-    // shrunk toward neutral (5) by sample size.
-    const sOps = inputs.bvpOps != null ? lin(inputs.bvpOps, 0.5, 1.0) : null;
+    // Directional display score shrinks much more slowly than the old 25-AB
+    // full-confidence rule. Even at 25 AB, half the raw deviation is still
+    // regressed toward neutral.
+    const bvpOpsScore = inputs.bvpOps != null ? lin(inputs.bvpOps, 0.5, 1.0) : null;
     const sHr = lin(hrRate, 0.0, 0.1);
-    let rawScore = sOps != null ? sOps * 0.65 + sHr * 0.35 : sHr;
+    let rawScore = bvpOpsScore != null ? bvpOpsScore * 0.65 + sHr * 0.35 : sHr;
     if (kRate != null) rawScore = clamp(rawScore - Math.max(0, kRate - 0.25) * 6, 0, 10);
-    const shrink = Math.min(1, sample / 25);
-    bvpScore = round1(clamp(5 + (rawScore - 5) * shrink, 0, 10));
+    const displayShrink = Math.min(1, sample / 50);
+    bvpScore = round1(clamp(5 + (rawScore - 5) * displayShrink, 0, 10));
 
-    // Points modifier with the same shrinkage caps. The HR term is REWARD-ONLY:
-    // 0 HR in a small sample is expected and must NOT be treated as a negative
-    // (per spec). Negative signal comes from low hit rate, high K, zero-production.
-    const raw =
-      Math.max(0, hrRate - 0.04) * 12 +
-      (hitRate - 0.25) * 2 -
-      (kRate != null ? Math.max(0, kRate - 0.25) * 2 : 0) -
-      (bvpZeroProduction ? 0.3 : 0);
-    const cap = sample >= 25 ? 1.0 : sample >= 10 ? 0.6 : 0.4;
-    bvpModifier = clamp(raw, -cap, cap);
+    if (sample >= 10) {
+      const raw =
+        Math.max(0, hrRate - 0.04) * 12 +
+        (hitRate - 0.25) * 2 -
+        (kRate != null ? Math.max(0, kRate - 0.25) * 2 : 0) -
+        (bvpZeroProduction ? 0.3 : 0);
+      const cap = sample >= 50 ? 0.50 : sample >= 25 ? 0.35 : 0.20;
+      bvpModifier = clamp(raw, -cap, cap);
+    }
 
-    // Direction. 0 HR alone never drives negative; we need genuine zero-production,
-    // a clearly low OPS with strikeouts, or a negative modifier.
-    const negative =
-      bvpZeroProduction ||
-      (inputs.bvpOps != null && inputs.bvpOps < 0.55 && (kRate ?? 0) >= 0.25) ||
-      bvpModifier <= -0.2;
-    const positive =
-      (inputs.bvpHr >= 1 && sample >= 8) ||
-      (inputs.bvpOps != null && inputs.bvpOps > 0.85) ||
-      bvpModifier >= 0.2;
-    bvpDirection = negative ? "negative" : positive ? "positive" : "neutral";
+    // Direction is reserved for samples large enough to carry an actual model
+    // meaning. Smaller samples can nudge the numeric score but never mint a
+    // positive/negative gate or independently block Elite.
+    if (sample >= 25) {
+      const negative =
+        bvpZeroProduction ||
+        (inputs.bvpOps != null && inputs.bvpOps < 0.55 && (kRate ?? 0) >= 0.25) ||
+        bvpModifier <= -0.20;
+      const positive =
+        (inputs.bvpHr >= 2 && sample >= 25) ||
+        (inputs.bvpOps != null && inputs.bvpOps > 0.90) ||
+        bvpModifier >= 0.20;
+      bvpDirection = negative ? "negative" : positive ? "positive" : "neutral";
+    }
 
     if (bvpDirection === "positive") {
-      drivers.push({ key: "fit_bvp", label: "Owns This Pitcher (BvP)", direction: "positive", weight: 40, evidence: `${inputs.bvpHr} HR / ${inputs.bvpHits} H in ${sample} AB` });
+      drivers.push({ key: "fit_bvp", label: "Positive BvP Context", direction: "positive", weight: 20, evidence: `${inputs.bvpHr} HR / ${inputs.bvpHits} H in ${sample} AB` });
     } else if (bvpDirection === "negative") {
       const ev = zeroProductionFlags.length > 0
         ? `${zeroProductionFlags.join(", ")} (${inputs.bvpHits} H, ${inputs.bvpStrikeouts ?? 0} K in ${sample} AB)`
         : `${inputs.bvpHits} H, ${inputs.bvpStrikeouts ?? 0} K in ${sample} AB`;
-      drivers.push({ key: "fit_bvp_bad", label: "Poor BvP History", direction: "negative", weight: 40, evidence: ev });
+      drivers.push({ key: "fit_bvp_bad", label: "Poor BvP Context", direction: "negative", weight: 20, evidence: ev });
+    } else if (sample < 10) {
+      warnings.push("BvP sample too small (<10 AB) — informational only");
     }
   } else if (sample > 0 && sample < 5) {
     warnings.push("BvP sample too small (<5 AB) — informational only");

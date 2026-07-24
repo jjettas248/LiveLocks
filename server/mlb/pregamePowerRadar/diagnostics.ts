@@ -1,8 +1,9 @@
 // Pre-Game Power Radar — diagnostics rollups + public visibility predicate.
 
 import type { PregamePowerSignal, PregamePowerRadarResponse } from "./types";
+import { countPositivePregameEvidenceFamilies } from "./evidenceFamilies";
 
-/** Derived helper: positive drivers on a signal. */
+/** Derived helper: positive drivers on a signal (display/analytics only). */
 export function positiveDrivers(signal: PregamePowerSignal) {
   return signal.drivers.filter((d) => d.direction === "positive");
 }
@@ -10,6 +11,17 @@ export function positiveDrivers(signal: PregamePowerSignal) {
 /** Derived helper: whether the batter power profile was available. */
 export function batterPowerAvailable(signal: PregamePowerSignal): boolean {
   return signal.diagnostics.rawInputsAvailable.batterPower === true;
+}
+
+function predictiveEvidenceFamilyCount(signal: PregamePowerSignal): number {
+  return countPositivePregameEvidenceFamilies({
+    batterPowerScore: signal.diagnostics.batterPowerScore,
+    pitcherVulnerabilityScore: signal.diagnostics.pitcherVulnerabilityScore,
+    matchupFitScore: signal.diagnostics.matchupFitScore,
+    parkWeatherScore: signal.diagnostics.parkWeatherScore,
+    lineupOpportunityScore: signal.diagnostics.lineupOpportunityScore,
+    nearHrRecentFormScore: signal.diagnostics.nearHrRecentFormScore ?? null,
+  });
 }
 
 /**
@@ -33,7 +45,10 @@ export function wasPubliclyFlaggedPregame(signal: PregamePowerSignal): boolean {
     signal.lineupStatus === "posted" &&
     tierEligible &&
     signal.score10 >= 6.0 &&
-    positiveDrivers(signal).length >= 2 &&
+    // Component-family confirmation, not raw chip count. A market tag plus one
+    // real driver, or three correlated power chips, no longer masquerades as
+    // independent evidence.
+    predictiveEvidenceFamilyCount(signal) >= 2 &&
     signal.diagnostics.dataCoverageScore >= 0.6 &&
     signal.diagnostics.rawInputsAvailable.batterPower === true &&
     signal.isOfficialPlay === false &&
@@ -62,7 +77,6 @@ export function flaggedBeforeFirstPitchPregame(signal: PregamePowerSignal): bool
  *
  *   1. INITIAL public eligibility (pre-first-pitch): may a signal surface for the
  *      first time? Answered by the intrinsic quality gate `wasPubliclyFlaggedPregame`.
- *      Unchanged — this pass never alters candidate volume or the eligibility bar.
  *   2. RETAINED visibility (first pitch has passed): does an already-publicly-surfaced,
  *      first-pitch-locked target stay on today's board through slate rollover? Answered
  *      by the durable frozen flag `flaggedBeforeFirstPitchPregame` + a locked/graded
@@ -84,7 +98,7 @@ export function isPublicPregameSignal(signal: PregamePowerSignal): boolean {
     signal.gameStatus === "final" ||
     signal.gameStatus === "suspended";
 
-  // Pre-first-pitch: INITIAL public eligibility (unchanged intrinsic gate).
+  // Pre-first-pitch: INITIAL public eligibility.
   if (!firstPitchPassed) return wasPubliclyFlaggedPregame(signal);
 
   // First pitch has passed: RETENTION off the durable frozen flag only.

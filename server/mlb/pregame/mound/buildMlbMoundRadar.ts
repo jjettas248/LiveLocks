@@ -42,6 +42,7 @@ import type {
 } from "./types";
 import { computePitcherSkill } from "./pitcherSkill";
 import { computeOpponentKProfile } from "./opponentKProfile";
+import { fetchOpponentLineupKProfile } from "./opponentBatterKProfile";
 import { computeWorkload } from "./workload";
 import { computeRunEnvironment } from "./runEnvironment";
 import { computeRecentForm } from "./recentForm";
@@ -52,7 +53,7 @@ import { computeKProjectionLabel } from "./kProjectionLabel";
 import { computeKLineValue } from "./kLineValue";
 import { composeMoundScore } from "./scoring";
 import { computeMoundDirection } from "./moundDirection";
-import { projectedStrikeoutsFromKPer9, weightedPlatoonKRate, computeAvgInningsPerStart } from "./scoreUtils";
+import { projectedStrikeoutsFromKPer9, computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMatchupAdjustedStrikeouts } from "./matchupAdjustedKs";
 import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
@@ -146,9 +147,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
   const prevSnapshot = getMoundSnapshot();
   const prevSignals =
     prevSnapshot && prevSnapshot.sessionDate === sessionDate ? prevSnapshot.signals : null;
-  // Grouped by gameId so a starter dropped from resolution (see
-  // carryForwardDroppedFromMound below) can be found without an O(games ×
-  // prevSignals) scan.
   const prevSignalsByGame = new Map<string, MoundSignal[]>();
   if (prevSignals) {
     for (const s of Array.from(prevSignals.values())) {
@@ -167,32 +165,13 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
   let lineupConfirmedCount = 0;
   let createdPublicEligible = 0;
   let suppressedCount = 0;
-  // score10 for confirmed-lineup pitchers only — the population the publish
-  // gate actually evaluates. Distribution logged at build-complete so a
-  // future "why is this empty" pass can read the answer instead of
-  // re-deriving it from the scoring formula by hand.
   const confirmedLineupScores: number[] = [];
-  // Research instrumentation only (evaluationSnapshot.ts) — the same season
-  // rate inputs moundOutcomeAttribution.ts's seasonBaseline() uses, captured
-  // per pitcher this cycle so the post-loop evaluation-snapshot pass can
-  // freeze them without a second data fetch.
   const seasonRatesByPitcherId = new Map<string, { seasonKPer9: number | null; seasonAvgInningsPerStart: number | null }>();
-  // Research instrumentation only (PR 2/5, rawPitcherContactSnapshot.ts) —
-  // held here, NOT written onto MoundDiagnostics, so it can never duplicate
-  // into every signal/public response. Threaded into applyMoundEvaluationSnapshots
-  // below, which places it directly into the frozen evaluation snapshot's
-  // champion object.
   const rawContactSnapshotsBySignalId = new Map<string, RawPitcherContactSnapshot>();
 
   try {
     const games = await discoverTodaysGames();
 
-    // Defense-in-depth: discoverTodaysGames() now throws on a failed fetch
-    // instead of returning [] (see gameDiscoveryService.ts), so this branch
-    // should be unreachable in practice — but if some other/future path ever
-    // returns a legitimately-empty-but-not-thrown result while today's board
-    // already has real signals in memory, refuse to wipe it. A true off-day
-    // (no prior signals to protect) still proceeds and builds an empty board.
     if (games.length === 0 && prevSignals && prevSignals.size > 0) {
       console.warn(
         `[MLB_PREGAME_MOUND_EMPTY_DISCOVERY] buildId=${buildId} date=${sessionDate} discovery returned 0 games with ${prevSignals.size} prior signals in memory — preserving existing snapshot`,
@@ -209,12 +188,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
 
       const gamePk = game.gamePk ?? null;
       if (!gamePk) {
-        // A transient MLB Stats API failure can leave gamePk unresolved for a
-        // cycle even after this game was already built. Without this, a bare
-        // `continue` would drop the whole game's signals — including
-        // already-graded mound_win outcomes — off the board for the rest of
-        // the day. Treat it as "every starter dropped from resolution" so it
-        // reuses the same preservation path.
         const carriedOver = carryForwardDroppedFromMound(
           game.gameId,
           new Set(),
@@ -256,11 +229,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
       const starters = [homeStarter, awayStarter].filter((p): p is NonNullable<typeof p> => !!p);
       if (starters.length > 0) starterGames++;
 
-      // Cache-only — never a live fetch on the build's critical path. This
-      // builder also produces the curated Targets feed, so a slow/degraded
-      // Odds API must never stall the whole Mound rebuild. On a cache miss,
-      // kick a background resolve (not awaited) to warm the cache for the
-      // NEXT build cycle instead.
       let oddsEventId: string | null = resolveMLBOddsEventIdFromCache(game.homeTeam, game.awayTeam);
       if (!oddsEventId) {
         resolveMLBOddsEventId(game.homeTeam, game.awayTeam).catch(() => {});
@@ -276,20 +244,21 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           Array.from(new Set(opposingLineup.map((l) => l.team)))[0] ??
           (starter.team === game.homeTeam ? game.awayTeam : game.homeTeam);
 
-        // ── Gather inputs (each guarded — degrade to neutral on failure) ────
-        // Independent network calls, no data dependency between them — run
-        // concurrently rather than paying Nx the round-trip latency per
-        // starter across a full slate's ~30 probable starters. BvP entries
-        // are one sync per confirmed opposing-lineup batter — shares the
-        // same cache the Plate/batter engine populates, so it's a no-op
-        // re-fetch when already warm from that side.
+        // Independent upstream calls run concurrently. Hitter-side K propensity
+        // is one cached aggregate call for the confirmed lineup, not an N+1 in
+        // the scoring function; internally it fans out once per hitter and then
+        // remains cached for subsequent pregame rebuilds.
         const bvpBatterIds = opposingLineupConfirmed ? opposingLineup.map((l) => l.playerId) : [];
-        const [, , handSplitsResult, recentStartsResult, savantResult] = await Promise.allSettled([
+        const [, , handSplitsResult, recentStartsResult, savantResult, lineupKResult] = await Promise.allSettled([
           syncPitcherSeasonStats(starter.pitcherId),
           syncPitcherMultiYearStats(starter.pitcherId),
           fetchPitcherHandednessSplits(starter.pitcherId),
           fetchPitcherRecentStarts(starter.pitcherId),
           fetchBaseballSavantData(starter.pitcherId, game.gameId),
+          fetchOpponentLineupKProfile(
+            opposingLineup.map((l) => ({ playerId: l.playerId, battingOrderSlot: l.battingOrderSlot })),
+            starter.throws ?? null,
+          ),
           ...bvpBatterIds.map((batterId) => syncBvPMatchup(batterId, starter.pitcherId)),
         ]);
         const seasonStats = mlbPlayerCache.pitcherSeasonStats[starter.pitcherId] ?? null;
@@ -297,11 +266,8 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         const handSplits = handSplitsResult.status === "fulfilled" ? handSplitsResult.value : null;
         const recentStarts = recentStartsResult.status === "fulfilled" ? recentStartsResult.value : null;
         const savant = savantResult.status === "fulfilled" ? savantResult.value : null;
+        const lineupKProfile = lineupKResult.status === "fulfilled" ? lineupKResult.value : null;
 
-        // Aggregate BvP across today's confirmed opposing lineup vs this
-        // starter — read-only cache aggregation, no additional I/O (the
-        // syncs above already populated it). Never fabricated: a batter
-        // with no BvP history simply contributes 0/0.
         let bvpTotalAtBats = 0;
         let bvpTotalStrikeouts = 0;
         for (const batterId of bvpBatterIds) {
@@ -312,10 +278,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           }
         }
 
-        // Cache-only display enrichment — never a live fetch on the build's
-        // critical path (same rationale as oddsEventId above). On a cache
-        // miss, warm the cache in the background for the NEXT build cycle
-        // rather than blocking this one.
         const strikeoutSnap = oddsEventId
           ? readOddsSnapshot({ sport: "mlb", eventId: oddsEventId, market: "pitcher_strikeouts", player: starter.pitcherName, isLive: false, allowStale: true })
           : null;
@@ -324,16 +286,12 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           getMLBPlayerOdds(oddsEventId, starter.pitcherName, "pitcher_strikeouts", false).catch(() => {});
         }
 
-        const pitcherKnown = true; // starter itself is always known here
+        const pitcherKnown = true;
         const avgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
         seasonRatesByPitcherId.set(starter.pitcherId, {
           seasonKPer9: seasonStats?.kPer9 ?? null,
           seasonAvgInningsPerStart: avgInningsPerStart,
         });
-        // Calls the same shared function as moundOutcomeAttribution.ts's
-        // settlement baseline (scoreUtils.ts) — the displayed projection and
-        // the number that decides win/loss grading must never be able to
-        // drift apart.
         const projectedStrikeouts = projectedStrikeoutsFromKPer9(seasonStats?.kPer9);
 
         const archetype = classifyPitcherArchetype({
@@ -345,8 +303,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           avgInningsPerStart,
         });
 
-        // Opposing lineup handedness composition — generic roster read, not
-        // hitter scoring, used only to weight the pitcher's own K-rate splits.
         let left = 0, right = 0, switchHit = 0;
         for (const slot of opposingLineup) {
           const p = getPlayer(slot.playerId);
@@ -370,6 +326,9 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           kRateVsLHB: handSplits?.kRateVsLHB ?? null,
           kRateVsRHB: handSplits?.kRateVsRHB ?? null,
           opposingLineupHandedness: opposingLineupConfirmed ? { left, right, switchHit } : null,
+          lineupBatterKRate: lineupKProfile?.lineupKRate ?? null,
+          lineupBatterKCoverage: lineupKProfile?.coverage ?? 0,
+          lineupHighKShare: lineupKProfile?.highKShare ?? null,
         });
 
         const workload = computeWorkload({
@@ -377,9 +336,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           bbPer9: seasonStats?.bbPer9 ?? null,
           avgInningsPerStart,
           lastStartPitchCount: recentStarts?.lastStartPitchCount ?? null,
-          // last3StartInningsPitched[0] is the SAME start lastStartPitchCount
-          // came from (fetchPitcherRecentStarts builds both from `starts[0]`,
-          // most-recent-first) — the correct pitches/inning denominator.
           lastStartInningsPitched: recentStarts?.last3StartInningsPitched?.[0] ?? null,
           ipVarianceLast3: recentStarts?.ipVarianceLast3 ?? null,
           archetype,
@@ -402,20 +358,14 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           last3StartERA: recentStarts?.last3StartERA ?? null,
         });
 
-        // Display-only enrichment of projectedStrikeouts — never feeds
-        // score10/tier/drivers/market selection, and never touches
-        // moundOutcomeAttribution.ts's settlement baseline (that stays
-        // anchored to projectedStrikeoutsFromKPer9 alone). Reuses the same
-        // platoon-K-rate weighting opponentKProfile.ts derives for its own
-        // score10, plus real BvP/multi-year/run-environment/recent-form
-        // inputs already gathered above.
+        // The richer projection remains separate from the stable season-baseline
+        // model grading, but it now uses the actual pitcher × hitter matchup K
+        // rate rather than pitcher splits alone.
         const matchupAdjustedStrikeouts = computeMatchupAdjustedStrikeouts({
           kPer9: seasonStats?.kPer9 ?? null,
           priorSeasonsKPer9,
           avgInningsPerStart,
-          platoonKRate: opposingLineupConfirmed
-            ? weightedPlatoonKRate(handSplits?.kRateVsLHB ?? null, handSplits?.kRateVsRHB ?? null, { left, right, switchHit })
-            : null,
+          platoonKRate: opponentKProfile.matchupKRate,
           opposingLineupConfirmed,
           runEnvironmentScore10: runEnv.available ? runEnv.score10 : null,
           runEnvironmentAvailable: runEnv.available,
@@ -441,16 +391,9 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           workloadScore: workload.score10,
         });
 
-        // Display-only, tagging layer — never feeds score10/tier/drivers/market
-        // selection. kLineValue's line MUST be the posted pitcher-strikeouts
-        // line (marketEdgeContext.line) only — never pitcher_outs or any other
-        // market's odds.
         const kProjectionLabel = computeKProjectionLabel(projectedStrikeouts, matchupAdjustedStrikeouts);
         const kLineValue = computeKLineValue(projectedStrikeouts, matchupAdjustedStrikeouts, marketEdgeContext?.line ?? null);
 
-        // Informational-only, like marketSetups — score10 is NEVER passed
-        // into composeMoundScore/MOUND_COMPONENT_WEIGHTS below, only its
-        // driver chips are folded into signal.drivers.
         const contactRisk = computeContactRisk({
           pitcherKnown,
           opposingLineupConfirmed,
@@ -461,12 +404,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           opposingLineupHandedness: opposingLineupConfirmed ? { left, right, switchHit } : null,
         });
 
-        // Research instrumentation only (PR 2/5) — reuses the same already-
-        // resolved seasonStats/recentStarts/savant inputs above; zero new
-        // fetches. seasonStatsAvailable/recentStartsAvailable mirror the
-        // exact same expressions used for rawInputsAvailable below
-        // (seasonStats != null / recentStarts != null), so this can never
-        // disagree with that existing diagnostic.
         const rawContactSupportingInputs: RawContactSupportingInputs = buildRawContactSupportingInputs(seasonStats, recentStarts);
         const rawContactSnapshot = aggregateRawPitcherContactSnapshot(
           savant?.pitcherContactCsvSource ?? null,
@@ -493,11 +430,8 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         } else if (archetype === "quality_starter") {
           drivers.push({ key: "ctx_quality", label: "Strong Pitcher Archetype", direction: "positive", weight: 30 });
         }
-        // contactRisk's chips (cr_high/cr_low) are informational-only — like
-        // marketSetups, they must never affect suppression/publish gating,
-        // only what's displayed. Excluded here AND in wasPubliclyFlaggedMound
-        // (diagnostics.ts), which independently recomputes this same count
-        // off signal.drivers.
+        // Legacy chip count retained for diagnostics/tests. composeMoundScore and
+        // the public predicate now gate on independent component families.
         const positiveDriverCount = drivers.filter((d) => d.direction === "positive" && !d.key.startsWith("cr_")).length;
 
         const lineupStatus: MoundLineupStatus = opposingLineupConfirmed ? "confirmed" : "unconfirmed";
@@ -523,9 +457,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
 
         if (opposingLineupConfirmed) confirmedLineupScores.push(scoring.score10);
 
-        // Stamped ONCE, here, at build time — never recomputed at grading
-        // time (moundShadowOutcomes.ts) or on the client. See
-        // moundDirection.ts's discipline comment.
         const moundDirection = computeMoundDirection({
           tier: scoring.tier,
           pitcherSkillScore: pitcherSkill.available ? pitcherSkill.score10 : null,
@@ -660,11 +591,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
         }
       }
 
-      // Preserve targets for starters who dropped out of resolution since the
-      // previous build (rotation change, scratch) — carryForwardMoundGradedState
-      // above only runs for starters still resolvable this cycle; without this
-      // pass a dropped starter's signal (including any already-stamped
-      // mound_win outcome) is silently absent from the rebuilt Map.
       const currentStarterIds = new Set(starters.map((s) => s.pitcherId));
       const carriedOver = carryForwardDroppedFromMound(
         game.gameId,
@@ -688,12 +614,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
     return null;
   }
 
-  // Research instrumentation (frozen evaluation snapshots) — runs once over
-  // the COMPLETE population after every candidate this cycle has been built
-  // and carryForwardMoundGradedState has already pinned moundDirection for
-  // each (the per-pitcher loop above already ran that), so a same-cycle
-  // Follow+Fade conflict resolves against the correctly-pinned direction.
-  // Never affects score10/tier/drivers/marketScores or public sort/filter.
   try {
     applyMoundEvaluationSnapshots(signals, prevSignals, buildId, seasonRatesByPitcherId, rawContactSnapshotsBySignalId);
   } catch (err: any) {
@@ -723,10 +643,6 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
       `pitchers=${pitchersEvaluated} public=${createdPublicEligible} suppressed=${suppressedCount}`,
   );
 
-  // Distribution over confirmed-lineup pitchers only — the population the
-  // publish gate actually evaluates — so a future "why is this empty" pass
-  // can read the answer in one log line instead of re-deriving it from the
-  // scoring formula by hand.
   if (confirmedLineupScores.length > 0) {
     const sorted = confirmedLineupScores.slice().sort((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
