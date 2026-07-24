@@ -16,6 +16,7 @@
 
 import type { MoundTier } from "./types";
 import { clamp10, round1 } from "./scoreUtils";
+import { countPositiveMoundEvidenceFamilies } from "./evidenceFamilies";
 
 export interface MoundScoringComponents {
   pitcherSkillScore: number;
@@ -32,6 +33,7 @@ export interface MoundScoringFlags {
   confirmedOpposingLineup: boolean;
   parkAvailable: boolean;
   weatherAvailable: boolean;
+  /** Legacy chip count retained for API/test compatibility; quality gating now counts independent component families. */
   positiveDriverCount: number;
 }
 
@@ -48,12 +50,10 @@ export interface MoundScoringResult {
 
 // 5.5, not 6.0: pitcherSkillScore's and opponentKProfileScore's lin() scales
 // (pitcherSkill.ts, opponentKProfile.ts) both place true league-average
-// performance well below the scale midpoint (~4.2/10 and ~2.9/10
-// respectively at league-average K/9 and platoon K rate), and
-// opponentKProfileScore + runEnvironmentScore (36% combined weight) sit at a
-// neutral 5 on any day without an extreme platoon/park/weather edge. At 6.0
-// this bar required near-top-of-league performance on nearly every axis
-// simultaneously, leaving it un-clearable on an ordinary slate.
+// performance well below the scale midpoint, so a 6.0 composite threshold is
+// too restrictive on an ordinary slate. Evidence-family gating below now adds
+// a separate quality requirement without conflating confirmation/context chips
+// with independent predictive evidence.
 export const MOUND_PUBLISH_MIN_SCORE = 5.5;
 
 export const MOUND_COMPONENT_WEIGHTS = {
@@ -122,7 +122,14 @@ export function composeMoundScore(
   const score10 = round1(clamp10(cappedScore - c.riskPenalty));
   const tier = classifyMoundTier(score10, c.pitcherSkillScore, c.workloadScore);
 
-  if (flags.positiveDriverCount < 2) suppressedReasons.push("insufficient_drivers");
+  const evidenceFamilyCount = countPositiveMoundEvidenceFamilies({
+    pitcherSkillScore: flags.pitcherSkillAvailable ? c.pitcherSkillScore : null,
+    opponentKProfileScore: flags.confirmedOpposingLineup ? c.opponentKProfileScore : null,
+    workloadScore: c.workloadScore,
+    runEnvironmentScore: flags.parkAvailable ? c.runEnvironmentScore : null,
+    recentFormScore: c.recentFormScore,
+  });
+  if (evidenceFamilyCount < 2) suppressedReasons.push("insufficient_drivers");
   if (score10 < MOUND_PUBLISH_MIN_SCORE) {
     suppressedReasons.push(cap < 10 ? "capped_by_data_quality" : "below_threshold_after_full_data");
   }
