@@ -35,6 +35,21 @@ export interface GameStateCache {
   homeTeamAbbr: string;
   awayTeamAbbr: string;
   fetchedAt: number;
+  /**
+   * Cumulative count of balls ACTUALLY put in play this game, straight from
+   * the play feed (`playEvents[].details.isInPlay`, falling back to the
+   * presence of `playEvents[].hitData`).
+   *
+   * This exists so contact detection stops being inferred from a pitch-count
+   * delta. A called strike, ball, swinging strike or foul all increment
+   * `pitchCount` without any contact; only this counter moves when a bat
+   * actually puts a ball in play.
+   *
+   * Optional so snapshots cached before this field existed (and test fixtures)
+   * still typecheck. Consumers must treat `undefined` as "unknown", never as 0
+   * — see classifyStateChange in ./liveStateEvents.
+   */
+  battedBallEvents?: number;
 }
 
 export interface PlayerContactData {
@@ -496,6 +511,17 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
     const allPlays: any[] = plays.allPlays ?? [];
     const totalPlays: number = allPlays.filter((p: any) => p.result?.event).length;
 
+    // Real batted-ball count — the play feed's own truth about contact.
+    // Counts pitch events flagged isInPlay (or carrying Statcast hitData),
+    // which is exactly the evidence syncContactData already reads further
+    // down this file. Zero extra network cost: same already-fetched payload.
+    let battedBallEvents = 0;
+    for (const play of allPlays) {
+      for (const evt of (play.playEvents ?? []) as any[]) {
+        if (evt?.details?.isInPlay === true || evt?.hitData) battedBallEvents += 1;
+      }
+    }
+
     // Runners on base
     const offenseBase = linescore.offense ?? {};
     const runnersOnBase: Array<"first" | "second" | "third"> = [];
@@ -597,6 +623,7 @@ export async function syncGameState(statsPk: string, cacheKey?: string): Promise
       homeTeamAbbr,
       awayTeamAbbr,
       fetchedAt: Date.now(),
+      battedBallEvents,
     };
 
     console.log(`[MLB pull] syncGameState: game ${gameId} — inning ${inning}${isTopInning ? "T" : "B"}, ${battingOrder.length} batters`);

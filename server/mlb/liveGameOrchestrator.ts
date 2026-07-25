@@ -73,13 +73,43 @@ import {
 import { evaluateShadowBatterOver } from "./shadowQualification";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
-import { resolveMLBOddsEventIdFromCache, readMLBPlayerOddsFromCache } from "../oddsService";
+import { resolveMLBOddsEventIdFromCache, readMLBPlayerOddsFromCache, readMLBApprovedBookPricesFromCache } from "../oddsService";
+import { normalizeMlbMarketKey } from "./normalizeMarketKey";
+import {
+  classifyStateChange,
+  computeImpactedMarkets as computeImpactedMarketsPure,
+  affectedActors,
+  HIGH_IMPACT_TRIGGERS,
+  GAME_WIDE_TRIGGERS,
+  type StateChangeTrigger as StateChangeTriggerType,
+} from "./liveStateEvents";
+import {
+  mergeCarryForward,
+  compareMLBSignalsForFeed,
+  isFullScope,
+  type CycleScope,
+} from "./edgeCarryForward";
+import {
+  evaluatePriceFloor,
+  getEvaluatedSide,
+  recordEvaluatedSide,
+} from "../odds/mlbOddsPriceFloor";
+import {
+  recordStatePoll,
+  recordEngineRun,
+  recordReconciliationCheck,
+  recordOddsRefreshSkip,
+  recordLiveGameTime,
+  maybeEmitLiveEdgeMetrics,
+} from "./liveEdgeMetrics";
 import { assignMlbTier, assignAndCheckPoll, markPolled, clearGame as clearScheduler, logTierAssignment, type MlbGameContext } from "../odds/oddsScheduler";
 import { clearTier } from "../odds/oddsDiagnostics";
 import {
   registerMarketInterest as registerMLBMarketInterest,
   removeGameInterests as removeMLBGameInterests,
   warmEventId as warmMLBEventId,
+  reconsiderDormantMarkets as reconsiderMLBDormantMarkets,
+  type MlbSignalUrgency,
 } from "../odds/mlbOddsRefreshCoordinator";
 import {
   classifyBatterArchetype,
@@ -952,13 +982,33 @@ const HR_RADAR_HYDRATED_GAMES = new Set<string>();
 //     `confidenceTier`, and `stageContract.currentCanonicalStage` downstream.
 
 // ── Engine dedup lock ─────────────────────────────────────────────────────────
-const LAST_RUN = new Map<string, number>();
+// Scope-aware: the window is only honoured when the incoming cycle would cover
+// no more ground than the last one did. A wider cycle always runs, so a narrow
+// event can never swallow the broader event arriving right behind it.
+const LAST_RUN = new Map<string, { ts: number; scope: CycleScope }>();
 const DEDUP_WINDOW_MS = 15_000;
+
+/** True when `candidate` covers no markets/players beyond `prior`. */
+function isScopeSubset(candidate: CycleScope, prior: CycleScope): boolean {
+  if (prior.markets !== "all") {
+    if (candidate.markets === "all") return false;
+    for (const m of Array.from(candidate.markets)) {
+      if (!prior.markets.has(m)) return false;
+    }
+  }
+  if (prior.playerIds !== "all") {
+    if (candidate.playerIds === "all") return false;
+    for (const p of Array.from(candidate.playerIds)) {
+      if (!prior.playerIds.has(p)) return false;
+    }
+  }
+  return true;
+}
 
 function shouldSkip(gameId: string): boolean {
   const last = LAST_RUN.get(gameId);
   if (last === undefined) return false;
-  return Date.now() - last < DEDUP_WINDOW_MS;
+  return Date.now() - last.ts < DEDUP_WINDOW_MS;
 }
 
 // ── Debug pipeline logging ────────────────────────────────────────────────────
@@ -1031,10 +1081,25 @@ function getCachedHrOdds(gameId: string, playerId: string): { overOdds: number |
 // coordinator (fire-and-forget — never awaited) and the tick moves on with
 // whatever is already cached; the next tick picks up any fresher snapshot
 // once that refresh has completed on its own schedule.
+/**
+ * Per-cycle odds-refresh policy handed to resolveBookLine. The engine reads
+ * cached odds unconditionally; this only governs whether a provider refresh
+ * may additionally be requested.
+ */
+interface ResolveBookLineRefreshPolicy {
+  /** False on reconciliation/liveness cycles — read cache, never spend quota. */
+  allowOddsInterest: boolean;
+  /** True when a real baseball event authorized this cycle. */
+  materialEvent: boolean;
+  /** Canonical lifecycle urgency of the strongest signal on this market. */
+  urgency: MlbSignalUrgency;
+}
+
 async function resolveBookLine(
   oddsEventId: string | null,
   playerName: string,
-  market: MLBMarket
+  market: MLBMarket,
+  refreshPolicy?: ResolveBookLineRefreshPolicy,
 ): Promise<ResolvedLine | null> {
   const normName = playerName.toLowerCase().trim();
   const cacheKey = oddsEventId ? `${oddsEventId}|${normName}|${market}` : `unknown|${normName}|${market}`;
@@ -1044,12 +1109,28 @@ async function resolveBookLine(
   if (oddsEventId) {
     const cached = readMLBPlayerOddsFromCache(oddsEventId, playerName, market, "live");
 
-    registerMLBMarketInterest({
-      eventId: oddsEventId,
-      market,
-      gameStatus: "live",
-      stale: !cached || cached.isDegraded,
-    });
+    // ── Engine/odds decoupling ────────────────────────────────────────────
+    // Recomputing a signal NEVER implies a provider request. The engine has
+    // already read whatever is cached above; whether we additionally ask the
+    // provider for a fresher price is a separate decision made here, against
+    // the side-specific price floor and the signal's own lifecycle urgency.
+    if (refreshPolicy?.allowOddsInterest === false) {
+      recordOddsRefreshSkip(oddsEventId, market, "no_material_event", { player: playerName });
+    } else {
+      const side = getEvaluatedSide(oddsEventId, market, playerName);
+      const books = readMLBApprovedBookPricesFromCache(oddsEventId, playerName, market);
+      const verdict = evaluatePriceFloor(books, side);
+      registerMLBMarketInterest({
+        eventId: oddsEventId,
+        market,
+        gameStatus: "live",
+        stale: !cached || cached.isDegraded,
+        urgency: refreshPolicy?.urgency ?? null,
+        bestPriceForSide: verdict.bestPrice,
+        priceEligible: verdict.eligible,
+        materialEvent: refreshPolicy?.materialEvent ?? true,
+      });
+    }
 
     if (cached) {
       priorResolvedLines.set(cacheKey, cached.line);
@@ -1090,53 +1171,31 @@ export function normalizeMlbStatus(raw: string | undefined): "live" | "pregame" 
 }
 
 // ── State change trigger types ────────────────────────────────────────────────
+// Canonical definitions now live in ./liveStateEvents (pure + unit-testable).
+// Re-exported here so existing importers of StateChangeTrigger keep working.
 
-export type StateChangeTrigger =
-  | "new_ab"
-  | "ab_completed"
-  | "ball_in_play"
-  | "inning_change"
-  | "pitcher_change"
-  | "runner_change"
-  | "pitch_count_threshold"
-  | "tto_shift"
-  | "lineup_substitution"
-  | "hard_hit_event"
-  | "out_recorded"
-  | "score_change"
-  | "odds_update"
-  | "heartbeat_refresh";
-
-const HIGH_IMPACT_TRIGGERS = new Set<StateChangeTrigger>([
-  "new_ab", "ab_completed", "inning_change", "pitcher_change",
-  "tto_shift", "lineup_substitution", "out_recorded", "score_change",
-]);
-
-const TRIGGER_IMPACTED_MARKETS: Record<StateChangeTrigger, MLBMarket[] | "all"> = {
-  new_ab: "all",
-  ab_completed: "all",
-  ball_in_play: ["hits", "total_bases", "home_runs", "hrr", "hits_allowed"],
-  inning_change: "all",
-  pitcher_change: "all",
-  runner_change: ["hits", "total_bases", "hrr"],
-  pitch_count_threshold: ["pitcher_strikeouts", "pitcher_outs", "hits_allowed"],
-  tto_shift: "all",
-  lineup_substitution: "all",
-  hard_hit_event: ["hits", "total_bases", "home_runs", "hrr", "hits_allowed"],
-  out_recorded: "all",
-  score_change: "all",
-  odds_update: "all",
-  // Heartbeat backstop — see HEARTBEAT_RECOMPUTE in pollGame. Recomputes all
-  // markets when the engine has gone >45s without a real state-change trigger
-  // so the cache `updatedAt` reflects a real run, not a fake refresh.
-  heartbeat_refresh: "all",
-};
+export type { StateChangeTrigger } from "./liveStateEvents";
+export { TRIGGER_IMPACTED_MARKETS } from "./liveStateEvents";
 
 // ── Polling intervals ─────────────────────────────────────────────────────────
 
 const GAME_DISCOVERY_MS = 5 * 60 * 1000;   // 5 minutes
 const GAME_STATE_MS = 10 * 1000;            // 10 seconds (via pollGame)
 const WEATHER_MS = 10 * 60 * 1000;          // 10 minutes
+
+// ── Reconciliation backstop ───────────────────────────────────────────────────
+// MLB is event-driven: elapsed time NEVER authorizes an engine run. This
+// interval does not schedule a recompute — it schedules a *check*. When a game
+// has gone this long without the engine running, we re-diff the current
+// authoritative state against the state the engine last actually ran on. If
+// that diff contains real baseball events (i.e. we missed one), those real
+// triggers drive a normal engine run. If the world is genuinely unchanged, the
+// check stops: no engine execution, no HR evaluation tick, no odds request.
+//
+// Sized under MLB_ACTIVE_FRESHNESS_MS (4 min, server/mlb/edgeCache.ts) so a
+// verified-unchanged game can have its display liveness re-stamped before
+// consumer routes would drop it.
+const RECONCILE_BACKSTOP_MS = 150 * 1000;
 
 // ── Orchestrator class ────────────────────────────────────────────────────────
 
@@ -1157,6 +1216,20 @@ export class LiveGameOrchestrator {
   private timers: ReturnType<typeof setInterval>[] = [];
   private previousStates: Map<string, GameStateCache> = new Map();
   private pollInFlight: Set<string> = new Set();
+  /**
+   * State the engine last ACTUALLY ran against, per game.
+   *
+   * Distinct from `previousStates`, which advances on every poll regardless of
+   * whether the engine ran — so a cycle that fired triggers but was
+   * dedup-skipped silently "consumes" those events. The reconciliation
+   * backstop diffs against this map instead, which is what makes it able to
+   * recover a genuinely missed baseball event.
+   */
+  private lastEngineStates: Map<string, GameStateCache> = new Map();
+  /** Wall-clock of the last engine run (or verified-unchanged reconcile) per game. */
+  private lastEngineRunAt: Map<string, number> = new Map();
+  /** Last poll timestamp per live game — feeds the per-live-game-hour KPI. */
+  private lastLivePollAt: Map<string, number> = new Map();
 
   start(): void {
     console.log("[MLB orchestrator] Starting...");
@@ -1446,6 +1519,11 @@ export class LiveGameOrchestrator {
           );
           removeGame(existing.gameId);
           this.previousStates.delete(existing.gameId);
+          // Event-driven bookkeeping — released alongside previousStates so
+          // these maps can't grow across a season.
+          this.lastEngineStates.delete(existing.gameId);
+          this.lastEngineRunAt.delete(existing.gameId);
+          this.lastLivePollAt.delete(existing.gameId);
           clearScheduler("mlb", existing.gameId);
           clearTier("mlb", existing.gameId);
           // HR Radar Final-Game Reconciliation — release the once-only
@@ -1690,6 +1768,20 @@ export class LiveGameOrchestrator {
 
     const isLiveForContact = normalizedStatus === "live";
 
+    // Live game-time accounting for the odds-requests-per-live-game-hour KPI.
+    if (isLiveForContact) {
+      const lastPoll = this.lastLivePollAt.get(gameId);
+      const nowPoll = Date.now();
+      // Only count contiguous polling gaps — a multi-minute jump means the
+      // game wasn't being observed, so it shouldn't inflate the denominator.
+      if (lastPoll && nowPoll - lastPoll < 5 * 60_000) {
+        recordLiveGameTime(nowPoll - lastPoll);
+      }
+      this.lastLivePollAt.set(gameId, nowPoll);
+    } else {
+      this.lastLivePollAt.delete(gameId);
+    }
+
     // Razor-sharp HR grading: pulls inning attribution from each HR play directly,
     // not from the orchestrator's current state.inning (which can roll over).
     // Runs every poll cycle (live + final) so post-game catch-ups still resolve correctly.
@@ -1890,6 +1982,8 @@ export class LiveGameOrchestrator {
 
     if (prevState) {
       const triggers = this.detectStateChange(prevState, newState);
+      recordStatePoll(gameId, triggers);
+
       if (triggers.length > 0) {
         console.log(`[MLB orchestrator] State change for game ${gameId} (status=${normalizedStatus}, source=${statusSource}): ${triggers.join(", ")}`);
 
@@ -1897,117 +1991,145 @@ export class LiveGameOrchestrator {
           await syncBullpenUsage(statsPk, gameId);
         }
 
+        // Material baseball events are the ONLY thing that grants a dormant
+        // (sub-floor) market a rediscovery opportunity. No extra timer.
+        this.maybeReconsiderDormantMarkets(gameId, triggers);
+
         const hrDetectedEpoch = safeDetectHrEpoch(prevState, triggers);
-        await this.triggerEngine(gameId, normalizedStatus, triggers, hrDetectedEpoch);
+        const actors = affectedActors(triggers, prevState, newState);
+        const runMarkerBefore = this.lastEngineRunAt.get(gameId) ?? 0;
+        await this.triggerEngine(gameId, normalizedStatus, triggers, hrDetectedEpoch, actors);
+        // ONLY advance the engine-truth state when the engine genuinely ran.
+        // A dedup-skipped cycle must leave lastEngineStates behind so the
+        // reconciliation backstop can still see (and recover) these events.
+        if ((this.lastEngineRunAt.get(gameId) ?? 0) !== runMarkerBefore) {
+          this.lastEngineStates.set(gameId, { ...newState });
+        }
       } else if (normalizedStatus === "live") {
-        // Freshness Integrity Fix #1 — never fake-refresh the cache timestamp.
-        // If no real state-change trigger fired, decide whether to fire a real
-        // heartbeat recompute based on engine output age. The 15s dedup window
-        // inside triggerEngine still protects us from runaway runs.
-        const cached = mlbEdgeCache.get(gameId);
-        const lastEngineRunAt = Math.max(cached?.updatedAt ?? 0, cached?.createdAt ?? 0);
-        const ageMs = lastEngineRunAt > 0 ? Date.now() - lastEngineRunAt : Infinity;
-        // MLB Signals audit P5 — 45s -> 25s. The user-facing edge feed now
-        // expects sub-30s freshness; heartbeat must keep pace so cards
-        // don't flat-line during natural between-PA gaps.
-        if (ageMs > 25_000) {
-          console.log(`[MLB HEARTBEAT_RECOMPUTE] game=${gameId} ageMs=${ageMs === Infinity ? "inf" : ageMs}`);
-          // Heartbeat recomputes never generate a capture epoch — no
-          // unchanged-tick duplication (HR Radar Research PR 2 invariant #4).
-          await this.triggerEngine(gameId, normalizedStatus, ["heartbeat_refresh"], null);
+        // ── No material baseball change: STOP ──────────────────────────────
+        // Elapsed time is not an event. No engine run, no HR evaluation tick,
+        // no lifecycle promotion, no odds request.
+        //
+        // The ONE exception is a reconciliation check, and it is a check, not
+        // a recompute: re-diff current state against the state the engine last
+        // actually ran on (NOT prevState, which advances every poll even when
+        // the engine was dedup-skipped). If that diff contains real events we
+        // missed one, and those real triggers drive a normal engine run. If it
+        // is genuinely empty, we only re-stamp display liveness and return.
+        const lastEngineState = this.lastEngineStates.get(gameId);
+        const lastEngineRunAt = this.lastEngineRunAt.get(gameId) ?? 0;
+        const sinceEngineMs = lastEngineRunAt > 0 ? Date.now() - lastEngineRunAt : Infinity;
+
+        if (sinceEngineMs >= RECONCILE_BACKSTOP_MS) {
+          const missed = lastEngineState
+            ? this.detectStateChange(lastEngineState, newState)
+            : [];
+          const recovered = missed.length > 0;
+          recordReconciliationCheck(recovered, gameId);
+
+          if (recovered) {
+            console.log(`[MLB_STATE_EVENT] reconciliation recovered missed events game=${gameId} triggers=[${missed.join(",")}] sinceEngineMs=${sinceEngineMs}`);
+            this.maybeReconsiderDormantMarkets(gameId, missed);
+            const hrDetectedEpoch = safeDetectHrEpoch(lastEngineState ?? null, missed);
+            const actors = affectedActors(missed, lastEngineState ?? null, newState);
+            const runMarkerBefore = this.lastEngineRunAt.get(gameId) ?? 0;
+            await this.triggerEngine(gameId, normalizedStatus, missed, hrDetectedEpoch, actors);
+            if ((this.lastEngineRunAt.get(gameId) ?? 0) !== runMarkerBefore) {
+              this.lastEngineStates.set(gameId, { ...newState });
+            }
+          } else {
+            // Verified unchanged. Re-stamp display liveness ONLY — this does
+            // not run the engine, does not touch updatedAt, and cannot
+            // manufacture HR promotion evidence. It exists so a genuinely
+            // quiet stretch doesn't drop the game's signals out of the feed
+            // via MLB_ACTIVE_FRESHNESS_MS.
+            const cached = mlbEdgeCache.get(gameId);
+            if (cached && cached.allSignals.length > 0) {
+              mlbEdgeCache.set(gameId, { ...cached, preservedAt: Date.now() } as any);
+            }
+            this.lastEngineRunAt.set(gameId, Date.now());
+          }
         }
       }
     } else if (normalizedStatus === "live") {
       console.log(`[MLB orchestrator] First poll for live game ${gameId} (status=${normalizedStatus}, source=${statusSource}) — triggering engine`);
       const hrDetectedEpoch = safeDetectHrEpoch(null, []);
+      const runMarkerBefore = this.lastEngineRunAt.get(gameId) ?? 0;
       await this.triggerEngine(gameId, normalizedStatus, undefined, hrDetectedEpoch);
+      if ((this.lastEngineRunAt.get(gameId) ?? 0) !== runMarkerBefore) {
+        this.lastEngineStates.set(gameId, { ...newState });
+      }
     }
 
     this.previousStates.set(gameId, { ...newState });
+    maybeEmitLiveEdgeMetrics();
   }
 
+  /**
+   * Read-only snapshot of canonical lifecycle state per (playerName, market)
+   * for this game, used purely to decide how urgently a market's PRICE needs
+   * refreshing. This does not create, mutate, or infer lifecycle state — it
+   * reads what the existing bus already published. Keyed by name+market
+   * because resolveBookLine works in player names, not actorIds.
+   */
+  private readLifecycleUrgency(gameId: string): Map<string, MlbSignalUrgency> {
+    const out = new Map<string, MlbSignalUrgency>();
+    try {
+      const registered = liveSignalBusMod.getRegistered({
+        sport: "mlb",
+        gameId,
+        excludeTerminal: true,
+        freshOnlyWithinMs: 0,
+      });
+      const rank: Record<string, number> = { watch: 0, build: 1, strong: 2, elite: 3 };
+      for (const sig of registered) {
+        const state = (sig as any).lifecycleState as MlbSignalUrgency;
+        if (!state || rank[state] === undefined) continue;
+        const key = `${String((sig as any).actorName ?? "").toLowerCase().trim()}|${normalizeMlbMarketKey((sig as any).market)}`;
+        const existing = out.get(key);
+        if (!existing || rank[state] > rank[existing]) out.set(key, state);
+      }
+    } catch {
+      /* urgency is an optimization — never break the engine tick */
+    }
+    return out;
+  }
+
+  /**
+   * Grant dormant (sub -200) markets on this game one rediscovery opportunity.
+   * Only meaningful baseball events qualify — never a timer.
+   */
+  private maybeReconsiderDormantMarkets(gameId: string, triggers: readonly StateChangeTriggerType[]): void {
+    try {
+      const qualifies = triggers.some(t =>
+        t === "inning_change" || t === "pitcher_change" || t === "lineup_substitution");
+      if (!qualifies) return;
+      const game = getGame(gameId);
+      if (!game) return;
+      const eventId = resolveMLBOddsEventIdFromCache(game.awayTeam, game.homeTeam);
+      if (!eventId) return;
+      const reason = triggers.find(t =>
+        t === "inning_change" || t === "pitcher_change" || t === "lineup_substitution") ?? "material_event";
+      reconsiderMLBDormantMarkets(eventId, reason);
+    } catch { /* rediscovery is best-effort — never break the poll */ }
+  }
+
+  /**
+   * Delegates to the pure classifier in ./liveStateEvents. Kept as a method so
+   * existing callers (including the admin debug route) are unaffected.
+   */
   detectStateChange(
     oldState: GameStateCache,
     newState: GameStateCache
-  ): StateChangeTrigger[] {
-    const triggers: StateChangeTrigger[] = [];
-
-    if (oldState.inning !== newState.inning || oldState.isTopInning !== newState.isTopInning) {
-      triggers.push("inning_change");
-    }
-
-    if (oldState.currentBatter?.playerId !== newState.currentBatter?.playerId) {
-      triggers.push("new_ab");
-    }
-
-    if (oldState.pitcherInGame?.playerId !== newState.pitcherInGame?.playerId) {
-      triggers.push("pitcher_change");
-    }
-
-    const oldRunners = JSON.stringify((oldState.runnersOnBase ?? []).sort());
-    const newRunners = JSON.stringify((newState.runnersOnBase ?? []).sort());
-    if (oldRunners !== newRunners) {
-      triggers.push("runner_change");
-    }
-
-    if (newState.pitchCount > oldState.pitchCount) {
-      triggers.push("ball_in_play");
-    }
-
-    if (newState.outs !== oldState.outs) {
-      triggers.push("out_recorded");
-    }
-
-    const oldTotal = oldState.totalPlays ?? 0;
-    const newTotal = newState.totalPlays ?? 0;
-    if (newTotal > oldTotal) {
-      triggers.push("ab_completed");
-    }
-
-    const oldHomeScore = oldState.homeScore ?? 0;
-    const oldAwayScore = oldState.awayScore ?? 0;
-    const newHomeScore = newState.homeScore ?? 0;
-    const newAwayScore = newState.awayScore ?? 0;
-    if (newHomeScore !== oldHomeScore || newAwayScore !== oldAwayScore) {
-      triggers.push("score_change");
-    }
-
-    const pitchCountThresholds = [50, 65, 75, 85, 95, 105];
-    for (const threshold of pitchCountThresholds) {
-      if (oldState.pitchCount < threshold && newState.pitchCount >= threshold) {
-        triggers.push("pitch_count_threshold");
-        break;
-      }
-    }
-
-    const oldTTO = (oldState as any).timesThrough ?? 1;
-    const newTTO = (newState as any).timesThrough ?? 1;
-    if (newTTO > oldTTO) {
-      triggers.push("tto_shift");
-    }
-
-    const oldBatterCount = (oldState as any).battingOrder?.length ?? 0;
-    const newBatterCount = (newState as any).battingOrder?.length ?? 0;
-    if (newBatterCount !== oldBatterCount && oldBatterCount > 0) {
-      triggers.push("lineup_substitution");
-    }
-
-    return triggers;
+  ): StateChangeTriggerType[] {
+    return classifyStateChange(oldState, newState);
   }
 
-  private computeImpactedMarkets(triggers: StateChangeTrigger[]): Set<MLBMarket> {
-    const impacted = new Set<MLBMarket>();
-    for (const t of triggers) {
-      const markets = TRIGGER_IMPACTED_MARKETS[t];
-      if (markets === "all") {
-        return new Set(ALL_MLB_MARKETS);
-      }
-      for (const m of markets) impacted.add(m);
-    }
-    return impacted;
+  private computeImpactedMarkets(triggers: StateChangeTriggerType[]): Set<MLBMarket> {
+    return computeImpactedMarketsPure(triggers);
   }
 
-  private getDedupWindow(triggers: StateChangeTrigger[]): number {
+  private getDedupWindow(triggers: StateChangeTriggerType[]): number {
     // MLB Signals audit P5 — inning_change forces a fresh recompute even if
     // another trigger (new_ab, ab_completed, etc.) just fired. Inning
     // boundaries change PA-remaining for every batter in the lineup; the
@@ -3736,7 +3858,13 @@ export class LiveGameOrchestrator {
     }
   }
 
-  async triggerEngine(gameId: string, normalizedStatus: "live" | "pregame" | "final" | "unknown", triggers?: StateChangeTrigger[], hrDetectedEpoch?: HrDetectedEpoch | null): Promise<MLBPropOutput[]> {
+  async triggerEngine(
+    gameId: string,
+    normalizedStatus: "live" | "pregame" | "final" | "unknown",
+    triggers?: StateChangeTriggerType[],
+    hrDetectedEpoch?: HrDetectedEpoch | null,
+    actors?: { all: boolean; playerIds: Set<string> },
+  ): Promise<MLBPropOutput[]> {
     const outputs: MLBPropOutput[] = [];
     const qualifiedSignals: MLBQualifiedSignal[] = [];
     const allSignals: MLBQualifiedSignal[] = [];
@@ -3764,19 +3892,79 @@ export class LiveGameOrchestrator {
       return outputs;
     }
 
+    const impactedMarkets = triggers ? this.computeImpactedMarkets(triggers) : new Set(ALL_MLB_MARKETS);
+
+    // ── Scope ────────────────────────────────────────────────────────────────
+    // A cycle's scope is what it actually iterated. Everything outside it is
+    // carried forward untouched rather than deleted from the feed.
+    //
+    // Player narrowing is deliberately conservative:
+    //   - home_runs is NEVER narrowed. The HR block inside the batter loop
+    //     drives recomputeHrAlertState, whose consecutivePromoteTicks gate is
+    //     evaluation-counted; skipping batters would stretch promotion and the
+    //     presence-floor pass would write presence-only rows over real ones.
+    //   - any cycle carrying an HR capture epoch stays lineup-complete.
+    const hrExemptFromNarrowing = hrDetectedEpoch != null;
+    const narrowPlayers = !!actors
+      && !actors.all
+      && !hrExemptFromNarrowing
+      && actors.playerIds.size > 0;
+    const narrowedPlayerIds = narrowPlayers ? new Set(actors!.playerIds) : null;
+
+    const allMarketsCount = ALL_MLB_MARKETS.length;
+    const marketsAreFull = impactedMarkets.size >= allMarketsCount;
+    // Markets walked for the whole lineup even under player narrowing:
+    // home_runs (never narrowed) and every pitcher market (only the active
+    // pitcher is ever evaluated, and it is always in the narrowed set).
+    const fullyEvaluatedMarkets = new Set<string>([
+      "home_runs",
+      ...PITCHER_MARKETS.map(m => normalizeMlbMarketKey(m)),
+    ]);
+    const cycleScope: CycleScope = {
+      markets: marketsAreFull ? "all" : new Set(Array.from(impactedMarkets).map(m => normalizeMlbMarketKey(m))),
+      playerIds: narrowedPlayerIds ? new Set(narrowedPlayerIds) : "all",
+      fullyEvaluatedMarkets,
+    };
+
+    // ── Scope-aware dedup ────────────────────────────────────────────────────
+    // The old dedup was scope-blind: a narrow cycle would burn the window and
+    // silently swallow a wider cycle arriving moments later (e.g. ball_in_play
+    // at t, ab_completed at t+2s ⇒ pitcher markets never recomputed). Dedup now
+    // only applies when the incoming scope is a SUBSET of the last run's.
     const effectiveDedup = triggers ? this.getDedupWindow(triggers) : DEDUP_WINDOW_MS;
     const last = LAST_RUN.get(gameId);
-    if (last !== undefined && Date.now() - last < effectiveDedup) {
-      console.log(`[MLB orchestrator] triggerEngine dedup-skipped for game ${gameId} (ran within ${effectiveDedup}ms)`);
-      auditRecordCooldown(gameId, Date.now() - last, effectiveDedup);
+    if (last !== undefined && Date.now() - last.ts < effectiveDedup && isScopeSubset(cycleScope, last.scope)) {
+      console.log(`[MLB orchestrator] triggerEngine dedup-skipped for game ${gameId} (ran within ${effectiveDedup}ms, scope subset)`);
+      auditRecordCooldown(gameId, Date.now() - last.ts, effectiveDedup);
       return outputs;
     }
-    LAST_RUN.set(gameId, Date.now());
+    LAST_RUN.set(gameId, { ts: Date.now(), scope: cycleScope });
+    this.lastEngineRunAt.set(gameId, Date.now());
 
-    const impactedMarkets = triggers ? this.computeImpactedMarkets(triggers) : new Set(ALL_MLB_MARKETS);
+    const isNarrowedCycle = !isFullScope(cycleScope);
     if (triggers) {
-      console.log(`[MLB orchestrator] Event-driven recalc for game ${gameId}: triggers=[${triggers.join(",")}] impactedMarkets=[${Array.from(impactedMarkets).join(",")}]`);
+      console.log(`[MLB orchestrator] Event-driven recalc for game ${gameId}: triggers=[${triggers.join(",")}] impactedMarkets=[${Array.from(impactedMarkets).join(",")}]${narrowedPlayerIds ? ` narrowedPlayers=${narrowedPlayerIds.size}` : ""}`);
     }
+    recordEngineRun(gameId, triggers ?? [], {
+      narrowed: isNarrowedCycle,
+      marketCount: impactedMarkets.size,
+      playerCount: narrowedPlayerIds ? narrowedPlayerIds.size : "all",
+    });
+
+    // ── Odds refresh policy for this cycle ───────────────────────────────────
+    // A cycle driven by a real baseball event may request fresher pricing;
+    // recomputation alone never does. Urgency is read from the existing
+    // canonical lifecycle states on the bus — no parallel state machine.
+    const refreshPolicyBase = {
+      allowOddsInterest: true,
+      materialEvent: (triggers?.length ?? 0) > 0,
+    };
+    const urgencyByKey = this.readLifecycleUrgency(gameId);
+    const refreshPolicyFor = (playerName: string, market: string): ResolveBookLineRefreshPolicy => ({
+      allowOddsInterest: refreshPolicyBase.allowOddsInterest,
+      materialEvent: refreshPolicyBase.materialEvent,
+      urgency: urgencyByKey.get(`${playerName.toLowerCase().trim()}|${normalizeMlbMarketKey(market)}`) ?? null,
+    });
 
     if (!state) {
       console.warn(`[MLB orchestrator] triggerEngine: no game state cached for ${gameId}`);
@@ -3914,7 +4102,16 @@ export class LiveGameOrchestrator {
     // ── Batter markets: evaluate each hitter in the starting lineup ────────────
     for (const market of BATTER_MARKETS) {
       if (!impactedMarkets.has(market)) continue;
+      // home_runs is exempt from player narrowing — see the cycleScope comment.
+      // Its FSM promotion gate is evaluation-counted and the presence-floor
+      // pass below assumes the full lineup was walked.
+      const narrowThisMarket = narrowedPlayerIds !== null && normalizeMlbMarketKey(market) !== "home_runs";
       for (const batter of state.battingOrder) {
+        if (narrowThisMarket && !narrowedPlayerIds!.has(batter.playerId)) {
+          // Not affected by this event — its prior signal is carried forward
+          // verbatim at the cache write instead of being recomputed or dropped.
+          continue;
+        }
         auditRecordRaw(gameId);
         // ── Input validation: skip player if required context is missing ─────
         if (!batter.playerId || batter.playerId === "unknown") {
@@ -3961,7 +4158,7 @@ export class LiveGameOrchestrator {
 
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${batter.playerName}", playerId: "${batter.playerId}", inning: ${state.inning} }`);
 
-        const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market);
+        const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market, refreshPolicyFor(batter.playerName, market));
         let hrRadarOnly = false;
         if (resolvedLine === null) {
           if (market === "home_runs") {
@@ -5166,7 +5363,7 @@ export class LiveGameOrchestrator {
 
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", playerId: "${pitcherToEval.playerId}", inning: ${state.inning} }`);
 
-        const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market);
+        const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market, refreshPolicyFor(pitcherToEval.playerName, market));
         auditRecordRaw(gameId);
         if (resolvedPitcherLine === null) {
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "no_book_line" }`);
@@ -5382,6 +5579,16 @@ export class LiveGameOrchestrator {
     const now = Date.now();
     const signalLocked = allSignals.length > 0;
 
+    // Stamp the side the engine is actually evaluating per player/market so the
+    // NEXT cycle's price floor tests the right side. Read-only w.r.t. the
+    // signal: this records an existing decision, it does not influence one.
+    if (oddsEventId) {
+      for (const s of allSignals) {
+        if (s.side !== "OVER" && s.side !== "UNDER") continue;
+        recordEvaluatedSide(oddsEventId, s.market, s.playerName, s.side);
+      }
+    }
+
     const gameCardTags = deriveGameCardTags(
       qualifiedSignals.map((s) => ({
         signalTags: s.signalTags as any,
@@ -5417,15 +5624,7 @@ export class LiveGameOrchestrator {
     }
     console.log(`[MLB_FAMILY_SUPPRESSION][${gameId}] signals=${allSignals.length} flagships=${flagshipCount}`);
 
-    allSignals.sort((a, b) => {
-      const aDeg = a.isDegraded ? 1 : 0;
-      const bDeg = b.isDegraded ? 1 : 0;
-      if (aDeg !== bDeg) return aDeg - bDeg;
-      const aFlagship = a.isFlagship ? 0 : 1;
-      const bFlagship = b.isFlagship ? 0 : 1;
-      if (aFlagship !== bFlagship) return aFlagship - bFlagship;
-      return (b.signalScore ?? 0) - (a.signalScore ?? 0);
-    });
+    allSignals.sort(compareMLBSignalsForFeed);
 
     const existingCache = mlbEdgeCache.get(gameId);
     // Preserve when this cycle produced no signals at all (transient blank
@@ -5442,6 +5641,49 @@ export class LiveGameOrchestrator {
     // stays visible on a fully-blank engine cycle.
     const PRESERVE_MAX_AGE_MS = 20 * 60 * 1000;
     const cacheAge = now - Math.max(existingCache?.updatedAt ?? 0, existingCache?.createdAt ?? 0);
+
+    // ── Narrowed-cycle carry-forward ─────────────────────────────────────────
+    // Runs AFTER family suppression and the per-signal tag stamping, and feeds
+    // ONLY the cache write below. `outputs` / `qualifiedSignals` / `allSignals`
+    // stay the fresh-only accumulators, so autoPersistMLBSignals, the
+    // LiveSignalBus population loop and recordDriftSnapshot mechanically cannot
+    // see a carried signal.
+    //
+    // The carry predicate is SCOPE, not absence: an in-scope pair that produced
+    // nothing this cycle is a genuine deletion and stays deleted.
+    const carryIsResolved = (playerId: string, market: string): boolean => {
+      const normalized = normalizeMlbMarketKey(market);
+      return normalized === "home_runs"
+        ? isPlayerHrResolved(gameId, playerId)
+        : isPlayerMarketResolved(gameId, playerId, normalized as MLBMarket);
+    };
+    const merged = mergeCarryForward({
+      gameId,
+      prior: MLB_FINAL_LOGGED.has(gameId) ? undefined : existingCache,
+      fresh: { outputs, qualifiedSignals, allSignals },
+      scope: cycleScope,
+      nowMs: now,
+      maxCarryAgeMs: PRESERVE_MAX_AGE_MS,
+      isResolved: carryIsResolved,
+    });
+    if (merged.carriedSignals > 0 || merged.droppedResolved > 0 || merged.droppedStale > 0) {
+      merged.allSignals.sort(compareMLBSignalsForFeed);
+      console.log(`[MLB_CARRY_FORWARD][${gameId}] carried=${merged.carriedSignals} carriedOutputs=${merged.carriedOutputs} droppedResolved=${merged.droppedResolved} droppedStale=${merged.droppedStale} scopeMarkets=${cycleScope.markets === "all" ? "all" : Array.from(cycleScope.markets).join("|")} scopePlayers=${cycleScope.playerIds === "all" ? "all" : cycleScope.playerIds.size}`);
+    }
+    // Entry-level tags are re-derived from the MERGED qualified set so a
+    // narrowed cycle can't drop aggregate tags (e.g. HOT BATS needs >= 2 HOT
+    // OVER signals). Per-signal tag stamping above stays fresh-only.
+    const cacheGameCardTags = merged.carriedSignals > 0
+      ? deriveGameCardTags(
+          merged.qualifiedSignals.map((s) => ({
+            signalTags: s.signalTags as any,
+            market: s.market,
+            recommendedSide: s.side,
+            signalScore: s.signalScore,
+          }))
+        )
+      : gameCardTags;
+
     if (isThisCycleEmpty && existingCache && existingCache.allSignals.length > 0 && cacheAge < PRESERVE_MAX_AGE_MS) {
       // Freshness Integrity Fix #2.2 — preserve the prior signals on a blank
       // cycle, but DO NOT touch updatedAt: faking the timestamp here is what
@@ -5476,35 +5718,44 @@ export class LiveGameOrchestrator {
     } else {
       mlbEdgeCache.set(gameId, {
         gameId,
-        outputs,
-        qualifiedSignals,
-        allSignals,
-        gameCardTags: gameCardTags as string[],
+        outputs: merged.outputs,
+        qualifiedSignals: merged.qualifiedSignals,
+        allSignals: merged.allSignals,
+        gameCardTags: cacheGameCardTags as string[],
         updatedAt: now,
         createdAt: existingCache?.createdAt ?? now,
         isDegraded: anyDegraded,
         signalLocked,
+        carriedForwardCount: merged.carriedSignals,
       });
       const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
-      console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} avgScore=${avgScore} gameCardTags=[${gameCardTags.join(",")}]`);
+      console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} carried=${merged.carriedSignals} avgScore=${avgScore} gameCardTags=[${cacheGameCardTags.join(",")}]`);
       auditEndCycle(gameId);
       checkMarketStarvation();
 
       // Phase 1 Gold Master — record drift snapshot for this cycle.
       // Passive observation only; never mutates engine math or surfacing.
-      try {
-        const sampleSig = allSignals[0] as Record<string, any> | undefined;
-        recordDriftSnapshot({
-          gameId,
-          marketsEvaluated,
-          qualifiedSignals: signalsQualified,
-          rejectedSignals: signalsRejected,
-          signals: allSignals as any,
-          payloadFieldSample: sampleSig ? Object.keys(sampleSig) : undefined,
-        });
-      } catch (err) {
-        // Drift recording must NEVER break the qualification cycle.
-        console.warn("[MLB_DRIFT_WARNING] snapshot_failed:", (err as Error).message);
+      //
+      // SKIPPED on narrowed cycles: marketsEvaluated is the rejectRate
+      // denominator in goldmasterGuard, and a partial cycle's denominator is
+      // not comparable to the full-cycle rolling baseline — feeding it in
+      // would emit spurious [MLB_DRIFT_WARNING] noise rather than detect real
+      // drift. Fresh-only counts, never the merged set.
+      if (!isNarrowedCycle) {
+        try {
+          const sampleSig = allSignals[0] as Record<string, any> | undefined;
+          recordDriftSnapshot({
+            gameId,
+            marketsEvaluated,
+            qualifiedSignals: signalsQualified,
+            rejectedSignals: signalsRejected,
+            signals: allSignals as any,
+            payloadFieldSample: sampleSig ? Object.keys(sampleSig) : undefined,
+          });
+        } catch (err) {
+          // Drift recording must NEVER break the qualification cycle.
+          console.warn("[MLB_DRIFT_WARNING] snapshot_failed:", (err as Error).message);
+        }
       }
 
       // [MLB_PRE_CHANGE_AUDIT] STEP 3 — Surfaced signals trace at orchestrator

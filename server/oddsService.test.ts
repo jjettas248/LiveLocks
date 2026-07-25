@@ -15,6 +15,7 @@ const oddsConfig = await import("./odds/oddsConfig");
 const {
   getMLBPlayerOdds,
   readMLBPlayerOddsFromCache,
+  readMLBApprovedBookPricesFromCache,
   isMLBSnapshotFresh,
   getPlayerOdds, // NBA
 } = oddsService;
@@ -48,11 +49,15 @@ let fetchBookmakers: any[] = [];
   };
 };
 
-function bookmakerRow(bookKey: string, marketKey: string, players: Array<{ name: string; line: number }>) {
+function bookmakerRow(
+  bookKey: string,
+  marketKey: string,
+  players: Array<{ name: string; line: number; overPrice?: number; underPrice?: number }>,
+) {
   const outcomes: any[] = [];
   for (const p of players) {
-    outcomes.push({ name: "Over", description: p.name, point: p.line, price: -115 });
-    outcomes.push({ name: "Under", description: p.name, point: p.line, price: -105 });
+    outcomes.push({ name: "Over", description: p.name, point: p.line, price: p.overPrice ?? -115 });
+    outcomes.push({ name: "Under", description: p.name, point: p.line, price: p.underPrice ?? -105 });
   }
   return {
     key: bookKey,
@@ -61,7 +66,7 @@ function bookmakerRow(bookKey: string, marketKey: string, players: Array<{ name:
   };
 }
 
-// ── A: provider URL never includes in_play; requests the widened MLB book list ─
+// ── A: provider URL never includes in_play; requests only the 3 approved books ─
 {
   fetchCalls = [];
   fetchBookmakers = [bookmakerRow("draftkings", "batter_hits", [{ name: "Test Player A", line: 1.5 }])];
@@ -70,9 +75,17 @@ function bookmakerRow(bookKey: string, marketKey: string, players: Array<{ name:
   const url = fetchCalls[0]?.url ?? "";
   check("A2: URL never includes in_play", !url.includes("in_play"), url);
   const bmParam = new URL(url).searchParams.get("bookmakers") ?? "";
+  // The narrowing is applied UPSTREAM (the bookmakers= request param), not as
+  // a post-fetch filter — fetching ten books and discarding seven would spend
+  // the same provider resources.
   check(
-    "A3: URL requests exactly the widened 10-book MLB_PROP_BOOKMAKERS list",
-    bmParam === "draftkings,fanduel,hardrockbet,prizepicks,underdogfantasy,betonlineag,bovada,williamhill_us,caesars,hard_rock",
+    "A3: URL requests exactly the 3 approved MLB Live Edge books",
+    bmParam === "draftkings,fanduel,hardrockbet",
+    bmParam,
+  );
+  check("A4: no non-approved book is ever requested for MLB",
+    !["prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us", "caesars", "hard_rock", "betmgm"]
+      .some((b) => bmParam.includes(b)),
     bmParam,
   );
 }
@@ -180,18 +193,20 @@ function bookmakerRow(bookKey: string, marketKey: string, players: Array<{ name:
     JSON.stringify(nbaBooks),
   );
 
-  // MLB was widened back from the original 3-book cost-optimized list to 10
-  // (3 preferred + 7 fallback) to reduce staleOdds line-resolution gaps on
-  // non-HR markets — see server/mlb/marketStarvationGuard.ts and the
-  // MLB_PROP_BOOKMAKERS comment in this file for the tradeoff rationale.
+  // MLB Live Edge is restricted to DraftKings / FanDuel / Hard Rock Bet.
+  // Reducing Odds API consumption is the point of this path, so there is no
+  // fallback tier — a fallback book would never have data to rank anyway,
+  // since it is not requested upstream.
   const mlbBooks = getAllPriorityBooks("mlb");
   check(
-    "G3: MLB book list widened to 10 (3 preferred + 7 fallback)",
-    mlbBooks.length === 10 &&
-      [
-        "draftkings", "fanduel", "hardrockbet",
-        "prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us", "caesars", "hard_rock",
-      ].every((b) => mlbBooks.includes(b)),
+    "G3: MLB book list is exactly the 3 approved books",
+    mlbBooks.length === 3 &&
+      ["draftkings", "fanduel", "hardrockbet"].every((b) => mlbBooks.includes(b)),
+    JSON.stringify(mlbBooks),
+  );
+  check(
+    "G3b: MLB has no fallback tier outside the approved books",
+    !mlbBooks.some((b) => !["draftkings", "fanduel", "hardrockbet"].includes(b)),
     JSON.stringify(mlbBooks),
   );
 
@@ -212,6 +227,32 @@ function bookmakerRow(bookKey: string, marketKey: string, players: Array<{ name:
     nbaBmParam.split(",").length === 11 && nbaBmParam.includes("betmgm") && nbaBmParam.includes("prizepicks"),
     nbaBmParam,
   );
+}
+
+// ── H: approved-book price reader (feeds the side-specific -200 floor) ────────
+{
+  fetchCalls = [];
+  fetchBookmakers = [
+    bookmakerRow("draftkings", "batter_home_runs", [{ name: "Floor Player", line: 0.5, overPrice: -225, underPrice: 185 }]),
+    bookmakerRow("fanduel", "batter_home_runs", [{ name: "Floor Player", line: 0.5, overPrice: -190, underPrice: 160 }]),
+    bookmakerRow("hardrockbet", "batter_home_runs", [{ name: "Floor Player", line: 0.5, overPrice: -210, underPrice: 175 }]),
+  ];
+  await getMLBPlayerOdds("evt-floor", "Floor Player", "home_runs", false);
+
+  const books = readMLBApprovedBookPricesFromCache("evt-floor", "Floor Player", "home_runs");
+  check("H1: reader returns every approved book's quote", books !== null && books.length === 3, JSON.stringify(books));
+  check(
+    "H2: per-book over/under prices survive the read",
+    !!books && books.some((b: any) => b.book === "fanduel" && b.overOdds === -190 && b.underOdds === 160),
+    JSON.stringify(books),
+  );
+  check("H3: the read issued no additional provider request", fetchCalls.length === 1, `got ${fetchCalls.length}`);
+
+  const miss = readMLBApprovedBookPricesFromCache("evt-does-not-exist", "Nobody", "home_runs");
+  check("H4: a cache miss returns null rather than fetching", miss === null && fetchCalls.length === 1);
+
+  const badMarket = readMLBApprovedBookPricesFromCache("evt-floor", "Floor Player", "not_a_market");
+  check("H5: an unknown market returns null", badMarket === null);
 }
 
 console.log(`[MLB_ODDS_CACHE_TEST] passed=${pass} failed=${fail}`);

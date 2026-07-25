@@ -33,6 +33,12 @@ interface EdgeCacheEntry {
   // so deliberately-preserved signals are not silently dropped from the
   // bettable feed during natural game gaps.
   preservedAt?: number;
+  /**
+   * Observability only — how many of this entry's signals were carried
+   * forward verbatim from the prior cycle because a narrowed (event-scoped)
+   * engine run never evaluated them. Never read by freshness logic.
+   */
+  carriedForwardCount?: number;
 }
 
 const _cache = new Map<string, EdgeCacheEntry>();

@@ -441,6 +441,20 @@ export async function registerRoutes(
     }
   });
 
+  // MLB Live Edge polling / odds-spend metrics — READ-ONLY. Answers "why did
+  // each external odds request happen?" and reports the infrastructure KPI:
+  // external Odds API requests per live game-hour. Counters only; this
+  // endpoint never influences polling, refresh eligibility, or engine math.
+  app.get("/api/admin/mlb-live-edge-metrics", requireAdmin, async (_req, res) => {
+    try {
+      const { getLiveEdgeMetrics } = await import("./mlb/liveEdgeMetrics");
+      return res.json(getLiveEdgeMetrics());
+    } catch (err) {
+      console.error("[admin/mlb-live-edge-metrics]", err);
+      return res.status(500).json({ error: "Failed to fetch MLB Live Edge metrics" });
+    }
+  });
+
   // HR Radar freshness diagnostic — READ-ONLY. Reports, per active live row,
   // how the canonical-store overlay reconciles the DB ladder (which lags the
   // engine by up to one reconcile interval) against the fresher in-memory

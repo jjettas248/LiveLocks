@@ -87,7 +87,10 @@ const PREFERRED_BOOKS_BY_SPORT: Record<Sport, string[]> = {
 // unaffected by this split — they still use the shared PROP_BOOKMAKERS in
 // server/oddsService.ts directly, so this list still gates NBA/NCAAB requests.)
 const FALLBACK_BOOKS_BY_SPORT: Record<Sport, string[]> = {
-  mlb:   ["prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us", "caesars", "hard_rock"],
+  // MLB Live Edge requests only DraftKings/FanDuel/Hard Rock Bet upstream, so
+  // there is no fallback tier to rank — any book listed here would never have
+  // data to prefer among. Keep empty to preserve the superset invariant above.
+  mlb:   [],
   nba:   ["prizepicks", "underdogfantasy", "betonlineag", "bovada", "williamhill_us"],
   ncaab: ["betonlineag", "bovada", "williamhill_us"],
 };
