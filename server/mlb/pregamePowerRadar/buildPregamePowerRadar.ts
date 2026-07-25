@@ -45,6 +45,8 @@ import type {
   PowerDriver,
   PregameParkContext,
 } from "./types";
+import { PLATE_CHAMPION_POLICY } from "./modelVersions/plateChampionJul20";
+import { countPositiveDrivers, driverKeysForUniverse } from "./modelVersions/plateDriverUniverse";
 import { computeBatterPowerProfile, type BatterPowerInputs } from "./batterPowerProfile";
 import { computePitcherVulnerability } from "./pitcherVulnerability";
 import { computePitcherOrderSplit } from "./pitcherOrderSplit";
@@ -459,7 +461,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               exitVelocity: null, maxEV: null, flyBallPct: null, hrFBRatioPct: null,
               pullRatePct: null, sweetSpotPct: null, xwOBA: null, battedBallEvents: null,
             };
-        const batterPower = computeBatterPowerProfile(powerInputs);
+        const batterPower = computeBatterPowerProfile(powerInputs, PLATE_CHAMPION_POLICY.batter);
         // computeBatterPowerProfile's own hasCore check is satisfied by xSLG
         // alone, so a Savant fetch that degraded to the bare 2-of-11-input
         // MLB-API fallback (batterDataQuality !== "full") still reports
@@ -483,7 +485,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           flyBallAllowedPct: pitcherContact?.flyBallAllowedPct ?? null,
           last3StartERA: pitcherRecentForm?.last3StartERA ?? null,
           daysSinceLastStart: pitcherRecentForm?.daysSinceLastStart ?? null,
-        });
+        }, PLATE_CHAMPION_POLICY.pitcher);
 
         const parkHrFactor = venueName
           ? getMarketParkFactor(venueName, "home_runs", player.bats)
@@ -622,11 +624,18 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           ...nearHrRecentForm.drivers,
           ...marketTags.drivers,
         ];
-        // Frozen here, BEFORE any Attack Environment driver is appended (further
-        // below, after scoring) — Attack Environment's own drivers must never be
-        // able to inflate this count or rescue a candidate from
-        // "insufficient_drivers".
-        const positiveDriverCount = drivers.filter((d) => d.direction === "positive").length;
+        // Counted against the CHAMPION's enumerated July-20 driver universe.
+        //
+        // This deliberately does NOT rely on being frozen before
+        // appendAttackEnvironmentDrivers runs further below. That ordering
+        // happens to exclude the `atkenv_*` tags today, but reorder those two
+        // statements and zero-weight research tags would silently start
+        // satisfying the two-driver minimum. Explicit membership is the
+        // contract; call ordering is not.
+        const positiveDriverCount = countPositiveDrivers(
+          drivers,
+          driverKeysForUniverse(PLATE_CHAMPION_POLICY.drivers.universe),
+        );
 
         // ── Attack Environment (pitcher × park/weather × matchup-fit interaction) ──
         // Computed BEFORE scoring (classifyTier needs the tier as an input) using
@@ -664,15 +673,20 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             bvpModifier: matchupFit.bvpModifier,
           },
           {
-            batterPowerAvailable: batterPowerFullyAvailable,
+            // CHAMPION (July-20) availability: the component's own
+            // `available` flag. The stricter savant-quality read is still
+            // computed and recorded under diagnostics.dataQuality, but it is a
+            // measurement, not a champion gate — see §10 of the plan.
+            batterPowerAvailable: batterPower.available,
             pitcherProfileAvailable,
             confirmedLineup: lineupStatus === "posted",
-            // NOT `parkHrFactor != null` — getMarketParkFactor always returns
-            // a number (1.0 fallback for both "no venue" and "unmatched
-            // venue"), so that check was true whenever a venue name string
-            // existed at all, matched park or not. isVenueResolved is the
-            // honest check.
-            parkAvailable: isVenueResolved(venueName),
+            // CHAMPION (July-20) availability: `parkHrFactor != null`.
+            // getMarketParkFactor always returns a number (1.0 fallback for
+            // both "no venue" and "unmatched venue"), so this is true whenever
+            // a venue name string exists at all, matched park or not. The
+            // honest `isVenueResolved` read is preserved verbatim under
+            // diagnostics.dataQuality.venueResolved and is a challenger input.
+            parkAvailable: parkHrFactor != null,
             weatherAvailable,
             bvpAvailable: matchupFit.bvpAvailable,
             parkIsOnlyPositiveDriver: parkWeather.parkIsOnlyPositiveDriver,
@@ -688,6 +702,8 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             // place that threshold is applied.
             attackEnvironmentEliminationEligible: attackEnvironment.eliminationEligible,
           },
+          // Explicit — production model selection never rides on a default.
+          PLATE_CHAMPION_POLICY.gates,
         );
         if (batterPower.available) batterWithPower++;
 
@@ -885,14 +901,31 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             sourceFreshness: {
               weatherUpdatedAt: weather?.fetchedAt ? new Date(weather.fetchedAt).toISOString() : null,
             },
+            // CHAMPION availability semantics — diagnostics.ts re-reads these
+            // as publication inputs, so they must agree with the flags passed
+            // to composePregameScore above. The honest/strict reads live
+            // alongside under `dataQuality`.
             rawInputsAvailable: {
               lineup: lineupStatus === "posted",
-              batterPower: batterPowerFullyAvailable,
+              batterPower: batterPower.available,
               pitcherProfile: pitcherProfileAvailable,
-              park: isVenueResolved(venueName),
+              park: parkHrFactor != null,
               weather: weatherAvailable,
               bvp: matchupFit.bvpAvailable,
               nearHrRecentForm: nearHrRecentForm.available,
+            },
+            // Honest data-quality measurement, kept strictly SEPARATE from
+            // champion model semantics (§10). Recorded for diagnostics and as a
+            // challenger input; it never gates the champion.
+            dataQuality: {
+              savantQuality: savant
+                ? savant.batterDataQuality === "full"
+                  ? "full"
+                  : "fallback"
+                : "missing",
+              venueResolved: isVenueResolved(venueName),
+              pitcherHandResolved: opposingPitcher?.throws != null,
+              batterPowerFullyAvailable,
             },
             // Display-only snapshot of the raw hitter inputs already computed
             // above — no re-fetch, no recompute, never fed back into scoring.

@@ -234,6 +234,24 @@ export interface PregamePowerDiagnostics {
   };
 
   /**
+   * Honest data-quality measurement, deliberately SEPARATE from champion model
+   * semantics. `rawInputsAvailable` above carries the champion's (July-20)
+   * availability definitions — the ones that actually drive coverage caps and
+   * publication. This block records what is factually true about the inputs, so
+   * a quality limitation is visible without silently changing the champion's
+   * decision. It is a diagnostic and a challenger input, never a champion gate.
+   *
+   * Optional: absent on rows persisted before this instrumentation shipped.
+   */
+  dataQuality?: {
+    savantQuality: "full" | "fallback" | "missing";
+    venueResolved: boolean;
+    pitcherHandResolved: boolean;
+    /** The stricter batter-power read the challenger uses. */
+    batterPowerFullyAvailable: boolean;
+  };
+
+  /**
    * Display-only raw power-profile snapshot (see PregamePowerProfileSnapshot).
    * Additive — never read by scoring/grading. Frozen into the locked signal by
    * gradedStateCarry so completed cards + restart/DB hydration show the ORIGINAL

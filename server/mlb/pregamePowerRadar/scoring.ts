@@ -51,6 +51,26 @@ export interface ScoringFlags {
   attackEnvironmentEliminationEligible: boolean;
 }
 
+/**
+ * Model-policy slice this module honors. Structurally satisfied by
+ * `PlateModelPolicy["gates"]` — declared locally so `scoring.ts` keeps no import
+ * edge to the model-version layer.
+ *
+ * Default is the CHAMPION (July-20) policy: Attack Environment gates nothing,
+ * and qualification is `positiveDriverCount >= 2`. Legacy/test call sites that
+ * omit the argument get champion behavior; production never relies on this
+ * default, because `evaluatePlateModel` passes one explicitly.
+ */
+export interface ScoringGatePolicy {
+  attackEnvironmentGates: boolean;
+  evidenceFamilyGate: boolean;
+}
+
+export const CHAMPION_SCORING_GATE_POLICY: ScoringGatePolicy = {
+  attackEnvironmentGates: false,
+  evidenceFamilyGate: false,
+};
+
 export interface ScoringResult {
   baseScore: number;
   /** Weighted composite + BvP modifier, BEFORE coverage caps / matchup penalty. */
@@ -67,6 +87,14 @@ export interface ScoringResult {
   warningTags: string[];
   /** Machine-readable downgrade reasons (one per applied penalty source). */
   downgradeReasons: string[];
+  /**
+   * Independent evidence-family count. ALWAYS computed and returned, under both
+   * policies — the champion simply does not gate on it. Diagnostics, the
+   * challenger, and the admin comparison all read this.
+   */
+  evidenceFamilyCount: number;
+  /** True when the Attack-Environment borderline rule actually suppressed. */
+  attackEnvironmentSuppressionApplied: boolean;
 }
 
 /** Minimum published composite score. */
@@ -93,16 +121,25 @@ export function classifyTier(
   pitcherVulnerabilityScore: number,
   eliteBlocked: boolean,
   attackEnvironmentTier: AttackEnvironmentTier,
+  policy: ScoringGatePolicy = CHAMPION_SCORING_GATE_POLICY,
 ): PregamePowerTier {
+  // Attack-Environment terms collapse to `true` under the champion policy, so
+  // the elite/nuclear branches reduce to exactly their July-20 form.
+  const aeAllowsNuclear = !policy.attackEnvironmentGates || attackEnvironmentTier === "ELITE";
+  const aeAllowsElite =
+    !policy.attackEnvironmentGates ||
+    attackEnvironmentTier === "ELITE" ||
+    attackEnvironmentTier === "FAVORABLE";
+
   // Power-only: elite raw power but a weak pitcher matchup → never an elite setup.
   if (batterPowerScore >= 7.0 && pitcherVulnerabilityScore < 5.5) return "power_watch";
   if (
     score10 >= 8.8 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 &&
-    attackEnvironmentTier === "ELITE" && !eliteBlocked
+    aeAllowsNuclear && !eliteBlocked
   ) return "nuclear";
   if (
     score10 >= 7.3 && batterPowerScore >= 7.0 && pitcherVulnerabilityScore >= 6.0 &&
-    (attackEnvironmentTier === "ELITE" || attackEnvironmentTier === "FAVORABLE") &&
+    aeAllowsElite &&
     !eliteBlocked
   ) return "elite";
   if (score10 >= 6.8 && batterPowerScore >= 6.7 && pitcherVulnerabilityScore >= 5.5) return "strong";
@@ -148,6 +185,7 @@ export function tierFromScore(score10: number): PregamePowerTier {
 export function composePregameScore(
   c: ScoringComponents,
   flags: ScoringFlags,
+  policy: ScoringGatePolicy = CHAMPION_SCORING_GATE_POLICY,
 ): ScoringResult {
   const baseScore = clamp10(
     c.batterPowerScore * COMPONENT_WEIGHTS.batterPower +
@@ -232,6 +270,7 @@ export function composePregameScore(
     c.pitcherVulnerabilityScore,
     eliteBlocked,
     flags.attackEnvironmentTier,
+    policy,
   );
 
   // ── Downgrade tags (UI / debug) ─────────────────────────────────────────────
@@ -249,23 +288,31 @@ export function composePregameScore(
     lineupOpportunityScore: flags.confirmedLineup ? c.lineupOpportunityScore : null,
     nearHrRecentFormScore: c.nearHrRecentFormScore,
   });
-  // Independent families are the authority. Keep the historical chip count as
-  // a one-way veto only: it can suppress an intentionally constructed one-chip
-  // case, but can never rescue a candidate with <2 independent model families.
-  if (evidenceFamilyCount < 2 || flags.positiveDriverCount < 2) {
+  // Qualification. CHAMPION (July-20): `positiveDriverCount >= 2`, counted by the
+  // caller against the July-20 driver universe. CHALLENGER: independent families
+  // are the authority, with the historical chip count kept as a one-way veto —
+  // it can suppress an intentionally constructed one-chip case, but can never
+  // rescue a candidate with <2 independent model families.
+  const insufficientEvidence = policy.evidenceFamilyGate
+    ? evidenceFamilyCount < 2 || flags.positiveDriverCount < 2
+    : flags.positiveDriverCount < 2;
+  if (insufficientEvidence) {
     suppressedReasons.push("insufficient_drivers");
   }
 
   // Attack Environment HOSTILE elimination — the ONLY behavioral effect HOSTILE
-  // has anywhere. Must run after every other suppression reason and before the
-  // final score-floor check.
+  // has anywhere, and CHALLENGER-ONLY (0b66384). Must run after every other
+  // suppression reason and before the final score-floor check.
   const otherwisePublishable = suppressedReasons.length === 0 && score10 >= PUBLISH_MIN_SCORE;
+  let attackEnvironmentSuppressionApplied = false;
   if (
+    policy.attackEnvironmentGates &&
     flags.attackEnvironmentEliminationEligible &&
     otherwisePublishable &&
     score10 < ATTACK_ENVIRONMENT_THRESHOLDS.borderlineScore
   ) {
     suppressedReasons.push(ATTACK_ENVIRONMENT_HOSTILE_SUPPRESSION_REASON);
+    attackEnvironmentSuppressionApplied = true;
   }
 
   if (score10 < PUBLISH_MIN_SCORE) {
@@ -286,5 +333,7 @@ export function composePregameScore(
     suppressedReasons,
     warningTags,
     downgradeReasons,
+    evidenceFamilyCount,
+    attackEnvironmentSuppressionApplied,
   };
 }

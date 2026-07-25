@@ -26,7 +26,30 @@ export interface BatterPowerInputs {
   battedBallEvents: number | null;
 }
 
-export function computeBatterPowerProfile(inputs: BatterPowerInputs): ComponentScore {
+/**
+ * Model-policy slice this scorer honors. Structurally satisfied by
+ * `PlateModelPolicy["batter"]` — declared locally so the component scorers stay
+ * free of any import edge to the model-version layer.
+ *
+ * Default is the CHAMPION (July-20) policy: no sample shrinkage, and `0` — not
+ * `5` — when no core power input is present. Legacy/test call sites that omit
+ * the argument therefore get champion behavior; production never relies on this
+ * default, because `evaluatePlateModel` always passes a policy explicitly.
+ */
+export interface BatterPowerPolicy {
+  applySampleShrinkage: boolean;
+  unavailableScore: 0 | 5;
+}
+
+export const CHAMPION_BATTER_POWER_POLICY: BatterPowerPolicy = {
+  applySampleShrinkage: false,
+  unavailableScore: 0,
+};
+
+export function computeBatterPowerProfile(
+  inputs: BatterPowerInputs,
+  policy: BatterPowerPolicy = CHAMPION_BATTER_POWER_POLICY,
+): ComponentScore {
   const drivers: PowerDriver[] = [];
   const warnings: string[] = [];
 
@@ -56,7 +79,7 @@ export function computeBatterPowerProfile(inputs: BatterPowerInputs): ComponentS
     { value: sXwoba, weight: 1 },
   ]);
 
-  // Sample-size shrinkage toward neutral (5) — mirrors the discipline already
+  // CHALLENGER-ONLY (7482c91). Sample-size shrinkage toward neutral (5) — mirrors the discipline already
   // applied in pitcherOrderSplit.ts/batterOrderSplit.ts, previously missing
   // here despite this being the single most heavily-weighted component
   // (0.28): without it, a handful of batted-ball events (a September call-up,
@@ -73,8 +96,21 @@ export function computeBatterPowerProfile(inputs: BatterPowerInputs): ComponentS
   // upstream (see buildPregamePowerRadar.ts). Double-shrinking that scenario
   // here would just re-punish something already handled elsewhere, while
   // wrongly discounting any caller that simply hasn't supplied a count yet.
+  //
+  // The champion (July-20) policy skips this entirely: `battedBallEvents` is
+  // still accepted and still recorded, it simply cannot move the champion score.
   const bbe = inputs.battedBallEvents;
-  const shrink = bbe == null ? 1.0 : bbe < 15 ? 0.25 : bbe < 35 ? 0.55 : bbe < 70 ? 0.8 : 1.0;
+  const shrink = !policy.applySampleShrinkage
+    ? 1.0
+    : bbe == null
+      ? 1.0
+      : bbe < 15
+        ? 0.25
+        : bbe < 35
+          ? 0.55
+          : bbe < 70
+            ? 0.8
+            : 1.0;
   const score = clamp10(5 + (rawScore - 5) * shrink);
 
   // Drivers from the strongest present components.
@@ -105,11 +141,13 @@ export function computeBatterPowerProfile(inputs: BatterPowerInputs): ComponentS
   const hasCore = inputs.xISO != null || inputs.barrelRatePct != null || inputs.xSLG != null || inputs.exitVelocity != null;
   if (!hasCore) {
     warnings.push("No batter power data (xISO/barrel/xSLG/EV all missing)");
-    // Neutral, not the worst-possible score — matches every sibling
-    // component's unavailable-data fallback (pitcherVulnerability.ts,
-    // matchupFit.ts, parkWeatherScore.ts, lineupOpportunity.ts,
-    // batterOrderSplit.ts all return 5, not 0, when unavailable).
-    return { score10: 5, available: false, drivers: [], warnings };
+    // Champion (July-20) returns 0 here. The challenger returns 5 — neutral,
+    // matching every sibling component's unavailable-data fallback
+    // (pitcherVulnerability.ts, matchupFit.ts, parkWeatherScore.ts,
+    // lineupOpportunity.ts, batterOrderSplit.ts all return 5, not 0). Either
+    // way the build layer caps at 3.9 and pushes `batter_power_missing`, so
+    // this only moves the displayed composite, never publication.
+    return { score10: policy.unavailableScore, available: false, drivers: [], warnings };
   }
   if (coverage < 0.35) {
     warnings.push("Sparse batter power data");
