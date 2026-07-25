@@ -13,7 +13,14 @@
 import { storage } from "../../../storage";
 import { mlbGameCache, getPitcherAppearanceOrder } from "../../dataPullService";
 import { getMoundSnapshot } from "./mlbMoundRadarStore";
-import { deriveMoundOutcome, deriveMoundMarketOutcome, isMoundOutcomeGradeableNow, hasPitcherBeenPulled } from "./moundOutcomeAttribution";
+import {
+  deriveMoundOutcome,
+  deriveMoundMarketOutcome,
+  isMoundOutcomeGradeableNow,
+  hasPitcherBeenPulled,
+  resolveMoundSettlementDirection,
+  resolveMoundSettlementLane,
+} from "./moundOutcomeAttribution";
 import { computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMoundGradingMeasurements } from "./evaluationSnapshot";
 import { deriveFrozenMoundMarketRecommendation } from "./marketRecommendation";
@@ -35,9 +42,11 @@ import type { MoundCalibrationRecord } from "../../../../shared/moundRadarWin";
  */
 function stampMarketOutcome(
   outcome: MoundOutcome,
-  primaryMarket: MoundSignal["primaryMarket"],
+  signal: MoundSignal,
   finalPregameSnapshot: MoundEvaluationSnapshot | null,
+  isPublicRecommendation: boolean,
 ): MoundOutcome {
+  const primaryMarket = signal.primaryMarket;
   const frozenLine =
     primaryMarket === "pitcher_strikeouts"
       ? finalPregameSnapshot?.champion.postedLine.strikeouts ?? null
@@ -58,6 +67,25 @@ function stampMarketOutcome(
     actual,
   });
 
+  const lane = resolveMoundSettlementLane(market.marketOutcome, market.marketUnavailableReason, isPublicRecommendation);
+
+  // Bounded: one line per graded signal, at stamp time — never per render.
+  console.log(
+    `[MOUND_SETTLEMENT] ${signal.signalId} pitcher=${signal.pitcherId} game=${signal.gameId} ` +
+      `market=${primaryMarket} public=${isPublicRecommendation} lane=${lane} ` +
+      `officialSide=${market.recommendedSide ?? "none"} frozenLine=${market.sportsbookLine ?? "none"} ` +
+      `finalStat=${actual ?? "none"} outcome=${market.marketOutcome} reason=${market.marketUnavailableReason ?? "none"}`,
+  );
+
+  if (lane === "integrity_gap") {
+    console.warn(
+      `[MOUND_SETTLEMENT_INTEGRITY] ${signal.signalId} pitcher=${signal.pitcherId} game=${signal.gameId} ` +
+        `publicRecommendation=true reason=${market.marketUnavailableReason} ` +
+        `missingSide=${market.recommendedSide == null} missingLine=${market.sportsbookLine == null} ` +
+        `missingSnapshot=${finalPregameSnapshot == null} market=${primaryMarket}`,
+    );
+  }
+
   return {
     ...outcome,
     marketOutcome: market.marketOutcome,
@@ -66,6 +94,7 @@ function stampMarketOutcome(
     lineSnapshotType: market.lineSnapshotType,
     lineFrozenAt: market.lineFrozenAt,
     lineSource: market.lineSource,
+    marketUnavailableReason: market.marketUnavailableReason,
   };
 }
 
@@ -91,7 +120,18 @@ function resolveMoundOutcome(
   const line = box?.byPitcherId?.[signal.pitcherId];
   if (!line) return null;
 
-  const wasPubliclyFlagged = signal.moundDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged;
+  // Durable public exposure decides which model rule applies — NOT the
+  // recomputable moundDirection column, which a post-first-pitch rebuild can
+  // flip to "fade" on a card that was publicly surfaced as a Follow (see
+  // resolveMoundSettlementDirection). Grading off the raw column inverts that
+  // card's outcome. Affects the MODEL read only; sportsbook side still comes
+  // exclusively from the frozen pregame recommendation (stampMarketOutcome).
+  const settlementDirection = resolveMoundSettlementDirection({
+    moundDirection: signal.moundDirection,
+    everPubliclyFlagged,
+    everPubliclyFlaggedFade,
+  });
+  const wasPubliclyFlagged = settlementDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged;
 
   const attribution = deriveMoundOutcome({
     primaryMarket: signal.primaryMarket,
@@ -100,9 +140,7 @@ function resolveMoundOutcome(
     seasonKPer9,
     seasonAvgInningsPerStart,
     wasPubliclyFlagged,
-    // Model direction stays exactly as stamped pregame. This affects ONLY the
-    // stable engine-baseline classification above, never sportsbook side.
-    moundDirection: signal.moundDirection,
+    moundDirection: settlementDirection,
   });
 
   return {
@@ -114,6 +152,7 @@ function resolveMoundOutcome(
     outcome: attribution.outcome,
     userVisible: attribution.userVisible,
     seasonBaselineValue: attribution.seasonBaselineValue,
+    settledDirection: settlementDirection,
   };
 }
 
@@ -214,8 +253,44 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
   }
 
   for (const signal of Array.from(snapshot.signals.values())) {
+    // Durable public-exposure state and the pinned MODEL direction are needed
+    // by every branch below (including the live-win refresh), so they are
+    // rehydrated once, up front, rather than only on the fresh-grade path.
+    const persisted = persistedState.get(signal.signalId);
+
+    // Pin the persisted MODEL direction before anything grades against it.
+    if (signal.moundDirection !== "fade" && persisted?.moundDirection === "fade" && persisted.everPubliclyFlaggedFade === true) {
+      signal.moundDirection = "fade";
+    } else if (signal.moundDirection !== "follow" && persisted?.moundDirection === "follow" && persisted.everPubliclyFlagged === true) {
+      signal.moundDirection = "follow";
+    }
+
+    const everPubliclyFlagged = signal.everPubliclyFlagged || (persisted?.everPubliclyFlagged ?? false);
+    const everPubliclyFlaggedFade = signal.everPubliclyFlaggedFade || (persisted?.everPubliclyFlaggedFade ?? false);
+    signal.everPubliclyFlagged = everPubliclyFlagged;
+    signal.everPubliclyFlaggedFade = everPubliclyFlaggedFade;
+
+    const settlementDirection = resolveMoundSettlementDirection({
+      moundDirection: signal.moundDirection,
+      everPubliclyFlagged,
+      everPubliclyFlaggedFade,
+    });
+    const isPublicRecommendation = settlementDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged;
+
     const pendingLiveWinRefresh = signal.status === "graded" && signal.outcomes?.gradedLive === true;
-    if (signal.status === "graded" && !pendingLiveWinRefresh) continue;
+    // A row already settled under a direction that durable public exposure
+    // contradicts was graded by the wrong rule (see
+    // resolveMoundSettlementDirection). Re-settle it from the SAME recorded
+    // facts — final stats and season baseline are untouched, only the
+    // comparison rule is corrected. Never invents data, and converges (once
+    // repaired, settledDirection matches and this stops firing).
+    const settledUnder = signal.outcomes?.settledDirection ?? signal.moundDirection;
+    const needsDirectionRepair =
+      signal.status === "graded" &&
+      signal.outcomes != null &&
+      !pendingLiveWinRefresh &&
+      settledUnder !== settlementDirection;
+    if (signal.status === "graded" && !pendingLiveWinRefresh && !needsDirectionRepair) continue;
 
     const isFinal = signal.gameStatus === "final";
     if (!isFinal && signal.gameStatus !== "live") continue;
@@ -240,7 +315,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         const finalPregameSnapshot = signal.diagnostics.evaluation?.finalPregameSnapshot ?? null;
         const gradingMeasurements = computeMoundGradingMeasurements(
           signal.primaryMarket,
-          signal.moundDirection,
+          settlementDirection,
           finalPregameSnapshot,
           refreshedOutcome.finalStrikeouts ?? null,
           refreshedOutcome.finalOutsRecorded ?? null,
@@ -249,7 +324,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         if (signal.diagnostics.evaluation) {
           signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
         }
-        signal.outcomes = stampMarketOutcome(signal.outcomes, signal.primaryMarket, finalPregameSnapshot);
+        signal.outcomes = stampMarketOutcome(signal.outcomes, signal, finalPregameSnapshot, isPublicRecommendation);
       } catch (err: any) {
         console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed (refresh) ${signal.signalId}:`, err?.message ?? err);
       }
@@ -266,22 +341,17 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
     const seasonStats = mlbPlayerCache.pitcherSeasonStats[signal.pitcherId] ?? null;
     const seasonAvgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
 
-    const persisted = persistedState.get(signal.signalId);
-
-    // Pin the persisted MODEL direction before grading the stable baseline.
-    if (signal.moundDirection !== "fade" && persisted?.moundDirection === "fade" && persisted.everPubliclyFlaggedFade === true) {
-      signal.moundDirection = "fade";
-    } else if (signal.moundDirection !== "follow" && persisted?.moundDirection === "follow" && persisted.everPubliclyFlagged === true) {
-      signal.moundDirection = "follow";
-    }
-
-    const everPubliclyFlagged = signal.everPubliclyFlagged || (persisted?.everPubliclyFlagged ?? false);
-    const everPubliclyFlaggedFade = signal.everPubliclyFlaggedFade || (persisted?.everPubliclyFlaggedFade ?? false);
-    signal.everPubliclyFlagged = everPubliclyFlagged;
-    signal.everPubliclyFlaggedFade = everPubliclyFlaggedFade;
-
     const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart, everPubliclyFlagged, everPubliclyFlaggedFade);
     if (!outcome) continue;
+
+    if (needsDirectionRepair) {
+      console.warn(
+        `[MOUND_SETTLEMENT_DIRECTION_REPAIR] ${signal.signalId} pitcher=${signal.pitcherId} game=${signal.gameId} ` +
+          `settledUnder=${settledUnder ?? "null"} resolved=${settlementDirection} ` +
+          `everPubliclyFlagged=${everPubliclyFlagged} everPubliclyFlaggedFade=${everPubliclyFlaggedFade} ` +
+          `was=${signal.outcomes?.outcome} now=${outcome.outcome}`,
+      );
+    }
 
     if (!isMoundOutcomeGradeableNow(outingComplete, outcome.outcome)) continue;
 
@@ -295,7 +365,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         const finalPregameSnapshot = signal.diagnostics.evaluation?.finalPregameSnapshot ?? null;
         const gradingMeasurements = computeMoundGradingMeasurements(
           signal.primaryMarket,
-          signal.moundDirection,
+          settlementDirection,
           finalPregameSnapshot,
           outcome.finalStrikeouts ?? null,
           outcome.finalOutsRecorded ?? null,
@@ -304,7 +374,7 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
         if (signal.diagnostics.evaluation) {
           signal.diagnostics.evaluation.gradingMeasurements = gradingMeasurements;
         }
-        signal.outcomes = stampMarketOutcome(signal.outcomes!, signal.primaryMarket, finalPregameSnapshot);
+        signal.outcomes = stampMarketOutcome(signal.outcomes!, signal, finalPregameSnapshot, isPublicRecommendation);
       } catch (err: any) {
         console.warn(`[MOUND_RADAR_EVALUATION_SNAPSHOT] grading measurement failed ${signal.signalId}:`, err?.message ?? err);
       }

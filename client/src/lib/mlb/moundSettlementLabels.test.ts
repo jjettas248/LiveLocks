@@ -8,7 +8,14 @@
 // exclusively for a real market-line tie, and the baseline-tie case here
 // must read "Matched Engine Baseline" instead.
 
-import { baselineOnlyLabel, moundResultLabel, moundFinalStatLabel, type MoundMarketOutcome } from "@/lib/mlb/moundSettlementLabels";
+import {
+  baselineOnlyLabel,
+  moundResultLabel,
+  moundFinalStatLabel,
+  MOUND_INTEGRITY_LABEL,
+  type MoundMarketOutcome,
+  type MoundSettlementLane,
+} from "@/lib/mlb/moundSettlementLabels";
 
 let pass = 0;
 let fail = 0;
@@ -64,17 +71,74 @@ const ALLOWED_RESULT_LABELS = new Set([
   "Follow Read Confirmed", "Fade Read Confirmed",
   "Performed Below Baseline", "Performed Above Baseline",
   "Matched Engine Baseline",
+  "Result Unavailable",
 ]);
 let sawUnexpectedResultLabel = false;
 for (const mkt of ALL_MARKET_OUTCOMES) {
   for (const mo of ["confirmed", "not_confirmed", "push", null] as const) {
     for (const side of ["OVER", "UNDER", null] as const) {
-      const label = moundResultLabel(mkt, mo, side);
-      if (label != null && !ALLOWED_RESULT_LABELS.has(label)) sawUnexpectedResultLabel = true;
+      for (const lane of ["market", "integrity_gap", "model_review", undefined] as const) {
+        const label = lane === undefined ? moundResultLabel(mkt, mo, side) : moundResultLabel(mkt, mo, side, lane);
+        if (label != null && !ALLOWED_RESULT_LABELS.has(label)) sawUnexpectedResultLabel = true;
+      }
     }
   }
 }
-assert("every input combination resolves to one of the 8 allowed result strings, or null", !sawUnexpectedResultLabel);
+assert("every input combination resolves to one of the 9 allowed result strings, or null", !sawUnexpectedResultLabel);
+
+// ── Lane precedence: a public bet never falls back to model wording ────────
+// The integrity lane exists for exactly one case — the card WAS a public
+// sportsbook recommendation, but its frozen side/line can no longer be
+// recovered. That must read as an unavailable result, never as a
+// model-performance verdict (which would silently rewrite a bet's outcome)
+// and never as a Cashed (which would fabricate a win from the engine
+// baseline).
+const ALL_LANES: MoundSettlementLane[] = ["market", "integrity_gap", "model_review"];
+const MODEL_WORDING = new Set([
+  "Follow Read Confirmed", "Fade Read Confirmed",
+  "Performed Below Baseline", "Performed Above Baseline",
+  "Matched Engine Baseline",
+]);
+
+assert(
+  "integrity lane → 'Result Unavailable', never the model-performance label",
+  moundResultLabel("unavailable", "not_confirmed", "UNDER", "integrity_gap") === MOUND_INTEGRITY_LABEL,
+);
+assert(
+  "integrity lane never says Cashed even when the model read confirmed",
+  moundResultLabel("unavailable", "confirmed", "OVER", "integrity_gap") === MOUND_INTEGRITY_LABEL,
+);
+assert(
+  "model_review lane keeps the baseline wording (no bet was ever recommended)",
+  moundResultLabel("unavailable", "not_confirmed", "UNDER", "model_review") === "Performed Above Baseline",
+);
+assert(
+  "omitted lane defaults to model_review — legacy responses render as before",
+  moundResultLabel("unavailable", "not_confirmed", "UNDER") === "Performed Above Baseline",
+);
+
+// A real market result outranks the lane argument entirely.
+let marketAlwaysWins = true;
+for (const lane of ALL_LANES) {
+  if (moundResultLabel("cashed", "not_confirmed", "UNDER", lane) !== "Cashed") marketAlwaysWins = false;
+  if (moundResultLabel("missed", "confirmed", "OVER", lane) !== "Missed") marketAlwaysWins = false;
+  if (moundResultLabel("push", "confirmed", "OVER", lane) !== "Push") marketAlwaysWins = false;
+}
+assert("a real market result outranks every lane value", marketAlwaysWins);
+
+// Exhaustive: model-performance wording can never escape the model lane.
+let modelWordingLeaked = false;
+for (const mkt of ["cashed", "missed", "push", "unavailable"] as MoundMarketOutcome[]) {
+  for (const mo of ALL_MODEL_OUTCOMES) {
+    for (const side of ALL_SIDES) {
+      for (const lane of ALL_LANES) {
+        const label = moundResultLabel(mkt, mo, side, lane);
+        if (label != null && MODEL_WORDING.has(label) && lane !== "model_review") modelWordingLeaked = true;
+      }
+    }
+  }
+}
+assert("model-performance wording never renders outside the model_review lane", !modelWordingLeaked);
 
 // ── moundFinalStatLabel: the factual final-performance text on the left ─────
 // Mirrors the batting card's HOMERED/No HR left-side position — always the

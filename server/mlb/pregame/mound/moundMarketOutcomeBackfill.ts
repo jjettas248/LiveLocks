@@ -23,10 +23,15 @@
 import type { MoundDirection } from "./moundDirection";
 import type { MoundEvaluationSnapshot, MoundMarket } from "./types";
 import { deriveMoundMarketOutcome, type MoundMarketOutcomeResult } from "./moundOutcomeAttribution";
+import { deriveFrozenMoundMarketRecommendation } from "./marketRecommendation";
 
 export interface MoundMarketOutcomeBackfillRow {
   signalId: string;
   primaryMarket: MoundMarket;
+  /**
+   * The row's MODEL read. Retained for logging/traceability only — it is
+   * deliberately NOT used to pick the sportsbook side (see the planner body).
+   */
   moundDirection: MoundDirection;
   /** From the persisted `outcomes` jsonb column. */
   finalStrikeouts: number | null;
@@ -61,8 +66,20 @@ export function planMoundMarketOutcomeBackfill(rows: MoundMarketOutcomeBackfillR
         : row.finalPregameSnapshot?.champion.postedLine.outs ?? null;
     const actual = row.primaryMarket === "pitcher_strikeouts" ? row.finalStrikeouts : row.finalOutsRecorded;
 
+    // The sportsbook side comes from the FROZEN pregame recommendation
+    // (projection vs. posted line), exactly as the prospective grading path
+    // derives it — never remapped from the row's Follow/Fade model read.
+    // Follow/Fade answers "is this pitcher above or below his own season
+    // baseline?"; OVER/UNDER answers "is the frozen projection above or below
+    // a real posted line?" A Follow can legitimately be an UNDER and vice
+    // versa, so inferring one from the other would backfill historical rows
+    // with sides no user was ever shown.
+    const recommendation = deriveFrozenMoundMarketRecommendation(row.primaryMarket, row.finalPregameSnapshot);
+    const marketSettlementDirection: MoundDirection =
+      recommendation.side === "OVER" ? "follow" : recommendation.side === "UNDER" ? "fade" : null;
+
     const result = deriveMoundMarketOutcome({
-      moundDirection: row.moundDirection,
+      moundDirection: marketSettlementDirection,
       frozenLine,
       lineFrozenAt: row.finalPregameSnapshot?.frozenAt ?? null,
       actual,

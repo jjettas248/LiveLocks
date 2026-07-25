@@ -51,6 +51,7 @@ npx tsx server/mlb/pregame/mound/contactRisk.test.ts # Mound Radar Hit/HR Suscep
 npx tsx server/mlb/pregame/mound/matchupAdjustedKs.test.ts # Mound Radar Matchup Adj. Ks enrichment + avgInningsPerStart swingman-inflation regression
 npx tsx server/mlb/pregame/mound/moundScoring.test.ts # Mound Radar component scorers + composite score10/tier invariants
 npx tsx server/mlb/pregame/mound/moundDirection.test.ts # Mound Radar Fade/Follow direction thresholds (server-stamped once at build time)
+npx tsx server/mlb/pregame/mound/moundPublicSettlement.test.ts # Mound Radar public-recommendation settlement lanes: market (Cashed/Missed/Push from the frozen sportsbook bet) vs model_review vs integrity_gap; durable-public-exposure direction resolution (a Follow-public card is never settled under Fade rules); Follow/Fade never remapped to OVER/UNDER; engine baseline never substituted for a missing line
 npx tsx server/mlb/pregame/mound/moundOutcomeAttribution.test.ts # Mound Radar settlement rule: Follow (Over) mound_win vs Fade (Under) mound_fade_win vs mound_calibration_miss (internal calibration, unchanged) + deriveMoundMarketOutcome/deriveModelOutcomeLabel/buildMoundSettlementView (additive market-settlement contract) + MOUND_WIN_COPY/MOUND_FADE_WIN_COPY never say "Cashed"
 npx tsx server/mlb/pregame/mound/moundCalibrationStats.test.ts # Mound Radar public/admin stats — Fade wins fully separate from Follow/Over win counters
 npx tsx server/mlb/pregame/mound/moundAnalyticsSeparation.test.ts # Mound vs Plate outcome-taxonomy + in-memory store isolation
