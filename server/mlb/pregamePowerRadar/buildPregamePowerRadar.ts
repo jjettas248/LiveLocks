@@ -46,6 +46,20 @@ import type {
   PregameParkContext,
 } from "./types";
 import { PLATE_CHAMPION_POLICY } from "./modelVersions/plateChampionJul20";
+import { PLATE_CHALLENGER_POLICY } from "./modelVersions/plateChallengerCurrent";
+import { isPlateShadowChallengerEnabled } from "./modelVersions/plateShadowFlags";
+import { evaluatePlateModel } from "./evaluatePlateModel";
+import {
+  freezePlateInput,
+  hashFrozenPlateInput,
+  RESEARCH_UNCOLLECTED,
+  type FrozenPlateInput,
+} from "./frozenPlateInput";
+import {
+  buildPlateModelComparison,
+  shouldLogPlateDelta,
+  type PlateModelComparisonRecord,
+} from "./plateModelComparison";
 import { countPositiveDrivers, driverKeysForUniverse } from "./modelVersions/plateDriverUniverse";
 import { computeBatterPowerProfile, type BatterPowerInputs } from "./batterPowerProfile";
 import { computePitcherVulnerability } from "./pitcherVulnerability";
@@ -184,7 +198,14 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   // yesterday's slate) tags the resulting signals with yesterday's date too —
   // instead of minting "today"-tagged wins for a slate that already finished.
   const sessionDate = slateDateET();
-  console.log(`[PREGAME_POWER_RADAR_BUILD_START] buildId=${buildId} date=${sessionDate}`);
+  // Read once per build so every candidate in a cycle is treated identically —
+  // and so a mid-build env change can never split the slate across two regimes.
+  const shadowEnabled = isPlateShadowChallengerEnabled();
+  console.log(`[PREGAME_POWER_RADAR_BUILD_START] buildId=${buildId} date=${sessionDate} shadow=${shadowEnabled}`);
+  let shadowEvaluated = 0;
+  let shadowFailed = 0;
+  let shadowDeltas = 0;
+  let shadowTotalMs = 0;
 
   // Previous same-slate snapshot — source of already-stamped grading/bridge
   // state that must survive this rebuild (see carryForwardGradedState).
@@ -346,7 +367,13 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
       // neutral path, exactly as when pitcherSplits is unavailable.
       const pitcherContactByPitcher = new Map<string, ReturnType<typeof aggregateRawPitcherContactSnapshot>>();
       const pitcherRecentFormByPitcher = new Map<string, Awaited<ReturnType<typeof fetchPitcherRecentStarts>>>();
-      for (const starter of sideStarters) {
+      // These two feeds are CHALLENGER-ONLY inputs — the champion scores on
+      // handedness HR/9 + ERA alone. When shadow evaluation is off we skip the
+      // work entirely (a real per-starter network saving); when it is on, each
+      // gatherer stays individually try/caught so a research failure degrades to
+      // null research fields and can never block champion construction.
+      const researchFetchFailed = new Set<string>();
+      for (const starter of shadowEnabled ? sideStarters : []) {
         try {
           // Same fetchBaseballSavantData call the batter side already makes,
           // but keyed by the PITCHER's own id (mirroring buildMlbMoundRadar.ts)
@@ -371,12 +398,14 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             }),
           );
         } catch {
-          /* contact-quality data is optional/additive — ignore failures */
+          /* research-only — degrade to null, never block the champion */
+          researchFetchFailed.add(starter.pitcherId);
         }
         try {
           pitcherRecentFormByPitcher.set(starter.pitcherId, await fetchPitcherRecentStarts(starter.pitcherId));
         } catch {
-          /* recent-form data is optional/additive — ignore failures */
+          /* research-only — degrade to null, never block the champion */
+          researchFetchFailed.add(starter.pitcherId);
         }
       }
 
@@ -943,6 +972,167 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         };
 
         carryForwardGradedState(signal, prevSignals?.get(signalId));
+
+        // ── Shadow challenger ────────────────────────────────────────────────
+        // Runs ONLY here: the champion signal above is fully assembled and
+        // carried forward, so nothing below can alter it. Persistence happens
+        // once, at the end of the build via buildSink — attaching the comparison
+        // here means the champion and its shadow record land in the same write.
+        //
+        // Fail-open by construction: any throw is logged and dropped, the signal
+        // keeps `challengerUnavailable`, and the build continues.
+        {
+          const frozen = freezePlateInput({
+            sessionDate,
+            gameId: game.gameId,
+            batterId: player.playerId,
+            pitcherId: opposingPitcher?.pitcherId ?? null,
+            batter: {
+              xISO: powerInputs.xISO, xSLG: powerInputs.xSLG,
+              barrelRatePct: powerInputs.barrelRatePct, hardHitRatePct: powerInputs.hardHitRatePct,
+              exitVelocity: powerInputs.exitVelocity, maxEV: powerInputs.maxEV,
+              flyBallPct: powerInputs.flyBallPct, hrFBRatioPct: powerInputs.hrFBRatioPct,
+              pullRatePct: powerInputs.pullRatePct, sweetSpotPct: powerInputs.sweetSpotPct,
+              xwOBA: powerInputs.xwOBA, battedBallEvents: powerInputs.battedBallEvents,
+              bats: player.bats,
+            },
+            pitcher: {
+              pitcherKnown,
+              throws: opposingPitcher?.throws ?? null,
+              hrPer9VsLHB: pitcherSplits?.hrPer9VsLHB ?? null,
+              hrPer9VsRHB: pitcherSplits?.hrPer9VsRHB ?? null,
+              eraVsLHB: pitcherSplits?.eraVsLHB ?? null,
+              eraVsRHB: pitcherSplits?.eraVsRHB ?? null,
+            },
+            research: !shadowEnabled
+              ? RESEARCH_UNCOLLECTED
+              : !opposingPitcher
+                ? { ...RESEARCH_UNCOLLECTED, unavailableReason: "no_pitcher" as const }
+                : {
+                    collected: !researchFetchFailed.has(opposingPitcher.pitcherId),
+                    unavailableReason: researchFetchFailed.has(opposingPitcher.pitcherId)
+                      ? ("fetch_failed" as const)
+                      : null,
+                    barrelAllowedPct: pitcherContact?.barrelAllowedPct ?? null,
+                    hardHitAllowedPct: pitcherContact?.hardHitAllowedPct ?? null,
+                    flyBallAllowedPct: pitcherContact?.flyBallAllowedPct ?? null,
+                    last3StartERA: pitcherRecentForm?.last3StartERA ?? null,
+                    daysSinceLastStart: pitcherRecentForm?.daysSinceLastStart ?? null,
+                  },
+            matchup: {
+              batterOpsVsHand: opsVsHand,
+              batterXslgVsDominantFamily: null,
+              parkFavorsPull: (parkHrFactor ?? 1) > 1.05,
+              bvpPlateAppearances: bvp?.atBats ?? null,
+              bvpAtBats: bvp?.atBats ?? null,
+              bvpHr: bvp?.homeRuns ?? null,
+              bvpHits: bvp?.hits ?? null,
+              bvpStrikeouts: bvp?.strikeouts ?? null,
+              bvpOps: bvp?.ops ?? null,
+              bvpAvg: bvp?.avg ?? null,
+            },
+            parkWeather: {
+              parkHrFactor,
+              isIndoors,
+              weatherAvailable,
+              temperature: weather?.temperature ?? null,
+              windSpeed: weather?.windSpeed ?? null,
+              windDirection: weather?.windDirection ?? null,
+            },
+            lineup: {
+              battingOrderSlot: slot.battingOrderSlot,
+              lineupPosted: lineupStatus === "posted",
+              teamImpliedRuns: null,
+              obpAhead: null,
+            },
+            // Policy-independent component OUTPUTS, frozen rather than
+            // re-derived — this is what makes the shadow champion reproduce the
+            // production champion exactly instead of approximating it.
+            precomputed: {
+              nearHrRecentForm: {
+                score10: nearHrRecentForm.score10,
+                available: nearHrRecentForm.available,
+                drivers: nearHrRecentForm.drivers.slice(),
+              },
+              batterOrderSplit: {
+                score10: batterOrderSplit.score10,
+                direction: batterOrderSplit.direction,
+                drivers: batterOrderSplit.drivers.slice(),
+              },
+              pitcherOrderSplit: {
+                score10: pitcherOrderSplit.score10,
+                available: pitcherOrderSplit.available,
+                direction: pitcherOrderSplit.direction,
+                drivers: pitcherOrderSplit.drivers.slice(),
+              },
+            },
+            dataQuality: {
+              savantQuality: savant ? (savant.batterDataQuality === "full" ? "full" : "fallback") : "missing",
+              venueResolved: isVenueResolved(venueName),
+              pitcherHandResolved: opposingPitcher?.throws != null,
+            },
+          });
+          const frozenInputHash = hashFrozenPlateInput(frozen);
+          const pubCtx = {
+            lineupStatus,
+            isOfficialPlay: signal.isOfficialPlay,
+            isPregameTarget: signal.isPregameTarget,
+          };
+
+          let modelComparison: PlateModelComparisonRecord | null = shadowEnabled
+            ? { championVersion: PLATE_CHAMPION_POLICY.version, challengerVersion: PLATE_CHALLENGER_POLICY.version, frozenInputHash, challengerUnavailable: "failed" as const }
+            : { championVersion: PLATE_CHAMPION_POLICY.version, challengerVersion: PLATE_CHALLENGER_POLICY.version, frozenInputHash, challengerUnavailable: "disabled" as const };
+          let shadowEvaluationMs: number | null = null;
+
+          if (shadowEnabled) {
+            const t0 = Date.now();
+            try {
+              // Both models receive the SAME frozen object — not two builds of
+              // an equivalent one — so the recorded hash is a real proof.
+              const championEval = evaluatePlateModel(frozen, PLATE_CHAMPION_POLICY, pubCtx);
+              // Parity guard. The comparison is only meaningful if the shadow
+              // champion IS the production champion — otherwise a delta could
+              // come from the re-derivation rather than from policy. Log-only:
+              // a mismatch must never alter the production signal.
+              if (
+                championEval.score10 !== scoring.score10 ||
+                championEval.tier !== scoring.tier ||
+                championEval.suppressed !== scoring.suppressed
+              ) {
+                console.warn(
+                  `[PLATE_CHAMPION_PARITY_MISMATCH] ${signalId} ` +
+                  `prod=${scoring.tier}/${scoring.score10}/${scoring.suppressed} ` +
+                  `shadow=${championEval.tier}/${championEval.score10}/${championEval.suppressed}`,
+                );
+              }
+              const challengerEval = evaluatePlateModel(frozen, PLATE_CHALLENGER_POLICY, pubCtx);
+              const prevComparison = prevSignals?.get(signalId)?.diagnostics?.modelComparison ?? null;
+              const comparison = buildPlateModelComparison(
+                championEval, challengerEval, frozenInputHash, prevComparison, generatedAt,
+              );
+              modelComparison = comparison;
+              shadowEvaluated++;
+              if (shouldLogPlateDelta(comparison)) {
+                shadowDeltas++;
+                console.log(
+                  `[PLATE_MODEL_DELTA] ${signalId} champ=${comparison.champion.tier}/${comparison.champion.score10}/${comparison.champion.publicEligible ? "public" : "hidden"} ` +
+                  `chal=${comparison.challenger.tier}/${comparison.challenger.score10}/${comparison.challenger.publicEligible ? "public" : "hidden"} ` +
+                  `market=${comparison.champion.primaryMarket}->${comparison.challenger.primaryMarket} ` +
+                  `attribution=${comparison.attribution.join(",") || "none"}`,
+                );
+              }
+            } catch (err: any) {
+              shadowFailed++;
+              console.warn(`[PLATE_SHADOW_FAILED] ${signalId} ${err?.message ?? err}`);
+            }
+            shadowEvaluationMs = Date.now() - t0;
+            shadowTotalMs += shadowEvaluationMs;
+          }
+
+          signal.diagnostics.modelComparison = modelComparison;
+          signal.diagnostics.shadowEvaluationMs = shadowEvaluationMs;
+        }
+
         signals.set(signalId, signal);
         if (scoring.suppressed) {
           suppressedCount++;
@@ -1012,6 +1202,19 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   console.log(
     `[PREGAME_POWER_RADAR_BUILD_COMPLETE] buildId=${buildId} games=${gamesScanned} ` +
       `batters=${battersEvaluated} public=${createdPublicEligible} suppressed=${suppressedCount}`,
+  );
+
+  // ONE aggregate line per build — never one per candidate. Unchanged
+  // candidates are never logged at all; only genuine deltas get their own line.
+  if (shadowEnabled) {
+    console.log(
+      `[PLATE_CHALLENGER_EVAL] buildId=${buildId} model=${PLATE_CHALLENGER_POLICY.version} ` +
+        `evaluated=${shadowEvaluated} failed=${shadowFailed} deltas=${shadowDeltas} totalMs=${shadowTotalMs}`,
+    );
+  }
+  console.log(
+    `[PLATE_CHAMPION_EVAL] buildId=${buildId} model=${PLATE_CHAMPION_POLICY.version} ` +
+      `candidates=${battersEvaluated} public=${createdPublicEligible}`,
   );
 
   // One aggregated line for the whole build, and only when the flagged set
