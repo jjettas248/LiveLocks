@@ -58,8 +58,11 @@ function makeSignal(over: {
     score10: over.score10,
     tier: over.tier ?? "strong",
     drivers: over.drivers ?? [
-      { key: "power", label: "Elite raw power", direction: "positive" },
-      { key: "park", label: "HR park boost", direction: "positive" },
+      // Real July-20 driver keys — placeholder keys do NOT satisfy the champion's
+      // driver minimum (modelVersions/plateDriverUniverse.ts), so a fixture using
+      // them would never be publicly flagged and every count below would be 0.
+      { key: "power_iso", label: "Elite Isolated Power", direction: "positive" },
+      { key: "pw_park", label: "Hitter-Friendly Park", direction: "positive" },
     ],
     warnings: [],
     tags: [],
@@ -200,7 +203,7 @@ ok(calibration.byTier.nuclear.targets === 1 && calibration.byTier.nuclear.wins =
 ok(calibration.byTier.strong.targets === 2 && calibration.byTier.strong.misses === 1, "byTier strong bucket includes pending + miss");
 ok(calibration.byScoreBand["9-10"].wins === 1, "byScoreBand 9-10 bucket correct");
 ok(calibration.byScoreBand["7-8"].misses === 1, "byScoreBand 7-8 miss bucket correct");
-ok(calibration.byDriver.power.targets === 4 && calibration.byDriver.power.wins === 2 && calibration.byDriver.power.misses === 1, "byDriver bucket correct");
+ok(calibration.byDriver.power_iso.targets === 4 && calibration.byDriver.power_iso.wins === 2 && calibration.byDriver.power_iso.misses === 1, "byDriver bucket correct");
 ok(calibration.targetToLiveReadyRate === 50, "targetToLiveReadyRate math correct");
 ok(calibration.targetToLiveFireRate === 25, "targetToLiveFireRate math correct");
 ok(calibration.targetToHrRate === 66.7, "targetToHrRate matches resolved HR conversion");
@@ -304,7 +307,8 @@ const aePositiveTagWin = makeSignal({
   signalId: "s-ae-tag-win", score10: 8.6, tier: "elite", everPubliclyFlagged: true,
   attackEnvironmentTier: "ELITE",
   drivers: [
-    { key: "power", label: "Elite raw power", direction: "positive" },
+    { key: "power_iso", label: "Elite Isolated Power", direction: "positive" },
+    { key: "pw_park", label: "Hitter-Friendly Park", direction: "positive" },
     { key: "atkenv_power_env", label: "Power Environment", direction: "positive", weight: 0 },
     { key: "atkenv_hostile", label: "Hostile Attack Environment", direction: "negative", weight: 0 },
   ],

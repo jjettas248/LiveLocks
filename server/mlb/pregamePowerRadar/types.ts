@@ -16,6 +16,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { GradeFactorEntry } from "./gradeFactorSummary";
+import type { PlateModelComparisonRecord } from "./plateModelComparison";
 
 /**
  * Pre-game tiers. `fire` is intentionally absent — it is reserved for the live radar.
@@ -234,12 +235,46 @@ export interface PregamePowerDiagnostics {
   };
 
   /**
+   * Honest data-quality measurement, deliberately SEPARATE from champion model
+   * semantics. `rawInputsAvailable` above carries the champion's (July-20)
+   * availability definitions — the ones that actually drive coverage caps and
+   * publication. This block records what is factually true about the inputs, so
+   * a quality limitation is visible without silently changing the champion's
+   * decision. It is a diagnostic and a challenger input, never a champion gate.
+   *
+   * Optional: absent on rows persisted before this instrumentation shipped.
+   */
+  dataQuality?: {
+    savantQuality: "full" | "fallback" | "missing";
+    venueResolved: boolean;
+    pitcherHandResolved: boolean;
+    /** The stricter batter-power read the challenger uses. */
+    batterPowerFullyAvailable: boolean;
+  };
+
+  /**
    * Display-only raw power-profile snapshot (see PregamePowerProfileSnapshot).
    * Additive — never read by scoring/grading. Frozen into the locked signal by
    * gradedStateCarry so completed cards + restart/DB hydration show the ORIGINAL
    * pregame profile, not a post-first-pitch rebuild. Optional for older rows.
    */
   powerProfile?: PregamePowerProfileSnapshot;
+
+  /**
+   * Champion-vs-challenger shadow comparison for this candidate. Research
+   * instrumentation — never read by scoring.ts, marketTagger.ts, or
+   * diagnostics.ts's public gate. Present only when shadow evaluation ran;
+   * `{ challengerUnavailable }` records why it did not, so "absent" is never
+   * mistaken for "the challenger declined this candidate". gradedStateCarry
+   * freezes it at lock (diagnostics is a wholesale jsonb overwrite).
+   */
+  modelComparison?: PlateModelComparisonRecord | null;
+
+  /**
+   * Wall-clock cost of the shadow evaluation, in ms. Persisted so it is
+   * possible to detect research work starting to slow the production build.
+   */
+  shadowEvaluationMs?: number | null;
 
   /**
    * Frozen prediction-time evaluation snapshots (research instrumentation —

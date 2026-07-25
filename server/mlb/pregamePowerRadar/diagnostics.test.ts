@@ -24,9 +24,12 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     pitcherId: "p1", pitcherName: "P", battingOrderSlot: 3, handednessMatchup: "R vs L",
     primaryMarket: "home_runs", marketTags: ["home_runs"], marketScores: { home_runs: 7 },
     score10: 7, tier: "strong",
+    // Real July-20 driver keys. Placeholder keys ("d1"/"d2") deliberately do NOT
+    // count toward the champion's two-driver minimum — only enumerated members
+    // of JUL20_POSITIVE_DRIVER_KEYS do (see modelVersions/plateDriverUniverse.ts).
     drivers: [
-      { key: "d1", label: "Driver 1", direction: "positive" },
-      { key: "d2", label: "Driver 2", direction: "positive" },
+      { key: "power_iso", label: "Elite Isolated Power", direction: "positive" },
+      { key: "pv_hr9", label: "Pitcher Yields HR vs RHB", direction: "positive" },
     ],
     warnings: [], tags: [], lineupStatus: "posted", weatherStatus: "estimated",
     gameStatus: "scheduled", firstPitchLockEligible: true, lockedAt: null,

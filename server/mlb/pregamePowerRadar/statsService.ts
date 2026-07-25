@@ -12,6 +12,7 @@ import { rowToSignal } from "./pregamePersistence";
 import { getRadarSnapshot } from "./pregamePowerRadarService";
 import { buildCalibrationStats, buildPublicStats } from "./calibrationStats";
 import { buildDailyPregameWins } from "./winAttribution";
+import { buildPlateModelComparisonReport, type PlateModelComparisonReport } from "./plateModelComparisonStats";
 import type { PregamePowerSignal } from "./types";
 import type {
   PregameRadarCalibrationStats,
@@ -112,6 +113,30 @@ export async function getPregameRadarCalibrationStats(days: number = 7): Promise
  * pattern as getPregameRadarPublicStats). Powers the daily cashed log for both
  * today and historical dates.
  */
+/**
+ * Champion-vs-challenger comparison over an ET date range. Read-only, admin.
+ * Reuses the same DB + in-memory merge every other Plate stat getter uses, so
+ * today's in-flight slate is included rather than silently missing.
+ */
+export async function getPlateModelComparison(
+  fromET: string,
+  toET: string,
+): Promise<PlateModelComparisonReport> {
+  await getRadarSnapshot().catch(() => null);
+
+  // Walk back with slateDaysAgoET (6am-ET rollover) — the same helper
+  // datesBack uses — so the window matches how sessionDate is stamped, then
+  // filter to the requested range. 60 days is the existing clamp.
+  const dates = datesBack(60).filter((d) => d >= fromET && d <= toET);
+
+  const signals = uniqueBySignalId([
+    ...await loadPregamePowerSignalsByDates(dates),
+    ...currentSnapshotSignalsForDate(slateDateET()),
+  ]).filter((s) => s.sessionDate >= fromET && s.sessionDate <= toET);
+
+  return buildPlateModelComparisonReport(signals, { startET: fromET, endET: toET });
+}
+
 export async function getPregameRadarWinsForDate(dateET: string = slateDateET()): Promise<{
   pregameRadarWins: PregameRadarWinItem[];
   firstAbPregameWins: PregameRadarWinItem[];

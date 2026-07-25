@@ -9,6 +9,7 @@ import {
   type ScoringComponents,
   type ScoringFlags,
 } from "./scoring";
+import { PLATE_CHALLENGER_POLICY } from "./modelVersions/plateChallengerCurrent";
 import { computeBatterPowerProfile } from "./batterPowerProfile";
 import { computePitcherVulnerability } from "./pitcherVulnerability";
 import { computeMatchupFit } from "./matchupFit";
@@ -64,22 +65,22 @@ const comps: ScoringComponents = {
 // original "all-8 → elite" case; the NEUTRAL-caps-elite behavior is asserted
 // separately below.
 const favorableEnvFlags: ScoringFlags = { ...fullFlags, attackEnvironmentTier: "FAVORABLE" };
-const r1 = composePregameScore(comps, favorableEnvFlags);
+const r1 = composePregameScore(comps, favorableEnvFlags, PLATE_CHALLENGER_POLICY.gates);
 ok(approx(r1.score10, 8.0), `all-8 components → ~8.0 (got ${r1.score10})`);
 ok(r1.score10 >= 0 && r1.score10 <= 10, "score in [0,10]");
 ok(r1.tier === "elite", "all-8 + FAVORABLE env → elite");
 ok(!r1.suppressed, "strong all-8 not suppressed");
 
 // ── Attack Environment gate: NEUTRAL/HOSTILE cap an otherwise-elite card ──────
-const rNeutralEnv = composePregameScore(comps, fullFlags); // fullFlags.attackEnvironmentTier === "NEUTRAL"
+const rNeutralEnv = composePregameScore(comps, fullFlags, PLATE_CHALLENGER_POLICY.gates); // fullFlags.attackEnvironmentTier === "NEUTRAL"
 ok(rNeutralEnv.tier === "strong", "all-8 + NEUTRAL env → capped at strong, not elite");
 
-const rHostileEnv = composePregameScore(comps, { ...fullFlags, attackEnvironmentTier: "HOSTILE" });
+const rHostileEnv = composePregameScore(comps, { ...fullFlags, attackEnvironmentTier: "HOSTILE" }, PLATE_CHALLENGER_POLICY.gates);
 ok(rHostileEnv.tier === "strong", "all-8 + HOSTILE env → capped at strong, not elite");
 
 // ── Attack Environment gate: ELITE required for nuclear, FAVORABLE insufficient ─
 const nuclearComps: ScoringComponents = { ...comps, batterPowerScore: 9.5, pitcherVulnerabilityScore: 9.5, matchupFitScore: 9.5 };
-const rNuclearFavorable = composePregameScore(nuclearComps, favorableEnvFlags);
+const rNuclearFavorable = composePregameScore(nuclearComps, favorableEnvFlags, PLATE_CHALLENGER_POLICY.gates);
 ok(rNuclearFavorable.tier !== "nuclear", "FAVORABLE env insufficient for nuclear (needs ELITE)");
 const rNuclearElite = composePregameScore(nuclearComps, { ...fullFlags, attackEnvironmentTier: "ELITE" });
 ok(rNuclearElite.tier === "nuclear", "ELITE env unlocks nuclear when score/gates otherwise qualify");
@@ -104,7 +105,7 @@ const borderlineComps: ScoringComponents = {
 };
 const rHostileBorderline = composePregameScore(borderlineComps, {
   ...fullFlags, attackEnvironmentTier: "HOSTILE", attackEnvironmentEliminationEligible: true,
-});
+}, PLATE_CHALLENGER_POLICY.gates);
 ok(
   rHostileBorderline.score10 >= PUBLISH_MIN_SCORE && rHostileBorderline.score10 < 6.5,
   `borderline fixture actually lands in [6.0,6.5) (got ${rHostileBorderline.score10})`,

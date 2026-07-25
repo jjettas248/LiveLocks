@@ -8,6 +8,11 @@ import { computePitcherOrderSplit, type PitcherOrderSplitInputs } from "./pitche
 import { computeMatchupFit } from "./matchupFit";
 import { composePregameScore, classifyTier, type ScoringComponents, type ScoringFlags } from "./scoring";
 import { round1 } from "./scoreUtils";
+import { PLATE_CHALLENGER_POLICY } from "./modelVersions/plateChallengerCurrent";
+
+// Attack-Environment tier gating is CHALLENGER behavior; the champion
+// (July-20 restored) ignores the AE tier entirely.
+const CHAL_GATES = PLATE_CHALLENGER_POLICY.gates;
 
 let passed = 0;
 let failed = 0;
@@ -114,10 +119,10 @@ ok(elite.warningTags.length === 0 && elite.downgradeReasons.length === 0, "clean
 
 // classifyTier units.
 ok(classifyTier(7.6, 8.6, 4.0, false, "NEUTRAL") === "power_watch", "classifyTier: high power + weak pitcher → power_watch");
-ok(classifyTier(7.6, 8.0, 7.0, false, "FAVORABLE") === "elite", "classifyTier: strong both + FAVORABLE env, not blocked → elite");
-ok(classifyTier(7.6, 8.0, 7.0, true, "FAVORABLE") === "strong", "classifyTier: blocked matchup caps elite → strong");
-ok(classifyTier(7.6, 8.0, 7.0, false, "NEUTRAL") === "strong", "classifyTier: strong both but NEUTRAL env caps at strong, not elite");
-ok(classifyTier(7.6, 8.0, 7.0, false, "HOSTILE") === "strong", "classifyTier: strong both but HOSTILE env caps at strong, not elite");
+ok(classifyTier(7.6, 8.0, 7.0, false, "FAVORABLE", CHAL_GATES) === "elite", "classifyTier: strong both + FAVORABLE env, not blocked → elite");
+ok(classifyTier(7.6, 8.0, 7.0, true, "FAVORABLE", CHAL_GATES) === "strong", "classifyTier: blocked matchup caps elite → strong");
+ok(classifyTier(7.6, 8.0, 7.0, false, "NEUTRAL", CHAL_GATES) === "strong", "classifyTier: strong both but NEUTRAL env caps at strong, not elite");
+ok(classifyTier(7.6, 8.0, 7.0, false, "HOSTILE", CHAL_GATES) === "strong", "classifyTier: strong both but HOSTILE env caps at strong, not elite");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [5] Production path: pitcher order-split UNAVAILABLE must not help or fake it

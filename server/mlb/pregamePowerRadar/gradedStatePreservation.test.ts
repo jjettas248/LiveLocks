@@ -296,8 +296,8 @@ function starveEvidence(s: PregamePowerSignal): PregamePowerSignal {
     gameStatus: "suspended",
     firstPitchLockEligible: false,
     drivers: [
-      { key: "d1", label: "Driver 1", direction: "positive" },
-      { key: "d2", label: "Driver 2", direction: "positive" },
+      { key: "power_iso", label: "Elite Isolated Power", direction: "positive" },
+      { key: "pv_hr9", label: "Pitcher Yields HR vs RHB", direction: "positive" },
     ],
   });
   carryForwardGradedState(fresh, undefined);
@@ -310,8 +310,8 @@ function starveEvidence(s: PregamePowerSignal): PregamePowerSignal {
   const freshLive = sig({
     gameStatus: "live", firstPitchLockEligible: false,
     drivers: [
-      { key: "d1", label: "Driver 1", direction: "positive" },
-      { key: "d2", label: "Driver 2", direction: "positive" },
+      { key: "power_iso", label: "Elite Isolated Power", direction: "positive" },
+      { key: "pv_hr9", label: "Pitcher Yields HR vs RHB", direction: "positive" },
     ],
   });
   carryForwardGradedState(freshLive, undefined);
@@ -320,8 +320,8 @@ function starveEvidence(s: PregamePowerSignal): PregamePowerSignal {
   const freshFinal = sig({
     gameStatus: "final", firstPitchLockEligible: false,
     drivers: [
-      { key: "d1", label: "Driver 1", direction: "positive" },
-      { key: "d2", label: "Driver 2", direction: "positive" },
+      { key: "power_iso", label: "Elite Isolated Power", direction: "positive" },
+      { key: "pv_hr9", label: "Pitcher Yields HR vs RHB", direction: "positive" },
     ],
   });
   carryForwardGradedState(freshFinal, undefined);
@@ -331,8 +331,8 @@ function starveEvidence(s: PregamePowerSignal): PregamePowerSignal {
   const freshPre = sig({
     gameStatus: "scheduled", firstPitchLockEligible: true,
     drivers: [
-      { key: "d1", label: "Driver 1", direction: "positive" },
-      { key: "d2", label: "Driver 2", direction: "positive" },
+      { key: "power_iso", label: "Elite Isolated Power", direction: "positive" },
+      { key: "pv_hr9", label: "Pitcher Yields HR vs RHB", direction: "positive" },
     ],
   });
   carryForwardGradedState(freshPre, undefined);

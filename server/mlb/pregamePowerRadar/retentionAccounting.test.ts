@@ -27,8 +27,10 @@ function sig(over: Partial<PregamePowerSignal>): PregamePowerSignal {
     primaryMarket: "home_runs", marketTags: ["home_runs"], marketScores: { home_runs: 7 },
     score10: 7, tier: "strong",
     drivers: [
-      { key: "power", label: "Elite raw power", direction: "positive" },
-      { key: "park", label: "HR park boost", direction: "positive" },
+            // Real July-20 driver keys — placeholder keys do NOT satisfy the
+      // champion's driver minimum (modelVersions/plateDriverUniverse.ts).
+      { key: "power_iso", label: "Elite Isolated Power", direction: "positive" },
+      { key: "pw_park", label: "Hitter-Friendly Park", direction: "positive" },
     ],
     warnings: [], tags: [], lineupStatus: "posted", weatherStatus: "estimated",
     gameStatus: "final", firstPitchLockEligible: false, lockedAt: "2026-07-01T20:00:00Z",

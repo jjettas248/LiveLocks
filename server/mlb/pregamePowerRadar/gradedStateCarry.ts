@@ -63,6 +63,28 @@ export function carryForwardGradedState(
   // freshly-computed score10 — once a snapshot exists it must never move.
   fresh.attackEnvironmentSuppressedScore10 = prev.attackEnvironmentSuppressedScore10 ?? fresh.attackEnvironmentSuppressedScore10;
 
+  // Challenger exposure is sticky for exactly the reason everPubliclyFlagged is:
+  // the champion's flag survives a later dip, so the challenger's must too. A
+  // per-build `publicEligible` compared against a sticky champion flag would
+  // score a challenger call that surfaced at noon and dipped by 4pm as "never
+  // called" — understating the challenger and making the A/B dishonest.
+  //
+  // Runs on EVERY cycle (not only at lock), because this value must accumulate
+  // across the pregame builds, not just be frozen at the end of them.
+  {
+    const prevC = prev.diagnostics?.modelComparison;
+    const freshC = fresh.diagnostics?.modelComparison;
+    if (
+      prevC && freshC &&
+      !("challengerUnavailable" in prevC) && !("challengerUnavailable" in freshC)
+    ) {
+      freshC.challenger.everPubliclyEligible =
+        freshC.challenger.everPubliclyEligible || prevC.challenger.everPubliclyEligible === true;
+      freshC.challenger.firstPublicEligibleAt =
+        prevC.challenger.firstPublicEligibleAt ?? freshC.challenger.firstPublicEligibleAt;
+    }
+  }
+
   fresh.becameLiveReady = fresh.becameLiveReady || prev.becameLiveReady;
   fresh.becameLiveFire = fresh.becameLiveFire || prev.becameLiveFire;
   fresh.convertedLiveAt = fresh.convertedLiveAt ?? prev.convertedLiveAt;
@@ -91,6 +113,12 @@ export function carryForwardGradedState(
     // (including its absence on a legacy/pre-instrumentation row), never a
     // post-lock recompute from since-changed diagnostics.
     fresh.diagnostics.gradeFactorSummary = prev.diagnostics?.gradeFactorSummary;
+    // Same freeze discipline: the champion-vs-challenger record must reflect the
+    // PREGAME decision both models made, not a post-lock recompute against
+    // since-changed inputs. Storage overwrites diagnostics wholesale, so
+    // freezing the nested value here is what makes it durable.
+    fresh.diagnostics.modelComparison = prev.diagnostics?.modelComparison;
+    fresh.diagnostics.shadowEvaluationMs = prev.diagnostics?.shadowEvaluationMs;
   }
   return fresh;
 }
