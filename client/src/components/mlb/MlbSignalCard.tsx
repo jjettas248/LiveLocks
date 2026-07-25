@@ -207,6 +207,14 @@ export function MlbSignalCard({
   const matchup = sig.awayAbbr && sig.homeAbbr ? `${sig.awayAbbr} @ ${sig.homeAbbr}` : null;
   const sideOdds = sig.recommendedSide === "OVER" ? sig.overOdds : sig.underOdds;
   const liveStat = getMlbLiveStatValue(sig);
+  // The live stat crossing the book line is only good news for an OVER
+  // signal — for UNDER it means the number broke through the cap the bet
+  // needed to stay under, i.e. it already busted. Keep the "on track" color
+  // and the "already resolved" pill direction-aware instead of assuming OVER.
+  const isUnderSignal = sig.recommendedSide === "UNDER";
+  const liveStatOnTrack = liveStat != null
+    ? (isUnderSignal ? liveStat.value < (sig.bookLine ?? 99) : liveStat.value >= (sig.bookLine ?? 99))
+    : false;
   // MLB Signals audit P6 — engine-state-driven dimming. Once the engine
   // marks a non-HR signal CLOSED (resolved or game-final) the card is fully
   // hidden visually; the route's bettable-feed filter strips it from the
@@ -548,15 +556,21 @@ export function MlbSignalCard({
         <div className="flex items-center gap-2 text-[9px]">
           {liveStat ? (
             <span className="text-muted-foreground">
-              {liveStat.label}: <span className="font-semibold" style={{ color: liveStat.value >= (sig.bookLine ?? 99) ? "#22c55e" : "#ffffff" }}>
+              {liveStat.label}: <span className="font-semibold" style={{ color: liveStatOnTrack ? "#22c55e" : "#ffffff" }}>
                 {liveStat.value}/{sig.bookLine}
               </span>
             </span>
           ) : null}
           {sig.alreadyHit && (
-            <span className="font-black px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-              HIT ✓
-            </span>
+            isUnderSignal ? (
+              <span className="font-black px-1.5 py-0.5 rounded-full bg-rose-500/15 text-rose-400 border border-rose-500/30">
+                BUSTED ✗
+              </span>
+            ) : (
+              <span className="font-black px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                HIT ✓
+              </span>
+            )
           )}
           {sig.inning > 0 && (
             <span className="text-muted-foreground">Inn {sig.inning}</span>
