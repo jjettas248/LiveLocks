@@ -22,7 +22,10 @@ import {
   type MoundRadarWinItem,
   type MoundOutcomeType,
   type MoundMarketOutcome,
+  type MoundMarketUnavailableReason,
+  type MoundSettlementLane,
   type MoundLineSnapshotType,
+  MOUND_MARKET_INTEGRITY_REASONS,
   MOUND_WIN_LABEL,
   MOUND_WIN_COPY,
   MOUND_FADE_WIN_LABEL,
@@ -47,6 +50,54 @@ export interface MoundOutcomeAttributionResult {
   outcome: MoundOutcomeType;
   userVisible: boolean;
   seasonBaselineValue: number | null;
+}
+
+export interface MoundSettlementDirectionInput {
+  /** The direction currently stamped on the signal — may have been recomputed post-hoc by a later rebuild. */
+  moundDirection: MoundDirection;
+  /** Durable Follow-track public exposure (OR-sticky DB column). */
+  everPubliclyFlagged: boolean;
+  /** Durable Fade-track public exposure (OR-sticky DB column). */
+  everPubliclyFlaggedFade: boolean;
+}
+
+/**
+ * The direction a settled card must be graded and labelled under — the single
+ * authority, used by BOTH the grader and the display view so the two can
+ * never disagree.
+ *
+ * `moundDirection` alone is not trustworthy at settlement time. It is
+ * recomputed from live inputs on every build cycle (computeMoundDirection),
+ * and a rebuild that lands after first pitch sees degraded data — the
+ * opposing lineup no longer reads "confirmed", stats age out — which drops
+ * score10 below MOUND_PUBLISH_MIN_SCORE, drops the tier to "track", and flips
+ * the recomputed direction to "fade". The in-memory carry-forward pin
+ * (carryForwardMoundGradedState) guards that flip only while an unbroken
+ * previous-build chain exists; a cold start, a snapshot that never hydrated,
+ * or a game whose signals weren't retained loses the pin, and the flipped
+ * "fade" then becomes permanent via the DB column's stickiness. The result is
+ * a card that was publicly surfaced as a Follow read being settled under Fade
+ * rules — inverting its outcome and its label.
+ *
+ * `everPubliclyFlagged` cannot flip that way. It is durable (SQL-level OR
+ * upsert) and can only ever have been minted by wasPubliclyFlaggedMound,
+ * which requires strong/elite/nuclear tier, score10 >= MOUND_PUBLISH_MIN_SCORE,
+ * a confirmed opposing lineup, real coverage and real season stats — exactly
+ * the conditions under which computeMoundDirection returns "follow", and
+ * mutually exclusive with the "track"-tier condition under which it returns
+ * "fade". So a true Follow flag PROVES the user was shown a Follow read, and
+ * any later "fade" on that same signal is a post-hoc artifact, not something
+ * anyone ever saw.
+ *
+ * NOTE: this resolves the MODEL read only (which season-baseline comparison
+ * applies, and which model-performance wording is honest). It must never be
+ * used to infer a sportsbook side — market side comes exclusively from the
+ * frozen pregame recommendation (marketRecommendation.ts).
+ */
+export function resolveMoundSettlementDirection(input: MoundSettlementDirectionInput): MoundDirection {
+  if (input.everPubliclyFlagged === true) return "follow";
+  if (input.everPubliclyFlaggedFade === true) return "fade";
+  return input.moundDirection;
 }
 
 /** Season-baseline per-start expectation for the given primary market. */
@@ -108,6 +159,31 @@ export interface MoundMarketOutcomeResult {
   lineSnapshotType: MoundLineSnapshotType | null;
   lineFrozenAt: string | null;
   lineSource: string | null;
+  /** Null iff marketOutcome is a real result. Otherwise names the missing settlement component — see MoundMarketUnavailableReason. */
+  marketUnavailableReason: MoundMarketUnavailableReason | null;
+}
+
+/**
+ * Name the missing settlement component, in priority order, so an
+ * "unavailable" is never an anonymous dead end. `sideResolved` says whether a
+ * sportsbook side was ever recommended at all (null direction = no bet).
+ */
+function marketUnavailableReasonFor(
+  input: MoundMarketOutcomeInput,
+  sideResolved: boolean,
+): MoundMarketUnavailableReason {
+  // No frozen snapshot at all — the terms of whatever the user saw are gone.
+  if (input.frozenLine == null) return "no_pregame_snapshot";
+  if (input.frozenLine.line == null) {
+    // Distinguish "this market has no odds feed anywhere" (pitcher_outs's
+    // permanent state, stamped as "no_data_source" at freeze time) from "a
+    // feed exists but no book had posted yet".
+    return input.frozenLine.lineUnavailableReason === "no_data_source"
+      ? "market_has_no_line_source"
+      : "no_line_posted";
+  }
+  if (!sideResolved) return "no_edge";
+  return "no_final_stat";
 }
 
 /**
@@ -133,6 +209,7 @@ export function deriveMoundMarketOutcome(input: MoundMarketOutcomeInput): MoundM
       lineSnapshotType: null,
       lineFrozenAt: null,
       lineSource: null,
+      marketUnavailableReason: marketUnavailableReasonFor(input, false),
     };
   }
 
@@ -147,6 +224,7 @@ export function deriveMoundMarketOutcome(input: MoundMarketOutcomeInput): MoundM
       lineSnapshotType: null,
       lineFrozenAt: null,
       lineSource: null,
+      marketUnavailableReason: marketUnavailableReasonFor(input, true),
     };
   }
 
@@ -154,6 +232,7 @@ export function deriveMoundMarketOutcome(input: MoundMarketOutcomeInput): MoundM
     lineSnapshotType: "final_pregame" as MoundLineSnapshotType,
     lineFrozenAt: input.lineFrozenAt,
     lineSource: input.frozenLine?.sportsbook ?? null,
+    marketUnavailableReason: null,
   };
 
   if (input.actual === line) {
@@ -208,6 +287,21 @@ export interface MoundSettlementView {
    * direction-based selection resolveMoundOutcome uses for wasPubliclyFlagged).
    */
   isPublicRecommendation: boolean;
+  /**
+   * Which lane decided this card's terminal result. The client renders from
+   * this and never re-derives it — model-performance wording is permitted in
+   * the "model_review" lane and nowhere else.
+   */
+  settlementLane: MoundSettlementLane;
+  /**
+   * The direction the model comparison was actually graded/labelled under —
+   * durable public exposure resolved, not the possibly-recomputed
+   * `moundDirection` column. Exposed so a card's wording can be traced back
+   * to a decision rather than to an unstable field.
+   */
+  settlementDirection: MoundDirection;
+  /** Why no market result exists. Null when marketOutcome is a real result. */
+  marketUnavailableReason: MoundMarketUnavailableReason | null;
 }
 
 export function buildMoundSettlementView(
@@ -218,23 +312,86 @@ export function buildMoundSettlementView(
   everPubliclyFlaggedFade: boolean,
 ): MoundSettlementView {
   const finalStat = primaryMarket === "pitcher_strikeouts" ? outcomes?.finalStrikeouts ?? null : outcomes?.finalOutsRecorded ?? null;
+  // Durable public exposure decides the model read, not the recomputable
+  // column — see resolveMoundSettlementDirection. This is what stops a card
+  // publicly surfaced as a Follow from being labelled with Fade wording after
+  // a post-first-pitch rebuild flipped its stamped direction.
+  const settlementDirection = resolveMoundSettlementDirection({
+    moundDirection,
+    everPubliclyFlagged,
+    everPubliclyFlaggedFade,
+  });
+  const isPublicRecommendation = settlementDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged;
+
   // Fallback for legacy/non-backfilled rows: outcomes.recommendedSide is only
   // stamped once a market outcome has actually been derived (prospectively,
   // or by the backfill script). A row with no resolvable frozen line never
-  // gets it — but moundDirection (the durable, sticky-upsert column) is
-  // always available, so the baseline-only fallback label is never misgendered
-  // (e.g. a legacy Fade result must never read as "Follow Read Confirmed").
+  // gets it — but the resolved settlement direction is always available, so
+  // the baseline-only fallback label is never misgendered (e.g. a legacy Fade
+  // result must never read as "Follow Read Confirmed"). This fallback exists
+  // ONLY to word the model-lane label; a market-lane side is never inferred
+  // from direction — outcomes.recommendedSide comes from the frozen pregame
+  // recommendation and is the only side a Cashed/Missed/Push can be graded on.
   const recommendedSide =
-    outcomes?.recommendedSide ?? (moundDirection === "fade" ? "UNDER" : moundDirection === "follow" ? "OVER" : null);
+    outcomes?.recommendedSide ??
+    (settlementDirection === "fade" ? "UNDER" : settlementDirection === "follow" ? "OVER" : null);
+
+  const marketOutcome: MoundMarketOutcome = outcomes?.marketOutcome ?? "unavailable";
+  // A row that never ran the market-settlement pass carries no reason. For
+  // pitcher_outs that absence is still fully explained — no odds feed exists
+  // for the market at all (postedLine.outs is stamped "no_data_source" at
+  // every freeze), so no bet could ever have been offered on it and this is
+  // not an integrity gap. For pitcher_strikeouts, where a real line source
+  // does exist, an unstamped row IS the finding.
+  const marketUnavailableReason: MoundMarketUnavailableReason | null =
+    marketOutcome !== "unavailable"
+      ? null
+      : outcomes?.marketUnavailableReason ??
+        (primaryMarket === "pitcher_outs" ? "market_has_no_line_source" : "not_stamped");
+
   return {
-    modelOutcome: deriveModelOutcomeLabel(finalStat, outcomes?.seasonBaselineValue ?? null, moundDirection),
+    modelOutcome: deriveModelOutcomeLabel(finalStat, outcomes?.seasonBaselineValue ?? null, settlementDirection),
     modelBaseline: outcomes?.seasonBaselineValue ?? null,
-    marketOutcome: outcomes?.marketOutcome ?? "unavailable",
+    marketOutcome,
     sportsbookLine: outcomes?.sportsbookLine ?? null,
     recommendedSide,
     finalStat,
-    isPublicRecommendation: moundDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged,
+    isPublicRecommendation,
+    settlementLane: resolveMoundSettlementLane(marketOutcome, marketUnavailableReason, isPublicRecommendation),
+    settlementDirection,
+    marketUnavailableReason,
   };
+}
+
+/**
+ * Terminal-state precedence. Strict order, no blending:
+ *
+ *   1. A real frozen sportsbook bet that settled → "market". Cashed/Missed/
+ *      Push outrank every model-performance label, always.
+ *   2. A public recommendation whose frozen bet can't be recovered →
+ *      "integrity_gap". Never silently downgraded to model-performance
+ *      wording, and never upgraded into a fabricated Cashed off the engine
+ *      baseline.
+ *   3. Everything else → "model_review". This covers both a card that was
+ *      never public and a public MODEL READ on which no sportsbook bet was
+ *      ever offered (no line source for the market, no book posted, or the
+ *      projection sat inside the no-edge band). Model-performance wording is
+ *      honest there because no bet was ever recommended to lose.
+ */
+export function resolveMoundSettlementLane(
+  marketOutcome: MoundMarketOutcome,
+  marketUnavailableReason: MoundMarketUnavailableReason | null,
+  isPublicRecommendation: boolean,
+): MoundSettlementLane {
+  if (marketOutcome !== "unavailable") return "market";
+  if (
+    isPublicRecommendation &&
+    marketUnavailableReason != null &&
+    MOUND_MARKET_INTEGRITY_REASONS.includes(marketUnavailableReason)
+  ) {
+    return "integrity_gap";
+  }
+  return "model_review";
 }
 
 /**

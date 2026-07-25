@@ -397,6 +397,24 @@ export interface MoundOutcome {
   lineFrozenAt?: string | null;
   /** Provenance — sportsbook name captured at freeze time. Null when marketOutcome is "unavailable", AND null for any signal snapshotted before postedLine started capturing it (never fabricated retroactively). */
   lineSource?: string | null;
+  /**
+   * Which settlement component was missing when marketOutcome came back
+   * "unavailable". Additive/optional — absent on rows stamped before this
+   * field existed (buildMoundSettlementView infers a truthful default for
+   * those rather than fabricating one). Null/absent when a real market
+   * outcome exists. Distinguishes "no bet was ever offered" from "a bet was
+   * offered but its frozen terms are gone" — see MoundMarketUnavailableReason.
+   */
+  marketUnavailableReason?: import("../../../../shared/moundRadarWin").MoundMarketUnavailableReason | null;
+  /**
+   * The direction the season-baseline classification above was actually
+   * graded under (resolveMoundSettlementDirection's output at grading time),
+   * as opposed to the recomputable `moundDirection` column. Additive/optional
+   * — absent on rows graded before this field existed. Lets the grader detect
+   * a row settled under a direction that durable public exposure contradicts,
+   * without guessing.
+   */
+  settledDirection?: import("./moundDirection").MoundDirection;
 }
 
 /** Per-component scorer result. All scores are on a 0–10 scale. Mirrors Plate's ComponentScore shape but is a separate type. */

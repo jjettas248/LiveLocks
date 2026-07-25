@@ -13,7 +13,12 @@ import { Badge } from "@/components/ui/badge";
 import { Flame, Zap, Target, Wind, ShieldAlert, Lock, PartyPopper, ChevronDown, ChevronUp, Check } from "lucide-react";
 import { MoundRadarRecord, MoundRadarFadeRecord } from "./MoundWinCard";
 import { getSetupGrade } from "@/lib/mlb/setupGrade";
-import { baselineOnlyLabel, moundResultLabel, moundFinalStatLabel } from "@/lib/mlb/moundSettlementLabels";
+import {
+  baselineOnlyLabel,
+  moundResultLabel,
+  moundFinalStatLabel,
+  type MoundSettlementLane,
+} from "@/lib/mlb/moundSettlementLabels";
 
 type Tier = "track" | "watch" | "strong" | "elite" | "nuclear";
 type Market = "pitcher_strikeouts" | "pitcher_outs";
@@ -75,6 +80,16 @@ interface MoundSettlementView {
   sportsbookLine: number | null;
   recommendedSide: "OVER" | "UNDER" | null;
   finalStat: number | null;
+  /**
+   * Server-decided terminal lane. Read verbatim — the client never re-derives
+   * which lane a card settled in, and model-performance wording is only ever
+   * rendered for "model_review".
+   */
+  settlementLane?: MoundSettlementLane;
+  /** The direction the model comparison was graded under (durable public exposure resolved). Display/trace only. */
+  settlementDirection?: "fade" | "follow" | null;
+  /** Why no market result exists — see server MoundMarketUnavailableReason. */
+  marketUnavailableReason?: string | null;
   /**
    * Was this ever a genuine public recommendation, independent of which
    * grading path (model vs. market) decided the outcome. NEVER derive this
@@ -448,35 +463,50 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
   // the durable everPubliclyFlagged/everPubliclyFlaggedFade flags instead.
   const isPubliclyGraded = s.status === "graded" && s.settlementView?.isPublicRecommendation === true;
   const marketOutcome = s.settlementView?.marketOutcome ?? "unavailable";
+  // Server-decided lane — never re-derived here. Legacy responses predating
+  // the field degrade to the model-review lane, matching prior behavior.
+  const lane: MoundSettlementLane = s.settlementView?.settlementLane ?? "model_review";
   // The ONLY thing allowed to drive "Cashed"/"Missed"/"Push" — never the
   // baseline-graded outcomes.outcome, which is internal calibration only.
   const cashed = isPubliclyGraded && marketOutcome === "cashed";
   const isPush = isPubliclyGraded && marketOutcome === "push";
   const isMissed = isPubliclyGraded && marketOutcome === "missed";
-  const isUnavailableFallback = isPubliclyGraded && marketOutcome === "unavailable";
-  const fallbackLabel = isUnavailableFallback
+  // A public recommendation whose frozen bet can't be recovered gets its own
+  // neutral terminal state — never the model-performance wording, and never
+  // a betting-result color.
+  const isIntegrityGap = isPubliclyGraded && lane === "integrity_gap";
+  const isModelReview = isPubliclyGraded && lane === "model_review";
+  const fallbackLabel = isModelReview
     ? baselineOnlyLabel(s.settlementView?.modelOutcome ?? null, s.settlementView?.recommendedSide ?? null)
     : null;
   // The single recommendation-result string — rendered ONLY beneath the
   // grade on the right (see moundResultLabel's doc comment). Never
   // duplicated on the left, which shows the factual final stat instead.
   const resultLabel = isPubliclyGraded
-    ? moundResultLabel(marketOutcome, s.settlementView?.modelOutcome ?? null, s.settlementView?.recommendedSide ?? null)
+    ? moundResultLabel(marketOutcome, s.settlementView?.modelOutcome ?? null, s.settlementView?.recommendedSide ?? null, lane)
     : null;
   const finalStatUnit: "Ks" | "Outs" = s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs";
   const finalStatLabel = isPubliclyGraded ? moundFinalStatLabel(s.settlementView?.finalStat ?? null, finalStatUnit) : null;
   const cashedColor = "#10b981";
+  const missedColor = "#ef4444";
   const pushColor = "#eab308";
   const fallbackColor = "#38bdf8";
+  const integrityColor = "#94a3b8";
+  const modelReviewColor =
+    s.settlementView?.modelOutcome === "not_confirmed" ? "#94a3b8" : fallbackColor;
   const accentColor = cashed
     ? cashedColor
-    : isPush
-      ? pushColor
-      : isUnavailableFallback && fallbackLabel
-        ? fallbackColor
-        : isFade
-          ? FADE_COLOR
-          : style.color;
+    : isMissed
+      ? missedColor
+      : isPush
+        ? pushColor
+        : isIntegrityGap
+          ? integrityColor
+          : isModelReview && fallbackLabel
+            ? modelReviewColor
+            : isFade
+              ? FADE_COLOR
+              : style.color;
 
   const marketSetups: MarketSetup[] =
     s.marketSetups && s.marketSetups.length > 0
@@ -493,12 +523,22 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
 
   return (
     <Card
-      className={`p-3.5 transition-colors duration-500 ${cashed ? "bg-emerald-500/10" : ""}`}
+      // Terminal betting results own the card's treatment: emerald for a real
+      // Cashed, red for a real Missed. Every other state (push, integrity gap,
+      // model review, ungraded) keeps the neutral tier/fade glow — a
+      // betting-result color is never shown for a card that didn't settle a
+      // real sportsbook bet.
+      className={`p-3.5 transition-colors duration-500 ${cashed ? "bg-emerald-500/10" : isMissed ? "bg-red-500/10" : ""}`}
       style={{
-        boxShadow: cashed ? `0 0 22px rgba(16,185,129,0.45)` : `0 0 14px ${isFade ? FADE_GLOW : style.glow}`,
-        borderColor: cashed ? cashedColor + "99" : accentColor + "55",
+        boxShadow: cashed
+          ? `0 0 22px rgba(16,185,129,0.45)`
+          : isMissed
+            ? `0 0 18px rgba(239,68,68,0.35)`
+            : `0 0 14px ${isFade ? FADE_GLOW : style.glow}`,
+        borderColor: cashed ? cashedColor + "99" : isMissed ? missedColor + "99" : accentColor + "55",
       }}
       data-testid={`card-mound-${slug}`}
+      data-settlement-lane={isPubliclyGraded ? lane : undefined}
     >
       <div
         className="cursor-pointer"
@@ -554,7 +594,7 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
           >
             {cashed ? (
               <PartyPopper className="w-3 h-3" />
-            ) : isMissed || isPush || (isUnavailableFallback && fallbackLabel) ? null : isFade ? (
+            ) : isMissed || isPush || isIntegrityGap || (isModelReview && fallbackLabel) ? null : isFade ? (
               <ShieldAlert className="w-3 h-3" />
             ) : (
               <TierIcon className="w-3 h-3" />
@@ -729,10 +769,22 @@ function SettlementRow({ signal: s }: { signal: MoundSignal }) {
     );
   }
 
-  // No real sportsbook line was ever captured — show the baseline-only
-  // model context instead. Never renders Cashed/Missed/Push here. The final
-  // stat already lives on the card's left (finalStatLabel), so this row is
-  // just the baseline number itself, nothing repeated.
+  // A public recommendation whose frozen bet can't be reconstructed: say so
+  // plainly. Never the engine baseline standing in for the missing line, and
+  // never a model-performance sentence dressed up as the bet's result.
+  if ((settlement?.settlementLane ?? "model_review") === "integrity_gap") {
+    return (
+      <div className="flex items-center gap-1.5 flex-wrap mt-1.5 text-[11px] text-muted-foreground" data-testid="mound-settlement-row-integrity">
+        <span>Recommendation terms unavailable — this pick's frozen sportsbook line could not be recovered.</span>
+      </div>
+    );
+  }
+
+  // No sportsbook bet was ever recommended on this card (no line source for
+  // the market, no book posted, or no edge) — show the baseline-only model
+  // context instead. Never renders Cashed/Missed/Push here. The final stat
+  // already lives on the card's left (finalStatLabel), so this row is just
+  // the baseline number itself, nothing repeated.
   const fallbackLabel = baselineOnlyLabel(settlement?.modelOutcome ?? null, settlement?.recommendedSide ?? null);
   if (fallbackLabel == null && settlement?.modelBaseline == null) return null;
 

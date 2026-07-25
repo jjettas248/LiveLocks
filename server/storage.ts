@@ -3387,11 +3387,23 @@ export class DatabaseStorage implements IStorage {
           outcomes: sql`COALESCE(excluded.outcomes, ${mlbMoundRadarSignals.outcomes})`,
           everPubliclyFlagged: sql`${mlbMoundRadarSignals.everPubliclyFlagged} OR excluded.ever_publicly_flagged`,
           everPubliclyFlaggedFade: sql`${mlbMoundRadarSignals.everPubliclyFlaggedFade} OR excluded.ever_publicly_flagged_fade`,
-          // Sticky once "fade" — NOT a blanket "once set, never changed":
-          // "follow" and null grade identically in deriveMoundOutcome (only
-          // "fade" flips the settlement comparison), so only "fade" needs to
-          // survive an intervening rebuild's differently-recomputed direction.
-          moundDirection: sql`CASE WHEN ${mlbMoundRadarSignals.moundDirection} = 'fade' THEN 'fade' ELSE excluded.mound_direction END`,
+          // Direction durability, mirroring carryForwardMoundGradedState's
+          // in-memory pin so the persisted column can never disagree with it.
+          //
+          // A row already publicly surfaced as a Follow keeps "follow"
+          // permanently. computeMoundDirection is re-derived from live inputs
+          // every build; a rebuild landing after first pitch sees a stale
+          // lineup and aged stats, drops the score below the publish bar, and
+          // recomputes the direction as "fade". The in-memory pin blocks that
+          // only while an unbroken previous-build chain exists — a cold start
+          // loses it, and the old blanket "sticky once fade" rule then made
+          // the flip permanent, settling a Follow recommendation under Fade
+          // rules. The existing "fade" stickiness is unchanged and still
+          // applies to every row that was never Follow-public.
+          moundDirection: sql`CASE
+            WHEN ${mlbMoundRadarSignals.moundDirection} = 'follow' AND ${mlbMoundRadarSignals.everPubliclyFlagged} THEN 'follow'
+            WHEN ${mlbMoundRadarSignals.moundDirection} = 'fade' THEN 'fade'
+            ELSE excluded.mound_direction END`,
           becameLiveReady: sql`${mlbMoundRadarSignals.becameLiveReady} OR excluded.became_live_ready`,
           becameLiveFire: sql`${mlbMoundRadarSignals.becameLiveFire} OR excluded.became_live_fire`,
           convertedLiveAt: sql`COALESCE(excluded.converted_live_at, ${mlbMoundRadarSignals.convertedLiveAt})`,

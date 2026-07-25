@@ -37,6 +37,64 @@ export type MoundOutcomeType = "mound_win" | "mound_fade_win" | "mound_calibrati
 export type MoundMarketOutcome = "cashed" | "missed" | "push" | "unavailable";
 
 /**
+ * Why a market outcome came back "unavailable". Distinguishes the two
+ * fundamentally different cases that used to collapse into one silent
+ * "unavailable": (a) no sportsbook bet was ever recommended, so there is
+ * legitimately nothing to settle, versus (b) a bet WAS recommended but its
+ * frozen terms can no longer be recovered — a data-integrity failure that
+ * must be surfaced, never quietly relabelled as a model-performance result.
+ *
+ *   • market_has_no_line_source — this market has no odds feed at all
+ *     (pitcher_outs today). No sportsbook bet was ever surfaced. Legitimate.
+ *   • no_line_posted            — a snapshot exists but no book had posted a
+ *                                 line before lock. Legitimate.
+ *   • no_edge                   — a line existed, but the frozen projection
+ *                                 sat inside the no-edge band, so no side was
+ *                                 ever recommended. Legitimate.
+ *   • no_final_stat             — the pitcher's final stat isn't in yet.
+ *                                 Transient, not an integrity failure.
+ *   • no_pregame_snapshot       — INTEGRITY GAP. The card was publicly
+ *                                 surfaced but no frozen pregame snapshot
+ *                                 survives, so the terms of the bet the user
+ *                                 actually saw cannot be reconstructed.
+ *   • not_stamped               — INTEGRITY GAP. The row settled without the
+ *                                 market-settlement pass ever running
+ *                                 (legacy row, or grading interrupted).
+ */
+export type MoundMarketUnavailableReason =
+  | "market_has_no_line_source"
+  | "no_line_posted"
+  | "no_edge"
+  | "no_final_stat"
+  | "no_pregame_snapshot"
+  | "not_stamped";
+
+/** The two "unavailable" reasons that indicate a broken settlement record rather than an absent bet. */
+export const MOUND_MARKET_INTEGRITY_REASONS: readonly MoundMarketUnavailableReason[] = [
+  "no_pregame_snapshot",
+  "not_stamped",
+];
+
+/**
+ * Which settlement lane decided a card's terminal result. Mutually exclusive,
+ * evaluated in strict precedence order (see buildMoundSettlementView):
+ *
+ *   • market        — a real sportsbook bet was recommended pregame and its
+ *                     frozen terms settled against the final stat. The ONLY
+ *                     lane allowed to say Cashed/Missed/Push. Absolute
+ *                     precedence over every model-performance label.
+ *   • integrity_gap — the card was a public recommendation whose frozen bet
+ *                     cannot be recovered. Never renders a model-performance
+ *                     label as the result, and never fabricates a Cashed from
+ *                     the engine baseline.
+ *   • model_review  — no sportsbook bet was ever recommended (either the card
+ *                     was never public, or it was a public model read on a
+ *                     market with no line source / no edge). Model-performance
+ *                     wording is legitimate here and ONLY here.
+ */
+export type MoundSettlementLane = "market" | "integrity_gap" | "model_review";
+
+/**
  * Which frozen snapshot a market-graded line's provenance came from. Single
  * value today (the last pre-lock evaluation snapshot, "closing line"
  * equivalent) — extensible if another legitimate freeze point is ever

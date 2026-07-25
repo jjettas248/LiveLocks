@@ -47,7 +47,10 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
 
 // ── A row with a real, resolvable frozen line + actual → backfillable ────────
 {
-  const signal = sig({ marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z", sportsbook: "DraftKings" } });
+  const signal = sig({
+    marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z", sportsbook: "DraftKings" },
+    matchupAdjustedStrikeouts: 7.2, // frozen projection above the 5.5 line → OVER
+  });
   const finalPregameSnapshot = buildMoundEvaluationSnapshot(signal, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T18:00:00Z", 9, 6);
 
   const rows: MoundMarketOutcomeBackfillRow[] = [
@@ -65,7 +68,10 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
   ok(plan.length === 1, "a row with a real frozen line + actual is backfillable");
   ok(plan[0].patch.marketOutcome === "cashed", "resolves the correct market outcome (7 over 5.5)");
   ok(plan[0].patch.sportsbookLine === 5.5, "backfills the frozen sportsbook line");
-  ok(plan[0].patch.recommendedSide === "OVER", "backfills recommendedSide from moundDirection");
+  ok(
+    plan[0].patch.recommendedSide === "OVER",
+    "backfills recommendedSide from the FROZEN recommendation (projection 7.2 vs line 5.5), never from moundDirection",
+  );
   ok(plan[0].patch.lineSnapshotType === "final_pregame", "backfills lineSnapshotType");
   ok(plan[0].patch.lineFrozenAt != null, "backfills lineFrozenAt from the snapshot's own frozenAt");
   ok(plan[0].patch.lineSource === "DraftKings", "backfills lineSource when the persisted snapshot already captured it");
@@ -74,7 +80,10 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
 // ── A row snapshotted BEFORE the sportsbook-capture field existed — line/side
 // backfill, but lineSource honestly stays absent (never fabricated) ────────
 {
-  const signal = sig({ marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z" } }); // no `sportsbook` field
+  const signal = sig({
+    marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z" }, // no `sportsbook` field
+    matchupAdjustedStrikeouts: 7.2, // frozen projection above the 5.5 line → OVER
+  });
   const finalPregameSnapshot = buildMoundEvaluationSnapshot(signal, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T18:00:00Z", 9, 6);
 
   const rows: MoundMarketOutcomeBackfillRow[] = [
@@ -90,7 +99,7 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
   ];
   const plan = planMoundMarketOutcomeBackfill(rows);
   ok(plan.length === 1, "still backfillable without a captured sportsbook name");
-  ok(plan[0].patch.marketOutcome === "missed", "market outcome still resolves correctly (4 under 5.5, Follow)");
+  ok(plan[0].patch.marketOutcome === "missed", "market outcome still resolves correctly (4 under a 5.5 OVER)");
   ok(plan[0].patch.lineFrozenAt != null, "lineFrozenAt still backfills — always existed on the snapshot type");
   ok(plan[0].patch.lineSource === null, "lineSource honestly stays null for a pre-capture row — never fabricated");
 }
@@ -134,7 +143,10 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
 
 // ── Idempotent: a row already carrying a market outcome is skipped ───────────
 {
-  const signal = sig({ marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z" } });
+  const signal = sig({
+    marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z" },
+    matchupAdjustedStrikeouts: 7.2, // a real edge exists, so the skip is proven by idempotence alone
+  });
   const finalPregameSnapshot = buildMoundEvaluationSnapshot(signal, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T18:00:00Z", 9, 6);
 
   const rows: MoundMarketOutcomeBackfillRow[] = [
@@ -152,16 +164,22 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
   ok(plan.length === 0, "a row already carrying marketOutcome is skipped — idempotent, safe to re-run");
 }
 
-// ── Unresolved direction → never guessed, left untouched ─────────────────────
+// ── No frozen market EDGE → never guessed, left untouched ───────────────────
+// The blocking condition is an unresolvable SPORTSBOOK side, not an
+// unresolved model read: a frozen projection sitting inside the no-edge band
+// means no bet was ever recommended, so there is nothing to settle.
 {
-  const signal = sig({ marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z" }, moundDirection: null });
+  const signal = sig({
+    marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z" },
+    matchupAdjustedStrikeouts: 5.5, // exactly on the line → NO_EDGE
+  });
   const finalPregameSnapshot = buildMoundEvaluationSnapshot(signal, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T18:00:00Z", 9, 6);
 
   const rows: MoundMarketOutcomeBackfillRow[] = [
     {
-      signalId: "row-no-direction",
+      signalId: "row-no-edge",
       primaryMarket: "pitcher_strikeouts",
-      moundDirection: null,
+      moundDirection: "follow",
       finalStrikeouts: 7,
       finalOutsRecorded: null,
       alreadyHasMarketOutcome: false,
@@ -169,7 +187,36 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
     },
   ];
   const plan = planMoundMarketOutcomeBackfill(rows);
-  ok(plan.length === 0, "unresolved moundDirection → unavailable, never a guessed side, row left untouched");
+  ok(plan.length === 0, "no frozen edge → no side was ever recommended, never a guessed one, row left untouched");
+}
+
+// ── Follow/Fade independence: the model read neither supplies nor blocks the side ──
+{
+  const signal = sig({
+    marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z" },
+    matchupAdjustedStrikeouts: 4.0, // frozen projection BELOW the line → UNDER
+  });
+  const finalPregameSnapshot = buildMoundEvaluationSnapshot(signal, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T18:00:00Z", 9, 6);
+
+  // A Follow model read with an UNDER market side — the two are independent.
+  const followRow: MoundMarketOutcomeBackfillRow = {
+    signalId: "row-follow-under",
+    primaryMarket: "pitcher_strikeouts",
+    moundDirection: "follow",
+    finalStrikeouts: 4,
+    finalOutsRecorded: null,
+    alreadyHasMarketOutcome: false,
+    finalPregameSnapshot,
+  };
+  const followPlan = planMoundMarketOutcomeBackfill([followRow]);
+  ok(followPlan.length === 1, "a Follow row with a real frozen UNDER edge is backfillable");
+  ok(followPlan[0].patch.recommendedSide === "UNDER", "Follow is never remapped to OVER — the frozen projection decides the side");
+  ok(followPlan[0].patch.marketOutcome === "cashed", "4 Ks under a 5.5 UNDER → cashed, despite the Follow model read");
+
+  // A null model read no longer blocks a provable market side either.
+  const nullDirectionPlan = planMoundMarketOutcomeBackfill([{ ...followRow, signalId: "row-null-direction", moundDirection: null }]);
+  ok(nullDirectionPlan.length === 1, "an unresolved model read does not block a provable sportsbook side");
+  ok(nullDirectionPlan[0].patch.recommendedSide === "UNDER", "…and that side still comes from the frozen recommendation");
 }
 
 console.log(`\nmoundMarketOutcomeBackfill.test: ${passed} passed, ${failed} failed`);

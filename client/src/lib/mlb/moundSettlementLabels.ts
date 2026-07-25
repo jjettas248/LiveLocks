@@ -27,23 +27,49 @@ export function baselineOnlyLabel(modelOutcome: MoundModelOutcome, recommendedSi
 
 export type MoundMarketOutcome = "cashed" | "missed" | "push" | "unavailable";
 
+/** Server-decided settlement lane — mirrors shared/moundRadarWin.ts's MoundSettlementLane. */
+export type MoundSettlementLane = "market" | "integrity_gap" | "model_review";
+
+/**
+ * The label for a public recommendation whose frozen sportsbook bet could not
+ * be recovered. Deliberately says nothing about how the pitcher performed: a
+ * broken settlement record is not a model-performance verdict, and it is
+ * certainly not a win. Never green, never red.
+ */
+export const MOUND_INTEGRITY_LABEL = "Result Unavailable" as const;
+
 /**
  * The single recommendation-result label shown beneath the letter grade on
  * the RIGHT side of the settled card — the only place this concept ever
  * renders. Mirrors the batting card's single "Cashed"/"Batter Power Only"
- * result slot: exactly one of these eight strings, never duplicated
- * elsewhere on the card (the left side shows the factual final performance
- * instead — see moundFinalStatLabel). Returns null only when the signal
- * isn't actually settled (no modelOutcome to fall back to either).
+ * result slot: exactly one of these strings, never duplicated elsewhere on
+ * the card (the left side shows the factual final performance instead — see
+ * moundFinalStatLabel). Returns null only when the signal isn't actually
+ * settled (no modelOutcome to fall back to either).
+ *
+ * Lane precedence is decided server-side (buildMoundSettlementView) and only
+ * read here:
+ *   • market        → Cashed/Missed/Push, absolute precedence.
+ *   • integrity_gap → "Result Unavailable". A public recommendation must
+ *                     never fall back to model-performance wording, and must
+ *                     never be upgraded into a Cashed off the engine baseline.
+ *   • model_review  → the baseline-only wording, legitimate only because no
+ *                     sportsbook bet was ever recommended on this card.
  */
 export function moundResultLabel(
   marketOutcome: MoundMarketOutcome,
   modelOutcome: MoundModelOutcome,
   recommendedSide: "OVER" | "UNDER" | null,
+  lane: MoundSettlementLane = "model_review",
 ): string | null {
   if (marketOutcome === "cashed") return "Cashed";
   if (marketOutcome === "missed") return "Missed";
   if (marketOutcome === "push") return "Push";
+  // Model-performance wording is reachable ONLY from the model lane. The
+  // "market" lane with no market outcome is a contradiction the server should
+  // never produce — treat it like any other unrecoverable bet rather than
+  // letting a betting result quietly degrade into a model verdict.
+  if (lane !== "model_review") return MOUND_INTEGRITY_LABEL;
   return baselineOnlyLabel(modelOutcome, recommendedSide);
 }
 
