@@ -35,8 +35,12 @@ export interface NcaabGameContext {
   startsInMinutes?: number;
 }
 
-const MLB_TRIGGER_INNINGS = new Set([1, 3, 5, 7]);
-
+// MLB is event-driven: an inning NUMBER is not an event, an inning TRANSITION
+// is. The old MLB_TRIGGER_INNINGS = {1,3,5,7} set promoted MLB to the tightest
+// polling cadence based purely on which inning it happened to be, which is a
+// clock construct with no baseball meaning. Inning transitions are now handled
+// where they belong — as a material state event in liveStateEvents.ts.
+// Removed deliberately; do not reintroduce.
 export function assignMlbTier(ctx: MlbGameContext): PollingTier {
   if (ctx.status === "final") return "idle";
   if (ctx.status === "pregame") {
@@ -46,8 +50,8 @@ export function assignMlbTier(ctx: MlbGameContext): PollingTier {
   }
   if (ctx.status === "live") {
     if (ctx.hasActiveSignals) return "critical";
-    if (ctx.inning != null && MLB_TRIGGER_INNINGS.has(ctx.inning)) return "critical";
-    if (ctx.inning != null && ctx.inning >= 8) return "high";
+    // "high" == 12s for MLB (POLLING_CADENCE_MS_BY_SPORT), inside the 10-15s
+    // state-observation window the event-driven design calls for.
     return "high";
   }
   return "low";

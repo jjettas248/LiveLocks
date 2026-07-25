@@ -36,6 +36,10 @@ npx tsx server/mlb/hrOccurrenceEngine.test.ts       # occurrence engine: edge de
 npx tsx server/mlb/hrEvGate.test.ts                 # edge/EV decoupling — HR Radar tier is odds-independent
 npx tsx server/mlb/hrRadarFreshnessOverlay.test.ts  # canonical-store freshness overlay (re-bucket/surface/terminal-safety)
 npx tsx server/mlb/hrRadarRuntimeSmoke.test.ts      # read-only contract smoke (freshness + FIRE-only record)
+npx tsx server/mlb/liveStateEvents.test.ts           # event-driven state classification: no-op poll, ordinary pitch != ball_in_play, completed AB, real contact, 74->75 threshold crossing, inning/pitcher change, family closure
+npx tsx server/mlb/edgeCarryForward.test.ts          # narrowed-cycle carry-forward: scope-not-absence predicate, no mutation of carried signals, outputs travel with signals, resolved/stale drops
+npx tsx server/mlb/liveEdgeMetrics.test.ts           # polling/odds observability: bounded counters, rate-limited tags, odds-requests-per-live-game-hour KPI, never throws
+npx tsx server/odds/mlbOddsPriceFloor.test.ts        # side-specific -200 active-polling floor (opposite side never rescues), approved-book-only best price, discovery for unseen pricing
 npx tsx server/oddsService.test.ts                   # MLB Live Edge unified raw-odds cache: single key (no pregame/live split), no in_play, 3-book allowlist, single-flight, cache-only reads, status-based freshness, NBA unaffected
 npx tsx server/odds/mlbOddsRefreshCoordinator.test.ts # MLB odds refresh coordinator: interest dedup/priority/immediate-fire, final stops scheduling, per-game cleanup
 npx tsx server/analytics/hrRadarOfficialSplit.test.ts # analytics official(FIRE) vs shadow(watch) split
@@ -104,8 +108,47 @@ NBA, MLB, NCAAB engines live in `server/engines/`, `server/mlb/`, `server/nba/`,
 ### 3.2a HR Radar canonical state machine
 `hrRadarStateMachine.ts` owns the **pure transition graph** for HR Radar lifecycle: `inactive → watch → build → ready → fire → cashed|missed|model_review|expired`. Terminal states are sticky. `hrRadarCanonicalStore.ts` owns in-memory persistence. `hrRadarSection.ts` provides section/outcome helpers for the API layer. `nonHrSignalState.ts` mirrors the same pattern for non-HR markets (`BUILDING → ACTIVE → COOLING → CLOSED`). No UI component may derive lifecycle state — all read from server-stamped values.
 
+### 3.2a-1 MLB Live Edge is event-driven, never clock-driven
+**Time detects events. Events drive computation. Signal state drives sportsbook refreshes.**
+- `server/mlb/liveStateEvents.ts` is the pure classifier (`classifyStateChange`,
+  `computeImpactedMarkets`, `affectedActors`). `LiveGameOrchestrator.detectStateChange` delegates to it.
+- **A pitch-count increase is NOT contact.** `ball_in_play` comes from `GameStateCache.battedBallEvents`
+  (play-feed `details.isInPlay`/`hitData`), never from a `pitchCount` delta. A missing counter means
+  "unknown", never "yes".
+- **A no-change poll terminates immediately** — no engine run, no HR evaluation tick, no odds request.
+  The only exception is the 150s *reconciliation check* (`RECONCILE_BACKSTOP_MS`): re-diff current state
+  against `lastEngineStates` (the state the engine last actually ran on, distinct from `previousStates`),
+  and run the engine only if that diff contains real missed events. It is a check, not a recompute.
+- Pitch-count deterioration uses canonical threshold **crossings** `[50,65,75,85,95,105]` — 74→75 fires,
+  75→76 does not. Do not add thresholds.
+- `computeImpactedMarkets` applies **market-family closure** so `applyFamilySuppression` can never see a
+  split family (e.g. `runner_change` pulls in `home_runs` alongside `total_bases`).
+- `LAST_RUN` dedup is **scope-aware** — a narrow cycle can never swallow a wider one behind it.
+- Narrowed cycles carry forward untouched signals via `server/mlb/edgeCarryForward.ts`. The carry
+  predicate is **scope, not absence**: an in-scope pair producing no fresh signal is a real deletion.
+  Carried objects pass through by reference and never re-enter family suppression, `autoPersistMLBSignals`,
+  the LiveSignalBus loop, or `recordDriftSnapshot`.
+- **`home_runs` is never narrowed by player** — `consecutivePromoteTicks` is evaluation-counted and the
+  presence-floor pass assumes a full-lineup walk.
+- Polling priority never keys off an inning *number* (`MLB_TRIGGER_INNINGS` was removed); an inning
+  *transition* is the event.
+
 ### 3.2b MLB odds cache (Live Edge) — engine ticks never fetch
-MLB Live Edge is narrowed to three books (`draftkings,fanduel,hardrockbet` — `MLB_PROP_BOOKMAKERS` in `server/oddsService.ts`, `PREFERRED_BOOKS_BY_SPORT.mlb`/`FALLBACK_BOOKS_BY_SPORT.mlb` in `server/odds/oddsConfig.ts`). This is **MLB-only** — NBA keeps its own separate `PROP_BOOKMAKERS`/book lists untouched.
+MLB Live Edge is narrowed to three books (`draftkings,fanduel,hardrockbet` — `MLB_PROP_BOOKMAKERS` in `server/oddsService.ts`, `PREFERRED_BOOKS_BY_SPORT.mlb` in `server/odds/oddsConfig.ts`; `FALLBACK_BOOKS_BY_SPORT.mlb` is intentionally empty). The narrowing is applied to the **request** (`bookmakers=` param), not as a post-fetch filter — fetching ten books and discarding seven spends the same upstream quota. This is **MLB-only** — NBA keeps its own separate `PROP_BOOKMAKERS`/book lists untouched.
+- **Active-polling price floor (`server/odds/mlbOddsPriceFloor.ts`) is SIDE-SPECIFIC.** A market/side is
+  eligible for routine refresh only when the best approved-book American price **on the side the engine is
+  evaluating** is `>= -200` (-200 eligible, -201 not). The opposite side can never rescue it: OVER at
+  DK -225 / FD -210 / HRB -215 stays suppressed even with UNDER +175 available. Unknown pricing gets exactly
+  one discovery request. The evaluated side is stamped per cycle by `recordEvaluatedSide` (defaults to OVER).
+- **Dormancy, not abandonment.** A sub-floor market parks as dormant with no routine refresh. Material
+  baseball events (`inning_change`, `pitcher_change`, `lineup_substitution`) grant it exactly one
+  rediscovery opportunity via `reconsiderDormantMarkets` — there is deliberately **no** second timer.
+- **Refresh urgency follows the existing canonical lifecycle state**, not a parallel state machine:
+  watch→`monitoring` (cached odds only), build→`build` (stale-only), strong→`ready` (45s),
+  elite→`actionable` (30s + immediate on promotion).
+- **Engine recomputation never implies a provider request.** `resolveBookLine` reads cache unconditionally;
+  whether it additionally registers refresh interest is a separate decision gated on the price floor,
+  lifecycle urgency, and whether a real baseball event authorized the cycle.
 - **One raw cache key per event+market, no player/live/pregame dimension:** `mlb_odds:${eventId}:${marketKey}` (`getMLBRawOdds` in `server/oddsService.ts`). No `in_play` param is ever sent to the provider. A single-flight `Map<string, Promise<...>>` collapses concurrent callers for the same key into one provider request.
 - **Freshness is status-based, not TTL-based, and never itself triggers a fetch:** `isMLBSnapshotFresh(gameStatus, ageMs)` — pregame=2min, live=30s, final=immutable (always fresh), unknown=cache-only (never confirmed fresh). A snapshot can be stale without that stale-ness causing a provider call.
 - **The engine tick never calls fetch().** `resolveBookLine()` in `server/mlb/liveGameOrchestrator.ts` reads via `readMLBPlayerOddsFromCache(eventId, playerName, market, gameStatus)` (cache-only, pure) and registers refresh interest with the independent coordinator — fire-and-forget, never awaited. `triggerEngine()` resolves the odds event ID via the cache-only `resolveMLBOddsEventIdFromCache`, never the fetching `resolveMLBOddsEventId`.
@@ -188,6 +231,7 @@ The codebase emits one-line bracketed tags as the primary observability surface.
 - **HR Radar:** `[HR_RADAR_TRANSITION]`, `[HR_RADAR_READY]`, `[HR_RADAR_FIRE]`, `[HR_RADAR_INACTIVE]`
 - **Shadow:** `[LL_SHADOW_SIGNAL_QUALIFIED]`, `[LL_SHADOW_OUTCOME_RESOLVED|MISSING|PUSH|EXPIRED]`, `[LL_SHADOW_SIGNAL_CASHED|MISSED]`
 - **Goldmaster:** `[MLB_GOLDMASTER_LOCK]` (boot), `[MLB_SIGNAL_PARITY]` (per cycle), `[MLB_DRIFT_WARNING]`
+- **Live Edge polling/odds:** `[MLB_STATE_EVENT]`, `[MLB_ENGINE_TRIGGER]`, `[MLB_ODDS_REFRESH]`, `[MLB_ODDS_CACHE_HIT]`, `[MLB_ODDS_PRICE_SUPPRESSED]`, `[MLB_ODDS_DORMANT]`, `[MLB_ODDS_REACTIVATED]`, `[MLB_CARRY_FORWARD]`, `[MLB_POLLING_METRICS]` (aggregate, ≤1 per 5 min) — all rate-limited; there is deliberately no per-pitch logging
 - **Qualification:** `[MLB_MARKET_STARVED]` / `[MLB_MARKET_STARVED_RECOVERED]` — a market's rolling-window staleOdds rejectRate crossed/cleared the starvation threshold (missing sportsbook lines, not engine drift)
 - **Alerts:** `[LL_ALERT_QUEUED]`, `[LL_ALERT_SENT]`, `[LL_ALERT_DEDUPE]`, `[LL_ALERT_SUPPRESSED]`, `[LL_ALERT_OPENED]`, `[LL_ALERT_CLICKED]`
 - **Analytics:** `[LL_ANALYTICS_AGGREGATE]`, `[LL_ANALYTICS_HR_RADAR]`, `[LL_ANALYTICS_DRIVER]`, `[LL_ANALYTICS_SHADOW]`
@@ -205,6 +249,7 @@ All gated by `requireAdmin`. Distinct namespaces:
 | `GET /api/admin/signal-lifecycle` | Paginated CanonicalSignal list (`?sport=mlb&limit=N`) |
 | `GET /api/admin/signal-lifecycle/:signalId` | Full record with `lifecycleHistory[]`, `gradingLink`, etc. |
 | `GET /api/admin/mlb-qualification` | Rolling-window qualification audit |
+| `GET /api/admin/mlb-live-edge-metrics` | Live Edge polling/odds spend — state polls, no-change polls, material events, engine runs by trigger, refresh attempts vs. skips (fresh-cache / price-floor / no-event), dormancy, and external Odds API requests per live game-hour |
 | `GET /api/admin/mlb-shadow-qualification` | Shadow outcome breakdown + ROI proxy |
 | `GET /api/admin/mlb-signal-intelligence` | Batch E unified dashboard payload |
 | `GET /api/admin/hr-board-studio/today` | Today's ranked Pre-Game HR board rows |

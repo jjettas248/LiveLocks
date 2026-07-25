@@ -1170,14 +1170,17 @@ export async function getSGOPlayerLine(
 const MLB_BASE_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb";
 
 // MLB Live Edge books — deliberately its own constant, NOT the NBA-shared
-// PROP_BOOKMAKERS above. Widened from the original 3-book cost-optimized list
-// (draftkings/fanduel/hardrockbet) back up to 10 to reduce staleOdds
-// line-resolution gaps on non-HR markets (see marketStarvationGuard.ts) —
-// accepts higher Odds API spend in exchange for more consistent book-line
-// coverage. Must stay a superset of PREFERRED_BOOKS_BY_SPORT.mlb ∪
+// PROP_BOOKMAKERS above. Narrowed back to the three approved MLB Live Edge
+// books. Reducing Odds API consumption is the entire point of this path, and
+// the narrowing is applied to the REQUEST (`bookmakers=` param) rather than as
+// a post-fetch filter — fetching ten books and discarding seven still spends
+// the same upstream resources.
+//
+// Must stay a superset of PREFERRED_BOOKS_BY_SPORT.mlb ∪
 // FALLBACK_BOOKS_BY_SPORT.mlb in server/odds/oddsConfig.ts (those lists only
 // rank preference among books that pass this gate — they don't request/filter).
-const MLB_PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet,prizepicks,underdogfantasy,betonlineag,bovada,williamhill_us,caesars,hard_rock";
+// NBA/NCAAB are unaffected: they use PROP_BOOKMAKERS above.
+const MLB_PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet";
 const MLB_PROP_BOOKMAKERS_SET = new Set(MLB_PROP_BOOKMAKERS.split(","));
 
 // MLB game status as understood by the odds-cache layer. "unknown" means the
@@ -1414,6 +1417,13 @@ async function fetchMLBRawOddsFromProvider(oddsEventId: string, marketKey: strin
     // cache redesign). MLB_PROP_BOOKMAKERS (not the NBA-shared
     // PROP_BOOKMAKERS) keeps this request to DraftKings/FanDuel/Hard Rock Bet.
     const url = `${MLB_BASE_URL}/events/${oddsEventId}/odds?apiKey=${mlbApiKey}&regions=${PROP_REGIONS}&markets=${marketKey}&bookmakers=${MLB_PROP_BOOKMAKERS}&oddsFormat=american`;
+
+    // Single accounting point for real outbound MLB odds spend. Every other
+    // counter in liveEdgeMetrics is derived; this one is the ground truth.
+    try {
+      const { recordExternalOddsRequest } = await import("./mlb/liveEdgeMetrics");
+      recordExternalOddsRequest(marketKey);
+    } catch { /* observability must never break the fetch path */ }
 
     let res: Response;
     try {
@@ -1796,6 +1806,50 @@ export function readMLBPlayerOddsFromCache(
     ageMs,
     fetchedAt: entry.timestamp,
   };
+}
+
+// ── Cache-only approved-book price read ───────────────────────────────────────
+// Returns EVERY approved book's quote for a player/market from the same
+// unified raw cache readMLBPlayerOddsFromCache uses (shared
+// filterMLBBookmakersForPlayer, so the two can never disagree). Never fetches.
+//
+// Exists because the active-polling price floor is side-specific and needs the
+// best price across DraftKings/FanDuel/Hard Rock Bet on ONE side — a single
+// preferred-book line is not enough to answer that.
+export interface CachedMLBApprovedBookPrice {
+  book: string;
+  line: number;
+  overOdds: number | null;
+  underOdds: number | null;
+}
+
+export function readMLBApprovedBookPricesFromCache(
+  oddsEventId: string,
+  playerName: string,
+  statType: string,
+): CachedMLBApprovedBookPrice[] | null {
+  const marketKey = MLB_MARKET_MAP[statType];
+  if (!marketKey) return null;
+
+  const entry = cache.get(mlbRawOddsCacheKey(oddsEventId, marketKey));
+  if (!entry) return null;
+
+  const bookmakers: any[] = Array.isArray(entry.data?.bookmakers) ? entry.data.bookmakers : [];
+  if (bookmakers.length === 0) return null;
+
+  const { result } = filterMLBBookmakersForPlayer(bookmakers, playerName, statType, marketKey);
+  const out: CachedMLBApprovedBookPrice[] = [];
+  for (const bookKey of Object.keys(result)) {
+    if (bookKey.startsWith("_")) continue;
+    const v = result[bookKey];
+    out.push({
+      book: bookKey,
+      line: v.line,
+      overOdds: v.overOdds ?? null,
+      underOdds: v.underOdds ?? null,
+    });
+  }
+  return out.length > 0 ? out : null;
 }
 
 // Thin wrapper the independent MLB odds refresh coordinator calls to warm a
