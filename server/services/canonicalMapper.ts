@@ -23,8 +23,17 @@ export function mlbSignalId(sig: Pick<MLBSignal, "gameId" | "playerId" | "market
 // reflects the engine's confidence ladder. Both are recorded
 // independently on CanonicalSignal.
 export function deriveMlbLifecycleState(sig: MLBSignal): LifecycleState {
-  // Terminal evidence first.
-  if (sig.alreadyHit === true) return "cashed";
+  // Terminal evidence first. `alreadyHit` only means "the live stat has
+  // crossed the book line" — it is NOT itself a win/loss verdict. For an
+  // OVER signal, crossing the line is a win (cashed). For an UNDER signal,
+  // crossing the same line means the number broke through the cap the bet
+  // needed to stay under, i.e. the bet has already lost (missed). Treating
+  // every crossing as "cashed" regardless of side was resolving UNDER
+  // signals as winners the moment they busted.
+  if (sig.alreadyHit === true) {
+    const side = sig.displaySide ?? sig.recommendedSide;
+    return side === "UNDER" ? "missed" : "cashed";
+  }
 
   // HR Radar bridge — promote watch→build→strong→elite cleanly so the
   // lifecycle store can transition without duplicate entries. Reads the HR
