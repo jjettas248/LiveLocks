@@ -40,6 +40,9 @@ npx tsx server/oddsService.test.ts                   # MLB Live Edge unified raw
 npx tsx server/odds/mlbOddsRefreshCoordinator.test.ts # MLB odds refresh coordinator: interest dedup/priority/immediate-fire, final stops scheduling, per-game cleanup
 npx tsx server/analytics/hrRadarOfficialSplit.test.ts # analytics official(FIRE) vs shadow(watch) split
 npx tsx server/growth/hrBoardStudio.test.ts          # HR Board Studio: no-link copy, compliance, movement purity, recap, admin-auth gate
+npx tsx server/mlb/pregamePowerRadar/plateChampionJul20Regression.test.ts # Plate champion (plate_jul20_restored_v1) policy lock — research inputs/BBE/Attack Environment cannot move champion score/tier/suppression; driver universes; publication is explicit
+npx tsx server/mlb/pregamePowerRadar/plateModelShadowIsolation.test.ts   # Plate champion-vs-challenger isolation — identical frozen input hash, shadow cannot mutate or block production, sticky challenger exposure, fail-closed shadow flag
+npx tsx server/mlb/pregamePowerRadar/plateModelComparisonStats.test.ts   # Plate model comparison analytics — sticky-to-sticky exposure, HR vs TB never blended, missing comparisons reported not inferred
 npx tsx server/mlb/pregamePowerRadar/winAttribution.test.ts  # Pregame Radar Win Attribution (pregame_win public vs calibration_miss internal; first-AB label; daily-log grouping)
 npx tsx server/mlb/pregamePowerRadar/calibrationStats.test.ts # Pregame Radar public stats (wins-only) vs admin calibration (full denominator: byTier/byScoreBand/byDriver + conversion rates)
 npx tsx server/mlb/pregamePowerRadar/gradedStatePreservation.test.ts # Pregame Radar graded-state carry across snapshot rebuilds + wrong-slate snapshot refusal + lineup-dropout carry-forward
@@ -153,6 +156,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | MLB integrity firewall | `server/mlb/integrityFirewall.ts` |
 | MLB shadow qualification | `server/mlb/shadowQualification.ts` |
 | MLB HR miss diagnostics (LLM payload, read-only) | `server/mlb/hrMissDiagnostics.ts` (pure builders), `server/mlb/hrMissDiagnosticsService.ts` (DB gatherer), `client/src/components/admin/HrMissDiagnosticsCard.tsx` (admin card) |
+| MLB Plate champion/challenger model contract | `server/mlb/pregamePowerRadar/modelVersions/` — `plateChampionJul20.ts` (`plate_jul20_restored_v1`, production authority, hard-coded), `plateChallengerCurrent.ts` (`plate_current_shadow_v1`, shadow only), `plateDriverUniverse.ts` (JUL20/CURRENT_HEAD/RESEARCH_ONLY key sets), `platePublicationDecision.ts` (the single publication authority), `plateShadowFlags.ts` (fail-closed `PLATE_SHADOW_CHALLENGER_ENABLED`); `frozenPlateInput.ts` (immutable hashed DTO both models share), `evaluatePlateModel.ts` (required policy arg), `plateModelComparison.ts`, `plateModelComparisonStats.ts`, `scripts/comparePlateModels.ts` |
 | MLB Pre-Game Power Radar + Win Attribution | `server/mlb/pregamePowerRadar/` — `shadowOutcomes.ts` (grading + `pregame_win`/`calibration_miss` attribution + public/admin stat getters), `winAttribution.ts` (pure attribution + daily-log builders), `calibrationStats.ts` (pure public/admin stat builders), `scoring.ts` (6-component weighted composite), `nearHrRecentForm.ts` (Component 6 — retroactive near-HR contact form via `nearHrContact.ts`, last 3 ET days, recency-weighted + consecutive-day bonus), `shared/pregameRadarWin.ts` (transport contracts: `DailyCashedLogResponse`, `PregameRadarPublicStats`, `PregameRadarCalibrationStats`); client `PregameWinCard.tsx` (public record + wins) + `components/admin/PregameRadarCalibrationCard.tsx` (admin calibration) |
 | MLB orchestrator (per-tick driver) | `server/mlb/liveGameOrchestrator.ts` |
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |
@@ -208,6 +212,7 @@ All gated by `requireAdmin`. Distinct namespaces:
 | `POST /api/admin/hr-board-studio/generate-recap` | Generate postgame recap/proof assets for a date |
 | `POST /api/admin/hr-board-studio/log-action` | Record admin copy/download/generate/view analytics |
 | `GET /api/admin/hr-board-studio/analytics` | Admin workflow summary rollup |
+| `GET /api/admin/mlb/plate-model-comparison` | Plate champion vs challenger (`?date=` or `?from=&to=`) — sticky-exposure A/B, HR and TB tracked separately, attribution breakdown, lost/gained winners. Admin-only, no public surface |
 | `GET /api/admin/mlb/pregame-radar/calibration` | Pregame Radar calibration breakdown (`?days=N`) — full denominator (wins + calibration misses), byTier/byScoreBand/byDriver + conversion rates |
 | `GET /api/admin/hr-radar/miss-payload` | HR Miss Diagnostic Payload — LLM-ready miss dossier (`?days=N&limit=N&categories=csv&format=json\|markdown`): fired/ready-only false positives + uncalled/late false negatives with engine snapshots, review buckets, and signal timelines |
 
