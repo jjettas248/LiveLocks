@@ -3323,6 +3323,18 @@ export class DatabaseStorage implements IStorage {
     // "no overwrite after lock" rule: once the existing row's lockedAt is
     // non-null (first pitch already happened), the ON CONFLICT UPDATE simply
     // does not fire — the row keeps whatever it was locked with, forever.
+    //
+    // The transition write itself (existing row still unlocked, incoming row
+    // is the first non-pregame capture) needs its own rule: this is the write
+    // that FLIPS lockedAt from null to non-null, so the WHERE guard above
+    // still lets it through — but the incoming payload is a post-first-pitch
+    // build, not the last pregame observation. Every "training observation"
+    // column below is therefore CASE-guarded on excluded.locked_at: when this
+    // write is the lock transition (excluded.locked_at IS NOT NULL), the
+    // existing (last pregame) value is kept and only lockedAt itself advances;
+    // an ordinary still-pregame write (excluded.locked_at IS NULL) keeps
+    // overwriting normally. Pure bookkeeping columns (game status, capture
+    // timestamps, display identity) are exempt and keep updating either way.
     await db
       .insert(plateHrV2FeatureSnapshots)
       .values(row)
@@ -3341,24 +3353,24 @@ export class DatabaseStorage implements IStorage {
           firstPitchTime: row.firstPitchTime ?? null,
           firstPitchLockEligible: row.firstPitchLockEligible,
           gameStatus: row.gameStatus,
-          predictionAsOf: row.predictionAsOf,
-          secondsToFirstPitch: row.secondsToFirstPitch ?? null,
-          lineupConfirmedAt: row.lineupConfirmedAt ?? null,
-          starterConfirmed: row.starterConfirmed,
+          predictionAsOf: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.predictionAsOf} ELSE excluded.prediction_as_of END`,
+          secondsToFirstPitch: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.secondsToFirstPitch} ELSE excluded.seconds_to_first_pitch END`,
+          lineupConfirmedAt: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.lineupConfirmedAt} ELSE excluded.lineup_confirmed_at END`,
+          starterConfirmed: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.starterConfirmed} ELSE excluded.starter_confirmed END`,
           lockedAt: row.lockedAt ?? null,
-          inputContractVersion: row.inputContractVersion,
-          rawInputs: row.rawInputs,
-          featureVersion: row.featureVersion,
-          featureHash: row.featureHash,
-          derivedFeatures: row.derivedFeatures,
-          availability: row.availability,
-          featureFreshness: row.featureFreshness,
-          leakageWarnings: row.leakageWarnings,
-          sufficientStatsRef: row.sufficientStatsRef ?? null,
-          championModelVersion: row.championModelVersion ?? null,
-          championScore10: row.championScore10 ?? null,
-          championTier: row.championTier ?? null,
-          championSuppressed: row.championSuppressed ?? null,
+          inputContractVersion: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.inputContractVersion} ELSE excluded.input_contract_version END`,
+          rawInputs: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.rawInputs} ELSE excluded.raw_inputs END`,
+          featureVersion: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.featureVersion} ELSE excluded.feature_version END`,
+          featureHash: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.featureHash} ELSE excluded.feature_hash END`,
+          derivedFeatures: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.derivedFeatures} ELSE excluded.derived_features END`,
+          availability: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.availability} ELSE excluded.availability END`,
+          featureFreshness: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.featureFreshness} ELSE excluded.feature_freshness END`,
+          leakageWarnings: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.leakageWarnings} ELSE excluded.leakage_warnings END`,
+          sufficientStatsRef: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.sufficientStatsRef} ELSE excluded.sufficient_stats_ref END`,
+          championModelVersion: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.championModelVersion} ELSE excluded.champion_model_version END`,
+          championScore10: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.championScore10} ELSE excluded.champion_score_10 END`,
+          championTier: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.championTier} ELSE excluded.champion_tier END`,
+          championSuppressed: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.championSuppressed} ELSE excluded.champion_suppressed END`,
           updatedAt: new Date(),
         },
         where: sql`${plateHrV2FeatureSnapshots.lockedAt} IS NULL`,

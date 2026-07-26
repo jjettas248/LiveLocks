@@ -244,6 +244,13 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   // flush. Zero production/publication authority.
   const plateHrV2Captures: PlateHrV2CaptureRow[] = [];
   const plateHrV2SufficientStatsCaptures: PlateHrV2SufficientStatsCaptureRow[] = [];
+  // Keyed "entityType:entityId", not entityId alone — a two-way player (e.g.
+  // a starter who also DHs) shares one raw MLB id across both roles, and the
+  // persisted stats id (plate-hr-v2-stats:${entityType}:${entityId}:${date})
+  // already treats batter/pitcher as separate rows. An id-only Set would
+  // silently drop whichever role's capture is encountered second, leaving
+  // the other role's feature snapshot pointing at a sufficientStatsRef that
+  // was never inserted.
   const plateHrV2SufficientStatsCaptured = new Set<string>();
   let gamesScanned = 0;
   let battersEvaluated = 0;
@@ -1327,15 +1334,17 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             });
             if (capturedRow) plateHrV2Captures.push(capturedRow);
 
-            if (!plateHrV2SufficientStatsCaptured.has(player.playerId)) {
-              plateHrV2SufficientStatsCaptured.add(player.playerId);
+            const batterStatsDedupeKey = `batter:${player.playerId}`;
+            if (!plateHrV2SufficientStatsCaptured.has(batterStatsDedupeKey)) {
+              plateHrV2SufficientStatsCaptured.add(batterStatsDedupeKey);
               const batterStats = captureSufficientStatsIfNeeded(
                 "batter", player.playerId, sessionDate, savant?.plateHrV2BatterSufficientStats,
               );
               if (batterStats) plateHrV2SufficientStatsCaptures.push(batterStats);
             }
-            if (opposingPitcher && !plateHrV2SufficientStatsCaptured.has(opposingPitcher.pitcherId)) {
-              plateHrV2SufficientStatsCaptured.add(opposingPitcher.pitcherId);
+            const pitcherStatsDedupeKey = opposingPitcher ? `pitcher:${opposingPitcher.pitcherId}` : null;
+            if (opposingPitcher && pitcherStatsDedupeKey && !plateHrV2SufficientStatsCaptured.has(pitcherStatsDedupeKey)) {
+              plateHrV2SufficientStatsCaptured.add(pitcherStatsDedupeKey);
               const pitcherStats = captureSufficientStatsIfNeeded(
                 "pitcher", opposingPitcher.pitcherId, sessionDate,
                 pitcherContactByPitcher.has(opposingPitcher.pitcherId)

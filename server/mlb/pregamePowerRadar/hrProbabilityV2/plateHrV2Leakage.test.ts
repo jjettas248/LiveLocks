@@ -169,10 +169,30 @@ function collectLeafNames(schema: z.ZodTypeAny): string[] {
   const storageSource = readFileSync(storagePath, "utf8");
   const methodStart = storageSource.indexOf("async upsertPlateHrV2FeatureSnapshot");
   ok(methodStart >= 0, "server/storage.ts defines upsertPlateHrV2FeatureSnapshot");
-  const methodSlice = storageSource.slice(methodStart, methodStart + 3000);
+  // Wide enough to comfortably span the full method body (including the
+  // per-column CASE guards below) — this is a source-scan, not a runtime
+  // boundary, so a generous slice just avoids false negatives as the method grows.
+  const methodSlice = storageSource.slice(methodStart, methodStart + 6000);
   ok(
     /where:\s*sql`\$\{plateHrV2FeatureSnapshots\.lockedAt\}\s*IS\s*NULL`/.test(methodSlice),
     "upsertPlateHrV2FeatureSnapshot's ON CONFLICT DO UPDATE is guarded by a `lockedAt IS NULL` WHERE clause — the actual enforcement of 'no overwrite after lock'",
+  );
+
+  // The WHERE guard alone only stops writes once a row is ALREADY locked —
+  // it does nothing to protect the transition write itself (existing row
+  // still unlocked, incoming row is the first non-pregame capture), which
+  // would otherwise overwrite the last pregame observation with post-first-
+  // pitch data in the same statement that sets lockedAt. The training-
+  // observation columns must additionally be CASE-guarded on
+  // `excluded.locked_at`, keeping the existing (pregame) value on that one
+  // transition write.
+  ok(
+    /derivedFeatures:\s*sql`CASE WHEN excluded\.locked_at IS NOT NULL THEN \$\{plateHrV2FeatureSnapshots\.derivedFeatures\} ELSE excluded\.derived_features END`/.test(methodSlice),
+    "derivedFeatures is CASE-guarded so the lock-transition write preserves the last pregame observation instead of overwriting it",
+  );
+  ok(
+    /predictionAsOf:\s*sql`CASE WHEN excluded\.locked_at IS NOT NULL THEN \$\{plateHrV2FeatureSnapshots\.predictionAsOf\} ELSE excluded\.prediction_as_of END`/.test(methodSlice),
+    "predictionAsOf is CASE-guarded so the lock-transition write preserves the last pregame observation instead of overwriting it",
   );
 }
 

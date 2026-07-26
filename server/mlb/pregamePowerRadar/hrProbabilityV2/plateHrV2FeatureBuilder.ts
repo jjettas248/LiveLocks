@@ -109,6 +109,31 @@ function leafAvailability(group: Record<string, unknown>): AvailabilityRecord {
   return result;
 }
 
+type PitchFamilyLeaves = {
+  usageShare: number | null;
+  batterXslg: number | null;
+  batterWhiffPct: number | null;
+  batterSampleSwings: number | null;
+};
+
+/**
+ * pitchType is the one nested (2-level) group: fastball/breaking/offspeed are
+ * always non-null wrapper objects (see batterPitchType below), so the plain
+ * shallow leafAvailability() sweep would report every family "present" just
+ * because the wrapper exists, even when every scalar inside it is null.
+ * Flatten to per-scalar leaves ("fastball.usageShare", etc.) instead.
+ */
+function pitchTypeAvailability(batterPitchType: Record<"fastball" | "breaking" | "offspeed", PitchFamilyLeaves>): AvailabilityRecord {
+  const result: AvailabilityRecord = {};
+  for (const family of ["fastball", "breaking", "offspeed"] as const) {
+    for (const [leaf, value] of Object.entries(batterPitchType[family])) {
+      const present = value !== null && value !== undefined;
+      result[`${family}.${leaf}`] = { present, quality: present ? "full" : "missing" };
+    }
+  }
+  return result;
+}
+
 function freshnessEntry(asOfMs: number, meta: PlateHrV2SourceMeta | undefined, present: boolean) {
   const sourceAt = meta?.fetchedAtMs != null ? new Date(meta.fetchedAtMs).toISOString() : null;
   const ageMs = meta?.fetchedAtMs != null ? Math.max(0, asOfMs - meta.fetchedAtMs) : null;
@@ -230,7 +255,7 @@ export function assemblePlateHrV2FeatureSnapshot(
     batterPower: leafAvailability(input.batterPower as unknown as Record<string, unknown>),
     batTracking: leafAvailability(input.batTracking as unknown as Record<string, unknown>),
     pitcherVulnerability: leafAvailability(input.pitcherVulnerability as unknown as Record<string, unknown>),
-    pitchType: leafAvailability(batterPitchType as unknown as Record<string, unknown>),
+    pitchType: pitchTypeAvailability(batterPitchType),
     zoneLocation: leafAvailability(input.zoneLocation as unknown as Record<string, unknown>),
     parkWeatherSpray: leafAvailability(input.parkWeatherSpray as unknown as Record<string, unknown>),
     lineupOpportunity: leafAvailability(input.lineupOpportunity as unknown as Record<string, unknown>),
