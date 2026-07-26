@@ -8,21 +8,23 @@
 // yet never leaves these tables missing. Drizzle continues to own the
 // canonical schema/types — this is a runtime safety net.
 //
-// All four tables are brand new in this PR, so there is no pre-existing
-// older shape to self-heal from (no `..._SELF_HEAL` ALTER TABLE constants).
-// A future PR that adds a column to one of these tables should add one then,
-// following the exact ADD COLUMN IF NOT EXISTS pattern used elsewhere in
-// this directory.
+// All four tables were brand new in PR 1, so that PR had no pre-existing
+// older shape to self-heal from. PR 2 adds the first `..._SELF_HEAL` ALTER
+// TABLE constant (plate_hr_v2_model_registry.artifact_body), following the
+// exact ADD COLUMN IF NOT EXISTS pattern already established in
+// pregameRadarPersistence.ts.
 //
 // No DROP / destructive-ALTER statements anywhere in this file — see
 // plateHrV2Persistence.test.ts.
 //
-// PR 1 scope: this module creates schema only. Nothing in this PR reads or
-// writes rows in plate_hr_v2_labels or plate_hr_v2_model_registry — no
-// labeler, no fitter, no artifact loader exists yet. Only
-// plate_hr_v2_feature_snapshots and plate_hr_v2_sufficient_stats are written
-// to, and only when PLATE_HR_V2_FORWARD_CAPTURE_ENABLED is explicitly set —
-// see server/mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture.ts.
+// PR 1 scope was schema-only. PR 2 adds the first writers: a labeler
+// (plateHrV2LabelReconciler.ts) writes plate_hr_v2_labels, and an opt-in
+// backtest script (scripts/backtestPlateHrV2.ts, --write flag) writes
+// plate_hr_v2_model_registry, always with status='candidate' — zero
+// production/publication authority either way. plate_hr_v2_feature_snapshots
+// and plate_hr_v2_sufficient_stats continue to be written only when
+// PLATE_HR_V2_FORWARD_CAPTURE_ENABLED is explicitly set — see
+// server/mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture.ts.
 
 export interface SqlExecutor {
   query(sql: string): Promise<unknown>;
@@ -144,6 +146,7 @@ const PLATE_HR_V2_MODEL_REGISTRY = `
     holdout_window_end TEXT,
     artifact_path TEXT,
     artifact_checksum TEXT,
+    artifact_body JSONB,
     standardization JSONB,
     metrics JSONB,
     status TEXT NOT NULL DEFAULT 'candidate',
@@ -152,6 +155,13 @@ const PLATE_HR_V2_MODEL_REGISTRY = `
     retirement_reason TEXT,
     created_at TIMESTAMP DEFAULT NOW()
   );
+`;
+// PR2: an older copy of this table created before artifact_body existed
+// (the model-artifact writer). Additive-only — a no-op once the column is
+// already present, mirroring pregameRadarPersistence.ts's own SELF_HEAL idiom.
+const PLATE_HR_V2_MODEL_REGISTRY_SELF_HEAL = `
+  ALTER TABLE plate_hr_v2_model_registry
+    ADD COLUMN IF NOT EXISTS artifact_body JSONB;
 `;
 const PLATE_HR_V2_MODEL_REGISTRY_STATUS_IDX = `
   CREATE INDEX IF NOT EXISTS plate_hr_v2_model_registry_status_idx ON plate_hr_v2_model_registry (status);
@@ -218,6 +228,7 @@ export const PLATE_HR_V2_PERSISTENCE_STATEMENTS: readonly string[] = [
   PLATE_HR_V2_LABELS_RESOLVED_AT_IDX,
   PLATE_HR_V2_LABELS_SNAPSHOT_IDX,
   PLATE_HR_V2_MODEL_REGISTRY,
+  PLATE_HR_V2_MODEL_REGISTRY_SELF_HEAL,
   PLATE_HR_V2_MODEL_REGISTRY_STATUS_IDX,
   PLATE_HR_V2_MODEL_REGISTRY_FEATURE_VERSION_IDX,
   PLATE_HR_V2_SUFFICIENT_STATS,

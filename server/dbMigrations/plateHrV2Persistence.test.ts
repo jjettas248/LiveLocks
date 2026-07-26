@@ -86,6 +86,11 @@ function isSelfHealOnlyAlter(statement: string): boolean {
   ok(ALL_SQL.includes("PLATE_HR_V2_MODEL_REGISTRY_STATUS_IDX"), "model_registry status index exists");
   ok(ALL_SQL.includes("PLATE_HR_V2_MODEL_REGISTRY_FEATURE_VERSION_IDX"), "model_registry feature_version index exists");
   ok(ALL_SQL.includes("STANDARDIZATION JSONB"), "model_registry has a standardization jsonb column (correction/deviation a)");
+  ok(ALL_SQL.includes("ARTIFACT_BODY JSONB"), "model_registry has an artifact_body jsonb column (PR2 — inline storage, not a filesystem path)");
+  ok(
+    ALL_SQL.includes("ALTER TABLE PLATE_HR_V2_MODEL_REGISTRY") && ALL_SQL.includes("ADD COLUMN IF NOT EXISTS ARTIFACT_BODY JSONB"),
+    "model_registry has a self-heal ALTER TABLE for artifact_body (pre-PR2 tables missing the column)",
+  );
 
   ok(
     ALL_SQL.includes("PLATE_HR_V2_SUFFICIENT_STATS_ENTITY_DATE_IDX") && ALL_SQL.includes("ENTITY_TYPE, ENTITY_ID, AS_OF_DATE"),

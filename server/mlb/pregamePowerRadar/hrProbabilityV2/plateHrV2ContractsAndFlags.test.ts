@@ -147,8 +147,8 @@ function fullFeatureVectorFixture() {
     featureOrder: ["batterPower.xISO"],
     missingValueBehavior: "neutral_marker",
     standardization: null,
-    baseline: { kind: "constant", coefficients: null, knots: null, treeNodes: null },
-    live: { kind: "constant", coefficients: null, knots: null, treeNodes: null },
+    baseline: { kind: "constant", intercept: null, coefficients: null, knots: null, treeNodes: null },
+    live: { kind: "constant", intercept: null, coefficients: null, knots: null, treeNodes: null },
     calibration: { method: "none", params: null },
     training: {
       trainedAt: new Date().toISOString(), trainingWindowStart: null, trainingWindowEnd: null,
@@ -163,6 +163,15 @@ function fullFeatureVectorFixture() {
   ok(plateHrV2ModelArtifactSchema.safeParse(withStandardization).success, "model artifact with populated standardization also parses");
 
   ok(!("policy" in artifact), "no policy/stage-policy block on the artifact contract (deliberate omission — no promotion policy exists yet)");
+
+  // PR2: a logistic component's coefficients alone can't reproduce its
+  // fitted probabilities (predictTermModel needs intercept + Σcoef*term) —
+  // intercept is a required (nullable, not optional) leaf on every component.
+  const withIntercept = { ...artifact, baseline: { kind: "logistic", intercept: -2.9, coefficients: { "batterPower.xISO": 0.4 }, knots: null, treeNodes: null } };
+  ok(plateHrV2ModelArtifactSchema.safeParse(withIntercept).success, "a logistic baseline component with a real intercept parses");
+  const { intercept, ...baselineWithoutIntercept } = withIntercept.baseline;
+  const missingIntercept = { ...artifact, baseline: baselineWithoutIntercept };
+  ok(!plateHrV2ModelArtifactSchema.safeParse(missingIntercept).success, "a component missing intercept entirely fails validation — it is required, not optional");
 }
 
 // ── 7. Forbidden training-feature guard ─────────────────────────────────────

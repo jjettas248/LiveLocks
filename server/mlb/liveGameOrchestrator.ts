@@ -1585,6 +1585,11 @@ export class LiveGameOrchestrator {
             bb: batting.baseOnBalls ?? 0,
             k: batting.strikeOuts ?? 0,
             sb: batting.stolenBases ?? 0,
+            // Straight from the official MLB boxscore batting stats, same as
+            // every other field above — durable and independent of
+            // priorABResults, which comes from the in-memory contact cache
+            // and can be empty even for a batter with a full box-score line.
+            hr: batting.homeRuns ?? 0,
             abResults: priorABResults.length > 0 ? JSON.stringify(priorABResults) : null,
             gameDate,
           });

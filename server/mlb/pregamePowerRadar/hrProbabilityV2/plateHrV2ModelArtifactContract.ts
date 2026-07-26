@@ -37,8 +37,17 @@ export type PlateHrV2ModelArtifactStatus = z.infer<typeof plateHrV2ModelArtifact
 // `treeNodes` is deliberately z.unknown() — tree-model node shapes vary by
 // algorithm and PR 1 isn't picking the model family; every other leaf here is
 // concretely typed.
+//
+// `intercept` (PR2 addition): a logistic component's coefficients alone are
+// not enough to reproduce its fitted probabilities — math/fitShadowTermWeights.ts's
+// predictTermModel computes sigmoid(intercept + Σ coefficient*term), and for a
+// typical HR-rate model the intercept is a large negative number (baseline log-odds
+// of the ~5% league HR rate). A dedicated field (rather than smuggling it into
+// `coefficients` under a reserved key) keeps every entry in `coefficients` a real,
+// unambiguous feature term a future loader can iterate without special-casing.
 export const plateHrV2ModelArtifactComponentSchema = z.object({
   kind: z.enum(["logistic", "gbm_tree", "spline", "constant"]),
+  intercept: z.number().nullable(),
   coefficients: z.record(z.string(), z.number()).nullable(),
   knots: z.array(z.number()).nullable(),
   treeNodes: z.unknown().nullable(),

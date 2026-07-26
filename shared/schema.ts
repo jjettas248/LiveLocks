@@ -537,6 +537,19 @@ export const gamePlayerStats = pgTable("game_player_stats", {
   bb: integer("bb").default(0),
   k: integer("k").default(0),
   sb: integer("sb").default(0),
+  // Durable HR count straight from the MLB Stats API boxscore's batting
+  // stats — independent of abResults, which is sourced from the in-memory
+  // mlbGameCache.contactData at snapshot time and can be null/incomplete
+  // (e.g. after a restart) even for a batter with a full, official box-score
+  // line. Plate HR V2's labeler needs a canonical HR count that can't go
+  // silently wrong just because live contact-data hydration was missed.
+  // Deliberately NO .default(0), unlike its siblings above: this column is
+  // added after rows already exist, so ADD COLUMN with a default would
+  // backfill every pre-existing row to a *confirmed* 0 — indistinguishable
+  // from a real, verified zero-HR game. NULL on an old row honestly means
+  // "predates HR tracking, unknown," not "confirmed no home run." New writes
+  // (server/mlb/liveGameOrchestrator.ts) always supply an explicit number.
+  hr: integer("hr"),
   abResults: text("ab_results"),
   gameDate: text("game_date"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -1520,6 +1533,14 @@ export const plateHrV2ModelRegistry = pgTable("plate_hr_v2_model_registry", {
   holdoutWindowEnd: text("holdout_window_end"),
   artifactPath: text("artifact_path"),
   artifactChecksum: text("artifact_checksum"),
+  // PR2: the full PlateHrV2ModelArtifact JSON body, stored inline. Railway's
+  // container filesystem is ephemeral across deploys, so artifactPath (a
+  // local file path) cannot durably hold the artifact — every other V2 table
+  // already stores its full payload as jsonb directly in Postgres, and this
+  // table is PR1's own creation for exactly this purpose. artifactPath stays
+  // reserved for a future external-storage backend if an artifact ever grows
+  // large enough to be worth moving out of Postgres.
+  artifactBody: jsonb("artifact_body"),
   standardization: jsonb("standardization"),
   metrics: jsonb("metrics"),
   status: text("status").notNull().default("candidate"),
