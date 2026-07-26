@@ -350,5 +350,67 @@ function starveEvidence(s: MoundSignal): MoundSignal {
   ok(freshPre.everPubliclyFlagged === true, "a legitimate pre-first-pitch Follow build still mints everPubliclyFlagged");
 }
 
+// ── 21. A publicly-flagged (Follow) primaryMarket is pinned across same-slate
+// rebuilds — Production regression (Sugano, COL vs MIL): computeMarketTags
+// recomputes primaryMarket every cycle from live pitcherSkill/opponentKProfile/
+// workloadScore, exactly like moundDirection. A post-first-pitch rebuild with
+// degraded data can flip which of the two scores wins, silently swapping a
+// pitcher shown publicly on the REAL-ODDS strikeout market onto the Outs
+// market — which has no sportsbook line source at all — permanently losing a
+// real Cashed/Missed/Push to the model-review baseline fallback. ──
+{
+  const prev = sig({
+    primaryMarket: "pitcher_strikeouts",
+    marketTags: ["pitcher_strikeouts", "pitcher_outs"],
+    marketScores: { pitcher_strikeouts: 6.5, pitcher_outs: 6.0 },
+    marketSetups: [
+      { market: "pitcher_strikeouts", setupScore: 6.5, setupLabel: "Strong", isPrimary: true },
+      { market: "pitcher_outs", setupScore: 6.0, setupLabel: "Solid", isPrimary: false },
+    ],
+    everPubliclyFlagged: true,
+  });
+  // Fresh rebuild recomputes this cycle as "pitcher_outs" (e.g. degraded
+  // post-game workload/opponent-K inputs flip the kScore-vs-outsScore
+  // comparison) — must not silently become the signal's settlement market.
+  const fresh = sig({
+    primaryMarket: "pitcher_outs",
+    marketTags: ["pitcher_strikeouts", "pitcher_outs"],
+    marketScores: { pitcher_strikeouts: 5.0, pitcher_outs: 5.8 },
+    marketSetups: [
+      { market: "pitcher_strikeouts", setupScore: 5.0, setupLabel: "Solid", isPrimary: false },
+      { market: "pitcher_outs", setupScore: 5.8, setupLabel: "Solid", isPrimary: true },
+    ],
+  });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.primaryMarket === "pitcher_strikeouts", "previously-flagged primaryMarket is pinned, not silently flipped to the freshly-recomputed Outs market");
+  const ksSetup = fresh.marketSetups.find((m) => m.market === "pitcher_strikeouts");
+  const outsSetup = fresh.marketSetups.find((m) => m.market === "pitcher_outs");
+  ok(ksSetup?.isPrimary === true, "marketSetups' isPrimary flag is repointed to the pinned market");
+  ok(outsSetup?.isPrimary === false, "the non-pinned market's isPrimary flag is cleared to stay consistent");
+}
+
+// ── 22. A publicly-flagged (Fade-only) primaryMarket is pinned too — the pin
+// is symmetric across both durable flags, not Follow-only. ──
+{
+  const prev = sig({
+    primaryMarket: "pitcher_strikeouts",
+    everPubliclyFlagged: false,
+    everPubliclyFlaggedFade: true,
+    moundDirection: "fade",
+    tier: "track",
+  });
+  const fresh = sig({ primaryMarket: "pitcher_outs", moundDirection: "fade", tier: "track" });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.primaryMarket === "pitcher_strikeouts", "a Fade-only publicly-flagged primaryMarket is pinned, not silently flipped to Outs");
+}
+
+// ── 23. An UNFLAGGED prior primaryMarket is not pinned (never shown publicly, safe to let it move) ──
+{
+  const prev = sig({ primaryMarket: "pitcher_strikeouts", everPubliclyFlagged: false, everPubliclyFlaggedFade: false });
+  const fresh = sig({ primaryMarket: "pitcher_outs" });
+  carryForwardMoundGradedState(fresh, prev);
+  ok(fresh.primaryMarket === "pitcher_outs", "a prior primaryMarket that was never publicly flagged is free to move on rebuild");
+}
+
 console.log(`\nmoundGradedStatePreservation.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

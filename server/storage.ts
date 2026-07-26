@@ -3611,7 +3611,21 @@ export class DatabaseStorage implements IStorage {
           gameStatus: row.gameStatus,
           firstPitchLockEligible: row.firstPitchLockEligible,
           opposingLineupConfirmed: row.opposingLineupConfirmed ?? false,
-          primaryMarket: row.primaryMarket,
+          // Market durability, mirroring moundDirection's SQL-level pin
+          // immediately below. carryForwardMoundGradedState's in-memory pin
+          // (moundGradedStateCarry.ts) only protects primaryMarket while an
+          // unbroken previous-build chain exists in memory — a cold start
+          // (boot hydration failed/skipped, or a worker rebuilding from
+          // empty state) has no `prev` to pin against, so the freshly
+          // recomputed (possibly drifted) market would otherwise overwrite
+          // an already durably-flagged row here and make the drift
+          // permanent. Once either public track has ever fired, the
+          // persisted market is never overwritten again.
+          primaryMarket: sql`CASE
+            WHEN ${mlbMoundRadarSignals.everPubliclyFlagged} OR ${mlbMoundRadarSignals.everPubliclyFlaggedFade}
+              THEN ${mlbMoundRadarSignals.primaryMarket}
+            ELSE excluded.primary_market
+          END`,
           marketTags: row.marketTags,
           marketScores: row.marketScores,
           score10: row.score10,

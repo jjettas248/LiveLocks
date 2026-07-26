@@ -29,8 +29,9 @@ import {
 } from "./moundOutcomeAttribution";
 import { deriveFrozenMoundMarketRecommendation } from "./marketRecommendation";
 import { planMoundMarketOutcomeBackfill } from "./moundMarketOutcomeBackfill";
+import { carryForwardMoundGradedState } from "./moundGradedStateCarry";
 import type { MoundDirection } from "./moundDirection";
-import type { MoundEvaluationSnapshot, MoundOutcome } from "./types";
+import type { MoundEvaluationSnapshot, MoundOutcome, MoundSignal } from "./types";
 
 let passed = 0;
 let failed = 0;
@@ -343,6 +344,192 @@ function settleMarket(
   );
   ok(view.marketUnavailableReason === "market_has_no_line_source", "an unstamped outs row is explained by the absent odds feed");
   ok(view.settlementLane === "model_review", "…so it is not reported as an integrity gap");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIMARY-MARKET DRIFT REGRESSION (production regression fixture, COL vs MIL).
+//
+// computeMarketTags (marketTagger.ts) recomputes primaryMarket every build
+// cycle from live pitcherSkill/opponentKProfile/workloadScore — exactly like
+// moundDirection. Unlike moundDirection, primaryMarket carried NO
+// carry-forward pin, so a post-first-pitch rebuild with degraded data could
+// silently swap a publicly-flagged pitcher off the REAL-ODDS strikeout
+// market onto the Outs market — which has no sportsbook line source at all
+// (postedLine.outs is permanently "no_data_source") — permanently losing a
+// real Cashed/Missed/Push to the model-review baseline fallback ("Performed
+// Above Baseline"/"Performed Below Baseline"). carryForwardMoundGradedState
+// (moundGradedStateCarry.ts) now pins primaryMarket the same way it already
+// pinned moundDirection. This is a regression fixture, not a hardcoded
+// player — it reproduces the failure SHAPE (a real strikeout-market
+// recommendation silently regraded against the odds-less Outs market),
+// not any specific stored row.
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  function moundSignalFixture(over: Partial<MoundSignal>): MoundSignal {
+    return {
+      signalId: "mlb-mound:2026-07-20:g1:pfixture",
+      sport: "mlb",
+      engine: "mound_radar",
+      sessionDate: "2026-07-20",
+      gameId: "g1",
+      gameDate: "2026-07-20",
+      startsAt: "2026-07-20T23:10:00.000Z",
+      generatedAt: "2026-07-20T20:00:00.000Z",
+      buildId: "b1",
+      pitcherId: "pfixture",
+      pitcherName: "Regression Fixture Pitcher",
+      team: "MIL",
+      opponent: "COL",
+      throws: "R",
+      opposingLineupConfirmed: true,
+      opposingLineupLabel: "vs COL confirmed lineup",
+      primaryMarket: "pitcher_strikeouts",
+      marketTags: ["pitcher_strikeouts", "pitcher_outs"],
+      marketScores: { pitcher_strikeouts: 6.5, pitcher_outs: 6.0 },
+      marketSetups: [
+        { market: "pitcher_strikeouts", setupScore: 6.5, setupLabel: "Strong", isPrimary: true },
+        { market: "pitcher_outs", setupScore: 6.0, setupLabel: "Solid", isPrimary: false },
+      ],
+      parkContext: null,
+      score10: 6.4,
+      tier: "track",
+      moundDirection: "fade",
+      drivers: [],
+      warnings: [],
+      tags: [],
+      lineupStatus: "confirmed",
+      weatherStatus: "estimated",
+      gameStatus: "scheduled",
+      firstPitchLockEligible: true,
+      lockedAt: null,
+      hasMarketLine: false,
+      isOfficialPlay: false,
+      isPregameTarget: true,
+      marketEdgeContext: null,
+      projectedStrikeouts: 5.4,
+      status: "active",
+      suppressed: false,
+      suppressedReasons: [],
+      outcomes: null,
+      everPubliclyFlagged: false,
+      everPubliclyFlaggedFade: false,
+      becameLiveReady: false,
+      becameLiveFire: false,
+      convertedLiveAt: null,
+      diagnostics: {
+        pitcherSkillScore: 6, opponentKProfileScore: 6, workloadScore: 5.8, runEnvironmentScore: 5,
+        recentFormScore: 5, marketFitScore: 0, contactRiskScore: null, riskPenalty: 0,
+        appliedDrivers: [], appliedWarnings: [],
+        dataCoverageScore: 0.9, finalScoreBeforeCaps: 6.4, finalScoreAfterCaps: 6.4, publicTier: "track",
+        suppressed: false, suppressedReasons: [],
+        sourceFreshness: {},
+        rawInputsAvailable: {
+          confirmedStarter: true, confirmedOpposingLineup: true, pitcherSeasonStats: true,
+          pitcherHandednessSplits: true, pitcherRecentStarts: true, pitcherStuffMetrics: true,
+          park: true, weather: true,
+        },
+      },
+      ...over,
+    };
+  }
+
+  // Pregame: publicly flagged as a Fade candidate on the strikeout market,
+  // which carries a real frozen sportsbook line (5.5, projection 4.0 → a
+  // real, frozen UNDER recommendation — the bet the user actually saw).
+  const frozenSnapshot = snapshotWithKLine(5.5, 4.0);
+  const prev = moundSignalFixture({
+    primaryMarket: "pitcher_strikeouts",
+    everPubliclyFlaggedFade: true,
+    moundDirection: "fade",
+    tier: "track",
+  });
+
+  // Post-game rebuild: degraded workload/opponent-K inputs flip the
+  // kScore-vs-outsScore comparison this cycle — primaryMarket freshly
+  // recomputes to "pitcher_outs", exactly as buildMlbMoundRadar.ts's
+  // computeMarketTags call would produce from degraded post-game inputs.
+  const freshRebuild = moundSignalFixture({
+    primaryMarket: "pitcher_outs",
+    marketScores: { pitcher_strikeouts: 5.0, pitcher_outs: 5.8 },
+    marketSetups: [
+      { market: "pitcher_strikeouts", setupScore: 5.0, setupLabel: "Solid", isPrimary: false },
+      { market: "pitcher_outs", setupScore: 5.8, setupLabel: "Solid", isPrimary: true },
+    ],
+    moundDirection: "fade",
+    tier: "track",
+    gameStatus: "final",
+    firstPitchLockEligible: false,
+    status: "locked",
+  });
+
+  carryForwardMoundGradedState(freshRebuild, prev);
+  ok(freshRebuild.primaryMarket === "pitcher_strikeouts", "the fix pins primaryMarket — the real-odds strikeout market survives the post-game rebuild");
+  ok(freshRebuild.everPubliclyFlaggedFade === true, "the durable Fade flag still carries forward independently of the market pin");
+
+  // ── WITH the fix: grading against the pinned (real) strikeout market ──────
+  {
+    const finalStrikeouts = 5; // beats the frozen UNDER 5.5 recommendation
+    const recommendation = deriveFrozenMoundMarketRecommendation(freshRebuild.primaryMarket, frozenSnapshot);
+    ok(recommendation.side === "UNDER", "the frozen recommendation is UNDER 5.5 — the real bet the user saw");
+
+    const market = deriveMoundMarketOutcome({
+      moundDirection: recommendation.side === "UNDER" ? "fade" : "follow",
+      frozenLine: frozenSnapshot.champion.postedLine.strikeouts,
+      lineFrozenAt: frozenSnapshot.frozenAt,
+      actual: finalStrikeouts,
+    });
+    ok(market.marketOutcome === "cashed", "final 5 Ks vs a frozen UNDER 5.5 → cashed — the real settlement, preserved by the fix");
+
+    const view = buildMoundSettlementView(
+      { finalStrikeouts, seasonBaselineValue: 6.0, ...market } as MoundOutcome,
+      freshRebuild.primaryMarket,
+      freshRebuild.moundDirection,
+      freshRebuild.everPubliclyFlagged,
+      freshRebuild.everPubliclyFlaggedFade,
+    );
+    ok(view.settlementLane === "market", "the fixed card settles in the market lane, not model_review");
+    ok(view.marketOutcome === "cashed", "the fixed card renders Cashed");
+  }
+
+  // ── CONTRAST — grading as it would have run WITHOUT the fix (primaryMarket
+  // left drifted to Outs) reproduces the exact reported production symptom:
+  // "Best Angle: Pitcher Outs", "Engine Baseline: 15.9 Outs", and
+  // "Performed Above Baseline" instead of the real Cashed settlement above. ──
+  {
+    const driftedMarket = "pitcher_outs" as const;
+    const finalOutsRecorded = 16;
+    const seasonBaselineValue = 15.9; // seasonAvgInningsPerStart 5.3 * 3
+
+    const recommendation = deriveFrozenMoundMarketRecommendation(driftedMarket, frozenSnapshot);
+    ok(recommendation.side === null, "pitcher_outs never has a real frozen line — no side was ever recommended on it");
+
+    const market = deriveMoundMarketOutcome({
+      moundDirection: null,
+      frozenLine: frozenSnapshot.champion.postedLine.outs,
+      lineFrozenAt: frozenSnapshot.frozenAt,
+      actual: finalOutsRecorded,
+    });
+    ok(market.marketOutcome === "unavailable", "grading against the drifted Outs market finds no line — unavailable");
+
+    const view = buildMoundSettlementView(
+      { finalOutsRecorded, seasonBaselineValue, ...market } as MoundOutcome,
+      driftedMarket,
+      "fade",
+      false,
+      true, // everPubliclyFlaggedFade — this WAS a public recommendation
+    );
+    ok(view.settlementLane === "model_review", "without the fix, the real recommendation is lost to the model-review lane");
+    ok(view.isPublicRecommendation === true, "…even though it was genuinely a public recommendation");
+    ok(view.modelOutcome === "not_confirmed", "16 outs beats the 15.9 baseline while flagged as a Fade — the fade call reads as not confirmed");
+    ok(view.recommendedSide === "UNDER", "…and the wording renders Fade-sided");
+    // baselineOnlyLabel(modelOutcome="not_confirmed", recommendedSide="UNDER")
+    // resolves to isFade=true → "Performed Above Baseline" (client/src/lib/mlb/moundSettlementLabels.ts)
+    // — the exact reported label, produced here only by the unfixed drift path.
+    ok(
+      view.modelOutcome === "not_confirmed" && view.recommendedSide === "UNDER",
+      "reproduces the exact production symptom: 'Performed Above Baseline' instead of Cashed",
+    );
+  }
 }
 
 console.log(`\nmoundPublicSettlement.test: ${passed} passed, ${failed} failed`);
