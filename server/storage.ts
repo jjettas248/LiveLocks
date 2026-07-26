@@ -53,6 +53,10 @@ import {
   type InsertPregamePowerRadarSignal,
   type PregamePowerRadarBuildRow,
   type InsertPregamePowerRadarBuild,
+  plateHrV2FeatureSnapshots,
+  plateHrV2SufficientStats,
+  type InsertPlateHrV2FeatureSnapshot,
+  type InsertPlateHrV2SufficientStats,
   mlbMoundRadarSignals,
   mlbMoundRadarBuilds,
   type MlbMoundRadarSignalRow,
@@ -395,6 +399,11 @@ export interface IStorage {
   getPregamePowerRadarSignalsByDate(sessionDate: string): Promise<PregamePowerRadarSignalRow[]>;
   getPregamePowerRadarSignalsByGame(sessionDate: string, gameId: string): Promise<PregamePowerRadarSignalRow[]>;
   recordPregamePowerBuild(build: InsertPregamePowerRadarBuild): Promise<void>;
+
+  // ── Plate HR Probability V2 research (PR 1; additive, zero production
+  // authority — see docs/audits/plate-hr-v2-feature-source-audit.md) ────────
+  upsertPlateHrV2FeatureSnapshot(row: InsertPlateHrV2FeatureSnapshot): Promise<void>;
+  upsertPlateHrV2SufficientStats(row: InsertPlateHrV2SufficientStats): Promise<void>;
   getLatestPregamePowerBuild(sessionDate: string): Promise<PregamePowerRadarBuildRow | null>;
 
   // ── MLB Mound Radar (additive; never feeds ROI; sibling of Pre-Game Power Radar) ──
@@ -3302,6 +3311,93 @@ export class DatabaseStorage implements IStorage {
           lockedAt: sql`COALESCE(${pregamePowerRadarSignals.lockedAt}, excluded.locked_at)`,
           gradedAt: sql`COALESCE(excluded.graded_at, ${pregamePowerRadarSignals.gradedAt})`,
           updatedAt: new Date(),
+        },
+      });
+  }
+
+  // ── Plate HR Probability V2 research (PR 1) ───────────────────────────────
+  async upsertPlateHrV2FeatureSnapshot(row: InsertPlateHrV2FeatureSnapshot): Promise<void> {
+    // Conflict on snapshotId (PK) — deterministic from featureVersion/
+    // sessionDate/gameId/batterId, so this is idempotent across repeated
+    // builds. The `where` clause is the actual enforcement of correction 3's
+    // "no overwrite after lock" rule: once the existing row's lockedAt is
+    // non-null (first pitch already happened), the ON CONFLICT UPDATE simply
+    // does not fire — the row keeps whatever it was locked with, forever.
+    await db
+      .insert(plateHrV2FeatureSnapshots)
+      .values(row)
+      .onConflictDoUpdate({
+        target: plateHrV2FeatureSnapshots.snapshotId,
+        set: {
+          batterName: row.batterName,
+          team: row.team,
+          opponent: row.opponent ?? null,
+          pitcherId: row.pitcherId ?? null,
+          pitcherName: row.pitcherName ?? null,
+          battingOrderSlot: row.battingOrderSlot ?? null,
+          buildId: row.buildId,
+          lastCapturedAt: row.lastCapturedAt,
+          captureRevision: sql`${plateHrV2FeatureSnapshots.captureRevision} + 1`,
+          firstPitchTime: row.firstPitchTime ?? null,
+          firstPitchLockEligible: row.firstPitchLockEligible,
+          gameStatus: row.gameStatus,
+          predictionAsOf: row.predictionAsOf,
+          secondsToFirstPitch: row.secondsToFirstPitch ?? null,
+          lineupConfirmedAt: row.lineupConfirmedAt ?? null,
+          starterConfirmed: row.starterConfirmed,
+          lockedAt: row.lockedAt ?? null,
+          inputContractVersion: row.inputContractVersion,
+          rawInputs: row.rawInputs,
+          featureVersion: row.featureVersion,
+          featureHash: row.featureHash,
+          derivedFeatures: row.derivedFeatures,
+          availability: row.availability,
+          featureFreshness: row.featureFreshness,
+          leakageWarnings: row.leakageWarnings,
+          sufficientStatsRef: row.sufficientStatsRef ?? null,
+          championModelVersion: row.championModelVersion ?? null,
+          championScore10: row.championScore10 ?? null,
+          championTier: row.championTier ?? null,
+          championSuppressed: row.championSuppressed ?? null,
+          updatedAt: new Date(),
+        },
+        where: sql`${plateHrV2FeatureSnapshots.lockedAt} IS NULL`,
+      });
+  }
+
+  async upsertPlateHrV2SufficientStats(row: InsertPlateHrV2SufficientStats): Promise<void> {
+    // Conflict on statsId (PK, deterministic from entityType/entityId/
+    // asOfDate) — a same-day recomputation (e.g. a later rebuild cycle with
+    // fresher Savant data) simply replaces the day's row; there is no lock
+    // concept here since this is season-to-date evidence, not a frozen
+    // per-candidate training observation.
+    await db
+      .insert(plateHrV2SufficientStats)
+      .values(row)
+      .onConflictDoUpdate({
+        target: plateHrV2SufficientStats.statsId,
+        set: {
+          pitchesSeen: row.pitchesSeen,
+          swings: row.swings,
+          whiffs: row.whiffs,
+          calledStrikes: row.calledStrikes,
+          balls: row.balls,
+          zoneSwings: row.zoneSwings ?? null,
+          zoneTakes: row.zoneTakes ?? null,
+          chaseSwings: row.chaseSwings ?? null,
+          chaseTakes: row.chaseTakes ?? null,
+          zoneDataAvailable: row.zoneDataAvailable,
+          paCount: row.paCount,
+          strikeouts: row.strikeouts,
+          walks: row.walks,
+          battedBallEvents: row.battedBallEvents,
+          pitchFamilyStats: row.pitchFamilyStats,
+          evPercentiles: row.evPercentiles,
+          laPercentiles: row.laPercentiles,
+          pulledBip: row.pulledBip,
+          sprayClassifiedBip: row.sprayClassifiedBip,
+          sourceRowCount: row.sourceRowCount,
+          computedAt: new Date(),
         },
       });
   }

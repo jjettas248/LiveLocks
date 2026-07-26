@@ -88,6 +88,18 @@ import {
   setSnapshot,
   type PregamePowerSnapshot,
 } from "./pregamePowerRadarStore";
+import { buildPitchTypeInteractionInputsFromSavant } from "./pitchFamilyMatchup";
+import { getPullSideParkGeometry } from "./parkDimensions";
+import { isPlateHrV2ForwardCaptureEnabled } from "./hrProbabilityV2/plateHrV2CaptureFlags";
+import {
+  capturePlateHrV2Candidate,
+  flushPlateHrV2Captures,
+  captureSufficientStatsIfNeeded,
+  flushPlateHrV2SufficientStats,
+  plateHrV2SufficientStatsId,
+  type PlateHrV2CaptureRow,
+  type PlateHrV2SufficientStatsCaptureRow,
+} from "./hrProbabilityV2/plateHrV2ForwardCapture";
 
 let isPregamePowerRadarBuildRunning = false;
 
@@ -225,6 +237,14 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   }
 
   const signals = new Map<string, PregamePowerSignal>();
+  // Plate HR Probability V2 (PR 1) — research-only accumulators, populated
+  // only when PLATE_HR_V2_FORWARD_CAPTURE_ENABLED is set (see
+  // capturePlateHrV2Candidate/captureSufficientStatsIfNeeded below). Flushed
+  // once at the end of the build, mirroring buildSink's own end-of-build
+  // flush. Zero production/publication authority.
+  const plateHrV2Captures: PlateHrV2CaptureRow[] = [];
+  const plateHrV2SufficientStatsCaptures: PlateHrV2SufficientStatsCaptureRow[] = [];
+  const plateHrV2SufficientStatsCaptured = new Set<string>();
   let gamesScanned = 0;
   let battersEvaluated = 0;
   let lineupGames = 0;
@@ -368,12 +388,22 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
       const pitcherContactByPitcher = new Map<string, ReturnType<typeof aggregateRawPitcherContactSnapshot>>();
       const pitcherRecentFormByPitcher = new Map<string, Awaited<ReturnType<typeof fetchPitcherRecentStarts>>>();
       // These two feeds are CHALLENGER-ONLY inputs — the champion scores on
-      // handedness HR/9 + ERA alone. When shadow evaluation is off we skip the
-      // work entirely (a real per-starter network saving); when it is on, each
-      // gatherer stays individually try/caught so a research failure degrades to
-      // null research fields and can never block champion construction.
+      // handedness HR/9 + ERA alone. When shadow evaluation AND V2 forward
+      // capture are both off we skip the work entirely (a real per-starter
+      // network saving); when either is on, each gatherer stays individually
+      // try/caught so a research failure degrades to null research fields and
+      // can never block champion construction.
+      //
+      // Correction 1 (PR1 review): V2 capture must own its own data
+      // dependencies rather than silently depending on the unrelated shadow
+      // flag — two otherwise-identical days must not produce different
+      // training rows because shadowEnabled happened to differ. Widening
+      // this condition also warms fetchBaseballSavantData's cache for the
+      // opposing starter, which the V2 capture tap below reads a second time
+      // (cache hit, not a new fetch) to build the pitch-arsenal matchup.
+      const gatherResearchInputs = shadowEnabled || isPlateHrV2ForwardCaptureEnabled();
       const researchFetchFailed = new Set<string>();
-      for (const starter of shadowEnabled ? sideStarters : []) {
+      for (const starter of gatherResearchInputs ? sideStarters : []) {
         try {
           // Same fetchBaseballSavantData call the batter side already makes,
           // but keyed by the PITCHER's own id (mirroring buildMlbMoundRadar.ts)
@@ -1133,6 +1163,192 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           signal.diagnostics.shadowEvaluationMs = shadowEvaluationMs;
         }
 
+        // ── V2 HR Probability forward feature capture (research-only, PR1,
+        // default OFF) ──────────────────────────────────────────────────────
+        // Strictly additive: reads only already-computed locals from this
+        // loop iteration; never touches `signal`/`scoring`/`drivers`/
+        // `suppressedReasons`. try/catch mirrors the shadow-challenger block
+        // above and CLAUDE.md §3.6 / Hard Rule 8's analytics-tap discipline —
+        // a failure here can never affect the champion signal or block the
+        // build.
+        if (isPlateHrV2ForwardCaptureEnabled()) {
+          try {
+            // Cache hit, not a new fetch, whenever gatherResearchInputs ran
+            // for this game (guaranteed when V2 capture is on — see
+            // correction 1 above): fetchBaseballSavantData caches by player
+            // id regardless of gamePk.
+            const pitcherSavantForMatchup = opposingPitcher
+              ? await fetchBaseballSavantData(opposingPitcher.pitcherId, gamePk)
+              : null;
+
+            const hrPer9VsHand =
+              player.bats === "L"
+                ? pitcherSplits?.hrPer9VsLHB ?? null
+                : player.bats === "R"
+                  ? pitcherSplits?.hrPer9VsRHB ?? null
+                  : null; // switch hitters: never guess, matches rosterService.ts's own "never guess" discipline
+
+            const parkHrFactorGeneric = venueName ? getMarketParkFactor(venueName, "home_runs") : null;
+            const pullSideGeometry = getPullSideParkGeometry(venueName, player.bats, opposingPitcher?.throws ?? null);
+
+            const capturedAtMs = Date.parse(generatedAt);
+            const firstPitchAtMs = startsAt ? Date.parse(startsAt) : null;
+            // No real "lineup confirmed at" timestamp is tracked anywhere in
+            // this build — approximated as "this build's time, if posted,"
+            // never as a fabricated earlier moment.
+            const lineupConfirmedAtMs = lineupStatus === "posted" ? capturedAtMs : null;
+
+            const sufficientStatsRef = savant?.plateHrV2BatterSufficientStats
+              ? plateHrV2SufficientStatsId("batter", player.playerId, sessionDate)
+              : null;
+
+            const capturedRow = capturePlateHrV2Candidate({
+              sessionDate,
+              gameId: game.gameId,
+              buildId,
+              batterId: player.playerId,
+              batterName: player.playerName,
+              team: batterTeam,
+              opponent,
+              pitcherId: opposingPitcher?.pitcherId ?? null,
+              pitcherName: opposingPitcher?.pitcherName ?? null,
+              battingOrderSlot: slot.battingOrderSlot,
+              batterHand: player.bats,
+              capturedAtMs,
+              firstPitchAtMs,
+              firstPitchLockEligible,
+              gameStatus,
+              lineupConfirmedAtMs,
+              starterConfirmed: !!opposingPitcher,
+              sufficientStatsRef,
+              batterPower: {
+                xISO: powerInputs.xISO,
+                xSLG: powerInputs.xSLG,
+                xwOBAcon: powerInputs.xwOBA, // best-available proxy — no distinct contact-only wOBA field exists yet
+                barrelRatePct: powerInputs.barrelRatePct,
+                hardHitRatePct: powerInputs.hardHitRatePct,
+                exitVelocity: powerInputs.exitVelocity,
+                maxEV: powerInputs.maxEV,
+                flyBallPct: powerInputs.flyBallPct,
+                hrFBRatioPct: powerInputs.hrFBRatioPct,
+                pullRatePct: powerInputs.pullRatePct,
+                sweetSpotPct: powerInputs.sweetSpotPct,
+                hrPerPaSeason: null, // not computed anywhere in this build — honestly null, not fabricated
+                paSample: powerInputs.battedBallEvents, // BBE as the available sample-size proxy
+              },
+              batTracking: {
+                avgBatSpeed: savant?.avgBatSpeed ?? null,
+                fastSwingRatePct: null,
+                avgSwingLength: savant?.avgSwingLength ?? null,
+                avgAttackAngle: null,
+                idealAttackAngleRatePct: null,
+                attackAngleStdDev: null,
+                avgSwingPathTilt: null,
+                squaredUpPerSwingPct: null,
+                blastPerSwingPct: null,
+                swingSample: null,
+              },
+              pitcherVulnerability: {
+                pitcherKnown,
+                batterHand: player.bats,
+                pitcherThrows: opposingPitcher?.throws ?? null,
+                hrPer9VsHand,
+                hrPer9Overall: null,
+                barrelAllowedPct: pitcherContact?.barrelAllowedPct ?? null,
+                hardHitAllowedPct: pitcherContact?.hardHitAllowedPct ?? null,
+                flyBallAllowedPct: pitcherContact?.flyBallAllowedPct ?? null,
+                bfSample: null,
+              },
+              pitchType: buildPitchTypeInteractionInputsFromSavant(savant, pitcherSavantForMatchup),
+              zoneLocation: {
+                batterHeartXslg: null,
+                batterElevatedFbXslg: null,
+                batterLowBreakingXslg: null,
+                pitcherHeartRate: null,
+                pitcherMiddleMiddleRate: null,
+                pitcherHangerRate: null,
+              },
+              parkWeatherSpray: {
+                parkHrFactor: parkHrFactorGeneric,
+                parkHrFactorHand: parkHrFactor,
+                isIndoors,
+                weatherAvailable,
+                temperatureF: weather?.temperature ?? null,
+                windSpeedMph: weather?.windSpeed ?? null,
+                windDirection: weather?.windDirection ?? null,
+                batterPullAirShare: savant?.pullRatePercent ?? null, // proxy — pull rate, not air-ball-specific pull share
+                pullFenceDistanceFt: pullSideGeometry?.pullFenceDistanceFt ?? null,
+                pullFenceHeightFt: pullSideGeometry?.pullFenceHeightFt ?? null,
+                avgFenceDistanceFt: pullSideGeometry?.avgFenceDistanceFt ?? null,
+                avgFenceHeightFt: pullSideGeometry?.avgFenceHeightFt ?? null,
+                avgHrDistanceFt: pullSideGeometry?.avgHrDistanceFt ?? null,
+              },
+              lineupOpportunity: {
+                battingOrderSlot: slot.battingOrderSlot,
+                teamImpliedRuns: null,
+                obpAhead: null,
+                lineupConfirmed: lineupStatus === "posted",
+              },
+              starterBullpen: {
+                starterConfirmed: !!opposingPitcher,
+                projectedPaVsStarter: null,
+                projectedPaVsBullpen: null,
+                bullpenHrPer9: null,
+                bullpenBarrelAllowedPct: null,
+              },
+              market: {
+                hrOddsAvailable: false,
+                impliedHrProbability: null,
+                noVigImpliedHrProbability: null,
+              },
+              availability: {
+                confirmedActive: lineupStatus === "posted",
+                lateScratchRisk: null,
+                restDayRisk: null,
+                platoonSubRisk: null,
+              },
+              contactOpportunity: {
+                kRatePct: null,
+                bbRatePct: null,
+                whiffRatePct: null,
+                contactRatePct: null,
+                zoneContactRatePct: null,
+                chaseRatePct: null,
+              },
+              slateBaselineGameHrProbability: null,
+              savantQuality: savant ? (savant.batterDataQuality === "full" ? "full" : "fallback") : "missing",
+              venueResolved: isVenueResolved(venueName),
+              pitcherHandResolved: opposingPitcher?.throws != null,
+              batterPowerFullyAvailable,
+              championModelVersion: PLATE_CHAMPION_POLICY.version,
+              championScore10: scoring.score10,
+              championTier: scoring.tier,
+              championSuppressed: scoring.suppressed,
+            });
+            if (capturedRow) plateHrV2Captures.push(capturedRow);
+
+            if (!plateHrV2SufficientStatsCaptured.has(player.playerId)) {
+              plateHrV2SufficientStatsCaptured.add(player.playerId);
+              const batterStats = captureSufficientStatsIfNeeded(
+                "batter", player.playerId, sessionDate, savant?.plateHrV2BatterSufficientStats,
+              );
+              if (batterStats) plateHrV2SufficientStatsCaptures.push(batterStats);
+            }
+            if (opposingPitcher && !plateHrV2SufficientStatsCaptured.has(opposingPitcher.pitcherId)) {
+              plateHrV2SufficientStatsCaptured.add(opposingPitcher.pitcherId);
+              const pitcherStats = captureSufficientStatsIfNeeded(
+                "pitcher", opposingPitcher.pitcherId, sessionDate,
+                pitcherContactByPitcher.has(opposingPitcher.pitcherId)
+                  ? (await fetchBaseballSavantData(opposingPitcher.pitcherId, gamePk)).plateHrV2PitcherSufficientStats
+                  : null,
+              );
+              if (pitcherStats) plateHrV2SufficientStatsCaptures.push(pitcherStats);
+            }
+          } catch (err: any) {
+            console.warn(`[PLATE_HR_V2_FORWARD_CAPTURE_FAILED] ${signalId} ${err?.message ?? err}`);
+          }
+        }
+
         signals.set(signalId, signal);
         if (scoring.suppressed) {
           suppressedCount++;
@@ -1252,6 +1468,16 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
     } catch (err: any) {
       console.error(`[PREGAME_POWER_RADAR_DB_UPSERT] sink failed:`, err?.message ?? err);
     }
+  }
+
+  // Plate HR Probability V2 (PR 1) — research-only capture flush. Never
+  // blocks/raises into runtime; a failure here cannot affect the champion
+  // signals already persisted above.
+  try {
+    await flushPlateHrV2Captures(plateHrV2Captures, { buildId, sessionDate });
+    await flushPlateHrV2SufficientStats(plateHrV2SufficientStatsCaptures);
+  } catch (err: any) {
+    console.error(`[PLATE_HR_V2_FORWARD_CAPTURE_SINK] sink failed:`, err?.message ?? err);
   }
 
   isPregamePowerRadarBuildRunning = false;
