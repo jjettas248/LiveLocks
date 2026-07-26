@@ -1520,6 +1520,14 @@ export const plateHrV2ModelRegistry = pgTable("plate_hr_v2_model_registry", {
   holdoutWindowEnd: text("holdout_window_end"),
   artifactPath: text("artifact_path"),
   artifactChecksum: text("artifact_checksum"),
+  // PR2: the full PlateHrV2ModelArtifact JSON body, stored inline. Railway's
+  // container filesystem is ephemeral across deploys, so artifactPath (a
+  // local file path) cannot durably hold the artifact — every other V2 table
+  // already stores its full payload as jsonb directly in Postgres, and this
+  // table is PR1's own creation for exactly this purpose. artifactPath stays
+  // reserved for a future external-storage backend if an artifact ever grows
+  // large enough to be worth moving out of Postgres.
+  artifactBody: jsonb("artifact_body"),
   standardization: jsonb("standardization"),
   metrics: jsonb("metrics"),
   status: text("status").notNull().default("candidate"),

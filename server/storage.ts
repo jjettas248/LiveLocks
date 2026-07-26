@@ -55,8 +55,15 @@ import {
   type InsertPregamePowerRadarBuild,
   plateHrV2FeatureSnapshots,
   plateHrV2SufficientStats,
+  plateHrV2Labels,
+  plateHrV2ModelRegistry,
   type InsertPlateHrV2FeatureSnapshot,
   type InsertPlateHrV2SufficientStats,
+  type PlateHrV2FeatureSnapshotRow,
+  type InsertPlateHrV2Label,
+  type PlateHrV2LabelRow,
+  type InsertPlateHrV2ModelRegistry,
+  type PlateHrV2ModelRegistryRow,
   mlbMoundRadarSignals,
   mlbMoundRadarBuilds,
   type MlbMoundRadarSignalRow,
@@ -405,6 +412,44 @@ export interface IStorage {
   upsertPlateHrV2FeatureSnapshot(row: InsertPlateHrV2FeatureSnapshot): Promise<void>;
   upsertPlateHrV2SufficientStats(row: InsertPlateHrV2SufficientStats): Promise<void>;
   getLatestPregamePowerBuild(sessionDate: string): Promise<PregamePowerRadarBuildRow | null>;
+
+  // ── Plate HR Probability V2 — PR 2 (labeling, fitting, model registry;
+  // still additive, still zero production authority — every write here is
+  // either append-only (labels) or status='candidate' only (model registry)) ──
+  // getGamePlayerStats existed only on the concrete class before PR2 (never
+  // declared on IStorage) — promoted here because plateHrV2LabelReconciler.ts
+  // needs it on an injectable Pick<IStorage, ...> for DB-less testing.
+  getGamePlayerStats(gameId: string): Promise<Array<{
+    playerId: string;
+    playerName: string;
+    teamAbbr: string | null;
+    teamSide: string | null;
+    battingOrderSlot: number | null;
+    ab: number | null;
+    h: number | null;
+    tb: number | null;
+    r: number | null;
+    rbi: number | null;
+    bb: number | null;
+    k: number | null;
+    sb: number | null;
+    abResults: string | null;
+    gameDate: string | null;
+    gamePk: string | null;
+  }>>;
+  getPlateHrV2LockedSnapshotsPendingLabel(
+    labelVersion: string,
+    opts?: { sessionDateFrom?: string; sessionDateTo?: string; limit?: number },
+  ): Promise<PlateHrV2FeatureSnapshotRow[]>;
+  /** Append-only — returns false (not inserted) if a row for (snapshotId, labelVersion) already exists. */
+  insertPlateHrV2LabelIfAbsent(row: InsertPlateHrV2Label): Promise<boolean>;
+  getPlateHrV2ResolvedTrainingPairs(
+    labelVersion: string,
+    opts?: { sessionDateFrom?: string; sessionDateTo?: string },
+  ): Promise<Array<{ snapshot: PlateHrV2FeatureSnapshotRow; label: PlateHrV2LabelRow }>>;
+  /** modelVersion is an immutable identity once published — returns false (not inserted) on a re-attempt. */
+  insertPlateHrV2ModelArtifact(row: InsertPlateHrV2ModelRegistry): Promise<boolean>;
+  getPlateHrV2ModelArtifact(modelVersion: string): Promise<PlateHrV2ModelRegistryRow | null>;
 
   // ── MLB Mound Radar (additive; never feeds ROI; sibling of Pre-Game Power Radar) ──
   upsertMlbMoundRadarSignal(row: InsertMlbMoundRadarSignal): Promise<void>;
@@ -2892,6 +2937,10 @@ export class DatabaseStorage implements IStorage {
     sb: number | null;
     abResults: string | null;
     gameDate: string | null;
+    // Widened for PR2's outcome-source bridge (gamePk keys the MLB Stats API
+    // status fetch) — zero behavior change, db.select() already returned
+    // this column, only the declared type was narrower.
+    gamePk: string | null;
   }>> {
     const rows = await db.select().from(gamePlayerStats).where(eq(gamePlayerStats.gameId, gameId));
     return rows;
@@ -3412,6 +3461,82 @@ export class DatabaseStorage implements IStorage {
           computedAt: new Date(),
         },
       });
+  }
+
+  // ── Plate HR Probability V2 — PR 2 (labeling, fitting, model registry) ───
+
+  async getPlateHrV2LockedSnapshotsPendingLabel(
+    labelVersion: string,
+    opts?: { sessionDateFrom?: string; sessionDateTo?: string; limit?: number },
+  ): Promise<PlateHrV2FeatureSnapshotRow[]> {
+    const conditions = [
+      isNotNull(plateHrV2FeatureSnapshots.lockedAt),
+      // LEFT JOIN + IS NULL expresses "no matching label row exists yet"
+      // (this codebase's established NOT-EXISTS idiom — see getAllFeedback).
+      isNull(plateHrV2Labels.snapshotId),
+    ];
+    if (opts?.sessionDateFrom) conditions.push(gte(plateHrV2FeatureSnapshots.sessionDate, opts.sessionDateFrom));
+    if (opts?.sessionDateTo) conditions.push(lte(plateHrV2FeatureSnapshots.sessionDate, opts.sessionDateTo));
+
+    const query = db
+      .select({ snapshot: plateHrV2FeatureSnapshots })
+      .from(plateHrV2FeatureSnapshots)
+      .leftJoin(
+        plateHrV2Labels,
+        and(
+          eq(plateHrV2Labels.snapshotId, plateHrV2FeatureSnapshots.snapshotId),
+          eq(plateHrV2Labels.labelVersion, labelVersion),
+        ),
+      )
+      .where(and(...conditions))
+      .orderBy(asc(plateHrV2FeatureSnapshots.predictionAsOf));
+
+    const rows = opts?.limit != null ? await query.limit(opts.limit) : await query;
+    return rows.map((r) => r.snapshot);
+  }
+
+  async insertPlateHrV2LabelIfAbsent(row: InsertPlateHrV2Label): Promise<boolean> {
+    const result = await db
+      .insert(plateHrV2Labels)
+      .values(row)
+      .onConflictDoNothing({ target: [plateHrV2Labels.snapshotId, plateHrV2Labels.labelVersion] });
+    return (result as any).rowCount > 0;
+  }
+
+  async getPlateHrV2ResolvedTrainingPairs(
+    labelVersion: string,
+    opts?: { sessionDateFrom?: string; sessionDateTo?: string },
+  ): Promise<Array<{ snapshot: PlateHrV2FeatureSnapshotRow; label: PlateHrV2LabelRow }>> {
+    const conditions = [
+      eq(plateHrV2Labels.labelVersion, labelVersion),
+      eq(plateHrV2Labels.labelDisposition, "resolved"),
+    ];
+    if (opts?.sessionDateFrom) conditions.push(gte(plateHrV2FeatureSnapshots.sessionDate, opts.sessionDateFrom));
+    if (opts?.sessionDateTo) conditions.push(lte(plateHrV2FeatureSnapshots.sessionDate, opts.sessionDateTo));
+
+    return db
+      .select({ snapshot: plateHrV2FeatureSnapshots, label: plateHrV2Labels })
+      .from(plateHrV2FeatureSnapshots)
+      .innerJoin(plateHrV2Labels, eq(plateHrV2Labels.snapshotId, plateHrV2FeatureSnapshots.snapshotId))
+      .where(and(...conditions))
+      .orderBy(asc(plateHrV2FeatureSnapshots.predictionAsOf));
+  }
+
+  async insertPlateHrV2ModelArtifact(row: InsertPlateHrV2ModelRegistry): Promise<boolean> {
+    const result = await db
+      .insert(plateHrV2ModelRegistry)
+      .values(row)
+      .onConflictDoNothing({ target: plateHrV2ModelRegistry.modelVersion });
+    return (result as any).rowCount > 0;
+  }
+
+  async getPlateHrV2ModelArtifact(modelVersion: string): Promise<PlateHrV2ModelRegistryRow | null> {
+    const rows = await db
+      .select()
+      .from(plateHrV2ModelRegistry)
+      .where(eq(plateHrV2ModelRegistry.modelVersion, modelVersion))
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   async getPregamePowerRadarSignalsByDate(sessionDate: string): Promise<PregamePowerRadarSignalRow[]> {

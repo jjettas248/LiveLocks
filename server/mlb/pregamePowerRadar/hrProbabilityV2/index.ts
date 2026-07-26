@@ -12,3 +12,12 @@ export * from "./plateHrV2CaptureFlags";
 export * from "./plateHrV2ForwardCapture";
 export * from "./plateHrV2CaptureRowMapper";
 export * from "./installPlateHrV2Capture";
+
+// ── PR 2 — labeling, fitting, calibration, model registry ─────────────────
+export * from "./plateHrV2ShadowTrainingRow";
+export * from "./plateHrV2OutcomeSource";
+export * from "./plateHrV2LabelRules";
+export * from "./plateHrV2LabelReconciler";
+export * from "./plateHrV2Calibrator";
+export * from "./plateHrV2ShadowFitting";
+export * from "./plateHrV2ModelArtifactWriter";
