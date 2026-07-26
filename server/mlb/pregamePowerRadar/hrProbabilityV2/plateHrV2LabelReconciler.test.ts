@@ -59,7 +59,7 @@ function fixtureSnapshot(overrides: Partial<PlateHrV2FeatureSnapshotRow> & { sna
   };
 }
 
-function makeFakeStorage(pending: PlateHrV2FeatureSnapshotRow[], gamePlayerStatsByGame: Record<string, Array<{ playerId: string; gamePk: string | null; ab: number | null; bb: number | null; abResults: string | null }>>) {
+function makeFakeStorage(pending: PlateHrV2FeatureSnapshotRow[], gamePlayerStatsByGame: Record<string, Array<{ playerId: string; gamePk: string | null; ab: number | null; bb: number | null; hr: number | null; abResults: string | null }>>) {
   const insertedKeys = new Set<string>();
   const insertedRows: InsertPlateHrV2Label[] = [];
   return {
@@ -94,9 +94,9 @@ function makeFakeStorage(pending: PlateHrV2FeatureSnapshotRow[], gamePlayerStats
   ];
   const gamePlayerStatsByGame = {
     g1: [
-      { playerId: "p1", gamePk: "778001", ab: 4, bb: 0, abResults: JSON.stringify([{ hitType: "home_run", inning: 2, half: "top" }]) },
-      { playerId: "p2", gamePk: "778001", ab: 3, bb: 1, abResults: null },
-      { playerId: "p3", gamePk: "778001", ab: 4, bb: 0, abResults: null },
+      { playerId: "p1", gamePk: "778001", ab: 4, bb: 0, hr: 1, abResults: JSON.stringify([{ hitType: "home_run", inning: 2, half: "top" }]) },
+      { playerId: "p2", gamePk: "778001", ab: 3, bb: 1, hr: 0, abResults: null },
+      { playerId: "p3", gamePk: "778001", ab: 4, bb: 0, hr: 0, abResults: null },
     ],
   };
   const { storage, insertedRows } = makeFakeStorage(pending, gamePlayerStatsByGame);
@@ -118,7 +118,7 @@ function makeFakeStorage(pending: PlateHrV2FeatureSnapshotRow[], gamePlayerStats
     fixtureSnapshot({ snapshotId: "s5", gameId: "g2", batterId: "p2" }),
     fixtureSnapshot({ snapshotId: "s6", gameId: "g2", batterId: "p3" }),
   ];
-  const { storage, insertedRows } = makeFakeStorage(pending, { g2: [{ playerId: "p1", gamePk: "778002", ab: 0, bb: 0, abResults: null }] });
+  const { storage, insertedRows } = makeFakeStorage(pending, { g2: [{ playerId: "p1", gamePk: "778002", ab: 0, bb: 0, hr: 0, abResults: null }] });
   const summary = await reconcilePlateHrV2Labels({}, { storage, fetchGameStatus: async () => "postponed" });
 
   ok(summary.censored === 3, "all 3 censored for a postponed game");
@@ -140,10 +140,29 @@ function makeFakeStorage(pending: PlateHrV2FeatureSnapshotRow[], gamePlayerStats
   ok(insertedRows.length === 0, "zero inserts for an in-progress game");
 }
 
+// ── 3b. A suspended game -> 0 inserts, skipped (never a stuck censored label) ──
+// The regression this guards: labels are append-only, and
+// getPlateHrV2LockedSnapshotsPendingLabel excludes any snapshot that already
+// has a label row regardless of disposition. If a suspended game were
+// labeled censored immediately, it could never be revisited once it resumes
+// under the same gamePk and reaches a real final.
+{
+  const pending = [
+    fixtureSnapshot({ snapshotId: "s10", gameId: "g5", batterId: "p1" }),
+    fixtureSnapshot({ snapshotId: "s11", gameId: "g5", batterId: "p2" }),
+  ];
+  const { storage, insertedRows } = makeFakeStorage(pending, { g5: [{ playerId: "p1", gamePk: "778005", ab: 2, bb: 0, hr: 0, abResults: null }] });
+  const summary = await reconcilePlateHrV2Labels({}, { storage, fetchGameStatus: async () => "suspended" });
+
+  ok(summary.skippedGameNotOverYet === 2, "suspended game snapshots are skipped, not labeled");
+  ok(summary.censored === 0, "no premature censored label is written for a suspended game");
+  ok(insertedRows.length === 0, "zero inserts for a suspended game — it stays pending for a future run");
+}
+
 // ── 4. Re-running against an already-labeled snapshot increments alreadyLabeled, not inserted ──
 {
   const pending = [fixtureSnapshot({ snapshotId: "s9", gameId: "g4", batterId: "p1" })];
-  const { storage } = makeFakeStorage(pending, { g4: [{ playerId: "p1", gamePk: "778004", ab: 4, bb: 0, abResults: null }] });
+  const { storage } = makeFakeStorage(pending, { g4: [{ playerId: "p1", gamePk: "778004", ab: 4, bb: 0, hr: 0, abResults: null }] });
 
   const first = await reconcilePlateHrV2Labels({}, { storage, fetchGameStatus: async () => "final" });
   ok(first.inserted === 1 && first.alreadyLabeled === 0, "first run inserts the label");

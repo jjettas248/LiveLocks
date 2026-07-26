@@ -65,6 +65,45 @@ function windowOf(rows: ShadowHrTrainingRow[]): { start: string | null; end: str
 }
 
 /**
+ * Groups chronologically-sorted rows into buckets of identical `frozenAt`.
+ * Forward capture stamps every candidate evaluated in the same build cycle
+ * with that build's own generatedAt, so many rows — an entire slate's worth
+ * of batters, possibly spanning several games — legitimately share the exact
+ * same timestamp. Splitting a tie-block across train/calibration/holdout
+ * would let same-game/same-slate correlation leak across the boundary,
+ * making held-out metrics optimistic. `sorted` is already ordered, so ties
+ * are always adjacent — no re-sort needed here.
+ */
+export function groupByFrozenAt(sorted: ShadowHrTrainingRow[]): ShadowHrTrainingRow[][] {
+  const buckets: ShadowHrTrainingRow[][] = [];
+  for (const row of sorted) {
+    const last = buckets[buckets.length - 1];
+    if (last && last[0].frozenAt === row.frozenAt) last.push(row);
+    else buckets.push([row]);
+  }
+  return buckets;
+}
+
+/**
+ * Walks buckets from the end backward, taking WHOLE buckets until at least
+ * `minRows` rows are collected (or buckets run out). The actual row count
+ * taken can exceed `minRows` — respecting a group boundary always wins over
+ * hitting an exact target size.
+ */
+export function takeWholeBucketsFromEnd(
+  buckets: ShadowHrTrainingRow[][],
+  minRows: number,
+): { taken: ShadowHrTrainingRow[]; remainingBuckets: ShadowHrTrainingRow[][] } {
+  let count = 0;
+  let splitIndex = buckets.length;
+  while (splitIndex > 0 && count < minRows) {
+    splitIndex--;
+    count += buckets[splitIndex].length;
+  }
+  return { taken: buckets.slice(splitIndex).flat(), remainingBuckets: buckets.slice(0, splitIndex) };
+}
+
+/**
  * Mirrors evaluateTermModel's Brier/logLoss math, but over already-computed
  * (possibly two-stage: term-model then calibrator) probabilities rather than
  * a single LogisticTermModel + raw terms — evaluateTermModel itself can't
@@ -101,6 +140,16 @@ function binaryMetricsFromPredictions(predictions: Array<{ p: number; y: 0 | 1 }
  * still returns a full-sample fit (holdoutMetrics: null) rather than
  * refusing, matching fitRegularizedTermModel's own "never throws on empty
  * input" discipline.
+ *
+ * The term-train/calibration/holdout split below respects frozenAt tie-
+ * blocks (groupByFrozenAt/takeWholeBucketsFromEnd) so same-build-cycle rows
+ * can never straddle the boundary. walkForwardFolds' own per-fold windowing
+ * is math/fitShadowTermWeights.ts's walkForwardFit, which slices by row
+ * count with no tie-block awareness — that file is never modified, so this
+ * is a known, documented limitation of the fold-level DIAGNOSTIC numbers
+ * only (they can be mildly optimistic/noisy from same-slate leakage across
+ * a fold boundary); it does not affect finalTermModel or holdoutMetrics,
+ * which this function fits and evaluates itself, tie-block-safe.
  */
 export function fitPlateHrV2ShadowModel(
   rows: ShadowHrTrainingRow[],
@@ -122,12 +171,25 @@ export function fitPlateHrV2ShadowModel(
   const finalFitOptions = { l2, iterations: options.finalFitIterations, learningRate: options.finalFitLearningRate };
   const n = sorted.length;
 
-  if (n < minTrainRows + calibrationRowsCount + testRowsCount) {
-    // Not enough data for a real three-way split — fit on everything
-    // available and calibrate in-sample (honest best-effort; the resulting
-    // calibrator is not out-of-sample validated, which is exactly why
-    // holdoutMetrics stays null rather than reporting a misleadingly-clean
-    // in-sample number as if it were held out).
+  // Bucket-respecting three-way split: never cuts a same-frozenAt tie-block
+  // across train/calibration/holdout (see groupByFrozenAt). Attempted
+  // unconditionally — the achieved sizes below (which can exceed the
+  // requested counts, since whole buckets are taken even when they overshoot)
+  // are what decide whether a real split was actually possible, not a
+  // pre-check row-count estimate that bucket effects could invalidate either way.
+  const buckets = groupByFrozenAt(sorted);
+  const { taken: holdoutRows, remainingBuckets: afterHoldout } = takeWholeBucketsFromEnd(buckets, testRowsCount);
+  const { taken: calibrationSourceRows, remainingBuckets: termTrainBuckets } = takeWholeBucketsFromEnd(afterHoldout, calibrationRowsCount);
+  const termTrainRows = termTrainBuckets.flat();
+
+  const hasRealSplit = termTrainRows.length >= minTrainRows && calibrationSourceRows.length > 0 && holdoutRows.length > 0;
+
+  if (!hasRealSplit) {
+    // Not enough data (or too few distinct frozenAt buckets) for a real
+    // three-way split — fit on everything available and calibrate in-sample
+    // (honest best-effort; the resulting calibrator is not out-of-sample
+    // validated, which is exactly why holdoutMetrics stays null rather than
+    // reporting a misleadingly-clean in-sample number as if it were held out).
     const finalTermModel = fitRegularizedTermModel(sorted, featureKeys, finalFitOptions);
     const calibratorInputRows = sorted.map((r) => ({
       rawProbability: predictTermModel(finalTermModel, r.terms),
@@ -147,10 +209,6 @@ export function fitPlateHrV2ShadowModel(
       holdoutMetrics: null,
     };
   }
-
-  const termTrainRows = sorted.slice(0, n - calibrationRowsCount - testRowsCount);
-  const calibrationSourceRows = sorted.slice(n - calibrationRowsCount - testRowsCount, n - testRowsCount);
-  const holdoutRows = sorted.slice(n - testRowsCount);
 
   const finalTermModel = fitRegularizedTermModel(termTrainRows, featureKeys, finalFitOptions);
 

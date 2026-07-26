@@ -62,6 +62,13 @@ export function derivePlateHrV2Label(input: PlateHrV2LabelDecisionInput): PlateH
     labelDisposition = "censored";
     resolutionReason = "game_postponed";
   } else if (game.gameStatus === "suspended") {
+    // Defensive fallback only in normal operation — the reconciler filters
+    // "suspended" games out (alongside "in_progress"/"unknown") BEFORE this
+    // function is ever called, specifically so a snapshot never acquires a
+    // premature censored label that the append-only label store can then
+    // never replace once the game resumes under the same gamePk and reaches
+    // a real "final" (see plateHrV2LabelReconciler.ts's skippedGameNotOverYet
+    // path). This branch stays correct in isolation for any other caller.
     labelDisposition = "censored";
     resolutionReason = "game_suspended_unresolved";
   } else {

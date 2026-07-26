@@ -433,6 +433,7 @@ export interface IStorage {
     bb: number | null;
     k: number | null;
     sb: number | null;
+    hr: number | null;
     abResults: string | null;
     gameDate: string | null;
     gamePk: string | null;
@@ -2889,6 +2890,7 @@ export class DatabaseStorage implements IStorage {
     bb?: number;
     k?: number;
     sb?: number;
+    hr?: number;
     abResults?: string | null;
     gameDate?: string | null;
   }>): Promise<void> {
@@ -2911,6 +2913,7 @@ export class DatabaseStorage implements IStorage {
           bb: s.bb ?? 0,
           k: s.k ?? 0,
           sb: s.sb ?? 0,
+          hr: s.hr ?? 0,
           abResults: s.abResults ?? null,
           gameDate: s.gameDate ?? null,
         }).onConflictDoNothing();
@@ -2935,6 +2938,11 @@ export class DatabaseStorage implements IStorage {
     bb: number | null;
     k: number | null;
     sb: number | null;
+    // Widened for PR2's outcome-source bridge — the canonical HR count
+    // (independent of abResults, which is in-memory-cache-derived and can
+    // be null/incomplete). Zero behavior change: db.select() already
+    // returned this column, only the declared type was narrower.
+    hr: number | null;
     abResults: string | null;
     gameDate: string | null;
     // Widened for PR2's outcome-source bridge (gamePk keys the MLB Stats API

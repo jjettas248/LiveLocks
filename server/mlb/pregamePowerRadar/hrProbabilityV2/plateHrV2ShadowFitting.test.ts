@@ -2,7 +2,7 @@
 //
 // Run: npx tsx server/mlb/pregamePowerRadar/hrProbabilityV2/plateHrV2ShadowFitting.test.ts
 
-import { fitPlateHrV2ShadowModel } from "./plateHrV2ShadowFitting";
+import { fitPlateHrV2ShadowModel, groupByFrozenAt, takeWholeBucketsFromEnd } from "./plateHrV2ShadowFitting";
 import { PLATE_HR_V2_SHADOW_TERM_KEYS } from "./plateHrV2ShadowTrainingRow";
 import type { ShadowHrTrainingRow } from "../math/fitShadowTermWeights";
 
@@ -102,6 +102,84 @@ function plantedSignalFixture(n: number): ShadowHrTrainingRow[] {
     "fitting twice on identical input produces a byte-identical finalTermModel (no randomness anywhere in the chain)",
   );
   ok(JSON.stringify(r1.calibrator) === JSON.stringify(r2.calibrator), "calibrator is likewise byte-identical across repeated fits");
+}
+
+// A fixture where forward capture's real behavior is modeled explicitly:
+// every row within a "build" shares the exact same frozenAt (mirroring
+// PregameRadar stamping every candidate in one build cycle with that
+// build's own generatedAt), and builds are chronologically ordered.
+function sameTimestampBuildsFixture(buildSizes: number[]): ShadowHrTrainingRow[] {
+  const rows: ShadowHrTrainingRow[] = [];
+  buildSizes.forEach((size, buildIndex) => {
+    const frozenAt = new Date(2026, 0, 1 + buildIndex).toISOString();
+    for (let i = 0; i < size; i++) {
+      rows.push({ frozenAt, homered: i % 4 === 0 ? 1 : 0, terms: { batterPower: i % 2 === 0 ? 0.3 : -0.3 } });
+    }
+  });
+  return rows;
+}
+
+// ── 6. groupByFrozenAt: correctly buckets tie-blocks ────────────────────────
+{
+  const rows = sameTimestampBuildsFixture([3, 1, 5]);
+  const buckets = groupByFrozenAt(rows);
+  ok(buckets.length === 3, "3 distinct frozenAt values produce 3 buckets");
+  ok(buckets[0].length === 3 && buckets[1].length === 1 && buckets[2].length === 5, "each bucket holds exactly the rows sharing its build's timestamp");
+  ok(buckets.every((b) => b.every((r) => r.frozenAt === b[0].frozenAt)), "every row in a bucket shares the same frozenAt as the bucket's first row");
+}
+
+// ── 7. takeWholeBucketsFromEnd: never splits a bucket ───────────────────────
+{
+  const buckets = groupByFrozenAt(sameTimestampBuildsFixture([50, 50, 50, 50, 50, 50, 50, 50, 50, 50])); // 10 builds x 50 rows
+  const { taken, remainingBuckets } = takeWholeBucketsFromEnd(buckets, 60);
+  ok(taken.length === 100, "a 60-row target that doesn't align with a single 50-row bucket takes 2 whole buckets (100 rows), never a partial one");
+  ok(remainingBuckets.length === 8, "the other 8 buckets remain untouched");
+  ok(
+    new Set(taken.map((r) => r.frozenAt)).size === 2,
+    "the taken rows span exactly 2 distinct frozenAt values, each fully included — no bucket is split across taken/remaining",
+  );
+
+  const { taken: exact } = takeWholeBucketsFromEnd(groupByFrozenAt(sameTimestampBuildsFixture([50, 50])), 50);
+  ok(exact.length === 50, "a target that exactly matches one bucket's size takes exactly that one bucket");
+
+  const { taken: overshoot, remainingBuckets: none } = takeWholeBucketsFromEnd(groupByFrozenAt(sameTimestampBuildsFixture([500])), 60);
+  ok(overshoot.length === 500 && none.length === 0, "a single bucket larger than the whole remaining budget is still taken whole, even though it overshoots the target");
+}
+
+// ── 8. fitPlateHrV2ShadowModel end-to-end: same-frozenAt tie-blocks never
+// straddle train/calibration/holdout (the actual Codex-reported regression) ──
+{
+  // 10 builds of 50 rows each = 500 rows, matching a slate-sized build cycle.
+  const buildSizes = Array.from({ length: 10 }, () => 50);
+  const rows = sameTimestampBuildsFixture(buildSizes);
+
+  const result = fitPlateHrV2ShadowModel(rows, { minTrainRows: 250, testRows: 60, calibrationRows: 60 });
+  ok(result.holdoutMetrics !== null, "500 rows across 10 builds clears the 3-way split threshold");
+
+  // Independently recompute what the bucket-respecting split SHOULD produce
+  // for this exact fixture + these exact options, and cross-check the
+  // model's actual reported holdout size against it — proving the function
+  // is really using bucket-respecting extraction, not silently reverting to
+  // a row-count cut that happens to look similar.
+  const buckets = groupByFrozenAt(rows);
+  const { taken: expectedHoldout, remainingBuckets: afterHoldout } = takeWholeBucketsFromEnd(buckets, 60);
+  const { taken: expectedCalibration } = takeWholeBucketsFromEnd(afterHoldout, 60);
+  ok(result.holdoutMetrics!.rows === expectedHoldout.length, `holdout size (${result.holdoutMetrics!.rows}) matches the bucket-respecting expectation (${expectedHoldout.length}), not a naive 60-row cut`);
+
+  // Structural proof: every distinct frozenAt value used for the holdout
+  // window is entirely disjoint from the calibration window — a naive
+  // row-count cut on this exact fixture (60 of 500) would have split
+  // build #9 (the last 50-row build) across calibration and holdout.
+  const holdoutFrozenAtSet = new Set(expectedHoldout.map((r) => r.frozenAt));
+  const calibrationFrozenAtSet = new Set(expectedCalibration.map((r) => r.frozenAt));
+  const overlap = [...holdoutFrozenAtSet].filter((t) => calibrationFrozenAtSet.has(t));
+  ok(overlap.length === 0, "zero frozenAt values appear in both the holdout and calibration splits");
+  ok(holdoutFrozenAtSet.size === 2, "holdout spans exactly 2 whole builds (100 rows for a 60-row target with 50-row builds), never a partial one");
+  ok(
+    result.holdoutMetrics!.window.start === buildSizes.map((_, i) => new Date(2026, 0, 1 + i).toISOString())[8] &&
+      result.holdoutMetrics!.window.end === buildSizes.map((_, i) => new Date(2026, 0, 1 + i).toISOString())[9],
+    "holdout window start/end land exactly on the 2 included builds' own timestamps, not a timestamp from build #7 (which a naive 60-row row-count cut would have partially pulled in)",
+  );
 }
 
 console.log(`\nplateHrV2ShadowFitting.test: ${passed} passed, ${failed} failed`);

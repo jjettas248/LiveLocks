@@ -32,7 +32,7 @@ function ok(cond: boolean, msg: string) {
 {
   const multiHr = reduceBatterOutcomeFacts([
     {
-      playerId: "p1", ab: 4, bb: 1,
+      playerId: "p1", ab: 4, bb: 1, hr: 2,
       abResults: JSON.stringify([
         { hitType: "single", inning: 1, half: "top" },
         { hitType: "home_run", inning: 3, half: "top" },
@@ -48,28 +48,61 @@ function ok(cond: boolean, msg: string) {
   ok(p1.paCountObserved === 5, "paCountObserved = ab + bb (4+1)");
 
   const zeroHr = reduceBatterOutcomeFacts([
-    { playerId: "p2", ab: 3, bb: 0, abResults: JSON.stringify([{ hitType: "double", inning: 2, half: "bottom" }]) },
+    { playerId: "p2", ab: 3, bb: 0, hr: 0, abResults: JSON.stringify([{ hitType: "double", inning: 2, half: "bottom" }]) },
   ]);
   const p2 = zeroHr.get("p2")!;
   ok(p2.hrCountToday === 0, "zero-HR game counts zero");
   ok(p2.firstHr === null, "firstHr is null with no home run");
 
-  const nullAbResults = reduceBatterOutcomeFacts([{ playerId: "p3", ab: 0, bb: 0, abResults: null }]);
+  const nullAbResults = reduceBatterOutcomeFacts([{ playerId: "p3", ab: 0, bb: 0, hr: 0, abResults: null }]);
   const p3 = nullAbResults.get("p3")!;
   ok(p3.hasBoxScoreRow === true && p3.hrCountToday === 0 && p3.paCountObserved === 0, "null abResults (e.g. 0-PA row) degrades to zero facts, still hasBoxScoreRow:true");
 
   let threw = false;
   let malformed: ReturnType<typeof reduceBatterOutcomeFacts> | null = null;
   try {
-    malformed = reduceBatterOutcomeFacts([{ playerId: "p4", ab: 2, bb: 0, abResults: "{not valid json[" }]);
+    malformed = reduceBatterOutcomeFacts([{ playerId: "p4", ab: 2, bb: 0, hr: 0, abResults: "{not valid json[" }]);
   } catch {
     threw = true;
   }
   ok(!threw, "malformed abResults JSON never throws");
   ok(malformed?.get("p4")?.hrCountToday === 0, "malformed abResults JSON degrades to zero HR facts, not fabricated data");
 
-  const notAnArray = reduceBatterOutcomeFacts([{ playerId: "p5", ab: 1, bb: 0, abResults: JSON.stringify({ not: "an array" }) }]);
+  const notAnArray = reduceBatterOutcomeFacts([{ playerId: "p5", ab: 1, bb: 0, hr: 0, abResults: JSON.stringify({ not: "an array" }) }]);
   ok(notAnArray.get("p5")?.hrCountToday === 0, "abResults JSON that parses but isn't an array degrades to zero HR facts");
+}
+
+// ── 2b. hr column is the canonical HR source, not abResults (the actual
+// Codex-reported regression: abResults comes from the in-memory contact
+// cache and can be null/incomplete for a batter with a real, confirmed HR) ──
+{
+  // The exact regression: a batter with a full official box-score line
+  // (ab+bb>0) but no captured abResults (e.g. after a restart) — the durable
+  // hr column says they homered. Before the fix this produced hrCountToday:0
+  // and a resolved-false label for a real home run.
+  const missedContactHydration = reduceBatterOutcomeFacts([
+    { playerId: "p6", ab: 4, bb: 0, hr: 1, abResults: null },
+  ]);
+  const p6 = missedContactHydration.get("p6")!;
+  ok(p6.hrCountToday === 1, "hr:1 with null abResults still reports hrCountToday:1 — a missed contact-feed hydration never masks a real home run");
+  ok(p6.firstHr === null, "firstHr honestly stays null (no location detail available) rather than fabricating an inning/PA for a HR abResults can't confirm");
+
+  // hr:0 with abResults reporting a HR — the durable column wins (it's the
+  // official record); abResults disagreeing is treated as the less
+  // authoritative source, not silently trusted over the box score.
+  const trustsHrColumnOverAbResults = reduceBatterOutcomeFacts([
+    { playerId: "p7", ab: 4, bb: 0, hr: 0, abResults: JSON.stringify([{ hitType: "home_run", inning: 1, half: "top" }]) },
+  ]);
+  ok(trustsHrColumnOverAbResults.get("p7")?.hrCountToday === 0, "hr:0 (the durable box-score count) takes precedence over a disagreeing abResults entry");
+
+  // hr:null (a row persisted before this column existed) falls back to
+  // counting abResults — the honest best-effort path for historical rows only.
+  const historicalRowFallback = reduceBatterOutcomeFacts([
+    { playerId: "p8", ab: 4, bb: 0, hr: null, abResults: JSON.stringify([{ hitType: "home_run", inning: 2, half: "bottom" }]) },
+  ]);
+  const p8 = historicalRowFallback.get("p8")!;
+  ok(p8.hrCountToday === 1, "hr:null (predates the column) falls back to the abResults-derived count");
+  ok(p8.firstHr?.inning === 2, "firstHr is still derived from abResults regardless of which source hrCountToday came from");
 }
 
 // ── 3. resolvePlateHrV2GameOutcome ──────────────────────────────────────────
@@ -77,9 +110,9 @@ function ok(cond: boolean, msg: string) {
   let statusFetchCount = 0;
   const fakeFetchGameStatus = async () => { statusFetchCount++; return "final" as const; };
   const rows = [
-    { playerId: "p1", gamePk: "778001", ab: 4, bb: 0, abResults: JSON.stringify([{ hitType: "home_run", inning: 2, half: "top" }]) },
-    { playerId: "p2", gamePk: "778001", ab: 3, bb: 1, abResults: null },
-    { playerId: "p3", gamePk: "778001", ab: 5, bb: 0, abResults: null },
+    { playerId: "p1", gamePk: "778001", ab: 4, bb: 0, hr: 1, abResults: JSON.stringify([{ hitType: "home_run", inning: 2, half: "top" }]) },
+    { playerId: "p2", gamePk: "778001", ab: 3, bb: 1, hr: 0, abResults: null },
+    { playerId: "p3", gamePk: "778001", ab: 5, bb: 0, hr: 0, abResults: null },
   ];
   const bundle = await resolvePlateHrV2GameOutcome("g1", {
     getGamePlayerStats: async () => rows,

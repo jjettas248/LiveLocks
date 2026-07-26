@@ -50,6 +50,8 @@ function baseArgs(): BuildPlateHrV2ArtifactArgs {
   ok(artifact.modelType === PLATE_HR_V2_MODEL_TYPE, "modelType is the fixed PLATE_HR_V2_MODEL_TYPE constant");
   ok(artifact.featureVersion === PLATE_HR_V2_FEATURES_V1, "featureVersion matches the current feature contract version");
   ok(artifact.status === "candidate", "default status is candidate — PR2 never writes anything else");
+  ok(artifact.baseline.intercept === baseArgs().termModel.intercept, "baseline.intercept preserves the fitted intercept — predictTermModel needs intercept + Σ(coef*term), not coefficients alone");
+  ok(artifact.live.intercept === null, "live.intercept is null, matching live's all-null constant no-op");
 }
 
 // ── 2. missingValueBehavior is literally zero_fill ──────────────────────────

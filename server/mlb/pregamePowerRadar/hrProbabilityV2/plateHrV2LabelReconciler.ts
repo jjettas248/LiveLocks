@@ -103,9 +103,25 @@ export async function reconcilePlateHrV2Labels(
       fetchGameStatus: deps?.fetchGameStatus,
     });
 
-    // A game that hasn't resolved yet is never labeled manual_review by
-    // construction — it's simply left for a future reconciliation run.
-    if (bundle.game.gameStatus === "in_progress" || bundle.game.gameStatus === "unknown") {
+    // A game that hasn't reached a stable terminal state yet is never
+    // labeled by this run — it's simply left pending for a future
+    // reconciliation. This deliberately includes "suspended", not just
+    // "in_progress"/"unknown": labels are append-only (insertPlateHrV2LabelIfAbsent
+    // is onConflictDoNothing, and getPlateHrV2LockedSnapshotsPendingLabel
+    // excludes any snapshot that already has ANY label row for this
+    // labelVersion, regardless of disposition). A suspended game resumes
+    // under the SAME gamePk and will typically reach a real "final" later —
+    // writing a premature censored/game_suspended_unresolved label now would
+    // permanently foreclose ever learning the real outcome once it resumes,
+    // since no mechanism here ever revisits an already-labeled snapshot.
+    // "postponed" is different and safe to label immediately: a postponed
+    // game's makeup (if any) is a separate gameId/gamePk with its own
+    // independent capture cycle, not a resumption of this same game.
+    if (
+      bundle.game.gameStatus === "in_progress" ||
+      bundle.game.gameStatus === "unknown" ||
+      bundle.game.gameStatus === "suspended"
+    ) {
       summary.skippedGameNotOverYet += snapshots.length;
       continue;
     }

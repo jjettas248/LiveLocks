@@ -83,11 +83,12 @@ export function buildPlateHrV2ModelArtifact(args: BuildPlateHrV2ArtifactArgs): P
     standardization: null,
     baseline: {
       kind: "logistic",
+      intercept: args.termModel.intercept,
       coefficients: args.termModel.coefficients,
       knots: null,
       treeNodes: null,
     },
-    live: { kind: "constant", coefficients: null, knots: null, treeNodes: null },
+    live: { kind: "constant", intercept: null, coefficients: null, knots: null, treeNodes: null },
     calibration: {
       method: "platt",
       params: { a: args.calibrator.a, b: args.calibrator.b },

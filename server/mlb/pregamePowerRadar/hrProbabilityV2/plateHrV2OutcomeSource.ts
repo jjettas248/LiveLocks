@@ -77,9 +77,23 @@ export function mapMlbScheduleStatus(raw: MlbScheduleStatusRaw | null | undefine
   return "unknown";
 }
 
-/** Pure. Reduces raw game_player_stats rows into per-batter outcome facts, keyed by playerId. Never throws on malformed abResults JSON. */
+/**
+ * Pure. Reduces raw game_player_stats rows into per-batter outcome facts,
+ * keyed by playerId. Never throws on malformed abResults JSON.
+ *
+ * hrCountToday's source of truth is the durable `hr` box-score column, NOT
+ * abResults — abResults is sourced from the in-memory contact cache at
+ * snapshot time and can be null/incomplete (e.g. after a restart or missed
+ * contact-feed hydration) even for a batter with a full, official box-score
+ * line. Deriving hrCountToday from abResults alone would silently convert a
+ * real home run into a confidently-wrong resolved-false label whenever
+ * abResults happened to be unavailable. abResults/locateHrInPlayerABs is
+ * still the only source for firstHr's inning/half/PA-number detail — when
+ * `hr` says a HR happened but abResults couldn't confirm which plate
+ * appearance, firstHr honestly stays null rather than fabricating a location.
+ */
 export function reduceBatterOutcomeFacts(
-  rows: Array<{ playerId: string; ab: number | null; bb: number | null; abResults: string | null }>,
+  rows: Array<{ playerId: string; ab: number | null; bb: number | null; hr: number | null; abResults: string | null }>,
 ): Map<string, PlateHrV2BatterOutcomeFact> {
   const out = new Map<string, PlateHrV2BatterOutcomeFact>();
   for (const row of rows) {
@@ -94,7 +108,10 @@ export function reduceBatterOutcomeFacts(
     }
     const ab = row.ab ?? 0;
     const bb = row.bb ?? 0;
-    const hrCountToday = abs.filter((a) => a?.hitType === "home_run").length;
+    // row.hr is null only for a row persisted before this column existed
+    // (every new write always supplies an explicit number) — abResults is
+    // the honest best-effort fallback for that historical case only.
+    const hrCountToday = row.hr ?? abs.filter((a) => a?.hitType === "home_run").length;
     out.set(row.playerId, {
       hasBoxScoreRow: true,
       ab,
@@ -133,7 +150,7 @@ export async function fetchMlbGameStatus(gamePk: string, fetchImpl: typeof fetch
 export async function resolvePlateHrV2GameOutcome(
   gameId: string,
   deps: {
-    getGamePlayerStats: (gameId: string) => Promise<Array<{ playerId: string; gamePk: string | null; ab: number | null; bb: number | null; abResults: string | null }>>;
+    getGamePlayerStats: (gameId: string) => Promise<Array<{ playerId: string; gamePk: string | null; ab: number | null; bb: number | null; hr: number | null; abResults: string | null }>>;
     fetchGameStatus?: typeof fetchMlbGameStatus;
   },
 ): Promise<PlateHrV2GameOutcomeBundle> {
