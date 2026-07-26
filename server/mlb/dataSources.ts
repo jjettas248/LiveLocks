@@ -5,6 +5,10 @@
 import { getPitchFamily } from "./pitchTypeNormalizer";
 import type { PitchMixEntry } from "./types";
 import type { PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
+import {
+  computePlateHrV2SufficientStats,
+  type PlateHrV2SufficientStatsRaw,
+} from "./pregamePowerRadar/hrProbabilityV2/plateHrV2SufficientStats";
 
 export interface BaseballSavantData {
   exitVelocity: number | null;
@@ -68,6 +72,15 @@ export interface BaseballSavantData {
   // "batter power data is present but is a 2-of-11-input stub" apart from a
   // real, full read — the two used to be indistinguishable to the caller.
   batterDataQuality: "full" | "partial_fallback" | "unavailable";
+  // Plate HR Probability V2 (PR 1, correction 2) — durable sufficient
+  // statistics computed from the same per-pitch rows above, before they are
+  // discarded. Purely additive: nothing existing reads these two fields; see
+  // pregamePowerRadar/hrProbabilityV2/plateHrV2SufficientStats.ts. Batter and
+  // pitcher are kept separate because both the batter-keyed and pitcher-keyed
+  // fetch below always run for whatever id is passed — exactly one branch has
+  // real rows for any given real player.
+  plateHrV2BatterSufficientStats: PlateHrV2SufficientStatsRaw | null;
+  plateHrV2PitcherSufficientStats: PlateHrV2SufficientStatsRaw | null;
 }
 
 // ── Pitcher contact-quality CSV projection (Mound Radar PR 2) ────────────────
@@ -530,6 +543,8 @@ export async function fetchBaseballSavantData(
     pitcherContactCsvSource: null,
     battedBallEvents: null,
     batterDataQuality: "unavailable",
+    plateHrV2BatterSufficientStats: null,
+    plateHrV2PitcherSufficientStats: null,
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -570,6 +585,8 @@ export async function fetchBaseballSavantData(
   // upgrades it to "full", so any early return / unhandled path never
   // silently overstates quality.
   let batterDataQuality: BaseballSavantData["batterDataQuality"] = "partial_fallback";
+  let plateHrV2BatterSufficientStats: PlateHrV2SufficientStatsRaw | null = null;
+  let plateHrV2PitcherSufficientStats: PlateHrV2SufficientStatsRaw | null = null;
 
   try {
     const currentYear = new Date().getFullYear();
@@ -716,6 +733,10 @@ export async function fetchBaseballSavantData(
         toppedPct = agg.toppedPct;
         maxEV = agg.maxEV;
 
+        // Plate HR Probability V2 (PR 1, correction 2) — durable sufficient
+        // statistics from the same rows, before they go out of scope below.
+        plateHrV2BatterSufficientStats = computePlateHrV2SufficientStats(rows);
+
         // Real per-pitch CSV parsed successfully — every batter-power field
         // above had a chance to populate (an empty in-season sample still
         // counts as "full": the fetch mechanism worked, there's just
@@ -790,6 +811,10 @@ export async function fetchBaseballSavantData(
         pitcherCswPct = stuff.cswPct;
         pitcherWhiffPctByFamily = stuff.whiffPctByFamily;
         pitcherMissesBatsFamily = stuff.missesBatsFamily;
+
+        // Plate HR Probability V2 (PR 1, correction 2) — durable sufficient
+        // statistics from the same rows, before they go out of scope below.
+        plateHrV2PitcherSufficientStats = computePlateHrV2SufficientStats(rows);
       }
     } else {
       console.warn("[Savant] Pitcher CSV fetch failed");
@@ -824,6 +849,8 @@ export async function fetchBaseballSavantData(
       pitcherContactCsvSource,
       battedBallEvents,
       batterDataQuality,
+      plateHrV2BatterSufficientStats,
+      plateHrV2PitcherSufficientStats,
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });

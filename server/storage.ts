@@ -53,6 +53,10 @@ import {
   type InsertPregamePowerRadarSignal,
   type PregamePowerRadarBuildRow,
   type InsertPregamePowerRadarBuild,
+  plateHrV2FeatureSnapshots,
+  plateHrV2SufficientStats,
+  type InsertPlateHrV2FeatureSnapshot,
+  type InsertPlateHrV2SufficientStats,
   mlbMoundRadarSignals,
   mlbMoundRadarBuilds,
   type MlbMoundRadarSignalRow,
@@ -395,6 +399,11 @@ export interface IStorage {
   getPregamePowerRadarSignalsByDate(sessionDate: string): Promise<PregamePowerRadarSignalRow[]>;
   getPregamePowerRadarSignalsByGame(sessionDate: string, gameId: string): Promise<PregamePowerRadarSignalRow[]>;
   recordPregamePowerBuild(build: InsertPregamePowerRadarBuild): Promise<void>;
+
+  // ── Plate HR Probability V2 research (PR 1; additive, zero production
+  // authority — see docs/audits/plate-hr-v2-feature-source-audit.md) ────────
+  upsertPlateHrV2FeatureSnapshot(row: InsertPlateHrV2FeatureSnapshot): Promise<void>;
+  upsertPlateHrV2SufficientStats(row: InsertPlateHrV2SufficientStats): Promise<void>;
   getLatestPregamePowerBuild(sessionDate: string): Promise<PregamePowerRadarBuildRow | null>;
 
   // ── MLB Mound Radar (additive; never feeds ROI; sibling of Pre-Game Power Radar) ──
@@ -3302,6 +3311,105 @@ export class DatabaseStorage implements IStorage {
           lockedAt: sql`COALESCE(${pregamePowerRadarSignals.lockedAt}, excluded.locked_at)`,
           gradedAt: sql`COALESCE(excluded.graded_at, ${pregamePowerRadarSignals.gradedAt})`,
           updatedAt: new Date(),
+        },
+      });
+  }
+
+  // ── Plate HR Probability V2 research (PR 1) ───────────────────────────────
+  async upsertPlateHrV2FeatureSnapshot(row: InsertPlateHrV2FeatureSnapshot): Promise<void> {
+    // Conflict on snapshotId (PK) — deterministic from featureVersion/
+    // sessionDate/gameId/batterId, so this is idempotent across repeated
+    // builds. The `where` clause is the actual enforcement of correction 3's
+    // "no overwrite after lock" rule: once the existing row's lockedAt is
+    // non-null (first pitch already happened), the ON CONFLICT UPDATE simply
+    // does not fire — the row keeps whatever it was locked with, forever.
+    //
+    // The transition write itself (existing row still unlocked, incoming row
+    // is the first non-pregame capture) needs its own rule: this is the write
+    // that FLIPS lockedAt from null to non-null, so the WHERE guard above
+    // still lets it through — but the incoming payload is a post-first-pitch
+    // build, not the last pregame observation. Every "training observation"
+    // column below is therefore CASE-guarded on excluded.locked_at: when this
+    // write is the lock transition (excluded.locked_at IS NOT NULL), the
+    // existing (last pregame) value is kept and only lockedAt itself advances;
+    // an ordinary still-pregame write (excluded.locked_at IS NULL) keeps
+    // overwriting normally. Pure bookkeeping columns (game status, capture
+    // timestamps, display identity) are exempt and keep updating either way.
+    await db
+      .insert(plateHrV2FeatureSnapshots)
+      .values(row)
+      .onConflictDoUpdate({
+        target: plateHrV2FeatureSnapshots.snapshotId,
+        set: {
+          batterName: row.batterName,
+          team: row.team,
+          opponent: row.opponent ?? null,
+          pitcherId: row.pitcherId ?? null,
+          pitcherName: row.pitcherName ?? null,
+          battingOrderSlot: row.battingOrderSlot ?? null,
+          buildId: row.buildId,
+          lastCapturedAt: row.lastCapturedAt,
+          captureRevision: sql`${plateHrV2FeatureSnapshots.captureRevision} + 1`,
+          firstPitchTime: row.firstPitchTime ?? null,
+          firstPitchLockEligible: row.firstPitchLockEligible,
+          gameStatus: row.gameStatus,
+          predictionAsOf: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.predictionAsOf} ELSE excluded.prediction_as_of END`,
+          secondsToFirstPitch: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.secondsToFirstPitch} ELSE excluded.seconds_to_first_pitch END`,
+          lineupConfirmedAt: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.lineupConfirmedAt} ELSE excluded.lineup_confirmed_at END`,
+          starterConfirmed: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.starterConfirmed} ELSE excluded.starter_confirmed END`,
+          lockedAt: row.lockedAt ?? null,
+          inputContractVersion: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.inputContractVersion} ELSE excluded.input_contract_version END`,
+          rawInputs: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.rawInputs} ELSE excluded.raw_inputs END`,
+          featureVersion: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.featureVersion} ELSE excluded.feature_version END`,
+          featureHash: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.featureHash} ELSE excluded.feature_hash END`,
+          derivedFeatures: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.derivedFeatures} ELSE excluded.derived_features END`,
+          availability: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.availability} ELSE excluded.availability END`,
+          featureFreshness: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.featureFreshness} ELSE excluded.feature_freshness END`,
+          leakageWarnings: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.leakageWarnings} ELSE excluded.leakage_warnings END`,
+          sufficientStatsRef: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.sufficientStatsRef} ELSE excluded.sufficient_stats_ref END`,
+          championModelVersion: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.championModelVersion} ELSE excluded.champion_model_version END`,
+          championScore10: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.championScore10} ELSE excluded.champion_score_10 END`,
+          championTier: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.championTier} ELSE excluded.champion_tier END`,
+          championSuppressed: sql`CASE WHEN excluded.locked_at IS NOT NULL THEN ${plateHrV2FeatureSnapshots.championSuppressed} ELSE excluded.champion_suppressed END`,
+          updatedAt: new Date(),
+        },
+        where: sql`${plateHrV2FeatureSnapshots.lockedAt} IS NULL`,
+      });
+  }
+
+  async upsertPlateHrV2SufficientStats(row: InsertPlateHrV2SufficientStats): Promise<void> {
+    // Conflict on statsId (PK, deterministic from entityType/entityId/
+    // asOfDate) — a same-day recomputation (e.g. a later rebuild cycle with
+    // fresher Savant data) simply replaces the day's row; there is no lock
+    // concept here since this is season-to-date evidence, not a frozen
+    // per-candidate training observation.
+    await db
+      .insert(plateHrV2SufficientStats)
+      .values(row)
+      .onConflictDoUpdate({
+        target: plateHrV2SufficientStats.statsId,
+        set: {
+          pitchesSeen: row.pitchesSeen,
+          swings: row.swings,
+          whiffs: row.whiffs,
+          calledStrikes: row.calledStrikes,
+          balls: row.balls,
+          zoneSwings: row.zoneSwings ?? null,
+          zoneTakes: row.zoneTakes ?? null,
+          chaseSwings: row.chaseSwings ?? null,
+          chaseTakes: row.chaseTakes ?? null,
+          zoneDataAvailable: row.zoneDataAvailable,
+          paCount: row.paCount,
+          strikeouts: row.strikeouts,
+          walks: row.walks,
+          battedBallEvents: row.battedBallEvents,
+          pitchFamilyStats: row.pitchFamilyStats,
+          evPercentiles: row.evPercentiles,
+          laPercentiles: row.laPercentiles,
+          pulledBip: row.pulledBip,
+          sprayClassifiedBip: row.sprayClassifiedBip,
+          sourceRowCount: row.sourceRowCount,
+          computedAt: new Date(),
         },
       });
   }

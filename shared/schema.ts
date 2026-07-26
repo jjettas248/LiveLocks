@@ -1394,3 +1394,186 @@ export const hrRadarModelRegistry = pgTable("hr_radar_model_registry", {
 export const insertHrRadarModelRegistrySchema = createInsertSchema(hrRadarModelRegistry).omit({ createdAt: true });
 export type HrRadarModelRegistryRow = typeof hrRadarModelRegistry.$inferSelect;
 export type InsertHrRadarModelRegistry = z.infer<typeof insertHrRadarModelRegistrySchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plate HR Probability V2 — research foundation (PR 1).
+//
+// New, additive tables backing a future statistical HR-probability shadow
+// model (`plate_hr_probability_v2_shadow`), built on top of the existing
+// server/mlb/pregamePowerRadar/math/ shadow engine. Zero production
+// authority — nothing on any public/user-facing route reads these tables.
+// The champion (plate_jul20_restored_v1) and existing challenger
+// (plate_current_shadow_v1) are untouched by this addition.
+//
+// One row per (session_date, game_id, batter_id, feature_version) —
+// mutable-until-locked (see plateHrV2ForwardCapture.ts / storage.ts's
+// upsertPlateHrV2FeatureSnapshot), not full per-build history. Becomes
+// immutable the instant first pitch occurs (lockedAt), so every historical
+// training observation is provably "what was knowable immediately before
+// first pitch."
+// ─────────────────────────────────────────────────────────────────────────────
+export const plateHrV2FeatureSnapshots = pgTable("plate_hr_v2_feature_snapshots", {
+  snapshotId: text("snapshot_id").primaryKey(),
+  sessionDate: text("session_date").notNull(),
+  gameId: text("game_id").notNull(),
+  batterId: text("batter_id").notNull(),
+  batterName: text("batter_name").notNull(),
+  team: text("team").notNull(),
+  opponent: text("opponent"),
+  pitcherId: text("pitcher_id"),
+  pitcherName: text("pitcher_name"),
+  battingOrderSlot: integer("batting_order_slot"),
+  buildId: text("build_id").notNull(),
+  firstCapturedAt: timestamp("first_captured_at").notNull(),
+  lastCapturedAt: timestamp("last_captured_at").notNull(),
+  captureRevision: integer("capture_revision").notNull().default(1),
+  firstPitchTime: timestamp("first_pitch_time"),
+  firstPitchLockEligible: boolean("first_pitch_lock_eligible").notNull().default(false),
+  gameStatus: text("game_status").notNull().default("unknown"),
+  // Canonical-training-observation fields (correction 3): the training row is
+  // the latest valid snapshot after lineup-posted + starter-resolved, locked
+  // immutably at first pitch.
+  predictionAsOf: timestamp("prediction_as_of").notNull(),
+  secondsToFirstPitch: integer("seconds_to_first_pitch"),
+  lineupConfirmedAt: timestamp("lineup_confirmed_at"),
+  starterConfirmed: boolean("starter_confirmed").notNull().default(false),
+  lockedAt: timestamp("locked_at"),
+  inputContractVersion: text("input_contract_version").notNull(),
+  rawInputs: jsonb("raw_inputs").notNull(),
+  featureVersion: text("feature_version").notNull(),
+  featureHash: text("feature_hash").notNull(),
+  derivedFeatures: jsonb("derived_features").notNull(),
+  availability: jsonb("availability").notNull(),
+  featureFreshness: jsonb("feature_freshness").notNull(),
+  leakageWarnings: jsonb("leakage_warnings").notNull().default([]),
+  // Pointer, not a copy, into plateHrV2SufficientStats below (correction 2) —
+  // a player's season-to-date evidence is stored once per day, not
+  // duplicated into every game-day row that references it.
+  sufficientStatsRef: text("sufficient_stats_ref"),
+  // Read-only copies for a later PR's champion-vs-V2 comparison — see
+  // plateHrV2TrainingFeatureGuard.ts: these must never be readable as part of
+  // the feature vector a training matrix flattens.
+  championModelVersion: text("champion_model_version"),
+  championScore10: numeric("champion_score_10"),
+  championTier: text("champion_tier"),
+  championSuppressed: boolean("champion_suppressed"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  sessionGameBatterIdx: index("plate_hr_v2_feature_snapshots_session_game_batter_idx").on(
+    table.sessionDate, table.gameId, table.batterId,
+  ),
+  sessionDateIdx: index("plate_hr_v2_feature_snapshots_session_date_idx").on(table.sessionDate),
+  featureVersionIdx: index("plate_hr_v2_feature_snapshots_feature_version_idx").on(table.featureVersion),
+  gameStatusIdx: index("plate_hr_v2_feature_snapshots_game_status_idx").on(table.gameStatus),
+  lockedAtIdx: index("plate_hr_v2_feature_snapshots_locked_at_idx").on(table.lockedAt),
+}));
+
+export const insertPlateHrV2FeatureSnapshotSchema = createInsertSchema(plateHrV2FeatureSnapshots).omit({ createdAt: true, updatedAt: true });
+export type PlateHrV2FeatureSnapshotRow = typeof plateHrV2FeatureSnapshots.$inferSelect;
+export type InsertPlateHrV2FeatureSnapshot = z.infer<typeof insertPlateHrV2FeatureSnapshotSchema>;
+
+// One label row per (snapshotId, labelVersion) — append-only. Whole-game
+// label rule (see plateHrV2LabelContract.ts), deliberately different from HR
+// Radar Research's next-PA censoring rule: hitHrToday is unconditional on PA
+// count once the game is final; "no_pa_recorded" is the one exclusion.
+export const plateHrV2Labels = pgTable("plate_hr_v2_labels", {
+  snapshotId: text("snapshot_id").notNull(),
+  labelVersion: text("label_version").notNull(),
+  labelDisposition: text("label_disposition").notNull(),
+  resolvedAt: timestamp("resolved_at"),
+  resolutionReason: text("resolution_reason"),
+  hitHrToday: boolean("hit_hr_today"),
+  paCountObserved: integer("pa_count_observed"),
+  hrCountToday: integer("hr_count_today"),
+  hrEventId: text("hr_event_id"),
+  hrInning: integer("hr_inning"),
+  hrHalf: text("hr_half"),
+  hrPlateAppearanceNumber: integer("hr_plate_appearance_number"),
+  hrFirstAb: boolean("hr_first_ab"),
+  labelSource: text("label_source").notNull().default("engine"),
+  dataQuality: text("data_quality"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  pk: primaryKey({ columns: [table.snapshotId, table.labelVersion] }),
+  dispositionIdx: index("plate_hr_v2_labels_disposition_idx").on(table.labelDisposition),
+  resolvedAtIdx: index("plate_hr_v2_labels_resolved_at_idx").on(table.resolvedAt),
+  snapshotIdx: index("plate_hr_v2_labels_snapshot_idx").on(table.snapshotId),
+}));
+
+export const insertPlateHrV2LabelSchema = createInsertSchema(plateHrV2Labels).omit({ createdAt: true });
+export type PlateHrV2LabelRow = typeof plateHrV2Labels.$inferSelect;
+export type InsertPlateHrV2Label = z.infer<typeof insertPlateHrV2LabelSchema>;
+
+// Immutable model metadata / lifecycle registry — a later PR's artifact
+// loader parses against plateHrV2ModelArtifactContract.ts before evaluating
+// V2. Includes `standardization` (feature means/stddevs), which
+// hrRadarModelRegistry above does not have — see that contract's header for
+// why.
+export const plateHrV2ModelRegistry = pgTable("plate_hr_v2_model_registry", {
+  modelVersion: text("model_version").primaryKey(),
+  modelType: text("model_type").notNull(),
+  featureVersion: text("feature_version").notNull(),
+  trainingWindowStart: text("training_window_start"),
+  trainingWindowEnd: text("training_window_end"),
+  holdoutWindowStart: text("holdout_window_start"),
+  holdoutWindowEnd: text("holdout_window_end"),
+  artifactPath: text("artifact_path"),
+  artifactChecksum: text("artifact_checksum"),
+  standardization: jsonb("standardization"),
+  metrics: jsonb("metrics"),
+  status: text("status").notNull().default("candidate"),
+  activatedAt: timestamp("activated_at"),
+  retiredAt: timestamp("retired_at"),
+  retirementReason: text("retirement_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  statusIdx: index("plate_hr_v2_model_registry_status_idx").on(table.status),
+  featureVersionIdx: index("plate_hr_v2_model_registry_feature_version_idx").on(table.featureVersion),
+}));
+
+export const insertPlateHrV2ModelRegistrySchema = createInsertSchema(plateHrV2ModelRegistry).omit({ createdAt: true });
+export type PlateHrV2ModelRegistryRow = typeof plateHrV2ModelRegistry.$inferSelect;
+export type InsertPlateHrV2ModelRegistry = z.infer<typeof insertPlateHrV2ModelRegistrySchema>;
+
+// The "separate historical aggregate/archive layer" (correction 2) — one row
+// per (entityType, entityId, asOfDate), so a player's season-to-date
+// evidence is stored once per day rather than duplicated into every
+// game-day feature snapshot that references it (see
+// plateHrV2SufficientStats.ts).
+export const plateHrV2SufficientStats = pgTable("plate_hr_v2_sufficient_stats", {
+  statsId: text("stats_id").primaryKey(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull(),
+  asOfDate: text("as_of_date").notNull(),
+  pitchesSeen: integer("pitches_seen").notNull().default(0),
+  swings: integer("swings").notNull().default(0),
+  whiffs: integer("whiffs").notNull().default(0),
+  calledStrikes: integer("called_strikes").notNull().default(0),
+  balls: integer("balls").notNull().default(0),
+  zoneSwings: integer("zone_swings"),
+  zoneTakes: integer("zone_takes"),
+  chaseSwings: integer("chase_swings"),
+  chaseTakes: integer("chase_takes"),
+  zoneDataAvailable: boolean("zone_data_available").notNull().default(false),
+  paCount: integer("pa_count").notNull().default(0),
+  strikeouts: integer("strikeouts").notNull().default(0),
+  walks: integer("walks").notNull().default(0),
+  battedBallEvents: integer("batted_ball_events").notNull().default(0),
+  pitchFamilyStats: jsonb("pitch_family_stats").notNull().default({}),
+  evPercentiles: jsonb("ev_percentiles").notNull().default({}),
+  laPercentiles: jsonb("la_percentiles").notNull().default({}),
+  pulledBip: integer("pulled_bip").notNull().default(0),
+  sprayClassifiedBip: integer("spray_classified_bip").notNull().default(0),
+  sourceRowCount: integer("source_row_count").notNull().default(0),
+  computedAt: timestamp("computed_at").notNull().defaultNow(),
+}, (table) => ({
+  entityDateIdx: index("plate_hr_v2_sufficient_stats_entity_date_idx").on(
+    table.entityType, table.entityId, table.asOfDate,
+  ),
+  asOfDateIdx: index("plate_hr_v2_sufficient_stats_as_of_date_idx").on(table.asOfDate),
+}));
+
+export const insertPlateHrV2SufficientStatsSchema = createInsertSchema(plateHrV2SufficientStats).omit({ computedAt: true });
+export type PlateHrV2SufficientStatsRow = typeof plateHrV2SufficientStats.$inferSelect;
+export type InsertPlateHrV2SufficientStats = z.infer<typeof insertPlateHrV2SufficientStatsSchema>;

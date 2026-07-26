@@ -20,6 +20,8 @@ import cron from "node-cron";
 import { db, pool } from "./db";
 import { ensurePregameRadarPersistenceSchema } from "./dbMigrations/pregameRadarPersistence";
 import { ensureHrRadarResearchPersistenceSchema } from "./dbMigrations/hrRadarResearchPersistence";
+import { ensurePlateHrV2PersistenceSchema } from "./dbMigrations/plateHrV2Persistence";
+import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
 import {
@@ -233,6 +235,16 @@ app.use((req, res, next) => {
   // yet — this call only ever creates schema, never rows.
   await ensureHrRadarResearchPersistenceSchema(pool);
   console.log("[startup] HR Radar research persistence schema ensured");
+
+  // Durable persistence bootstrap: Plate HR Probability V2 research
+  // foundation (PR 1) — four additive, zero-production-authority tables
+  // backing a future statistical HR-probability shadow model. Same
+  // fail-hard reasoning as the two calls above. Capture itself stays gated
+  // by PLATE_HR_V2_FORWARD_CAPTURE_ENABLED (default off) — this only ever
+  // creates schema and registers a sink, never rows, until that flag is set.
+  await ensurePlateHrV2PersistenceSchema(pool);
+  console.log("[startup] Plate HR V2 persistence schema ensured");
+  installPlateHrV2CapturePersistence();
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.
