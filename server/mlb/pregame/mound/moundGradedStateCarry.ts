@@ -21,6 +21,30 @@ export function carryForwardMoundGradedState(
     return fresh;
   }
 
+  // Once a signal has been legitimately shown to users under a specific
+  // primary market (Ks vs. Outs), a later rebuild must not silently swap
+  // which market it settles/displays against. computeMarketTags recomputes
+  // primaryMarket every cycle from live pitcherSkill/opponentKProfile/workload
+  // scores — exactly like moundDirection — and moundOutcomeAttribution.ts's
+  // deriveMoundOutcome/deriveMoundMarketOutcome/buildMoundSettlementView all
+  // branch on signal.primaryMarket to pick the frozen line and the
+  // final-stat field. An un-pinned flip after first pitch (degraded
+  // workload/opponent-K data shifting which side of the kScore-vs-outsScore
+  // comparison wins) silently regrades a pitcher the UI showed as a real
+  // Pitcher Ks recommendation (real sportsbook line) against the Outs market
+  // instead — which has no sportsbook line source at all today — losing a
+  // real Cashed/Missed/Push result to the model-review baseline fallback.
+  // Pin it, mirroring moundDirection's pin immediately below; keep
+  // marketSetups' isPrimary flags consistent with the pinned value so the
+  // "Best Angle" display and settlement routing never disagree.
+  if (prev.everPubliclyFlagged === true || prev.everPubliclyFlaggedFade === true) {
+    fresh.primaryMarket = prev.primaryMarket;
+    fresh.marketSetups = fresh.marketSetups.map((setup) => ({
+      ...setup,
+      isPrimary: setup.market === fresh.primaryMarket,
+    }));
+  }
+
   // Once a signal has been legitimately shown to users with a direction
   // (Fade or Follow), a later pregame rebuild (updated lineup/stats data)
   // must not silently flip which settlement rule it grades against — the
