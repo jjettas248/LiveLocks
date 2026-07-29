@@ -122,3 +122,63 @@ export function expectedValueOfPmf(pmf: number[]): number {
   for (let k = 0; k < pmf.length; k++) sum += pmf[k] * k;
   return sum;
 }
+
+// ── Joint strikeouts/outs process ───────────────────────────────────────────
+// A joint (not independent) model of strikeouts and total outs recorded
+// across n plate appearances. Each PA has exactly three outcomes:
+//   - strikeout (probability pK)               -> +1 strikeout, +1 out
+//   - non-strikeout out, e.g. groundout/flyout (probability (1-pK)*pNonKOut) -> +1 out only
+//   - on-base, e.g. hit/walk/HBP                (remaining probability)      -> no change
+// `cells[s][o]` = P(exactly s strikeouts AND exactly o total outs) after the
+// trials processed so far. Because `s` only ever increments in lockstep with
+// `o` (the strikeout transition adds to both, nothing adds to s alone), the
+// invariant s <= o holds for every reachable cell BY CONSTRUCTION — there is
+// no way for this table to ever assign probability mass to an incoherent
+// (s > o) state. The table is always square: after k trials it is
+// (k+1) x (k+1), so `o` (and therefore `s`) can never exceed the number of
+// trials processed — outs can never exceed batters faced either.
+
+/** Advances a joint (strikeouts, outs) table by exactly one plate appearance. Exported standalone (in addition to the batch helper below) so an engine can snapshot the marginal after every incremental trial without rebuilding from scratch — see moundV2Engine.ts. */
+export function stepJointStrikeoutOutsPmf(cells: number[][], strikeoutProb: number, nonStrikeoutOutRate: number): number[][] {
+  const pK = Math.max(0, Math.min(1, strikeoutProb));
+  const pNonKOut = Math.max(0, Math.min(1, (1 - pK) * nonStrikeoutOutRate));
+  const pOnBase = Math.max(0, 1 - pK - pNonKOut);
+
+  const size = cells.length;
+  const next: number[][] = Array.from({ length: size + 1 }, () => new Array(size + 1).fill(0));
+  for (let s = 0; s < size; s++) {
+    for (let o = 0; o < size; o++) {
+      const p = cells[s][o];
+      if (p <= 0) continue;
+      next[s][o] += p * pOnBase;
+      next[s][o + 1] += p * pNonKOut;
+      next[s + 1][o + 1] += p * pK;
+    }
+  }
+  return next;
+}
+
+/** Runs the full joint process over an explicit list of per-trial strikeout probabilities (one call per trial). Prefer stepJointStrikeoutOutsPmf directly when an engine wants a marginal snapshot after every trial rather than only the final one. */
+export function computeJointStrikeoutOutsPmf(strikeoutProbs: number[], nonStrikeoutOutRate: number): number[][] {
+  let cells: number[][] = [[1]];
+  for (const p of strikeoutProbs) {
+    cells = stepJointStrikeoutOutsPmf(cells, p, nonStrikeoutOutRate);
+  }
+  return cells;
+}
+
+/** Sums a square joint (strikeouts, outs) table down to a single 1-D marginal PMF over one dimension. */
+export function marginalizeJointPmf(cells: number[][], dimension: "strikeouts" | "outs"): number[] {
+  const size = cells.length;
+  const result = new Array(size).fill(0);
+  if (dimension === "strikeouts") {
+    for (let s = 0; s < size; s++) {
+      for (let o = 0; o < size; o++) result[s] += cells[s][o];
+    }
+  } else {
+    for (let o = 0; o < size; o++) {
+      for (let s = 0; s < size; s++) result[o] += cells[s][o];
+    }
+  }
+  return result;
+}

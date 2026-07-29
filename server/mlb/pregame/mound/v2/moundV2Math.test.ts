@@ -9,6 +9,9 @@ import {
   normalizePmf,
   computeLineProbabilities,
   expectedValueOfPmf,
+  stepJointStrikeoutOutsPmf,
+  computeJointStrikeoutOutsPmf,
+  marginalizeJointPmf,
 } from "./moundV2Math";
 
 let passed = 0;
@@ -100,6 +103,70 @@ function sum(arr: number[]): number {
   ok(int.push > 0, "an integer line has nonzero push probability when the PMF has mass at exactly that value");
   ok(approx(int.push, 1 / 11, 1e-9), `integer line push mass equals P(X=5)=1/11 (got ${int.push})`);
   ok(approx(int.over + int.under + int.push, 1, 1e-9), "over+under+push sums to the PMF's total mass for an integer line");
+}
+
+// ── Joint (strikeouts, outs) process: structural coherence ─────────────────
+{
+  const probs = [0.25, 0.3, 0.15, 0.28, 0.2];
+  const joint = computeJointStrikeoutOutsPmf(probs, 0.6);
+  ok(joint.length === probs.length + 1, `joint table side length is n+1 (got ${joint.length})`);
+
+  let total = 0;
+  let sawPositiveMass = false;
+  for (let s = 0; s < joint.length; s++) {
+    for (let o = 0; o < joint[s].length; o++) {
+      total += joint[s][o];
+      if (joint[s][o] > 0) {
+        sawPositiveMass = true;
+        ok(s <= o, `every cell with positive mass satisfies strikeouts <= outs (s=${s}, o=${o}, p=${joint[s][o]})`);
+      }
+    }
+  }
+  ok(sawPositiveMass, "the joint table has real probability mass somewhere");
+  ok(approx(total, 1, 1e-9), `the full joint table sums to 1 (got ${total})`);
+}
+{
+  // outs can never exceed the number of trials (batters faced) processed.
+  const probs = [0.2, 0.2, 0.2];
+  const joint = computeJointStrikeoutOutsPmf(probs, 0.9);
+  for (let s = 0; s < joint.length; s++) {
+    for (let o = 0; o < joint[s].length; o++) {
+      if (o > probs.length && joint[s][o] > 0) {
+        ok(false, `outs=${o} exceeds the ${probs.length} trials processed but has positive mass ${joint[s][o]}`);
+      }
+    }
+  }
+  ok(true, "no cell assigns mass to an outs count exceeding the number of batters faced");
+}
+{
+  // Zero non-strikeout-out rate: every non-K PA is on-base, so outs == strikeouts exactly.
+  const probs = [0.3, 0.4, 0.2];
+  const joint = computeJointStrikeoutOutsPmf(probs, 0);
+  for (let s = 0; s < joint.length; s++) {
+    for (let o = 0; o < joint[s].length; o++) {
+      if (joint[s][o] > 1e-12) {
+        ok(s === o, `with nonStrikeoutOutRate=0, every strikeout IS the only source of outs, so s must equal o (got s=${s}, o=${o})`);
+      }
+    }
+  }
+}
+{
+  // Building incrementally (stepJointStrikeoutOutsPmf repeatedly) matches the batch helper.
+  const probs = [0.22, 0.31, 0.18];
+  const batch = computeJointStrikeoutOutsPmf(probs, 0.55);
+  let incremental: number[][] = [[1]];
+  for (const p of probs) incremental = stepJointStrikeoutOutsPmf(incremental, p, 0.55);
+  ok(JSON.stringify(batch) === JSON.stringify(incremental), "computeJointStrikeoutOutsPmf and repeated stepJointStrikeoutOutsPmf calls agree exactly");
+}
+{
+  const probs = [0.25, 0.3, 0.15, 0.28];
+  const joint = computeJointStrikeoutOutsPmf(probs, 0.6);
+  const strikeoutMarginal = marginalizeJointPmf(joint, "strikeouts");
+  const outsMarginal = marginalizeJointPmf(joint, "outs");
+  ok(approx(sum(strikeoutMarginal), 1, 1e-9), "strikeouts marginal sums to 1");
+  ok(approx(sum(outsMarginal), 1, 1e-9), "outs marginal sums to 1");
+  ok(expectedValueOfPmf(strikeoutMarginal) <= expectedValueOfPmf(outsMarginal) + 1e-9,
+    `expected strikeouts (${expectedValueOfPmf(strikeoutMarginal).toFixed(4)}) never exceeds expected outs (${expectedValueOfPmf(outsMarginal).toFixed(4)}) in aggregate`);
 }
 
 console.log(`\nmoundV2Math.test: ${passed} passed, ${failed} failed`);

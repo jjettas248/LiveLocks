@@ -8,22 +8,35 @@
 // it, for research/backtesting only, until a promotion decision is made via
 // moundV2PromotionGate.ts.
 //
-// Method: the strikeout count is a Poisson-binomial mixture — for every
-// plausible "batters faced" count n (weighted by the workload model's
-// battersFacedPmf), the n batters actually faced (cycling through the
-// confirmed batting order) each contribute an independent strikeout trial,
-// aggregated via poissonBinomialPmf; those n-conditional distributions are
-// then weight-mixed into the unconditional strikeout distribution. Outs
-// recorded is a separate, directly-modeled negative-binomial workload read
-// (see battersFacedWorkloadModel.ts's header for why these are not derived
-// from one another).
+// Method: strikeouts and outs recorded are NOT modeled as two independent
+// distributions (an earlier version of this file did that, and could
+// produce incoherent joint states — e.g. an outs realization inconsistent
+// with the same start's batters-faced realization). Both now come from ONE
+// coherent process: for every plausible "batters faced" count n (weighted
+// by the workload model's battersFacedPmf), the n batters actually faced
+// (cycling through the confirmed batting order) are run one at a time
+// through moundV2Math.ts's joint (strikeouts, outs) process — each trial is
+// a strikeout, a non-strikeout out, or an on-base event, so a strikeout
+// always increments both strikeouts AND outs together, structurally
+// guaranteeing strikeouts <= outs <= batters faced in every reachable state.
+// The joint table is built incrementally (one trial at a time) so its
+// strikeout/outs marginals can be snapshotted and weight-mixed after EVERY
+// n, without rebuilding the table from scratch per n.
 
-import { poissonBinomialPmf, mixPmfInto, normalizePmf, computeLineProbabilities, expectedValueOfPmf } from "./moundV2Math";
+import {
+  stepJointStrikeoutOutsPmf,
+  marginalizeJointPmf,
+  mixPmfInto,
+  normalizePmf,
+  computeLineProbabilities,
+  expectedValueOfPmf,
+} from "./moundV2Math";
 import { computeWorkloadDistributions } from "./battersFacedWorkloadModel";
 import { LEAGUE_K_RATE } from "./batterStrikeoutProbability";
 import type { MoundV2Inputs, MoundV2Distribution, MoundV2MarketResult } from "./moundV2Types";
 
 const MAX_STRIKEOUTS_SUPPORT = 25;
+const MAX_OUTS_SUPPORT = 33;
 
 function buildMarketResult(pmf: number[], line: number | null | undefined): MoundV2MarketResult {
   const expectedValue = expectedValueOfPmf(pmf);
@@ -49,27 +62,40 @@ export function computeMoundV2Distribution(inputs: MoundV2Inputs): MoundV2Distri
     : [LEAGUE_K_RATE];
   const lineupSize = orderedProbs.length;
 
-  let strikeoutsPmf: number[] = [0];
-  for (let n = 0; n < workload.battersFacedPmf.length; n++) {
-    const weight = workload.battersFacedPmf[n];
-    if (weight <= 0) continue;
-    const trialProbs: number[] = [];
-    for (let i = 0; i < n; i++) trialProbs.push(orderedProbs[i % lineupSize]);
-    const conditionalPmf = poissonBinomialPmf(trialProbs);
-    strikeoutsPmf = mixPmfInto(strikeoutsPmf, conditionalPmf, weight);
+  const maxN = workload.battersFacedPmf.length - 1;
+
+  let jointTable: number[][] = [[1]]; // n=0: P(0 strikeouts, 0 outs) = 1
+  let strikeoutsPmfAcc: number[] = [0];
+  let outsPmfAcc: number[] = [0];
+
+  const weight0 = workload.battersFacedPmf[0] ?? 0;
+  if (weight0 > 0) {
+    strikeoutsPmfAcc = mixPmfInto(strikeoutsPmfAcc, marginalizeJointPmf(jointTable, "strikeouts"), weight0);
+    outsPmfAcc = mixPmfInto(outsPmfAcc, marginalizeJointPmf(jointTable, "outs"), weight0);
   }
-  strikeoutsPmf = normalizePmf(strikeoutsPmf, MAX_STRIKEOUTS_SUPPORT);
+
+  for (let n = 1; n <= maxN; n++) {
+    const batterProb = orderedProbs[(n - 1) % lineupSize];
+    jointTable = stepJointStrikeoutOutsPmf(jointTable, batterProb, workload.nonStrikeoutOutRate);
+    const weight = workload.battersFacedPmf[n] ?? 0;
+    if (weight <= 0) continue;
+    strikeoutsPmfAcc = mixPmfInto(strikeoutsPmfAcc, marginalizeJointPmf(jointTable, "strikeouts"), weight);
+    outsPmfAcc = mixPmfInto(outsPmfAcc, marginalizeJointPmf(jointTable, "outs"), weight);
+  }
+
+  const strikeoutsPmf = normalizePmf(strikeoutsPmfAcc, MAX_STRIKEOUTS_SUPPORT);
+  const outsPmf = normalizePmf(outsPmfAcc, MAX_OUTS_SUPPORT);
 
   return {
     strikeouts: buildMarketResult(strikeoutsPmf, inputs.strikeoutsLine),
-    outs: buildMarketResult(workload.outsPmf, inputs.outsLine),
+    outs: buildMarketResult(outsPmf, inputs.outsLine),
     strikeoutsPmf,
-    outsPmf: workload.outsPmf,
+    outsPmf,
     diagnostics: {
       dataAvailable: workload.dataAvailable && lineupAvailable,
       battersInLineup: inputs.batters.length,
       expectedBattersFaced: workload.expectedBattersFaced,
-      expectedOuts: workload.expectedOuts,
+      expectedOuts: expectedValueOfPmf(outsPmf),
     },
   };
 }

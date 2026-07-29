@@ -152,5 +152,37 @@ function baseInputs(overrides: Partial<MoundV2Inputs> = {}): MoundV2Inputs {
   ok(clean, "no file under mound/v2/ imports any production Mound scoring/direction/settlement/persistence module");
 }
 
+// ── Joint coherence end-to-end: strikeouts <= outs <= batters faced ─────────
+// The actual defect Part 2 fixes: strikeouts and outs used to be two
+// INDEPENDENT negative binomials with no joint relationship at all.
+{
+  const scenarios: MoundV2Inputs[] = [
+    baseInputs(),
+    baseInputs({ workload: { avgInningsPerStart: 1.2, ipVarianceLast3: 0.2, lastStartPitchCount: 30, lastStartInningsPitched: 1.2, bbPer9: 3.5 } }),
+    baseInputs({ workload: { avgInningsPerStart: 8.0, ipVarianceLast3: 2.0, lastStartPitchCount: 105, lastStartInningsPitched: 8, bbPer9: 1.8 } }),
+    baseInputs({ batters: [] }),
+    baseInputs({ batters: nineBatters([0.35, 0.32, 0.30, 0.28, 0.26, 0.24, 0.22, 0.20, 0.18]) }),
+  ];
+  for (const [i, scenario] of scenarios.entries()) {
+    const dist = computeMoundV2Distribution(scenario);
+    ok(
+      dist.strikeouts.expectedValue <= dist.outs.expectedValue + 1e-6,
+      `scenario ${i}: expected strikeouts (${dist.strikeouts.expectedValue.toFixed(3)}) never exceeds expected outs (${dist.outs.expectedValue.toFixed(3)})`,
+    );
+    ok(
+      dist.outs.expectedValue <= dist.diagnostics.expectedBattersFaced + 1e-6,
+      `scenario ${i}: expected outs (${dist.outs.expectedValue.toFixed(3)}) never exceeds expected batters faced (${dist.diagnostics.expectedBattersFaced.toFixed(3)})`,
+    );
+    // Support-level check, not just expected values: no strikeout PMF mass
+    // beyond what the outs PMF's own support could coherently produce.
+    const maxOutsWithMass = dist.outsPmf.reduce((max, p, k) => (p > 1e-9 ? k : max), 0);
+    const maxStrikeoutsWithMass = dist.strikeoutsPmf.reduce((max, p, k) => (p > 1e-9 ? k : max), 0);
+    ok(
+      maxStrikeoutsWithMass <= maxOutsWithMass,
+      `scenario ${i}: the highest strikeout count with real probability mass (${maxStrikeoutsWithMass}) does not exceed the highest outs count with real mass (${maxOutsWithMass})`,
+    );
+  }
+}
+
 console.log(`\nmoundV2Engine.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
