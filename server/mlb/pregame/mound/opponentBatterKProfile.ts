@@ -16,6 +16,16 @@ export interface OpponentLineupKProfile {
   hittersRequested: number;
   highKShare: number | null;
   totalSplitPa: number;
+  /**
+   * Additive: the same shrunk per-batter K rate vs the pitcher's throwing
+   * hand that already feeds `lineupKRate` above, exposed per-batter instead
+   * of only as a lineup aggregate — for callers needing individual-batter
+   * granularity (Mound V2's shadow distributional model) without a second,
+   * duplicate fetch of the same Stats API data. Empty when no batter's
+   * split data was available. Existing callers reading only the aggregate
+   * fields above are entirely unaffected.
+   */
+  perBatter: Array<{ playerId: string; battingOrderSlot: number | null; kRateVsThrowHand: number; plateAppearances: number }>;
 }
 
 interface BatterKHandSplits {
@@ -142,7 +152,7 @@ export async function fetchOpponentLineupKProfile(
 ): Promise<OpponentLineupKProfile> {
   const hittersRequested = lineup.length;
   if (hittersRequested === 0) {
-    return { lineupKRate: null, rawLineupKRate: null, coverage: 0, hittersAvailable: 0, hittersRequested: 0, highKShare: null, totalSplitPa: 0 };
+    return { lineupKRate: null, rawLineupKRate: null, coverage: 0, hittersAvailable: 0, hittersRequested: 0, highKShare: null, totalSplitPa: 0, perBatter: [] };
   }
 
   const rows = await Promise.all(
@@ -151,13 +161,19 @@ export async function fetchOpponentLineupKProfile(
       if (!splits) return null;
       const resolved = resolveVsHand(splits, pitcherThrows);
       if (resolved.rate == null || resolved.pa <= 0) return null;
-      return { rate: resolved.rate, pa: resolved.pa, weight: orderWeight(entry.battingOrderSlot) };
+      return {
+        playerId: entry.playerId,
+        battingOrderSlot: entry.battingOrderSlot,
+        rate: resolved.rate,
+        pa: resolved.pa,
+        weight: orderWeight(entry.battingOrderSlot),
+      };
     }),
   );
 
   const available = rows.filter((r): r is NonNullable<typeof r> => r != null);
   if (available.length === 0) {
-    return { lineupKRate: null, rawLineupKRate: null, coverage: 0, hittersAvailable: 0, hittersRequested, highKShare: null, totalSplitPa: 0 };
+    return { lineupKRate: null, rawLineupKRate: null, coverage: 0, hittersAvailable: 0, hittersRequested, highKShare: null, totalSplitPa: 0, perBatter: [] };
   }
 
   const weightSum = available.reduce((sum, r) => sum + r.weight, 0);
@@ -177,5 +193,11 @@ export async function fetchOpponentLineupKProfile(
     hittersRequested,
     highKShare,
     totalSplitPa: available.reduce((sum, r) => sum + r.pa, 0),
+    perBatter: available.map((r) => ({
+      playerId: r.playerId,
+      battingOrderSlot: r.battingOrderSlot,
+      kRateVsThrowHand: r.rate,
+      plateAppearances: r.pa,
+    })),
   };
 }
