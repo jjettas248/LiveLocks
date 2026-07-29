@@ -1666,3 +1666,80 @@ export const mlbRecommendationEpisodes = pgTable("mlb_recommendation_episodes", 
 export const insertMlbRecommendationEpisodeSchema = createInsertSchema(mlbRecommendationEpisodes).omit({ createdAt: true, updatedAt: true });
 export type MlbRecommendationEpisodeRow = typeof mlbRecommendationEpisodes.$inferSelect;
 export type InsertMlbRecommendationEpisode = z.infer<typeof insertMlbRecommendationEpisodeSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mound Radar V2 (Flagship Program Phase 2) — shadow prediction capture.
+// One row per (snapshotId, market) — a pitcher's frozen shadow snapshot
+// produces TWO rows (pitcher_strikeouts, pitcher_outs), never one blended
+// row, so each market can be graded and measured independently. Research/
+// shadow only: this table is never read by buildMlbMoundRadar.ts's public
+// response, moundOutcomeAttribution.ts's settlement, or any official
+// recommendation path — see server/mlb/pregame/mound/v2/ for the isolation
+// discipline this table exists under.
+//
+// prediction_id = `${snapshotId}:${market}` is the natural composite primary
+// key — creation is INSERT-only (server/storage.ts's
+// createMoundV2ShadowPrediction never upserts), so a repeated evaluation of
+// the exact same frozen snapshot+market is a harmless no-op (ON CONFLICT DO
+// NOTHING), not a duplicate row and not a silently-overwritten one. Grading
+// is a separate, column-scoped UPDATE (settlement_status/final_result/
+// final_stat_value/graded_at only) that never touches the frozen prediction
+// fields above it.
+// ─────────────────────────────────────────────────────────────────────────────
+export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
+  predictionId: text("prediction_id").primaryKey(),
+  snapshotId: text("snapshot_id").notNull(),
+  gameId: text("game_id").notNull(),
+  pitcherId: text("pitcher_id").notNull(),
+  pitcherName: text("pitcher_name").notNull(),
+  market: text("market").notNull(),
+
+  // Frozen market state — never rewritten after creation.
+  frozenLine: numeric("frozen_line"),
+  frozenOverPrice: integer("frozen_over_price"),
+  frozenUnderPrice: integer("frozen_under_price"),
+  sportsbook: text("sportsbook"),
+  oddsFetchedAt: timestamp("odds_fetched_at"),
+
+  evaluationTimestamp: timestamp("evaluation_timestamp").notNull(),
+
+  // V1's own output for the same candidate, captured for side-by-side comparison.
+  v1Score10: numeric("v1_score_10"),
+  v1Tier: text("v1_tier"),
+  setupGrade: text("setup_grade"),
+
+  // V2's real distributional output.
+  v2ExpectedValue: numeric("v2_expected_value").notNull(),
+  v2OverProbability: numeric("v2_over_probability").notNull(),
+  v2UnderProbability: numeric("v2_under_probability").notNull(),
+  v2PushProbability: numeric("v2_push_probability").notNull(),
+
+  productionModelVersion: text("production_model_version").notNull(),
+  v2ModelVersion: text("v2_model_version").notNull(),
+  contractVersion: text("contract_version").notNull(),
+  featureHash: text("feature_hash").notNull(),
+
+  dataQuality: text("data_quality").notNull(),
+  lineupStatus: text("lineup_status").notNull(),
+
+  shadowLatencyMs: numeric("shadow_latency_ms"),
+  shadowFailureReason: text("shadow_failure_reason"),
+
+  // Grading — MUTABLE, only via server/storage.ts's gradeMoundV2ShadowPrediction.
+  settlementStatus: text("settlement_status").notNull().default("pending"),
+  finalResult: text("final_result"),
+  finalStatValue: numeric("final_stat_value"),
+  gradedAt: timestamp("graded_at"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  snapshotIdx: index("mound_v2_shadow_predictions_snapshot_idx").on(table.snapshotId),
+  gamePitcherIdx: index("mound_v2_shadow_predictions_game_pitcher_idx").on(table.gameId, table.pitcherId),
+  settlementStatusIdx: index("mound_v2_shadow_predictions_settlement_status_idx").on(table.settlementStatus),
+  evaluationTimestampIdx: index("mound_v2_shadow_predictions_evaluation_timestamp_idx").on(table.evaluationTimestamp),
+  marketVersionIdx: index("mound_v2_shadow_predictions_market_version_idx").on(table.market, table.v2ModelVersion),
+}));
+
+export const insertMoundV2ShadowPredictionSchema = createInsertSchema(moundV2ShadowPredictions).omit({ createdAt: true });
+export type MoundV2ShadowPredictionRow = typeof moundV2ShadowPredictions.$inferSelect;
+export type InsertMoundV2ShadowPrediction = z.infer<typeof insertMoundV2ShadowPredictionSchema>;

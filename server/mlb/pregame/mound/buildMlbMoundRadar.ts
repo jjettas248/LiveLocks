@@ -59,6 +59,10 @@ import { buildMoundMarketEdgeContext } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
 import { applyMoundEvaluationSnapshots } from "./evaluationSnapshot";
 import { aggregateRawPitcherContactSnapshot, type RawContactSupportingInputs, type RawPitcherContactSnapshot } from "./rawPitcherContactSnapshot";
+import { isMoundV2ShadowEnabled } from "./v2/moundV2ShadowFlags";
+import { evaluateMoundV2Shadow, MOUND_V1_MODEL_VERSION, MOUND_V2_MODEL_VERSION } from "./v2/moundV2ShadowEvaluation";
+import { recordMoundV2ShadowEvaluation } from "./v2/moundV2ShadowStore";
+import type { FrozenMoundBatterInput, MoundFrozenDataQuality } from "./v2/frozenMoundShadowInput";
 
 /**
  * Builds RawContactSupportingInputs from the already-resolved seasonStats/
@@ -578,6 +582,105 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             },
           },
         };
+
+        // ── Mound V2 (shadow, research-only) ────────────────────────────────
+        // Runs AFTER `signal` above is fully assembled and reads only
+        // variables already fetched for V1's own use above (no additional
+        // provider/odds/roster request). Never touches `signal` or
+        // `signals` — a failure here is caught and reported, never thrown
+        // into this loop, and V1's real output is already complete by the
+        // time this block runs. See CLAUDE.md's Mound V2 status note.
+        if (isMoundV2ShadowEnabled()) {
+          try {
+            const shadowSnapshotId = `mound_v2:${signalId}:${buildId}`;
+            const battingOrder: FrozenMoundBatterInput[] = opposingLineup.map((slot) => {
+              const player = getPlayer(slot.playerId);
+              const perBatterRate = lineupKProfile?.perBatter?.find((b) => b.playerId === slot.playerId);
+              const bvp = mlbPlayerCache.bvpMatchups[`${slot.playerId}_vs_${starter.pitcherId}`];
+              const bats = player?.bats;
+              return {
+                playerId: slot.playerId,
+                playerName: player?.playerName ?? slot.playerId,
+                battingOrderSlot: slot.battingOrderSlot,
+                handedness: bats === "L" || bats === "R" || bats === "S" ? bats : null,
+                kRateVsThrowHand: perBatterRate?.kRateVsThrowHand ?? null,
+                kRateSamplePa: perBatterRate?.plateAppearances ?? null,
+                bvpAtBats: bvp?.atBats ?? null,
+                bvpStrikeouts: bvp?.strikeouts ?? null,
+              };
+            });
+            const throwsForShadow: "L" | "R" | null = starter.throws === "L" || starter.throws === "R" ? starter.throws : null;
+            const dataQuality: MoundFrozenDataQuality =
+              opposingLineupConfirmed && seasonStats != null ? "complete" : seasonStats != null ? "partial" : "degraded";
+
+            const shadowResult = evaluateMoundV2Shadow({
+              snapshotId: shadowSnapshotId,
+              now: new Date(),
+              frozenInputArgs: {
+                gameId: game.gameId,
+                pitcherId: starter.pitcherId,
+                pitcherName: starter.pitcherName,
+                opponent,
+                scheduledGameTime: startsAt,
+                lineupStatus,
+                battingOrder,
+                pitcherThrows: throwsForShadow,
+                kPer9: seasonStats?.kPer9 ?? null,
+                priorSeasonsKPer9,
+                swStrPct: savant?.pitcherSwStrPct ?? null,
+                cswPct: savant?.pitcherCswPct ?? null,
+                missesBatsFamily: savant?.pitcherMissesBatsFamily ?? null,
+                kRateVsLHB: handSplits?.kRateVsLHB ?? null,
+                kRateVsRHB: handSplits?.kRateVsRHB ?? null,
+                avgInningsPerStart,
+                ipVarianceLast3: recentStarts?.ipVarianceLast3 ?? null,
+                lastStartPitchCount: recentStarts?.lastStartPitchCount ?? null,
+                lastStartInningsPitched: recentStarts?.last3StartInningsPitched?.[0] ?? null,
+                bbPer9: seasonStats?.bbPer9 ?? null,
+                // Outs has no real fetch path anywhere in this codebase today
+                // (see types.ts's postedLine.outs comment) — always
+                // unavailable, never fabricated or cross-substituted from
+                // strikeouts.
+                strikeoutsMarket: {
+                  line: marketEdgeContext?.line ?? null,
+                  overPrice: marketEdgeContext?.odds ?? null,
+                  underPrice: null,
+                  sportsbook: marketEdgeContext?.sportsbook ?? null,
+                  fetchedAt: marketEdgeContext?.oddsUpdatedAt ?? null,
+                },
+                outsMarket: { line: null, overPrice: null, underPrice: null, sportsbook: null, fetchedAt: null },
+                dataQuality,
+                productionModelVersion: MOUND_V1_MODEL_VERSION,
+                v2ModelVersion: MOUND_V2_MODEL_VERSION,
+              },
+              productionComponentScores: {
+                pitcherSkillScore: pitcherSkill.available ? pitcherSkill.score10 : null,
+                workloadScore: workload.available ? workload.score10 : null,
+                opponentKProfileScore: opponentKProfile.available ? opponentKProfile.score10 : null,
+              },
+              v1Score10: scoring.score10,
+              v1Tier: scoring.tier,
+              strikeoutsLine: marketEdgeContext?.line ?? null,
+              outsLine: null,
+            });
+
+            recordMoundV2ShadowEvaluation(shadowResult);
+
+            if (shadowResult.failureReason) {
+              console.warn(`[MOUND_V2_SHADOW_FAILURE] ${signalId} ${shadowResult.failureReason}`);
+            } else if (shadowResult.parity && !shadowResult.parity.matches) {
+              console.warn(`[MOUND_V2_PARITY_MISMATCH] ${signalId} ${shadowResult.parity.mismatches.join("; ")}`);
+            }
+          } catch (err: any) {
+            // Belt-and-suspenders: evaluateMoundV2Shadow itself never throws
+            // (every failure mode inside it is caught and reported via
+            // failureReason instead), but this outer guard ensures a defect
+            // anywhere in THIS block (the flag check, batting-order
+            // construction, the recording call) can never affect V1's own
+            // signal, which is already fully assembled above.
+            console.warn(`[MOUND_V2_SHADOW_UNEXPECTED_ERROR] ${signalId}`, err?.message ?? err);
+          }
+        }
 
         carryForwardMoundGradedState(signal, prevSignals?.get(signalId));
         signals.set(signalId, signal);

@@ -22,6 +22,7 @@ import { ensurePregameRadarPersistenceSchema } from "./dbMigrations/pregameRadar
 import { ensureHrRadarResearchPersistenceSchema } from "./dbMigrations/hrRadarResearchPersistence";
 import { ensurePlateHrV2PersistenceSchema } from "./dbMigrations/plateHrV2Persistence";
 import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/mlbRecommendationEpisodePersistence";
+import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2ShadowPersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
@@ -255,6 +256,13 @@ app.use((req, res, next) => {
   // later-phase work; this call only ever creates schema, never rows.
   await ensureMlbRecommendationEpisodePersistenceSchema(pool);
   console.log("[startup] MLB Recommendation Episode persistence schema ensured");
+
+  // Durable persistence bootstrap: Mound Radar V2 (shadow) prediction
+  // capture (Flagship Program Phase 2, Part 4) — one additive table.
+  // MOUND_V2_SHADOW_ENABLED stays off by default; this call only ever
+  // creates schema, never rows, until that flag is set.
+  await ensureMoundV2ShadowPersistenceSchema(pool);
+  console.log("[startup] Mound V2 shadow prediction persistence schema ensured");
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.
@@ -812,9 +820,16 @@ app.use((req, res, next) => {
       const { installMoundPersistence, loadMoundSnapshotFromDb } = await import(
         "./mlb/pregame/mound/moundPersistence"
       );
+      const { installMoundV2ShadowPersistence } = await import(
+        "./mlb/pregame/mound/v2/moundV2ShadowPersistenceAdapter"
+      );
       const { slateDateET } = await import("./utils/dateUtils");
 
       installMoundPersistence();
+      // Mound V2 (shadow, research-only) — wires durable capture for
+      // whatever the shadow evaluation records; MOUND_V2_SHADOW_ENABLED
+      // stays off by default, so this is inert until that flag is set.
+      installMoundV2ShadowPersistence();
 
       // Boot-time hydration (research plan §4.1, Option A) — mirrors the
       // Plate hydration block above exactly: seed the in-memory snapshot from

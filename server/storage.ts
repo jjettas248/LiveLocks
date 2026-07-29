@@ -73,6 +73,9 @@ import {
   mlbRecommendationEpisodes,
   type MlbRecommendationEpisodeRow,
   type InsertMlbRecommendationEpisode,
+  moundV2ShadowPredictions,
+  type MoundV2ShadowPredictionRow,
+  type InsertMoundV2ShadowPrediction,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -503,6 +506,31 @@ export interface IStorage {
     settlementResult: MlbSettlementResult,
     settledAt: Date,
   ): Promise<MlbRecommendationEpisodeRow | null>;
+
+  // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
+  // Creation is INSERT-only with ON CONFLICT DO NOTHING — a repeated
+  // evaluation of the exact same frozen (snapshotId, market) is a harmless
+  // no-op (returns null), never a duplicate row and never a silent
+  // overwrite. Grading is a separate, column-scoped UPDATE that never
+  // touches the frozen prediction fields.
+  /** Returns null (not an error) when predictionId already exists — idempotent capture. */
+  createMoundV2ShadowPrediction(row: InsertMoundV2ShadowPrediction): Promise<MoundV2ShadowPredictionRow | null>;
+  getMoundV2ShadowPrediction(predictionId: string): Promise<MoundV2ShadowPredictionRow | null>;
+  listMoundV2ShadowPredictions(filter?: {
+    gameId?: string;
+    pitcherId?: string;
+    market?: string;
+    settlementStatus?: string;
+    v2ModelVersion?: string;
+    fromEvaluationTimestamp?: Date;
+    toEvaluationTimestamp?: Date;
+    limit?: number;
+  }): Promise<MoundV2ShadowPredictionRow[]>;
+  /** Column-scoped: only settlement_status/final_result/final_stat_value/graded_at ever change. Returns null if predictionId does not exist. Safe to call more than once (re-grading after an official stat correction updates the same four columns again — see moundV2ShadowGrading.ts for the idempotency/audit discipline). */
+  gradeMoundV2ShadowPrediction(
+    predictionId: string,
+    grading: { settlementStatus: string; finalResult: string | null; finalStatValue: number | null; gradedAt: Date },
+  ): Promise<MoundV2ShadowPredictionRow | null>;
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -3898,6 +3926,72 @@ export class DatabaseStorage implements IStorage {
         updatedAt: new Date(),
       })
       .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
+      .returning();
+    return updated ?? null;
+  }
+
+  // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
+  async createMoundV2ShadowPrediction(row: InsertMoundV2ShadowPrediction): Promise<MoundV2ShadowPredictionRow | null> {
+    const [inserted] = await db
+      .insert(moundV2ShadowPredictions)
+      .values(row)
+      .onConflictDoNothing({ target: moundV2ShadowPredictions.predictionId })
+      .returning();
+    return inserted ?? null;
+  }
+
+  async getMoundV2ShadowPrediction(predictionId: string): Promise<MoundV2ShadowPredictionRow | null> {
+    const rows = await db
+      .select()
+      .from(moundV2ShadowPredictions)
+      .where(eq(moundV2ShadowPredictions.predictionId, predictionId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async listMoundV2ShadowPredictions(filter: {
+    gameId?: string;
+    pitcherId?: string;
+    market?: string;
+    settlementStatus?: string;
+    v2ModelVersion?: string;
+    fromEvaluationTimestamp?: Date;
+    toEvaluationTimestamp?: Date;
+    limit?: number;
+  } = {}): Promise<MoundV2ShadowPredictionRow[]> {
+    const conditions = [];
+    if (filter.gameId) conditions.push(eq(moundV2ShadowPredictions.gameId, filter.gameId));
+    if (filter.pitcherId) conditions.push(eq(moundV2ShadowPredictions.pitcherId, filter.pitcherId));
+    if (filter.market) conditions.push(eq(moundV2ShadowPredictions.market, filter.market));
+    if (filter.settlementStatus) conditions.push(eq(moundV2ShadowPredictions.settlementStatus, filter.settlementStatus));
+    if (filter.v2ModelVersion) conditions.push(eq(moundV2ShadowPredictions.v2ModelVersion, filter.v2ModelVersion));
+    if (filter.fromEvaluationTimestamp) conditions.push(gte(moundV2ShadowPredictions.evaluationTimestamp, filter.fromEvaluationTimestamp));
+    if (filter.toEvaluationTimestamp) conditions.push(lte(moundV2ShadowPredictions.evaluationTimestamp, filter.toEvaluationTimestamp));
+    const limit = filter.limit ?? 1000;
+    if (conditions.length === 0) {
+      return db.select().from(moundV2ShadowPredictions)
+        .orderBy(desc(moundV2ShadowPredictions.evaluationTimestamp))
+        .limit(limit);
+    }
+    return db.select().from(moundV2ShadowPredictions)
+      .where(and(...conditions))
+      .orderBy(desc(moundV2ShadowPredictions.evaluationTimestamp))
+      .limit(limit);
+  }
+
+  async gradeMoundV2ShadowPrediction(
+    predictionId: string,
+    grading: { settlementStatus: string; finalResult: string | null; finalStatValue: number | null; gradedAt: Date },
+  ): Promise<MoundV2ShadowPredictionRow | null> {
+    const [updated] = await db
+      .update(moundV2ShadowPredictions)
+      .set({
+        settlementStatus: grading.settlementStatus,
+        finalResult: grading.finalResult,
+        finalStatValue: grading.finalStatValue != null ? String(grading.finalStatValue) : null,
+        gradedAt: grading.gradedAt,
+      })
+      .where(eq(moundV2ShadowPredictions.predictionId, predictionId))
       .returning();
     return updated ?? null;
   }
