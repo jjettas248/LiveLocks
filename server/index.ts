@@ -895,6 +895,22 @@ app.use((req, res, next) => {
         );
       }, 5 * 60 * 1000);
 
+      // Mound V2 (shadow) grading — same 5-min cadence as V1's own grading
+      // tick above, since it depends on the same box-score cache. Gated
+      // behind MOUND_V2_SHADOW_ENABLED (default off): with the flag off, no
+      // shadow predictions are ever captured, so this is an inert no-op scan
+      // of an empty pending list until a human deliberately turns it on.
+      const { isMoundV2ShadowEnabled } = await import("./mlb/pregame/mound/v2/moundV2ShadowFlags");
+      const { runMoundV2ShadowGradingSweep } = await import(
+        "./mlb/pregame/mound/v2/moundV2ShadowGradingSweep"
+      );
+      setInterval(() => {
+        if (!isMoundV2ShadowEnabled()) return;
+        runMoundV2ShadowGradingSweep().catch((e) =>
+          console.warn("[MOUND_V2_SHADOW_GRADE] sweep failed:", e?.message),
+        );
+      }, 5 * 60 * 1000);
+
       console.log("[MLB_PREGAME_MOUND_TARGETS] scheduled builds armed");
     } catch (err) {
       console.warn("[MLB_PREGAME_MOUND_TARGETS] boot failed:", (err as Error).message);
