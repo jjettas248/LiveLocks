@@ -72,7 +72,6 @@ npx tsx server/utils/dateUtils.test.ts               # slateDateET() 6am-ET roll
 npx tsx server/dbMigrations/hrRadarResearchPersistence.test.ts       # HR Radar research schema bootstrap idempotence + constraint + no-destructive-SQL guard
 npx tsx server/mlb/hrRadarResearch/hrRadarResearchContracts.test.ts  # HR Radar research Zod contracts (feature/trigger/eligibility/label/artifact/policy) + fail-closed flag parsing
 npx tsx server/mlb/marketStarvationGuard.test.ts     # market-starvation evaluator threshold logic + never-throws guarantee + cooldown/recovery logging
-npx tsx server/mlb/lineupReleaseAlerts.test.ts       # lineup-release push+email alert eligibility predicates + independent dedupe fingerprints + no-API-key email no-op
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
