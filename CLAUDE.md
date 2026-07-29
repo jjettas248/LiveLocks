@@ -79,6 +79,11 @@ npx tsx server/odds/mlbOddsProvenanceContract.test.ts # MLB odds provenance: rea
 npx tsx server/mlb/episodes/mlbOfficialRecommendationFirewall.test.ts # Official MLB recommendation firewall: rejects missing/stale/synthetic odds, side/probability consistency, game-state-driven freshness
 npx tsx server/mlb/episodes/mlbEpisodeMeasurement.test.ts # MLB performance measurement: captured-price ROI (no -110 assumption), push/void handling, Brier/log-loss/calibration, breakdown grouping
 npx tsx server/dbMigrations/mlbRecommendationEpisodePersistence.test.ts # MLB recommendation episode schema bootstrap idempotence + constraint + no-destructive-SQL guard
+npx tsx server/mlb/pregame/mound/v2/moundV2Math.test.ts              # Mound V2 (shadow) statistical primitives: Poisson-binomial, negative-binomial, line-probability invariants
+npx tsx server/mlb/pregame/mound/v2/batterStrikeoutProbability.test.ts # Mound V2 per-batter K-probability log-odds blend + degradation cases
+npx tsx server/mlb/pregame/mound/v2/battersFacedWorkloadModel.test.ts # Mound V2 batters-faced + outs workload distributions, pull-risk adjustment
+npx tsx server/mlb/pregame/mound/v2/moundV2Engine.test.ts             # Mound V2 distributional engine: OVER/UNDER/push invariants, low-BF/missing-lineup handling, zero production-Mound import edges
+npx tsx server/mlb/pregame/mound/v2/moundV2PromotionGate.test.ts      # Mound V2 promotion-readiness criteria checker (not an auto-promotion)
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
@@ -193,6 +198,11 @@ A NEW, product-agnostic contract shared by Plate/Mound/Live Edge for **official*
 
 **Status: contracts + firewall + measurement + persistence are defined and unit-tested; no product (Plate/Mound/Live Edge) writes episodes into this table yet** — wiring each product to emit real episodes is later-phase work. Do not create a second/duplicate version of this contract.
 
+### 3.9 Mound Radar V2 (shadow, research-only)
+`server/mlb/pregame/mound/v2/` builds a genuine outcome **probability distribution** for pitcher strikeouts and outs recorded — distinct from production `score10` (a matchup-quality composite, never a probability; see `scoring.ts`). Per-batter P(strikeout) (`batterStrikeoutProbability.ts`) blends the pitcher's own platoon K rate with each individual opposing batter's shrunk K rate in log-odds space (same style as production `opponentKProfile.ts`'s lineup-aggregate blend, applied per batter instead). A batters-faced workload distribution and a separately-modeled outs-recorded workload distribution (`battersFacedWorkloadModel.ts`, both negative-binomial, mean from `avgInningsPerStart` adjusted for pitch-count efficiency and walk rate, variance from `ipVarianceLast3`) feed `moundV2Engine.ts`'s `computeMoundV2Distribution`, which mixes a Poisson-binomial strikeout distribution (conditional on each plausible batters-faced count, cycling the confirmed batting order) across that workload marginal — real OVER/UNDER/push probabilities and an expected value, for both markets. `moundV2PromotionGate.ts` defines (but never applies) the promotion bar: sample size, calibration/Brier/log-loss improvement vs. baseline, market coverage, and a hard block on any settlement/provenance regression.
+
+**Shadow-only, structurally enforced**: nothing under `mound/v2/` is imported by `buildMlbMoundRadar.ts`, `scoring.ts`, `moundDirection.ts`, `moundOutcomeAttribution.ts`, `evaluationSnapshot.ts`, `moundGradedStateCarry.ts`, or any `storage.ts` mound method (verified by grep + a test-time structural check) — `score10`/`tier`/`primaryMarket`/settlement are completely untouched. Nothing here is persisted yet; there is no capture/grading pipeline wiring V2 predictions to real outcomes — that, and any future promotion, are later work. Do not wire V2 into production without clearing `moundV2PromotionGate.ts`'s criteria first.
+
 ---
 
 ## 4. Where Things Live
@@ -220,6 +230,7 @@ A NEW, product-agnostic contract shared by Plate/Mound/Live Edge for **official*
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |
 | MLB qualification audit + market-starvation guard | `server/mlb/qualificationAudit.ts` (passive rejection/qualification recorder, feeds `/api/admin/mlb-qualification`), `server/mlb/marketStarvationGuard.ts` (per-market staleOdds threshold guard, log-only), `client/src/components/admin/MlbQualificationAuditCard.tsx` (admin card) |
 | MLB Recommendation Episode contract (Flagship Program Phase 1) | `shared/mlbRecommendationEpisode.ts` (frozen contract + guarded mutator), `shared/mlbOddsProvenance.ts`, `shared/mlbEmptyStateReason.ts`, `shared/mlbPerformanceMeasurement.ts` (transport shapes); `server/odds/mlbOddsProvenanceContract.ts` (Zod + reader-driven freshness), `server/mlb/episodes/mlbOfficialRecommendationFirewall.ts` (official-publication gate), `server/mlb/episodes/mlbEpisodeMeasurement.ts` (pure ROI/Brier/log-loss/calibration math); persistence in `shared/schema.ts` (`mlbRecommendationEpisodes`), `server/dbMigrations/mlbRecommendationEpisodePersistence.ts`, `server/storage.ts` (`createMlbRecommendationEpisode` et al.) |
+| Mound Radar V2 (Flagship Program Phase 2, shadow-only) | `server/mlb/pregame/mound/v2/moundV2Math.ts` (Poisson-binomial/negative-binomial primitives), `batterStrikeoutProbability.ts`, `battersFacedWorkloadModel.ts`, `moundV2Engine.ts` (`computeMoundV2Distribution`), `moundV2PromotionGate.ts` (criteria checker, never auto-applied) — zero production Mound import edges |
 | NBA playoff rotation truth | `server/services/nbaRotationHistoryService.ts` |
 | Analytics (read-only) | `server/analytics/` |
 | HR Board Studio (admin growth, read-only) | `server/growth/hrBoardStudioCore.ts` (pure builders), `server/growth/hrBoardStudioService.ts` (live gatherers), `server/growth/hrBoardStudioRoutes.ts`, `server/growth/hrBoardCompliance.ts`, `server/growth/hrBoardAnalytics.ts`, `shared/hrBoardStudio.ts`, `client/src/components/admin/HrBoard*.tsx`, `client/src/pages/admin/hr-board-studio.tsx` |
