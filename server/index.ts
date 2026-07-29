@@ -21,6 +21,7 @@ import { db, pool } from "./db";
 import { ensurePregameRadarPersistenceSchema } from "./dbMigrations/pregameRadarPersistence";
 import { ensureHrRadarResearchPersistenceSchema } from "./dbMigrations/hrRadarResearchPersistence";
 import { ensurePlateHrV2PersistenceSchema } from "./dbMigrations/plateHrV2Persistence";
+import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/mlbRecommendationEpisodePersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
@@ -245,6 +246,15 @@ app.use((req, res, next) => {
   await ensurePlateHrV2PersistenceSchema(pool);
   console.log("[startup] Plate HR V2 persistence schema ensured");
   installPlateHrV2CapturePersistence();
+
+  // Durable persistence bootstrap: MLB Recommendation Episode contract
+  // (Flagship Program Phase 1 foundation) — one additive table backing the
+  // new cross-product (Plate/Mound/Live Edge) frozen-recommendation ledger.
+  // Same fail-hard reasoning as the three calls above. No product writes to
+  // this table yet — wiring Plate/Mound/Live Edge to emit episodes is
+  // later-phase work; this call only ever creates schema, never rows.
+  await ensureMlbRecommendationEpisodePersistenceSchema(pool);
+  console.log("[startup] MLB Recommendation Episode persistence schema ensured");
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.

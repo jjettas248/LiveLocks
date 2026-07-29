@@ -70,6 +70,9 @@ import {
   type InsertMlbMoundRadarSignal,
   type MlbMoundRadarBuildRow,
   type InsertMlbMoundRadarBuild,
+  mlbRecommendationEpisodes,
+  type MlbRecommendationEpisodeRow,
+  type InsertMlbRecommendationEpisode,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -92,6 +95,19 @@ import {
   type InsertHrRadarSignalEvent,
 } from "@shared/schema";
 import { PREGAME_SEED_CAP, pregameSeedTierLabel } from "@shared/hrRadarConviction";
+import {
+  applyMlbEpisodeLifecycleEvent as applyMlbEpisodeLifecycleEventPure,
+  settleMlbRecommendationEpisode as settleMlbRecommendationEpisodePure,
+  type MlbRecommendationEpisode,
+  type MlbEpisodeMutableField,
+  type MlbRecommendationProduct,
+  type MlbApprovedSportsbook,
+  type MlbRecommendedSide,
+  type MlbEpisodeDataQuality,
+  type MlbEpisodeStatus,
+  type MlbLifecycleStatus,
+  type MlbSettlementResult,
+} from "@shared/mlbRecommendationEpisode";
 import { eq, and, asc, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
@@ -458,6 +474,35 @@ export interface IStorage {
   getMlbMoundRadarSignalsByGame(sessionDate: string, gameId: string): Promise<MlbMoundRadarSignalRow[]>;
   recordMlbMoundRadarBuild(build: InsertMlbMoundRadarBuild): Promise<void>;
   getLatestMlbMoundRadarBuild(sessionDate: string): Promise<MlbMoundRadarBuildRow | null>;
+
+  // ── MLB Recommendation Episode (Flagship Program Phase 1 foundation) ──────
+  // Creation is INSERT-only — a re-create attempt for an existing episodeId
+  // throws rather than silently overwriting a frozen row. There is
+  // deliberately no upsert/update method that touches frozen fields; the
+  // only mutators are the two below, which apply
+  // shared/mlbRecommendationEpisode.ts's guarded pure function before issuing
+  // a column-scoped UPDATE limited to the mutable columns.
+  createMlbRecommendationEpisode(row: InsertMlbRecommendationEpisode): Promise<MlbRecommendationEpisodeRow>;
+  getMlbRecommendationEpisode(episodeId: string): Promise<MlbRecommendationEpisodeRow | null>;
+  listMlbRecommendationEpisodes(filter?: {
+    product?: MlbRecommendationProduct;
+    status?: MlbEpisodeStatus;
+    gameId?: string;
+    fromCreatedAt?: Date;
+    toCreatedAt?: Date;
+    limit?: number;
+  }): Promise<MlbRecommendationEpisodeRow[]>;
+  /** Returns null if episodeId does not exist. Throws if the patch touches a frozen field, the episode is terminal, or the status transition is invalid. */
+  applyMlbEpisodeLifecycleEvent(
+    episodeId: string,
+    patch: Partial<Pick<MlbRecommendationEpisode, MlbEpisodeMutableField>>,
+  ): Promise<MlbRecommendationEpisodeRow | null>;
+  /** Grades the episode against its own frozen side/line/price. Returns null if episodeId does not exist. Throws if already settled. */
+  settleMlbRecommendationEpisode(
+    episodeId: string,
+    settlementResult: MlbSettlementResult,
+    settledAt: Date,
+  ): Promise<MlbRecommendationEpisodeRow | null>;
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -481,6 +526,45 @@ function estimatePossessionsPerMinute(period: number, scoreDiff: number): number
 function americanOddsToProb(odds: number): number {
   if (odds < 0) return Math.abs(odds) / (Math.abs(odds) + 100);
   return 100 / (odds + 100);
+}
+
+// Drizzle's `numeric` columns round-trip as strings (to avoid float
+// precision loss), and `timestamp` columns round-trip as Date objects — this
+// converts an mlb_recommendation_episodes row back into the ISO-string /
+// number-typed MlbRecommendationEpisode domain shape that
+// shared/mlbRecommendationEpisode.ts's guarded pure functions operate on.
+function mlbRecommendationEpisodeRowToDomain(row: MlbRecommendationEpisodeRow): MlbRecommendationEpisode {
+  return {
+    episodeId: row.episodeId,
+    sport: "MLB",
+    product: row.product as MlbRecommendationProduct,
+    gameId: row.gameId,
+    playerId: row.playerId,
+    playerName: row.playerName,
+    market: row.market,
+    recommendedSide: row.recommendedSide as MlbRecommendedSide,
+    line: Number(row.line),
+    americanOdds: row.americanOdds,
+    sportsbook: row.sportsbook as MlbApprovedSportsbook,
+    oddsFetchedAt: row.oddsFetchedAt.toISOString(),
+    recommendationCreatedAt: row.recommendationCreatedAt.toISOString(),
+    modelVersion: row.modelVersion,
+    contractVersion: row.contractVersion,
+    projection: Number(row.projection),
+    modelProbability: Number(row.modelProbability),
+    setupGrade: row.setupGrade,
+    sportsbookEdge: row.sportsbookEdge !== null ? Number(row.sportsbookEdge) : null,
+    dataQuality: row.dataQuality as MlbEpisodeDataQuality,
+    sourceType: "sportsbook",
+    isOfficial: true,
+    gamePhase: row.gamePhase ?? null,
+    surfacedAt: row.surfacedAt ? row.surfacedAt.toISOString() : null,
+    expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+    lifecycleStatus: row.lifecycleStatus as MlbLifecycleStatus,
+    status: row.status as MlbEpisodeStatus,
+    settlementResult: row.settlementResult as MlbSettlementResult | null,
+    settledAt: row.settledAt ? row.settledAt.toISOString() : null,
+  };
 }
 
 // ─── Calibrated probability lookup ─────────────────────────────────────────
@@ -3718,6 +3802,104 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(mlbMoundRadarBuilds.startedAt))
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  // ── MLB Recommendation Episode (Flagship Program Phase 1 foundation) ──────
+  async createMlbRecommendationEpisode(row: InsertMlbRecommendationEpisode): Promise<MlbRecommendationEpisodeRow> {
+    // Deliberately a plain INSERT with no onConflictDoUpdate — a re-create
+    // attempt for an existing episodeId throws a unique-violation instead of
+    // silently overwriting a frozen row.
+    const [inserted] = await db.insert(mlbRecommendationEpisodes).values(row).returning();
+    return inserted;
+  }
+
+  async getMlbRecommendationEpisode(episodeId: string): Promise<MlbRecommendationEpisodeRow | null> {
+    const rows = await db
+      .select()
+      .from(mlbRecommendationEpisodes)
+      .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async listMlbRecommendationEpisodes(filter: {
+    product?: MlbRecommendationProduct;
+    status?: MlbEpisodeStatus;
+    gameId?: string;
+    fromCreatedAt?: Date;
+    toCreatedAt?: Date;
+    limit?: number;
+  } = {}): Promise<MlbRecommendationEpisodeRow[]> {
+    const conditions = [];
+    if (filter.product) conditions.push(eq(mlbRecommendationEpisodes.product, filter.product));
+    if (filter.status) conditions.push(eq(mlbRecommendationEpisodes.status, filter.status));
+    if (filter.gameId) conditions.push(eq(mlbRecommendationEpisodes.gameId, filter.gameId));
+    if (filter.fromCreatedAt) conditions.push(gte(mlbRecommendationEpisodes.recommendationCreatedAt, filter.fromCreatedAt));
+    if (filter.toCreatedAt) conditions.push(lte(mlbRecommendationEpisodes.recommendationCreatedAt, filter.toCreatedAt));
+    const limit = filter.limit ?? 500;
+    if (conditions.length === 0) {
+      return db.select().from(mlbRecommendationEpisodes)
+        .orderBy(desc(mlbRecommendationEpisodes.recommendationCreatedAt))
+        .limit(limit);
+    }
+    return db.select().from(mlbRecommendationEpisodes)
+      .where(and(...conditions))
+      .orderBy(desc(mlbRecommendationEpisodes.recommendationCreatedAt))
+      .limit(limit);
+  }
+
+  async applyMlbEpisodeLifecycleEvent(
+    episodeId: string,
+    patch: Partial<Pick<MlbRecommendationEpisode, MlbEpisodeMutableField>>,
+  ): Promise<MlbRecommendationEpisodeRow | null> {
+    const existing = await this.getMlbRecommendationEpisode(episodeId);
+    if (!existing) return null;
+    // Throws MlbEpisodeMutationError/MlbEpisodeTerminalError/MlbEpisodeTransitionError
+    // if the patch is invalid — this call is the real enforcement, BEFORE any
+    // SQL is issued. The subsequent UPDATE is additionally column-scoped to
+    // the mutable fields only, so frozen columns are never named in a SET
+    // clause regardless.
+    const next = applyMlbEpisodeLifecycleEventPure(mlbRecommendationEpisodeRowToDomain(existing), patch);
+    const [updated] = await db
+      .update(mlbRecommendationEpisodes)
+      .set({
+        surfacedAt: next.surfacedAt ? new Date(next.surfacedAt) : null,
+        expiresAt: next.expiresAt ? new Date(next.expiresAt) : null,
+        lifecycleStatus: next.lifecycleStatus,
+        status: next.status,
+        settlementResult: next.settlementResult,
+        settledAt: next.settledAt ? new Date(next.settledAt) : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async settleMlbRecommendationEpisode(
+    episodeId: string,
+    settlementResult: MlbSettlementResult,
+    settledAt: Date,
+  ): Promise<MlbRecommendationEpisodeRow | null> {
+    const existing = await this.getMlbRecommendationEpisode(episodeId);
+    if (!existing) return null;
+    const next = settleMlbRecommendationEpisodePure(
+      mlbRecommendationEpisodeRowToDomain(existing),
+      settlementResult,
+      settledAt.toISOString(),
+    );
+    const [updated] = await db
+      .update(mlbRecommendationEpisodes)
+      .set({
+        status: next.status,
+        settlementResult: next.settlementResult,
+        settledAt: next.settledAt ? new Date(next.settledAt) : null,
+        lifecycleStatus: next.lifecycleStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
+      .returning();
+    return updated ?? null;
   }
 
   // ── Task #129 — batter rolling stat snapshots ──────────────────────────

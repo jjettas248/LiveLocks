@@ -1599,3 +1599,70 @@ export const plateHrV2SufficientStats = pgTable("plate_hr_v2_sufficient_stats", 
 export const insertPlateHrV2SufficientStatsSchema = createInsertSchema(plateHrV2SufficientStats).omit({ computedAt: true });
 export type PlateHrV2SufficientStatsRow = typeof plateHrV2SufficientStats.$inferSelect;
 export type InsertPlateHrV2SufficientStats = z.infer<typeof insertPlateHrV2SufficientStatsSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MLB Recommendation Episode — MLB Flagship Program Phase 1 foundation. The
+// single frozen record an OFFICIAL MLB recommendation (Plate, Mound, or Live
+// Edge) produces. See shared/mlbRecommendationEpisode.ts for the full
+// contract, the frozen/mutable field split, and the guarded mutator
+// (applyMlbEpisodeLifecycleEvent) that is the real enforcement surface.
+//
+// This is a NEW table, not a reuse of persistedPlays — persistedPlays
+// upserts "current best signalScore wins" in place and is shared cross-sport
+// with NBA/NCAAB, with no frozen-price discipline (see Phase 1 persistence
+// audit). episode_id is the primary key and creation is INSERT-only
+// (server/storage.ts's createMlbRecommendationEpisode never upserts), so a
+// re-create attempt fails on the key rather than silently overwriting a
+// frozen row. Every subsequent write is a column-scoped UPDATE limited to
+// the mutable columns below (surfaced_at/expires_at/lifecycle_status/
+// status/settlement_result/settled_at) — frozen columns are never named in
+// any UPDATE ... SET clause anywhere in this codebase.
+// ─────────────────────────────────────────────────────────────────────────────
+export const mlbRecommendationEpisodes = pgTable("mlb_recommendation_episodes", {
+  episodeId: text("episode_id").primaryKey(),
+  sport: text("sport").notNull().default("MLB"),
+  product: text("product").notNull(),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  market: text("market").notNull(),
+  recommendedSide: text("recommended_side").notNull(),
+  line: numeric("line").notNull(),
+  americanOdds: integer("american_odds").notNull(),
+  sportsbook: text("sportsbook").notNull(),
+  oddsFetchedAt: timestamp("odds_fetched_at").notNull(),
+  recommendationCreatedAt: timestamp("recommendation_created_at").notNull(),
+  modelVersion: text("model_version").notNull(),
+  contractVersion: text("contract_version").notNull(),
+  projection: numeric("projection").notNull(),
+  modelProbability: numeric("model_probability").notNull(),
+  setupGrade: text("setup_grade").notNull(),
+  sportsbookEdge: numeric("sportsbook_edge"),
+  dataQuality: text("data_quality").notNull(),
+  sourceType: text("source_type").notNull().default("sportsbook"),
+  isOfficial: boolean("is_official").notNull().default(true),
+  // Additive, nullable: inning/game-phase label for Live Edge episodes
+  // ("pregame" | "1st" | ...), null for single-shot pregame products.
+  gamePhase: text("game_phase"),
+  // Lifecycle — MUTABLE, only via server/storage.ts's
+  // applyMlbEpisodeLifecycleEvent/settleMlbRecommendationEpisode.
+  surfacedAt: timestamp("surfaced_at"),
+  expiresAt: timestamp("expires_at"),
+  lifecycleStatus: text("lifecycle_status").notNull(),
+  status: text("status").notNull().default("created"),
+  settlementResult: text("settlement_result"),
+  settledAt: timestamp("settled_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  gameIdIdx: index("mlb_recommendation_episodes_game_id_idx").on(table.gameId),
+  playerIdIdx: index("mlb_recommendation_episodes_player_id_idx").on(table.playerId),
+  productStatusIdx: index("mlb_recommendation_episodes_product_status_idx").on(table.product, table.status),
+  createdAtIdx: index("mlb_recommendation_episodes_created_at_idx").on(table.recommendationCreatedAt),
+  statusIdx: index("mlb_recommendation_episodes_status_idx").on(table.status),
+  modelVersionIdx: index("mlb_recommendation_episodes_model_version_idx").on(table.modelVersion),
+}));
+
+export const insertMlbRecommendationEpisodeSchema = createInsertSchema(mlbRecommendationEpisodes).omit({ createdAt: true, updatedAt: true });
+export type MlbRecommendationEpisodeRow = typeof mlbRecommendationEpisodes.$inferSelect;
+export type InsertMlbRecommendationEpisode = z.infer<typeof insertMlbRecommendationEpisodeSchema>;

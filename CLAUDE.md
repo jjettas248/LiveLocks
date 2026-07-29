@@ -73,6 +73,12 @@ npx tsx server/dbMigrations/hrRadarResearchPersistence.test.ts       # HR Radar 
 npx tsx server/mlb/hrRadarResearch/hrRadarResearchContracts.test.ts  # HR Radar research Zod contracts (feature/trigger/eligibility/label/artifact/policy) + fail-closed flag parsing
 npx tsx server/mlb/marketStarvationGuard.test.ts     # market-starvation evaluator threshold logic + never-throws guarantee + cooldown/recovery logging
 npx tsx server/mlb/lineupReleaseAlerts.test.ts       # lineup-release push+email alert eligibility predicates + independent dedupe fingerprints + no-API-key email no-op
+npx tsx shared/mlbRecommendationEpisode.test.ts       # MLB recommendation episode contract: frozen-field mutation guard, status transitions, settlement grades frozen side/line/price
+npx tsx shared/mlbEmptyStateReason.test.ts            # MLB empty-state reason contract: exhaustive reason->message coverage, builder defaults/overrides
+npx tsx server/odds/mlbOddsProvenanceContract.test.ts # MLB odds provenance: reader-driven freshness classification cross-checked against isMLBSnapshotFresh, Zod schema rejects synthetic/invalid provenance
+npx tsx server/mlb/episodes/mlbOfficialRecommendationFirewall.test.ts # Official MLB recommendation firewall: rejects missing/stale/synthetic odds, side/probability consistency, game-state-driven freshness
+npx tsx server/mlb/episodes/mlbEpisodeMeasurement.test.ts # MLB performance measurement: captured-price ROI (no -110 assumption), push/void handling, Brier/log-loss/calibration, breakdown grouping
+npx tsx server/dbMigrations/mlbRecommendationEpisodePersistence.test.ts # MLB recommendation episode schema bootstrap idempotence + constraint + no-destructive-SQL guard
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
@@ -180,6 +186,13 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 ### 3.7 Shadow qualification
 `server/mlb/shadowQualification.ts` runs a parallel lower-floor signal track for batter-over markets. It writes **only** to its shadow store — never to `storage.settlePlay`, `persisted_plays`, ROI, or W/L. Push outcomes are excluded from hit rate. ROI proxy at -110 vig (cashed=+0.909u, missed=-1u). Sample-size warning when settled<50.
 
+### 3.8 MLB Recommendation Episode contract (Flagship Program Phase 1 foundation)
+A NEW, product-agnostic contract shared by Plate/Mound/Live Edge for **official** MLB recommendations — distinct from `persisted_plays` (mutable, cross-sport, upsert-in-place "current best" row) and `CanonicalSignal` (live-only, 0-100 display probability). `shared/mlbRecommendationEpisode.ts` defines `MlbRecommendationEpisode`: a frozen record (side/line/price/sportsbook/probability/projection/model+contract version) plus a small mutable lifecycle surface (`surfacedAt`/`expiresAt`/`lifecycleStatus`/`status`/`settlementResult`/`settledAt`), guarded by `applyMlbEpisodeLifecycleEvent` (throws on any attempt to mutate a frozen field, an invalid status transition, or any patch to a terminal episode) and `settleMlbRecommendationEpisode` (grades the episode's own frozen side/line/price; settlement is single-write). Persisted in `mlb_recommendation_episodes` (`shared/schema.ts`, bootstrap in `server/dbMigrations/mlbRecommendationEpisodePersistence.ts`) via `IStorage`'s `createMlbRecommendationEpisode` (INSERT-only, never upserts a frozen row) / `getMlbRecommendationEpisode` / `listMlbRecommendationEpisodes` / `applyMlbEpisodeLifecycleEvent` / `settleMlbRecommendationEpisode` (`server/storage.ts`).
+
+`server/mlb/episodes/mlbOfficialRecommendationFirewall.ts`'s `evaluateOfficialRecommendationEligibility` is the single gate a candidate must clear before it may become `isOfficial: true` — approved sportsbook only (`draftkings`/`fanduel`/`hardrockbet`; rejects placeholder labels like `"odds_api"`), finite line/price, real fetch timestamp, freshness computed from the **reader's current game status** (never a stored value — see `server/odds/mlbOddsProvenanceContract.ts`'s `classifyMlbOddsFreshness`, which wraps `isMLBSnapshotFresh` rather than re-deriving its TTLs), side/projection/probability mathematical consistency, and required model/contract version. `server/mlb/episodes/mlbEpisodeMeasurement.ts` computes performance (win rate, units/ROI from each episode's own captured American odds — never a flat -110 assumption, Brier score, log loss, expected calibration error, coverage, CLV when closing prices are supplied) purely from arrays of frozen, `isOfficial: true` episodes, with breakdowns by product/market/side/setupGrade/modelVersion/gamePhase/dataQuality. `shared/mlbEmptyStateReason.ts` gives empty pregame/live feeds an explicit, user-safe reason code instead of a generic "no plays."
+
+**Status: contracts + firewall + measurement + persistence are defined and unit-tested; no product (Plate/Mound/Live Edge) writes episodes into this table yet** — wiring each product to emit real episodes is later-phase work. Do not create a second/duplicate version of this contract.
+
 ---
 
 ## 4. Where Things Live
@@ -206,6 +219,7 @@ All server-side date logic must use `todayET()` (America/New_York). Late-night g
 | MLB orchestrator (per-tick driver) | `server/mlb/liveGameOrchestrator.ts` |
 | Goldmaster lock + drift guard | `server/mlb/goldmasterGuard.ts` |
 | MLB qualification audit + market-starvation guard | `server/mlb/qualificationAudit.ts` (passive rejection/qualification recorder, feeds `/api/admin/mlb-qualification`), `server/mlb/marketStarvationGuard.ts` (per-market staleOdds threshold guard, log-only), `client/src/components/admin/MlbQualificationAuditCard.tsx` (admin card) |
+| MLB Recommendation Episode contract (Flagship Program Phase 1) | `shared/mlbRecommendationEpisode.ts` (frozen contract + guarded mutator), `shared/mlbOddsProvenance.ts`, `shared/mlbEmptyStateReason.ts`, `shared/mlbPerformanceMeasurement.ts` (transport shapes); `server/odds/mlbOddsProvenanceContract.ts` (Zod + reader-driven freshness), `server/mlb/episodes/mlbOfficialRecommendationFirewall.ts` (official-publication gate), `server/mlb/episodes/mlbEpisodeMeasurement.ts` (pure ROI/Brier/log-loss/calibration math); persistence in `shared/schema.ts` (`mlbRecommendationEpisodes`), `server/dbMigrations/mlbRecommendationEpisodePersistence.ts`, `server/storage.ts` (`createMlbRecommendationEpisode` et al.) |
 | NBA playoff rotation truth | `server/services/nbaRotationHistoryService.ts` |
 | Analytics (read-only) | `server/analytics/` |
 | HR Board Studio (admin growth, read-only) | `server/growth/hrBoardStudioCore.ts` (pure builders), `server/growth/hrBoardStudioService.ts` (live gatherers), `server/growth/hrBoardStudioRoutes.ts`, `server/growth/hrBoardCompliance.ts`, `server/growth/hrBoardAnalytics.ts`, `shared/hrBoardStudio.ts`, `client/src/components/admin/HrBoard*.tsx`, `client/src/pages/admin/hr-board-studio.tsx` |
