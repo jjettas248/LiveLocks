@@ -7,7 +7,7 @@
 import type { Express, RequestHandler } from "express";
 import { slateDateET } from "../../../utils/dateUtils";
 import { getMoundRadarCalibrationStats, getMoundRadarPublicStats } from "./moundStatsService";
-import { gatherMoundV2ComparisonReport } from "./v2/moundV2ComparisonGatherer";
+import { gatherMoundV2ComparisonReport, gatherMoundV2PromotionReadiness } from "./v2/moundV2ComparisonGatherer";
 
 export function registerMoundRadarStatsRoutes(
   app: Express,
@@ -68,6 +68,40 @@ export function registerMoundRadarStatsRoutes(
     } catch (err: any) {
       console.error("[admin/mlb/mound-v2-comparison]", err?.message ?? err);
       return res.status(500).json({ error: "Failed to build Mound V2 comparison report" });
+    }
+  });
+
+  // Mound V2 promotion-readiness evidence — Part 7. Evidence + a criteria
+  // verdict ONLY; this endpoint cannot promote anything, and nothing is
+  // triggered by hitting it. Fails closed: regressionDetected defaults to
+  // true (blocked) unless the caller explicitly asserts "false" — there is
+  // no live runtime monitor for a V2-caused regression today, so a human
+  // reviewing the structural evidence (moundV2ShadowWiring.test.ts +
+  // moundV2Engine.test.ts's isolation check) must consciously pass
+  // ?regressionDetected=false to even attempt clearing that blocker.
+  //   ?date=YYYY-MM-DD          single slate day
+  //   ?from=YYYY-MM-DD&to=...   inclusive range
+  //   ?regressionDetected=false lifts the fail-closed regression blocker (explicit opt-in only)
+  app.get("/api/admin/mlb/mound-v2-promotion-readiness", guards.requireAdmin, async (req, res) => {
+    try {
+      const today = slateDateET();
+      const single = req.query.date != null ? String(req.query.date) : null;
+      const from = single ?? (req.query.from != null ? String(req.query.from) : today);
+      const to = single ?? (req.query.to != null ? String(req.query.to) : today);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+        return res.status(400).json({ error: "date/from/to must be YYYY-MM-DD" });
+      }
+      if (from > to) return res.status(400).json({ error: "from must not be after to" });
+      const settlementOrProvenanceRegressionDetected = req.query.regressionDetected !== "false";
+      const result = await gatherMoundV2PromotionReadiness({
+        windowStart: from,
+        windowEnd: to,
+        settlementOrProvenanceRegressionDetected,
+      });
+      return res.json(result);
+    } catch (err: any) {
+      console.error("[admin/mlb/mound-v2-promotion-readiness]", err?.message ?? err);
+      return res.status(500).json({ error: "Failed to build Mound V2 promotion readiness evidence" });
     }
   });
 }

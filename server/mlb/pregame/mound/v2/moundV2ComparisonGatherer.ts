@@ -14,6 +14,9 @@ import {
   type MoundV1OutcomeSummary,
   type MoundV2ComparisonReport,
 } from "./moundV2ComparisonStats";
+import { getMoundV2ShadowMetrics } from "./moundV2ShadowStore";
+import { buildAndEvaluateMoundV2Promotion } from "./moundV2PromotionEvidenceAdapter";
+import type { MoundV2PromotionEvidence, MoundV2PromotionVerdict } from "./moundV2PromotionGate";
 
 /**
  * Every ET calendar-date string from startDate to endDate inclusive. Pure
@@ -70,6 +73,17 @@ export interface GatherMoundV2ComparisonOpts {
   windowEnd: string;
 }
 
+async function fetchComparisonRows(opts: GatherMoundV2ComparisonOpts): Promise<MoundV2ComparisonRow[]> {
+  const fromEvaluationTimestamp = new Date(`${opts.windowStart}T00:00:00.000Z`);
+  const toEvaluationTimestamp = new Date(`${opts.windowEnd}T23:59:59.999Z`);
+  const v2Rows = await storage.listMoundV2ShadowPredictions({
+    fromEvaluationTimestamp,
+    toEvaluationTimestamp,
+    limit: 5000,
+  });
+  return v2Rows.map(toComparisonRow);
+}
+
 /**
  * Assembles the real V2 shadow predictions + real V1 settlement outcomes
  * for the declared window and hands them to the pure comparison engine.
@@ -83,22 +97,45 @@ export interface GatherMoundV2ComparisonOpts {
 export async function gatherMoundV2ComparisonReport(
   opts: GatherMoundV2ComparisonOpts,
 ): Promise<MoundV2ComparisonReport> {
-  const fromEvaluationTimestamp = new Date(`${opts.windowStart}T00:00:00.000Z`);
-  const toEvaluationTimestamp = new Date(`${opts.windowEnd}T23:59:59.999Z`);
-
-  const v2Rows = await storage.listMoundV2ShadowPredictions({
-    fromEvaluationTimestamp,
-    toEvaluationTimestamp,
-    limit: 5000,
-  });
+  const comparisonRows = await fetchComparisonRows(opts);
 
   const etDates = enumerateEtDates(opts.windowStart, opts.windowEnd);
   const v1SignalArrays = await Promise.all(etDates.map((d) => storage.getMlbMoundRadarSignalsByDate(d)));
   const v1Outcomes = v1SignalArrays.flat().map(toV1OutcomeSummary);
 
   return buildMoundV2ComparisonReport(
-    v2Rows.map(toComparisonRow),
+    comparisonRows,
     v1Outcomes,
     { windowStart: opts.windowStart, windowEnd: opts.windowEnd },
   );
+}
+
+export interface GatherMoundV2PromotionReadinessOpts extends GatherMoundV2ComparisonOpts {
+  /**
+   * Required, not defaulted — see moundV2PromotionEvidenceAdapter.ts's own
+   * doc comment. No live runtime monitor for a V2-caused settlement/
+   * provenance regression exists today; passing false here is a conscious
+   * human/CI attestation that the structural evidence (moundV2ShadowWiring
+   * .test.ts + moundV2Engine.test.ts's isolation check) has been reviewed
+   * for the code currently deployed, not something this function verifies.
+   */
+  settlementOrProvenanceRegressionDetected: boolean;
+}
+
+/**
+ * Evidence + verdict only — never applies a promotion. Uses the SAME
+ * comparison-row fetch as gatherMoundV2ComparisonReport (Part 6), plus the
+ * in-memory shadow-evaluation counters from Part 3's moundV2ShadowStore
+ * for marketCoverage.
+ */
+export async function gatherMoundV2PromotionReadiness(
+  opts: GatherMoundV2PromotionReadinessOpts,
+): Promise<{ evidence: MoundV2PromotionEvidence; verdict: MoundV2PromotionVerdict }> {
+  const comparisonRows = await fetchComparisonRows(opts);
+  const shadowMetrics = getMoundV2ShadowMetrics();
+  return buildAndEvaluateMoundV2Promotion(comparisonRows, {
+    shadowEvaluationTotal: shadowMetrics.totalEvaluations,
+    shadowEvaluationFailures: shadowMetrics.totalFailures,
+    settlementOrProvenanceRegressionDetected: opts.settlementOrProvenanceRegressionDetected,
+  });
 }
