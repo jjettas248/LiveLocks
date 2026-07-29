@@ -10,6 +10,7 @@ import type { User } from "@shared/schema";
 import { sendWallEmail, sendVerificationEmail, sendPasswordResetEmail } from "./email";
 import { resolveAccess } from "./utils/access";
 import { todayET } from "./utils/dateUtils";
+import { resolveMlbPreviewConsumeKey } from "./utils/mlbPreviewAccess";
 
 // ── Stripe tier-check TTL cache ────────────────────────────────────────────────
 // Limits Stripe API calls to once per 5 minutes per user.
@@ -566,11 +567,12 @@ export async function requireMLBAccess(req: Request, res: Response, next: NextFu
 
   await storage.resetDailyPlaysIfNeeded(userId);
 
+  // Previously returned 400 here for any route without a gameId, turning
+  // "2 free previews/day" into a hard error for every such MLB route
+  // (confirmed on the pre-existing bare /api/mlb/pregame-power-radar route
+  // too, not just newly-gated ones) — see resolveMlbPreviewConsumeKey.
   const gameId = (req.params as any)?.gameId ?? (req.body as any)?.gameId;
-  if (!gameId) {
-    return res.status(400).json({ error: "Missing gameId for MLB preview access" });
-  }
-  const consumeKey = `mlb-${gameId}`;
+  const consumeKey = resolveMlbPreviewConsumeKey(gameId);
 
   const alreadyUnlocked = await storage.isGameUnlockedToday(userId, consumeKey);
   if (alreadyUnlocked) return next();
