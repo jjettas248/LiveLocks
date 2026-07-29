@@ -647,6 +647,8 @@ export default function Dashboard() {
   const [phoneInput, setPhoneInput] = useState("");
   const [smsEnabled, setSmsEnabled] = useState(false);
   const [smsLoading, setSmsLoading] = useState(false);
+  const [emailAlertsEnabled, setEmailAlertsEnabled] = useState(false);
+  const [emailAlertsLoading, setEmailAlertsLoading] = useState(false);
   const [alertHistory, setAlertHistory] = useState<{ title: string; body: string; time: number }[]>(() => {
     try { return JSON.parse(localStorage.getItem("ll_alerts") ?? "[]"); } catch { return []; }
   });
@@ -751,6 +753,7 @@ export default function Dashboard() {
       if (d.hasSubscription) setPushSubscribed(true);
       if (d.phoneNumber) setPhoneInput(d.phoneNumber);
       if (d.smsAlerts) setSmsEnabled(true);
+      if (d.emailAlerts) setEmailAlertsEnabled(true);
     }).catch(() => {});
 
     if ("serviceWorker" in navigator && "PushManager" in window) {
@@ -841,6 +844,20 @@ export default function Dashboard() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     } finally {
       setPushLoading(false);
+    }
+  };
+
+  const handleToggleEmailAlerts = async () => {
+    const next = !emailAlertsEnabled;
+    setEmailAlertsLoading(true);
+    try {
+      await apiRequest("POST", "/api/user/alerts/email", { emailAlerts: next });
+      setEmailAlertsEnabled(next);
+      toast({ title: next ? "Email lineup alerts enabled" : "Email lineup alerts disabled" });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setEmailAlertsLoading(false);
     }
   };
 
@@ -4299,6 +4316,17 @@ export default function Dashboard() {
                 }
                 {pushSubscribed && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />}
               </div>
+              {/* Email lineup-alert toggle inline — MLB-only, mirrors the Push toggle above */}
+              {!!user?.hasMLB && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-zinc-400">Lineup Emails</span>
+                  {emailAlertsEnabled
+                    ? <button data-testid="button-disable-email-alerts" onClick={handleToggleEmailAlerts} disabled={emailAlertsLoading} className="text-xs text-zinc-400 underline underline-offset-2 hover:text-zinc-200 transition-colors disabled:opacity-50">{emailAlertsLoading ? "..." : "Disable"}</button>
+                    : <button data-testid="button-enable-email-alerts" onClick={handleToggleEmailAlerts} disabled={emailAlertsLoading} className="text-xs text-brand underline underline-offset-2 hover:text-white transition-colors disabled:opacity-50">{emailAlertsLoading ? "..." : "Enable"}</button>
+                  }
+                  {emailAlertsEnabled && <span className="w-1.5 h-1.5 rounded-full bg-green-400 shrink-0" />}
+                </div>
+              )}
               <button
                 data-testid="button-alert-preferences"
                 onClick={() => { setSmsModalFlow("view"); setShowSmsModal(true); }}
