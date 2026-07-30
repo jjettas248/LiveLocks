@@ -769,6 +769,14 @@ export interface MLBQualifiedSignal {
   // the official-eligibility gate — only a real-line BET_NOW may become an
   // official persisted play. Null/undefined for every non-HR signal.
   hrCurrentState?: import("./hrAlertEngine").DynamicHRState | null;
+  // MLB Live Edge Trust Recovery (Phase 5) — the single finalized-eligibility
+  // result (server/mlb/mlbOfficialEligibility.ts), stamped once so every
+  // consumer (persistence, analytics, admin diagnostics) reads the SAME
+  // computed value rather than re-deriving it. This is DELIBERATELY separate
+  // from displayContract's isBettable (a distinct, pre-existing "worth
+  // showing in the live UI" concept) — collapsing the two would change live
+  // UI bettability behavior, which this recovery does not touch.
+  officialEligibility?: { eligible: boolean; reasons: string[]; version: string } | null;
   pitcherAnalysis?: {
     stuff: number;
     command: number;

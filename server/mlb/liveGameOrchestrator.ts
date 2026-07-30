@@ -6036,6 +6036,11 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
     // official persisted play; the route-side safety net consumes the exact
     // same function so the two entry points can never disagree.
     const eligibility = evaluateMlbOfficialEligibility(sig);
+    // Stamped once here so every other consumer (admin diagnostics,
+    // analytics, the API response) reads this exact computed value instead
+    // of re-deriving it — this signal object is the same reference already
+    // written into mlbEdgeCache, so the stamp is visible there too.
+    sig.officialEligibility = eligibility;
     if (!eligibility.eligible) {
       skipped++;
       for (const reason of eligibility.reasons) {

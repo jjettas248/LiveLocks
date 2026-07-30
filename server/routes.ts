@@ -2897,11 +2897,15 @@ export async function registerRoutes(
         const normalizedMarketKey = (qs.market as string) === "hr" ? "home_runs" : qs.market;
         if (!validIds.has(`${qs.playerId}|${normalizedMarketKey}`)) continue;
 
-        // ── MLB Live Edge Trust Recovery (Phase 4) — single finalized-
+        // ── MLB Live Edge Trust Recovery (Phase 4/5) — single finalized-
         // eligibility gate. Identical to the orchestrator's primary
         // persistence path (autoPersistMLBSignals) — this route-side safety
         // net can never diverge from it or reconstruct its own weaker rules.
-        const eligibility = evaluateMlbOfficialEligibility(qs);
+        // Prefer the value the orchestrator already stamped on this exact
+        // signal object (officialEligibility) so the two entry points never
+        // disagree even under a rare recompute-drift; fall back to computing
+        // it fresh only if this signal somehow reached here unstamped.
+        const eligibility = qs.officialEligibility ?? evaluateMlbOfficialEligibility(qs);
         if (!eligibility.eligible) {
           console.log(`[MLB_ROUTE_PERSIST_SAFETY] ineligible player=${qs.playerName} market=${qs.market} reasons=${eligibility.reasons.join(",")}`);
           continue;
