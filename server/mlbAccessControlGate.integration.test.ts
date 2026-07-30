@@ -241,6 +241,69 @@ async function main() {
     assertEq(rejected, N - 2, `the remaining ${N - 2} concurrent requests are correctly rejected, not silently allowed through`);
   });
 
+  test("12. [Final Pre-Push Integrity Pass, Section 7] Varying irrelevant query params can change WHICH key is spent, but can never grant MORE than the real 2/day cap", async () => {
+    const free = await createTestUser("free-irrelevant-params", { subscriptionTier: null });
+    // A gameId-less board route hit with 5 DIFFERENT irrelevant/incidental
+    // query params (the kind a frontend might attach without the route
+    // itself ever reading them: analytics/tracking/cache-busting values).
+    // Honest, documented behavior: because requireMLBAccess folds req.query
+    // WHOLESALE into the fingerprint for gameId-less routes, each of these
+    // resolves to a DIFFERENT consume key — this is NOT "identity-precise"
+    // for irrelevant params. The security property under test is narrower
+    // and load-bearing: no matter how many distinct-looking keys a client
+    // manufactures this way, the GLOBAL per-user daily counter still caps
+    // real unlocks at exactly 2 (see storage.ts's tryConsumeGamePlayToday —
+    // a single, atomically-incremented counter, independent of which key is
+    // being unlocked).
+    const variations = [
+      "/api/mlb/pregame-power-radar?utm_source=newsletter",
+      "/api/mlb/pregame-power-radar?utm_source=twitter",
+      "/api/mlb/pregame-power-radar?_=1690000000000",
+      "/api/mlb/pregame-power-radar?ref=push-notification",
+      "/api/mlb/pregame-power-radar?session=abc123",
+    ];
+    const responses = [];
+    for (const url of variations) {
+      responses.push(await req(url, free.token));
+    }
+    const succeeded = responses.filter((r) => r.status === 200).length;
+    const rejected = responses.filter((r) => r.status === 402).length;
+    assertEq(succeeded, 2, `even though all 5 requests hit the SAME logical dashboard, only the first 2 distinct-looking (irrelevant-param-varied) keys succeed (got ${succeeded}) — the global cap is not inflated by query variation`);
+    assertEq(rejected, 3, `the remaining 3 differently-fingerprinted-but-functionally-identical requests are correctly rejected once the real 2-credit budget is spent (got ${rejected})`);
+    assertEq(responses[4].body?.error, "MLB_UPGRADE_REQUIRED", "the rejection is the normal upgrade prompt, not a crash or a silent pass-through");
+
+    // The bare, param-less URL is a DIFFERENT key again (no query at all) —
+    // proving this isn't "the 5 variations share a key but the bare URL is
+    // separate"; every one of these 6 total requests is a distinct key, and
+    // the cap holds across all of them combined.
+    const bare = await req("/api/mlb/pregame-power-radar", free.token);
+    assertEq(bare.status, 402, "a 6th variant (no query string at all) is ALSO rejected — confirms the cap is genuinely global across every key this route's irrelevant-param sensitivity can produce, not reset per new key shape");
+  });
+
+  test("13. [Final Pre-Push Integrity Pass, Section 7] Responses never leak sensitive/internal fields", async () => {
+    const free = await createTestUser("free-sanitize", { subscriptionTier: null });
+    const ok200 = await req("/api/mlb/pregame-power-radar", free.token);
+    assertEq(ok200.status, 200, "sanity: the successful preview response is a real 200");
+    const json200 = JSON.stringify(ok200.body ?? {});
+    assert(!/passwordHash/i.test(json200), "a successful preview response never includes the word passwordHash");
+    assert(!/stripeCustomerId|stripeSubscriptionId/i.test(json200), "a successful preview response never leaks Stripe identifiers");
+    assert(!json200.includes(free.token), "a successful preview response never echoes back the caller's own auth token");
+
+    const deniedExhausted = await req("/api/mlb/alerts", free.token); // consumes credit 2/2
+    assertEq(deniedExhausted.status, 200, "sanity: second distinct route still succeeds (2/2)");
+    const denied = await req("/api/mlb/hr-radar", free.token); // 3rd distinct key -> 402
+    assertEq(denied.status, 402, "sanity: third distinct key is denied");
+    const deniedKeys = Object.keys(denied.body ?? {});
+    assert(deniedKeys.every((k) => ["error", "message", "playsUsedToday", "limit"].includes(k)), `a 402 rejection body exposes ONLY the documented fields (error/message/playsUsedToday/limit), never internal state (got keys: ${deniedKeys.join(", ")})`);
+    assert(typeof denied.body?.playsUsedToday === "number" && typeof denied.body?.limit === "number", "the numeric fields on a 402 are genuinely numbers, not leaked raw DB rows/objects");
+
+    const other = await createTestUser("free-sanitize-other", { subscriptionTier: null });
+    const otherResp = await req("/api/mlb/alerts", other.token);
+    assertEq(otherResp.status, 200, "a completely different user's independent request succeeds on their own fresh budget");
+    const otherJson = JSON.stringify(otherResp.body ?? {});
+    assert(!otherJson.includes(String(free.id)), "one user's response never contains another user's numeric userId");
+  });
+
   let pass = 0, fail = 0;
   const failures: string[] = [];
   for (const c of cases) {

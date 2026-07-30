@@ -55,13 +55,13 @@ import { composeMoundScore } from "./scoring";
 import { computeMoundDirection } from "./moundDirection";
 import { projectedStrikeoutsFromKPer9, computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMatchupAdjustedStrikeouts } from "./matchupAdjustedKs";
-import { buildMoundMarketEdgeContext, pickBestUnderBook } from "./oddsDisplay";
+import { buildMoundMarketEdgeContext, pairedUnderOddsForBook } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
 import { applyMoundEvaluationSnapshots } from "./evaluationSnapshot";
 import { aggregateRawPitcherContactSnapshot, type RawContactSupportingInputs, type RawPitcherContactSnapshot } from "./rawPitcherContactSnapshot";
 import { isMoundV2ShadowEnabled } from "./v2/moundV2ShadowFlags";
 import { MOUND_V1_MODEL_VERSION, MOUND_V2_MODEL_VERSION } from "./v2/moundV2ShadowEvaluation";
-import { runMoundV2ShadowForPitcher } from "./v2/moundV2ShadowRunner";
+import { enqueueMoundV2ShadowForPitcher } from "./v2/moundV2ShadowEnqueueRunner";
 import type { FrozenMoundBatterInput, MoundFrozenDataQuality } from "./v2/frozenMoundShadowInput";
 
 /**
@@ -583,13 +583,34 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           },
         };
 
+        // Carry-forward runs BEFORE the V2 shadow block (moved here in the
+        // Final Pre-Push Integrity Pass — it previously ran AFTER, which
+        // meant the shadow capture below read signal.moundDirection/
+        // everPubliclyFlagged/everPubliclyFlaggedFade BEFORE they were
+        // pinned/carried forward, always seeing the fresh per-cycle default
+        // (everPubliclyFlagged: false) rather than this pitcher's real,
+        // durable public-qualification history. carryForwardMoundGradedState
+        // mutates `signal` in place and is pure/synchronous (no I/O) — V1's
+        // own publication (signals.set below) still runs unconditionally
+        // after the shadow block, so this reordering does not change the
+        // "V1 publishes regardless of the shadow block's outcome" guarantee,
+        // only WHAT the shadow block is allowed to read off `signal`.
+        carryForwardMoundGradedState(signal, prevSignals?.get(signalId));
+
         // ── Mound V2 (shadow, research-only) ────────────────────────────────
-        // Runs AFTER `signal` above is fully assembled and reads only
-        // variables already fetched for V1's own use above (no additional
-        // provider/odds/roster request). Never touches `signal` or
-        // `signals` — a failure here is caught and reported, never thrown
-        // into this loop, and V1's real output is already complete by the
-        // time this block runs. See CLAUDE.md's Mound V2 status note.
+        // Runs AFTER `signal` above is fully assembled (and carry-forward has
+        // pinned its durable state) and reads only variables already fetched
+        // for V1's own use above (no additional provider/odds/roster
+        // request). Never touches `signal` or `signals` — a failure here is
+        // caught and reported, never thrown into this loop.
+        //
+        // (Final Pre-Push Integrity Pass) This block's ONLY job is now the
+        // durable, idempotent ENQUEUE (moundV2ShadowJobQueue.ts) — a single
+        // bounded INSERT. The actual V2 evaluation (computeMoundV2Distribution,
+        // parity check, decision-policy application) and its persistence run
+        // later, entirely outside this loop, in moundV2ShadowWorker.ts's own
+        // tick. V1's publication below never depends on that worker running,
+        // succeeding, or even existing.
         if (isMoundV2ShadowEnabled()) {
           try {
             const shadowSnapshotId = `mound_v2:${signalId}:${buildId}`;
@@ -612,30 +633,33 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             const throwsForShadow: "L" | "R" | null = starter.throws === "L" || starter.throws === "R" ? starter.throws : null;
             const dataQuality: MoundFrozenDataQuality =
               opposingLineupConfirmed && seasonStats != null ? "complete" : seasonStats != null ? "partial" : "degraded";
-            // Correction 1: the raw odds snapshot (strikeoutSnap.books) already
-            // carries an UNDER price for every book — buildMoundMarketEdgeContext
-            // only ever surfaces the OVER side for V1's own display purposes, so
-            // the shadow capture previously hardcoded underPrice to null even
-            // though the real data was already fetched. Zero new provider calls.
-            const underBook = strikeoutSnap?.books ? pickBestUnderBook(strikeoutSnap.books) : null;
-            // V1's own frozen recommended side at this exact evaluation moment —
-            // captured, never recomputed, so the decision-policy comparison
-            // (moundV2ComparisonStats.ts) can grade V1's actual pick against its
-            // own captured price rather than treating V1's performance as
-            // structurally unavailable.
-            const v1RecommendedSide: "OVER" | "UNDER" | null =
-              signal.moundDirection === "follow" ? "OVER" : signal.moundDirection === "fade" ? "UNDER" : null;
+            // Paired-market design: the under price MUST come from the exact
+            // same book (and therefore the exact same line) marketEdgeContext
+            // already chose for the over side — never independently shopped
+            // across all books, which could silently pair an OVER from one
+            // book with an UNDER from a different book or even a different
+            // line (see oddsDisplay.ts's pairedUnderOddsForBook doc comment).
+            const pairedUnderPrice = pairedUnderOddsForBook(strikeoutSnap?.books, marketEdgeContext?.sportsbook);
+            // V1's own frozen recommended side — captured ONLY when it
+            // represents a genuinely publicly-qualified recommendation
+            // (everPubliclyFlagged/everPubliclyFlaggedFade), never a generic
+            // moundDirection model lean that was never shown to users. Read
+            // AFTER carryForwardMoundGradedState above, which is what pins
+            // these fields to their real, durable, restart-safe values for
+            // this build.
+            const v1Qualified = signal.everPubliclyFlagged === true || signal.everPubliclyFlaggedFade === true;
+            const v1RecommendedSide: "OVER" | "UNDER" | null = !v1Qualified ? null : signal.everPubliclyFlaggedFade === true ? "UNDER" : "OVER";
+            const v1QualificationStatus: "recommended" | "not_recommended" = v1Qualified ? "recommended" : "not_recommended";
 
-            // The actual evaluate/record/log/never-throw wrapper is
-            // extracted into runMoundV2ShadowForPitcher (Correction 2) so it
-            // can be exercised with real behavioral tests (including
-            // injected throwing stubs), not just proven by reading source
-            // text. This outer try/catch additionally covers the
-            // construction above (battingOrder, underBook,
-            // v1RecommendedSide) — real defense-in-depth, not redundant,
-            // since that setup code has deep closure dependencies on this
-            // per-pitcher loop and can't be moved into the extracted runner.
-            runMoundV2ShadowForPitcher({
+            // This outer try/catch covers both the construction above
+            // (battingOrder, pairedUnderPrice, v1RecommendedSide) and the
+            // enqueue call below — a defect in either can never affect V1's
+            // own signal, which is already fully assembled and carried
+            // forward above. enqueueMoundV2ShadowForPitcher itself also
+            // never throws (defense in depth, not redundant — its own
+            // internal try/catch covers a different failure surface: the
+            // actual database round trip).
+            await enqueueMoundV2ShadowForPitcher({
               signalId,
               evaluateArgs: {
                 snapshotId: shadowSnapshotId,
@@ -669,7 +693,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
                   strikeoutsMarket: {
                     line: marketEdgeContext?.line ?? null,
                     overPrice: marketEdgeContext?.odds ?? null,
-                    underPrice: underBook?.odds ?? null,
+                    underPrice: pairedUnderPrice,
                     sportsbook: marketEdgeContext?.sportsbook ?? null,
                     fetchedAt: marketEdgeContext?.oddsUpdatedAt ?? null,
                   },
@@ -686,21 +710,22 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
                 v1Score10: scoring.score10,
                 v1Tier: scoring.tier,
                 v1RecommendedSide,
+                v1QualificationStatus,
                 strikeoutsLine: marketEdgeContext?.line ?? null,
                 outsLine: null,
               },
             });
           } catch (err: any) {
-            // Belt-and-suspenders: runMoundV2ShadowForPitcher itself never
-            // throws, but this outer guard also covers the construction
-            // above (battingOrder, underBook, v1RecommendedSide) — a defect
-            // there can never affect V1's own signal, which is already
-            // fully assembled above.
+            // Belt-and-suspenders: enqueueMoundV2ShadowForPitcher itself
+            // never throws, but this outer guard also covers the
+            // construction above (battingOrder, pairedUnderPrice,
+            // v1RecommendedSide) — a defect there can never affect V1's own
+            // signal, which is already fully assembled and carried forward
+            // above.
             console.warn(`[MOUND_V2_SHADOW_UNEXPECTED_ERROR] ${signalId}`, err?.message ?? err);
           }
         }
 
-        carryForwardMoundGradedState(signal, prevSignals?.get(signalId));
         signals.set(signalId, signal);
 
         if (scoring.suppressed) {

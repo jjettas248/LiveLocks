@@ -33,6 +33,7 @@
 
 import { unitsWonPerDollarStaked } from "../../../episodes/mlbEpisodeMeasurement";
 import { americanToImpliedProbability } from "../oddsDisplay";
+import type { MoundV2PromotionSubgroupEvidence } from "./moundV2PromotionGate";
 
 const CALIBRATION_EPSILON = 1e-6;
 
@@ -62,6 +63,16 @@ export interface MoundV2ComparisonRow {
   v1Tier: string | null;
   v2ModelVersion: string;
   productionModelVersion: string;
+  /** V2's own versioned qualify/abstain decision-policy version (distinct from v2ModelVersion, the probability model's own version) — see moundV2DecisionPolicy.ts. Used for the promotion gate's undeclared-version check, never for probability/decision-policy math itself. */
+  v2DecisionPolicyVersion: string | null;
+  /** Frozen data-quality band captured at evaluation time ("complete" | "partial" | "degraded") — a promotion-gate subgroup dimension, never a probability/decision-policy input. */
+  dataQuality: string | null;
+  /** Frozen lineup-confirmation status at evaluation time — a promotion-gate subgroup dimension. */
+  lineupStatus: string | null;
+  /** The one sportsbook both frozenOverPrice/frozenUnderPrice were paired from (see oddsDisplay.ts's pairedUnderOddsForBook) — a promotion-gate subgroup dimension AND the source for sportsbookProvenanceRatio. */
+  sportsbook: string | null;
+  /** When the paired odds were fetched — combined with `sportsbook`, both non-null is what "real sportsbook provenance" means for the promotion gate. */
+  oddsFetchedAt: string | null;
 }
 
 function clampProbability(p: number): number {
@@ -422,6 +433,108 @@ export function computeMoundV2DecisionPolicyComparison(
     v2,
     winRateDelta: v1.winRate != null && v2.winRate != null ? v2.winRate - v1.winRate : null,
     roiDelta: v1.roi != null && v2.roi != null ? v2.roi - v1.roi : null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Promotion-gate evidence support (Final Pre-Push Integrity Pass, Section 5)
+// — subgroup breakdown + evidence-integrity ratios. Still pure math, no I/O.
+// ─────────────────────────────────────────────────────────────────────────
+
+const PROMOTION_SUBGROUP_DIMENSIONS: ReadonlyArray<{
+  dimension: MoundV2PromotionSubgroupEvidence["dimension"];
+  keyOf: (row: MoundV2ComparisonRow) => string | null;
+}> = [
+  { dimension: "market", keyOf: (r) => r.market },
+  { dimension: "side", keyOf: (r) => r.v1RecommendedSide },
+  { dimension: "setupGrade", keyOf: (r) => r.v1Tier },
+  { dimension: "dataQuality", keyOf: (r) => r.dataQuality },
+  { dimension: "lineupStatus", keyOf: (r) => r.lineupStatus },
+  { dimension: "sportsbook", keyOf: (r) => r.sportsbook },
+];
+
+/**
+ * Per-subgroup paired win-rate/ROI deltas for the promotion gate's subgroup-
+ * regression check. Groups the PAIRED population only (rows where both V1
+ * and V2 have a real, gradeable decision) — grouping non-paired rows would
+ * produce a sampleSize/winRateDelta pair with no real bet behind it.
+ *
+ * `workloadBand` is a required subgroup dimension per Section 5's list but
+ * has no persisted source data anywhere in this codebase today (no
+ * workload-band categorization is computed or stored on the shadow
+ * prediction row) — inventing one wholesale here would be a modeling
+ * decision this pass shouldn't make unilaterally. It is simply never
+ * emitted; MoundV2PromotionSubgroupDimension already declares the dimension
+ * so wiring it in later needs only a new entry below plus a real source
+ * column, not a gate change.
+ */
+export function buildMoundV2PromotionSubgroups(gradedWithLine: readonly MoundV2ComparisonRow[]): MoundV2PromotionSubgroupEvidence[] {
+  const { paired } = partitionForDecisionPolicy(gradedWithLine);
+  const results: MoundV2PromotionSubgroupEvidence[] = [];
+  for (const { dimension, keyOf } of PROMOTION_SUBGROUP_DIMENSIONS) {
+    const groups = new Map<string, MoundV2ComparisonRow[]>();
+    for (const row of paired) {
+      const key = keyOf(row);
+      if (key == null) continue;
+      const arr = groups.get(key);
+      if (arr) arr.push(row); else groups.set(key, [row]);
+    }
+    for (const key of Array.from(groups.keys()).sort()) {
+      const subset = groups.get(key)!;
+      const v1 = buildV1Metrics(subset);
+      const v2 = buildV2Metrics(subset);
+      results.push({
+        dimension,
+        key,
+        sampleSize: subset.length,
+        winRateDelta: v1.winRate != null && v2.winRate != null ? v2.winRate - v1.winRate : null,
+        roiDelta: v1.roi != null && v2.roi != null ? v2.roi - v1.roi : null,
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * The worse of V1's and V2's own price-coverage ratios over the paired
+ * population — "of the bets each model actually made, how often did we have
+ * a real captured price to grade ROI from." Null when either side produced
+ * zero recommendations over an empty paired population (nothing to measure).
+ */
+export function computeRoiEligiblePriceRatio(gradedWithLine: readonly MoundV2ComparisonRow[]): number | null {
+  const { paired } = partitionForDecisionPolicy(gradedWithLine);
+  if (paired.length === 0) return null;
+  const v1 = buildV1Metrics(paired);
+  const v2 = buildV2Metrics(paired);
+  const v1Ratio = v1.recommendationsProduced > 0 ? v1.roiEligibleCount / v1.recommendationsProduced : null;
+  const v2Ratio = v2.recommendationsProduced > 0 ? v2.roiEligibleCount / v2.recommendationsProduced : null;
+  if (v1Ratio == null || v2Ratio == null) return null;
+  return Math.min(v1Ratio, v2Ratio);
+}
+
+/** Fraction of a graded-with-line population carrying a real (non-empty) sportsbook AND odds-fetch timestamp — never a placeholder/blank standing in for "we don't actually know where this price came from". Null when there is no population to check. */
+export function computeSportsbookProvenanceRatio(gradedWithLine: readonly MoundV2ComparisonRow[]): number | null {
+  if (gradedWithLine.length === 0) return null;
+  const withProvenance = gradedWithLine.filter(
+    (r) => r.sportsbook != null && r.sportsbook !== "" && r.oddsFetchedAt != null && r.oddsFetchedAt !== "",
+  );
+  return withProvenance.length / gradedWithLine.length;
+}
+
+/** pairedN as a fraction of every row that COULD have been paired (paired + legacy-incomplete + V1-had-no-recommendation). Null when the denominator is 0 (no evidence at all) — never silently 0 or 1. */
+export function computePairedPopulationRatio(pairedN: number, legacyIncompleteCount: number, v1NoRecommendationCount: number): number | null {
+  const denom = pairedN + legacyIncompleteCount + v1NoRecommendationCount;
+  return denom > 0 ? pairedN / denom : null;
+}
+
+/** Every row in the population must declare a real (non-empty) version — a single undeclared row fails the WHOLE check, since "some rows have no known version" is exactly the ambiguity this guards against. An empty population is honestly "not declared" (false), never vacuously true. */
+export function computeMoundV2VersionDeclaration(
+  rows: readonly MoundV2ComparisonRow[],
+): { v2ModelVersionDeclared: boolean; v2DecisionPolicyVersionDeclared: boolean } {
+  if (rows.length === 0) return { v2ModelVersionDeclared: false, v2DecisionPolicyVersionDeclared: false };
+  return {
+    v2ModelVersionDeclared: rows.every((r) => !!r.v2ModelVersion),
+    v2DecisionPolicyVersionDeclared: rows.every((r) => !!r.v2DecisionPolicyVersion),
   };
 }
 

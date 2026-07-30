@@ -29,9 +29,17 @@ import {
 import { toMoundV2Inputs, checkMoundV1Parity, type MoundV1ComponentScores, type MoundV1ParityResult } from "./moundV1Adapters";
 import { computeMoundV2Distribution } from "./moundV2Engine";
 import type { MoundV2Distribution } from "./moundV2Types";
+import {
+  applyMoundV2DecisionPolicy,
+  MOUND_V2_DEFAULT_DECISION_POLICIES,
+  type MoundV2DecisionPolicyResult,
+} from "./moundV2DecisionPolicy";
 
 export const MOUND_V1_MODEL_VERSION = "mound_v1_production";
 export const MOUND_V2_MODEL_VERSION = "mound_v2_shadow_v1";
+
+/** "recommended" only when v1RecommendedSide reflects a genuinely publicly-qualified V1 recommendation (everPubliclyFlagged/everPubliclyFlaggedFade) — never a generic model lean. See moundV2ShadowEvaluation.ts's v1RecommendedSide doc + buildMlbMoundRadar.ts's capture site. */
+export type MoundV1QualificationStatus = "recommended" | "not_recommended";
 
 export interface MoundV2ShadowEvaluationResult {
   snapshotId: string;
@@ -46,15 +54,18 @@ export interface MoundV2ShadowEvaluationResult {
   v1Tier: string | null;
   /**
    * V1's own frozen recommended side for THIS exact candidate at THIS exact
-   * evaluation moment (derived from moundDirection: follow->OVER,
-   * fade->UNDER, null if V1 had no resolved direction) — captured, never
-   * recomputed. Combined with the frozen strikeoutsMarket prices already on
-   * `frozen`, this is what makes a real V1 captured-price decision-policy
-   * evaluation possible going forward (see moundV2ComparisonStats.ts's
-   * decision-policy evaluation) — correcting the earlier assumption that
-   * V1's captured-price performance was structurally unavailable.
+   * evaluation moment — null unless v1QualificationStatus is "recommended".
+   * Captured, never recomputed. Combined with the frozen strikeoutsMarket
+   * prices already on `frozen`, this is what makes a real V1 captured-price
+   * decision-policy evaluation possible going forward (see
+   * moundV2ComparisonStats.ts's decision-policy evaluation).
    */
   v1RecommendedSide: "OVER" | "UNDER" | null;
+  /** Whether v1RecommendedSide represents a real, publicly-qualified V1 wager — see the type's own doc comment. Null only in the failure branch (frozen input itself could not be built), where no V1 capture context was ever resolved. */
+  v1QualificationStatus: MoundV1QualificationStatus | null;
+  /** V2's OWN versioned decision-policy verdict for each market — qualify-or-abstain, distinct from the raw distribution probabilities. Null only in the failure branch. */
+  strikeoutsDecision: MoundV2DecisionPolicyResult | null;
+  outsDecision: MoundV2DecisionPolicyResult | null;
   latencyMs: number;
   failureReason: string | null;
 }
@@ -69,6 +80,8 @@ export interface EvaluateMoundV2ShadowArgs {
   v1Tier: string | null;
   /** V1's own frozen recommended side — see the result field's doc comment. */
   v1RecommendedSide: "OVER" | "UNDER" | null;
+  /** Whether v1RecommendedSide is a real, publicly-qualified recommendation — see the result field's doc comment. */
+  v1QualificationStatus: MoundV1QualificationStatus;
   strikeoutsLine?: number | null;
   outsLine?: number | null;
 }
@@ -96,6 +109,36 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
     const v2Inputs = toMoundV2Inputs(frozen, { strikeoutsLine: args.strikeoutsLine, outsLine: args.outsLine });
     const distribution = computeMoundV2Distribution(v2Inputs);
     const parity = checkMoundV1Parity(frozen, args.productionComponentScores);
+
+    // Decision-policy application happens HERE, downstream of the pure
+    // probability computation above — price/provenance/data-quality are
+    // read here to decide qualify-or-abstain, never fed back into
+    // computeMoundV2Distribution itself.
+    const strikeoutsDecision = applyMoundV2DecisionPolicy(MOUND_V2_DEFAULT_DECISION_POLICIES.pitcher_strikeouts, {
+      overProbability: distribution.strikeouts.overProbability,
+      underProbability: distribution.strikeouts.underProbability,
+      pushProbability: distribution.strikeouts.pushProbability,
+      dataQuality: frozen.dataQuality,
+      lineupStatus: frozen.lineupStatus,
+      overPrice: frozen.strikeoutsMarket.overPrice,
+      underPrice: frozen.strikeoutsMarket.underPrice,
+      sportsbook: frozen.strikeoutsMarket.sportsbook,
+      oddsFetchedAt: frozen.strikeoutsMarket.fetchedAt,
+      now: args.now,
+    });
+    const outsDecision = applyMoundV2DecisionPolicy(MOUND_V2_DEFAULT_DECISION_POLICIES.pitcher_outs, {
+      overProbability: distribution.outs.overProbability,
+      underProbability: distribution.outs.underProbability,
+      pushProbability: distribution.outs.pushProbability,
+      dataQuality: frozen.dataQuality,
+      lineupStatus: frozen.lineupStatus,
+      overPrice: frozen.outsMarket.overPrice,
+      underPrice: frozen.outsMarket.underPrice,
+      sportsbook: frozen.outsMarket.sportsbook,
+      oddsFetchedAt: frozen.outsMarket.fetchedAt,
+      now: args.now,
+    });
+
     return {
       ...base,
       frozen,
@@ -104,6 +147,9 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
       v1Score10: args.v1Score10,
       v1Tier: args.v1Tier,
       v1RecommendedSide: args.v1RecommendedSide,
+      v1QualificationStatus: args.v1QualificationStatus,
+      strikeoutsDecision,
+      outsDecision,
       latencyMs: performance.now() - start,
       failureReason: null,
     };
@@ -116,6 +162,9 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
       v1Score10: args.v1Score10,
       v1Tier: args.v1Tier,
       v1RecommendedSide: args.v1RecommendedSide,
+      v1QualificationStatus: null,
+      strikeoutsDecision: null,
+      outsDecision: null,
       latencyMs: performance.now() - start,
       failureReason: err instanceof Error ? err.message : String(err),
     };

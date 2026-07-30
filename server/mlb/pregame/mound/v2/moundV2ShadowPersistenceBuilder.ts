@@ -25,6 +25,7 @@ export function buildMoundV2ShadowPredictionRows(
   return MOUND_V2_MARKETS.map((market) => {
     const marketQuote = market === "pitcher_strikeouts" ? frozen.strikeoutsMarket : frozen.outsMarket;
     const marketResult = market === "pitcher_strikeouts" ? distribution.strikeouts : distribution.outs;
+    const decision = market === "pitcher_strikeouts" ? result.strikeoutsDecision : result.outsDecision;
 
     const row: InsertMoundV2ShadowPrediction = {
       predictionId: `${result.snapshotId}:${market}`,
@@ -45,6 +46,11 @@ export function buildMoundV2ShadowPredictionRows(
       v1Tier: result.v1Tier,
       setupGrade: result.v1Tier,
       v1RecommendedSide: result.v1RecommendedSide,
+      v1QualificationStatus: result.v1QualificationStatus,
+      v2DecisionPolicyVersion: decision?.policyVersion ?? null,
+      v2DecisionSide: decision?.side ?? null,
+      v2Qualified: decision?.qualified ?? null,
+      v2QualificationReason: decision?.reason ?? null,
       v2ExpectedValue: String(marketResult.expectedValue),
       v2OverProbability: String(marketResult.overProbability),
       v2UnderProbability: String(marketResult.underProbability),

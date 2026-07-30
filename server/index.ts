@@ -23,6 +23,7 @@ import { ensureHrRadarResearchPersistenceSchema } from "./dbMigrations/hrRadarRe
 import { ensurePlateHrV2PersistenceSchema } from "./dbMigrations/plateHrV2Persistence";
 import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/mlbRecommendationEpisodePersistence";
 import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2ShadowPersistence";
+import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
@@ -263,6 +264,13 @@ app.use((req, res, next) => {
   // creates schema, never rows, until that flag is set.
   await ensureMoundV2ShadowPersistenceSchema(pool);
   console.log("[startup] Mound V2 shadow prediction persistence schema ensured");
+
+  // Durable evaluation outbox (Final Pre-Push Integrity Pass) — the durable
+  // handoff that lets V2 evaluation run entirely outside buildMlbMoundRadar.ts's
+  // publication-critical path. See shared/schema.ts's moundV2ShadowJobs doc
+  // comment. Same MOUND_V2_SHADOW_ENABLED gate; schema-only until then.
+  await ensureMoundV2ShadowJobsPersistenceSchema(pool);
+  console.log("[startup] Mound V2 shadow evaluation outbox schema ensured");
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.
@@ -820,16 +828,9 @@ app.use((req, res, next) => {
       const { installMoundPersistence, loadMoundSnapshotFromDb } = await import(
         "./mlb/pregame/mound/moundPersistence"
       );
-      const { installMoundV2ShadowPersistence } = await import(
-        "./mlb/pregame/mound/v2/moundV2ShadowPersistenceAdapter"
-      );
       const { slateDateET } = await import("./utils/dateUtils");
 
       installMoundPersistence();
-      // Mound V2 (shadow, research-only) — wires durable capture for
-      // whatever the shadow evaluation records; MOUND_V2_SHADOW_ENABLED
-      // stays off by default, so this is inert until that flag is set.
-      installMoundV2ShadowPersistence();
 
       // Boot-time hydration (research plan §4.1, Option A) — mirrors the
       // Plate hydration block above exactly: seed the in-memory snapshot from
@@ -895,12 +896,32 @@ app.use((req, res, next) => {
         );
       }, 5 * 60 * 1000);
 
+      // Mound V2 (shadow) evaluation WORKER (Final Pre-Push Integrity Pass) —
+      // fully decoupled from buildMlbMoundRadar.ts's publication-critical
+      // path. The build loop's only synchronous obligation toward V2 is a
+      // bounded, idempotent INSERT into the durable outbox
+      // (moundV2ShadowJobQueue.ts); this tick is what actually runs
+      // evaluateMoundV2Shadow + persists the resulting predictions. A short
+      // (30s) interval — cheap to run often since each tick claims only a
+      // bounded batch and no-ops quickly when the queue is empty — keeps
+      // shadow data fresh without ever being on V1's timeline. Same
+      // MOUND_V2_SHADOW_ENABLED gate as the sweeps below: with the flag off,
+      // nothing is ever enqueued, so this is an inert no-op claim of an
+      // empty queue.
+      const { isMoundV2ShadowEnabled } = await import("./mlb/pregame/mound/v2/moundV2ShadowFlags");
+      const { runMoundV2ShadowWorkerTick } = await import("./mlb/pregame/mound/v2/moundV2ShadowWorker");
+      setInterval(() => {
+        if (!isMoundV2ShadowEnabled()) return;
+        runMoundV2ShadowWorkerTick().catch((e) =>
+          console.warn("[MOUND_V2_SHADOW_WORKER] tick failed:", e?.message),
+        );
+      }, 30 * 1000);
+
       // Mound V2 (shadow) grading — same 5-min cadence as V1's own grading
       // tick above, since it depends on the same box-score cache. Gated
       // behind MOUND_V2_SHADOW_ENABLED (default off): with the flag off, no
       // shadow predictions are ever captured, so this is an inert no-op scan
       // of an empty pending list until a human deliberately turns it on.
-      const { isMoundV2ShadowEnabled } = await import("./mlb/pregame/mound/v2/moundV2ShadowFlags");
       const { runMoundV2ShadowGradingSweep } = await import(
         "./mlb/pregame/mound/v2/moundV2ShadowGradingSweep"
       );

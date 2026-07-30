@@ -128,7 +128,7 @@ export interface FrozenMoundInput {
 import { createHash } from "node:crypto";
 
 // v2 (Correction 1): strikeoutsMarket.underPrice is now genuinely populated
-// from the same already-fetched raw odds snapshot (pickBestUnderBook in
+// from the same already-fetched raw odds snapshot (pairedUnderOddsForBook in
 // oddsDisplay.ts) instead of being permanently hardcoded to null — v1 rows
 // captured before this change have real overPrice but always-null
 // underPrice. Persisted rows also gain a sibling v1RecommendedSide field

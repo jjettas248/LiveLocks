@@ -1,30 +1,26 @@
-// Mound V2 shadow — latency benchmark (Correction 2). Measures
+// Mound V2 shadow — WORKER evaluation latency benchmark (Final Pre-Push
+// Integrity Pass; supersedes Correction 2's framing). Measures
 // evaluateMoundV2Shadow's OWN synchronous CPU cost in isolation, using a
-// realistic 9-batter confirmed lineup (the shape buildMlbMoundRadar.ts
-// actually constructs in its per-pitcher loop). This is exactly the new
-// synchronous cost the shadow block adds inline to that loop — it does NOT
-// simulate the real build's network I/O (6+ awaited HTTP calls per pitcher
-// via Promise.allSettled: syncPitcherSeasonStats, syncPitcherMultiYearStats,
-// fetchPitcherHandednessSplits, fetchPitcherRecentStarts,
-// fetchBaseballSavantData, fetchOpponentLineupKProfile, plus one
-// syncBvPMatchup per opposing batter), which cannot be measured offline and
-// is unchanged by this work (confirmed by grep: zero new fetch()/
-// syncGameBoxScore() calls anywhere in v2/ — see the Part 3/8 handoffs).
+// realistic 9-batter confirmed lineup.
 //
-// Measured result (this machine, N=2000, 9-batter lineup): mean ~0.6ms,
-// p95 ~0.9ms, max ~1.6ms per pitcher — projecting to ~9-18ms of ADDED
-// sequential CPU time across an entire 15-30-pitcher build, against a build
-// that is already dominated by many seconds of real per-pitcher network I/O
-// (each pitcher's Promise.allSettled alone typically costs low-hundreds-of-
-// milliseconds to low seconds per external HTTP round trip, well-established
-// for real network calls, sequential across pitchers since the per-pitcher
-// loop is NOT parallelized — see buildMlbMoundRadar.ts's `for (const starter
-// of starters)`). This is why the architecture stays synchronous/inline
-// rather than moving to a real async dispatch/queue: the measured cost is
-// not material. If a future change to moundV2Math.ts's algorithms, or a
-// larger batting order, pushes p95Ms past MATERIALITY_THRESHOLD_MS, that is
-// the trigger to revisit this decision — not a reason to pre-build unused
-// queue infrastructure now.
+// IMPORTANT CONTEXT CHANGE: this number is NO LONGER the cost of anything in
+// buildMlbMoundRadar.ts's publication-critical path. As of this pass,
+// evaluateMoundV2Shadow runs exclusively inside moundV2ShadowWorker.ts's own
+// independent tick, reached only via the durable outbox
+// (moundV2ShadowJobQueue.ts) — the build loop's ONLY synchronous obligation
+// is one bounded INSERT (see moundV2ShadowJobQueue.integration.test.ts for
+// THAT latency, and moundV2ShadowNeverWaits.test.ts for the actual
+// behavioral proof that V1 publication does not wait for this cost, however
+// large it becomes). This benchmark is retained as a WORKER-side regression
+// guard (so a future algorithmic blow-up in moundV2Math.ts is caught here,
+// where it can only ever slow down the worker's own throughput, never V1)
+// and to size worker batch/interval tuning — NOT as justification for
+// keeping evaluation inline (it no longer is inline).
+//
+// Measured result (this machine, N=500, 9-batter lineup): mean ~0.6ms,
+// p95 ~0.9ms, max ~1.6ms per pitcher (unchanged in magnitude by the
+// decision-policy addition — applyMoundV2DecisionPolicy is O(1) arithmetic
+// per market, negligible next to the O(n^2)-or-better DP in moundV2Math.ts).
 //
 // Run: npx tsx server/mlb/pregame/mound/v2/moundV2ShadowLatency.test.ts
 
@@ -68,7 +64,7 @@ function buildArgs(i: number): EvaluateMoundV2ShadowArgs {
       dataQuality: "complete", productionModelVersion: MOUND_V1_MODEL_VERSION, v2ModelVersion: MOUND_V2_MODEL_VERSION,
     },
     productionComponentScores: { pitcherSkillScore: 7.0, workloadScore: 6.4, opponentKProfileScore: 6.7 },
-    v1Score10: 6.8, v1Tier: "strong", v1RecommendedSide: "OVER",
+    v1Score10: 6.8, v1Tier: "strong", v1RecommendedSide: "OVER", v1QualificationStatus: "recommended",
     strikeoutsLine: 6.5, outsLine: null,
   };
 }
@@ -80,9 +76,9 @@ function percentile(sorted: number[], p: number): number {
 
 // Generous headroom over the measured ~0.9ms p95 / ~1.6ms max on this
 // machine — this is a regression guard against a future algorithmic
-// blow-up (e.g. an unbounded workload state space), not a tight
-// performance SLA. Crossing it doesn't fail silently: it's the documented
-// trigger to reconsider inline execution (see the module header).
+// blow-up (e.g. an unbounded workload state space) inside the WORKER, not a
+// tight performance SLA and not a justification for staying inline (the
+// worker is already fully decoupled from V1 regardless of this number).
 const MATERIALITY_THRESHOLD_MS = 25;
 const WARMUP = 50;
 const N = 500;
@@ -106,11 +102,11 @@ const p99 = percentile(samples, 99);
 const max = samples[samples.length - 1];
 
 ok(!anyFailure, "every benchmark evaluation succeeds (no failureReason) — this is measuring the happy path's real cost, not an error path's");
-ok(p95 < MATERIALITY_THRESHOLD_MS, `p95 latency (${p95.toFixed(3)}ms) stays well under the materiality threshold (${MATERIALITY_THRESHOLD_MS}ms) — inline synchronous execution remains justified`);
+ok(p95 < MATERIALITY_THRESHOLD_MS, `p95 latency (${p95.toFixed(3)}ms) stays well under the materiality threshold (${MATERIALITY_THRESHOLD_MS}ms) — the worker can process a batch quickly; this is NOT why V1 doesn't wait (see moundV2ShadowNeverWaits.test.ts for that proof)`);
 ok(max < MATERIALITY_THRESHOLD_MS * 2, `max latency (${max.toFixed(3)}ms) has no wild outlier tail`);
 
-console.log(`  evaluateMoundV2Shadow latency (N=${N}, 9-batter lineup): mean=${mean.toFixed(4)}ms p50=${p50.toFixed(4)}ms p95=${p95.toFixed(4)}ms p99=${p99.toFixed(4)}ms max=${max.toFixed(4)}ms`);
-console.log(`  Projected added sequential CPU time per build: ~${(mean * 15).toFixed(2)}ms (15 pitchers) to ~${(mean * 30).toFixed(2)}ms (30 pitchers)`);
+console.log(`  evaluateMoundV2Shadow (WORKER-side) latency (N=${N}, 9-batter lineup): mean=${mean.toFixed(4)}ms p50=${p50.toFixed(4)}ms p95=${p95.toFixed(4)}ms p99=${p99.toFixed(4)}ms max=${max.toFixed(4)}ms`);
+console.log(`  Projected worker-side sequential CPU time per batch: ~${(mean * 15).toFixed(2)}ms (15 jobs) to ~${(mean * 30).toFixed(2)}ms (30 jobs) — entirely off V1's timeline`);
 
 console.log(`\nmoundV2ShadowLatency.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

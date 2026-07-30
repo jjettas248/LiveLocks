@@ -24,11 +24,32 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
     v2OverProbability: 0.6, v2UnderProbability: 0.37, v2PushProbability: 0.03,
     v1RecommendedSide: "OVER", contractVersion: MOUND_FROZEN_CONTRACT_VERSION,
     v1Tier: "strong", v2ModelVersion: "v2_v1", productionModelVersion: "prod_v1",
+    v2DecisionPolicyVersion: "mound_v2_decision_policy_v1",
+    dataQuality: "complete", lineupStatus: "confirmed", sportsbook: "draftkings",
+    oddsFetchedAt: "2026-07-29T19:58:00.000Z",
     ...over,
   };
 }
 
-const baseOpts = { probabilityComparator: "climatology" as const, shadowEvaluationTotal: 0, shadowEvaluationFailures: 0, settlementOrProvenanceRegressionDetected: false };
+const baseOpts = {
+  probabilityComparator: "climatology" as const,
+  shadowEvaluationTotal: 0,
+  shadowEvaluationFailures: 0,
+  settlementOrProvenanceRegressionDetected: false,
+  evalWindowStart: null as string | null,
+  evalWindowEnd: null as string | null,
+  gradingCoverageReport: null as { totalRows: number; pendingCount: number; providerFailureCount: number } | null,
+  workerQueueStats: null as { completed: number; deadLetter: number } | null,
+};
+
+/** baseOpts with every Section 5 evidence-integrity input filled in cleanly — for tests whose focus is the ORIGINAL (probability/decision-policy) criteria, so Section 5's new fail-closed gates don't spuriously fire and obscure the assertion under test. */
+const cleanOpts = {
+  ...baseOpts,
+  evalWindowStart: "2026-07-01",
+  evalWindowEnd: "2026-07-30",
+  gradingCoverageReport: { totalRows: 1000, pendingCount: 10, providerFailureCount: 2 },
+  workerQueueStats: { completed: 500, deadLetter: 2 },
+};
 
 // ── Fail-closed on missing data ──────────────────────────────────────────
 {
@@ -82,11 +103,12 @@ const baseOpts = { probabilityComparator: "climatology" as const, shadowEvaluati
     ...Array.from({ length: 10 }, (_, i) => row({ gameId: `gc${i}`, finalResult: "over", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER" })),
     ...Array.from({ length: 90 }, (_, i) => row({ gameId: `gd${i}`, finalResult: "under", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER" })),
   ];
-  const cleanVerdict = buildAndEvaluateMoundV2Promotion(great, { ...baseOpts, shadowEvaluationTotal: 300 }).verdict;
-  ok(cleanVerdict.readyForPromotion, `a large, well-calibrated, fully-covered, paired-decision-policy-clean sample with no regression IS ready for promotion (blockers: ${cleanVerdict.blockers.join(", ")})`);
+  const cleanVerdict = buildAndEvaluateMoundV2Promotion(great, { ...cleanOpts, shadowEvaluationTotal: 300 }).verdict;
+  ok(cleanVerdict.readyForPromotion, `a large, well-calibrated, fully-covered, paired-decision-policy-clean sample with no regression and clean Section-5 evidence IS ready for promotion (blockers: ${cleanVerdict.blockers.join(", ")})`);
 
-  const regressionVerdict = buildAndEvaluateMoundV2Promotion(great, { ...baseOpts, shadowEvaluationTotal: 300, settlementOrProvenanceRegressionDetected: true }).verdict;
+  const regressionVerdict = buildAndEvaluateMoundV2Promotion(great, { ...cleanOpts, shadowEvaluationTotal: 300, settlementOrProvenanceRegressionDetected: true }).verdict;
   ok(!regressionVerdict.readyForPromotion && regressionVerdict.blockers.includes("SETTLEMENT_OR_PROVENANCE_REGRESSION"), "a detected regression blocks promotion even when every statistical criterion is otherwise perfect");
+  ok(regressionVerdict.blockers.length === 1, "no other blockers are spuriously reported alongside the regression flag when every other criterion (including the new Section 5 evidence-integrity ones) is genuinely clean");
 }
 
 // ── V2 must beat climatology, not just be non-degenerate ─────────────────
@@ -161,6 +183,83 @@ const baseOpts = { probabilityComparator: "climatology" as const, shadowEvaluati
   }));
   const evidence = buildMoundV2PromotionEvidence(rows, { ...baseOpts, probabilityComparator: "market_implied", shadowEvaluationTotal: 150 });
   ok(evidence.probabilityComparator === "market_implied", "the requested comparator is honored, not silently defaulted to climatology");
+}
+
+// ── Section 5: eval window passes through verbatim, and fails closed when absent ──
+{
+  const rows = Array.from({ length: 10 }, (_, i) => row({ gameId: `w${i}` }));
+  const withWindow = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, evalWindowStart: "2026-06-15", evalWindowEnd: "2026-07-15" });
+  ok(withWindow.evalWindowStart === "2026-06-15" && withWindow.evalWindowEnd === "2026-07-15", "the declared window is carried through verbatim, never recomputed or reformatted");
+
+  const withoutWindow = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, evalWindowStart: null, evalWindowEnd: null });
+  ok(withoutWindow.evalWindowStart === null && withoutWindow.evalWindowEnd === null, "a null window is passed through honestly, never fabricated");
+}
+
+// ── Section 5: settlementErrorRatio/pendingGradingRatio from a real grading-coverage report ──
+{
+  const rows = Array.from({ length: 10 }, (_, i) => row({ gameId: `gc${i}` }));
+  const withReport = buildMoundV2PromotionEvidence(rows, {
+    ...cleanOpts,
+    gradingCoverageReport: { totalRows: 200, pendingCount: 20, providerFailureCount: 4 },
+  });
+  ok(withReport.settlementErrorRatio !== null && Math.abs(withReport.settlementErrorRatio - 0.02) < 1e-9, `settlementErrorRatio = providerFailureCount/totalRows = 4/200 = 0.02 (got ${withReport.settlementErrorRatio})`);
+  ok(withReport.pendingGradingRatio !== null && Math.abs(withReport.pendingGradingRatio - 0.1) < 1e-9, `pendingGradingRatio = pendingCount/totalRows = 20/200 = 0.1 (got ${withReport.pendingGradingRatio})`);
+
+  const withoutReport = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, gradingCoverageReport: null });
+  ok(withoutReport.settlementErrorRatio === null && withoutReport.pendingGradingRatio === null, "no grading-coverage report supplied -> both ratios null, fails closed rather than defaulting to 0 (which would read as 'perfectly healthy')");
+
+  const zeroTotalReport = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, gradingCoverageReport: { totalRows: 0, pendingCount: 0, providerFailureCount: 0 } });
+  ok(zeroTotalReport.settlementErrorRatio === null && zeroTotalReport.pendingGradingRatio === null, "a report with zero total rows (empty denominator) -> null, never a fabricated 0");
+}
+
+// ── Section 5: workerJobFailureRatio from real worker-queue stats ────────
+{
+  const rows = Array.from({ length: 10 }, (_, i) => row({ gameId: `wq${i}` }));
+  const withStats = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, workerQueueStats: { completed: 190, deadLetter: 10 } });
+  ok(withStats.workerJobFailureRatio !== null && Math.abs(withStats.workerJobFailureRatio - 0.05) < 1e-9, `workerJobFailureRatio = deadLetter/(completed+deadLetter) = 10/200 = 0.05 (got ${withStats.workerJobFailureRatio})`);
+
+  const withoutStats = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, workerQueueStats: null });
+  ok(withoutStats.workerJobFailureRatio === null, "no worker-queue stats supplied -> null, fails closed");
+
+  const zeroTerminalJobs = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, workerQueueStats: { completed: 0, deadLetter: 0 } });
+  ok(zeroTerminalJobs.workerJobFailureRatio === null, "zero terminal (completed+deadLetter) jobs -> null, never a fabricated 0 or 1");
+}
+
+// ── Section 5: shadowEvaluationFailureRatio is distinct from marketCoverage ──
+{
+  const rows = Array.from({ length: 10 }, (_, i) => row({ gameId: `se${i}` }));
+  const evidence = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, shadowEvaluationTotal: 1000, shadowEvaluationFailures: 100 });
+  ok(Math.abs(evidence.shadowEvaluationFailureRatio - 0.1) < 1e-9, `shadowEvaluationFailureRatio = failures/total = 100/1000 = 0.1 (got ${evidence.shadowEvaluationFailureRatio})`);
+  ok(Math.abs(evidence.marketCoverage - 0.9) < 1e-9, "marketCoverage is computed from the SAME two inputs but is a separate field (0.9 = 1 - 0.1)");
+
+  const zeroAttempts = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, shadowEvaluationTotal: 0, shadowEvaluationFailures: 0 });
+  ok(zeroAttempts.shadowEvaluationFailureRatio === 0, "zero evaluation attempts -> failure ratio 0 (nothing to have failed), not null — distinct from the ratios that fail closed on an empty denominator because THIS one isn't reporting a rate over an uncertain population, just 'nothing failed because nothing ran'");
+}
+
+// ── Section 5: version declaration end to end ────────────────────────────
+{
+  const declared = buildMoundV2PromotionEvidence(Array.from({ length: 5 }, (_, i) => row({ gameId: `vd${i}` })), cleanOpts);
+  ok(declared.v2ModelVersionDeclared === true && declared.v2DecisionPolicyVersionDeclared === true, "a population where every row declares both versions reads as fully declared");
+
+  const oneUndeclared = buildMoundV2PromotionEvidence(
+    [...Array.from({ length: 4 }, (_, i) => row({ gameId: `ud${i}` })), row({ gameId: "missing", v2DecisionPolicyVersion: null })],
+    cleanOpts,
+  );
+  ok(oneUndeclared.v2DecisionPolicyVersionDeclared === false, "a single row missing its decision-policy version fails the whole evidence's declaration check");
+}
+
+// ── Section 5: subgroups/pairedPopulationRatio/roiEligiblePriceRatio/sportsbookProvenanceRatio/absoluteCalibrationError all flow end to end from real rows ──
+{
+  const rows: MoundV2ComparisonRow[] = [
+    ...Array.from({ length: 50 }, (_, i) => row({ gameId: `sg${i}`, sportsbook: "draftkings", finalResult: i % 2 === 0 ? "over" : "under" })),
+    ...Array.from({ length: 20 }, (_, i) => row({ gameId: `nr${i}`, v1RecommendedSide: null })), // V1-no-recommendation, never paired
+  ];
+  const evidence = buildMoundV2PromotionEvidence(rows, { ...cleanOpts, shadowEvaluationTotal: 70 });
+  ok(evidence.subgroups.some((s) => s.dimension === "sportsbook" && s.key === "draftkings" && s.sampleSize === 50), "subgroups are populated end to end from real comparison rows via the adapter, not just in the standalone unit test");
+  ok(evidence.pairedPopulationRatio !== null && Math.abs(evidence.pairedPopulationRatio - 50 / 70) < 1e-9, `pairedPopulationRatio reflects the real 50-paired/70-total split (got ${evidence.pairedPopulationRatio})`);
+  ok(evidence.roiEligiblePriceRatio === 1, "every paired row in this fixture carries a real captured price on both sides -> ratio 1.0");
+  ok(evidence.sportsbookProvenanceRatio === 1, "every graded-with-line row in this fixture carries a real sportsbook + fetch timestamp -> ratio 1.0");
+  ok(evidence.absoluteCalibrationError !== null && evidence.absoluteCalibrationError >= 0, `absoluteCalibrationError is V2's own real, non-negative calibration error (got ${evidence.absoluteCalibrationError})`);
 }
 
 console.log(`\nmoundV2PromotionEvidenceAdapter.test: ${passed} passed, ${failed} failed`);

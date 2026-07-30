@@ -1,35 +1,56 @@
 // Mound Radar V2 (shadow) — promotion evidence adapter (Flagship Program
-// Phase 2, Part 7, corrected). Converts REAL Part 6 comparison rows (plus
-// REAL Part 3 shadow-evaluation metrics) into the MoundV2PromotionEvidence
-// shape moundV2PromotionGate.ts's evaluateMoundV2PromotionReadiness checks
-// against fixed thresholds. Produces EVIDENCE ONLY — nothing here promotes
+// Phase 2, Part 7, corrected; Final Pre-Push Integrity Pass, Section 5).
+// Converts REAL Part 6 comparison rows (plus REAL Part 3 shadow-evaluation
+// metrics, and — as of Section 5 — real grading-coverage and worker-queue
+// stats) into the MoundV2PromotionEvidence shape
+// moundV2PromotionGate.ts's evaluateMoundV2PromotionReadiness checks against
+// fixed thresholds. Produces EVIDENCE ONLY — nothing here promotes
 // anything, and nothing calls this automatically. Promotion requires a
 // separate, deliberate, explicit code/config change.
 //
-// Thin by design: both criteria families the gate needs (absolute
-// probability quality vs an explicitly-named comparator, and paired
-// decision-policy non-inferiority vs V1's real captured-price performance)
-// are already computed by moundV2ComparisonStats.ts's
-// computeMoundV2ProbabilityEvaluation / computeMoundV2DecisionPolicyComparison
-// — this file only selects the strikeouts-market subset (the outs market
-// has no real line today, so it can never feed a probability/decision-
-// policy criterion) and re-shapes their output into the gate's evidence.
+// Thin by design: every criteria family the gate needs is already computed
+// by moundV2ComparisonStats.ts (probability quality vs an explicitly-named
+// comparator, paired decision-policy non-inferiority, subgroup breakdowns,
+// and the evidence-integrity ratios added in Section 5) — this file only
+// selects the strikeouts-market subset (the outs market has no real line
+// today, so it can never feed a probability/decision-policy criterion) and
+// re-shapes everything into the gate's evidence.
 //
 // Fail-closed: every value that can't be honestly computed reads as
 // "blocks promotion," never as "clears the gate." Market coverage with no
-// evaluation data at all reads as 0. settlementOrProvenanceRegressionDetected
-// has no live runtime monitor today and is therefore a REQUIRED explicit
-// input, not a defaulted one — there is no way to silently get a favorable
-// "false" out of this function.
+// evaluation data at all reads as 0. settlementOrProvenanceRegressionDetected,
+// gradingCoverageReport, and workerQueueStats have no live runtime monitor
+// wired into THIS function today and are therefore REQUIRED explicit inputs
+// (nullable, but never defaulted/omitted) — there is no way to silently get
+// a favorable readout out of this function when real evidence wasn't
+// supplied.
 
 import {
   computeMoundV2ProbabilityEvaluation,
   computeMoundV2DecisionPolicyComparison,
+  buildMoundV2PromotionSubgroups,
+  computeRoiEligiblePriceRatio,
+  computeSportsbookProvenanceRatio,
+  computePairedPopulationRatio,
+  computeMoundV2VersionDeclaration,
   type MoundV2ComparisonRow,
 } from "./moundV2ComparisonStats";
 import { evaluateMoundV2PromotionReadiness, type MoundV2PromotionEvidence, type MoundV2PromotionVerdict } from "./moundV2PromotionGate";
 
 const STRIKEOUTS_MARKET = "pitcher_strikeouts";
+
+/** Same shape as storage.ts's getMoundV2ShadowJobQueueStats — only the two fields this adapter needs. */
+export interface MoundV2WorkerQueueStatsForPromotion {
+  completed: number;
+  deadLetter: number;
+}
+
+/** Same shape as moundV2ShadowReconciliation.ts's MoundV2GradingCoverageReport — only the fields this adapter needs. */
+export interface MoundV2GradingCoverageForPromotion {
+  totalRows: number;
+  pendingCount: number;
+  providerFailureCount: number;
+}
 
 export interface MoundV2PromotionEvidenceOpts {
   /** Which non-V1 reference to score V2's absolute probability quality against — see moundV2PromotionGate.ts's own doc comment for why this is never V1. */
@@ -51,6 +72,13 @@ export interface MoundV2PromotionEvidenceOpts {
    * human/CI attestation, not something this function can verify itself.
    */
   settlementOrProvenanceRegressionDetected: boolean;
+  /** ET slate date strings ("YYYY-MM-DD") declaring the evaluation window — required so a report can never silently omit stating what period it covers. */
+  evalWindowStart: string | null;
+  evalWindowEnd: string | null;
+  /** From moundV2ShadowReconciliation.ts's buildMoundV2GradingCoverageReport, run over the SAME window's full row population (not just graded-with-line). Null (not omitted) when the caller genuinely has no such report available — the gate then fails closed on settlementErrorRatio/pendingGradingRatio rather than silently passing. */
+  gradingCoverageReport: MoundV2GradingCoverageForPromotion | null;
+  /** From storage.ts's getMoundV2ShadowJobQueueStats. Null when unavailable — the gate fails closed on workerJobFailureRatio. */
+  workerQueueStats: MoundV2WorkerQueueStatsForPromotion | null;
 }
 
 /**
@@ -71,12 +99,33 @@ export function buildMoundV2PromotionEvidence(
   const marketCoverage = opts.shadowEvaluationTotal > 0
     ? (opts.shadowEvaluationTotal - opts.shadowEvaluationFailures) / opts.shadowEvaluationTotal
     : 0;
+  // Reported/gated SEPARATELY from marketCoverage above: coverage conflates
+  // "no market line available for this candidate" with "the evaluator
+  // actually failed/threw" as the same shortfall. 0 when there were zero
+  // attempts (nothing to have failed) — not 1 ("perfect"), since
+  // marketCoverage already carries the "no attempts" case.
+  const shadowEvaluationFailureRatio = opts.shadowEvaluationTotal > 0
+    ? opts.shadowEvaluationFailures / opts.shadowEvaluationTotal
+    : 0;
 
   // Fail-closed: an unmeasurable probability delta (no V2 or comparator
   // metric to diff) reads as +Infinity ("not improved"), never 0 ("matches
   // exactly") — missing/insufficient data must never silently pass a gate
   // meant to require PROVEN improvement.
   const toBlockingDelta = (d: number | null): number => d ?? Number.POSITIVE_INFINITY;
+
+  const { v2ModelVersionDeclared, v2DecisionPolicyVersionDeclared } = computeMoundV2VersionDeclaration(gradedWithLine);
+
+  const settlementErrorRatio = opts.gradingCoverageReport && opts.gradingCoverageReport.totalRows > 0
+    ? opts.gradingCoverageReport.providerFailureCount / opts.gradingCoverageReport.totalRows
+    : null;
+  const pendingGradingRatio = opts.gradingCoverageReport && opts.gradingCoverageReport.totalRows > 0
+    ? opts.gradingCoverageReport.pendingCount / opts.gradingCoverageReport.totalRows
+    : null;
+
+  const workerJobFailureRatio = opts.workerQueueStats && (opts.workerQueueStats.completed + opts.workerQueueStats.deadLetter) > 0
+    ? opts.workerQueueStats.deadLetter / (opts.workerQueueStats.completed + opts.workerQueueStats.deadLetter)
+    : null;
 
   return {
     probabilityComparator: opts.probabilityComparator,
@@ -90,6 +139,20 @@ export function buildMoundV2PromotionEvidence(
     winRateDelta: decisionPolicy.winRateDelta,
     roiDelta: decisionPolicy.roiDelta,
     settlementOrProvenanceRegressionDetected: opts.settlementOrProvenanceRegressionDetected,
+
+    evalWindowStart: opts.evalWindowStart,
+    evalWindowEnd: opts.evalWindowEnd,
+    absoluteCalibrationError: probabilityEvaluation.v2CalibrationError,
+    pairedPopulationRatio: computePairedPopulationRatio(decisionPolicy.pairedN, decisionPolicy.legacyIncompleteDataCount, decisionPolicy.v1NoRecommendationCount),
+    roiEligiblePriceRatio: computeRoiEligiblePriceRatio(gradedWithLine),
+    sportsbookProvenanceRatio: computeSportsbookProvenanceRatio(gradedWithLine),
+    settlementErrorRatio,
+    pendingGradingRatio,
+    subgroups: buildMoundV2PromotionSubgroups(gradedWithLine),
+    workerJobFailureRatio,
+    shadowEvaluationFailureRatio,
+    v2ModelVersionDeclared,
+    v2DecisionPolicyVersionDeclared,
   };
 }
 

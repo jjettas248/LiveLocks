@@ -29,25 +29,32 @@ export function pickBestOverBook(
 }
 
 /**
- * Mirrors pickBestOverBook for the UNDER side. The raw odds snapshot
- * (RawBookLine) already carries underOdds for every book — this was
- * previously never extracted anywhere in Mound's own code, so every
- * consumer that needed an UNDER price (Fade captured-price grading, the
- * V2 shadow frozen market snapshot) had it hardcoded to null even though
- * the real data was already being fetched. Zero new provider calls.
+ * Given the SAME book pickBestOverBook already chose for the OVER side,
+ * returns THAT book's own UNDER price — never independently re-shopped
+ * across other books.
+ *
+ * A prior version of this file had a pickBestUnderBook that scanned ALL
+ * books for the single best UNDER price, called independently of
+ * pickBestOverBook. That let the frozen market snapshot combine an OVER
+ * price from one book with an UNDER price from a DIFFERENT book — or even
+ * a different LINE, since books do not always post identical lines for the
+ * same prop. FrozenMoundMarketQuote has exactly one line/sportsbook/
+ * fetchedAt shared by both prices, so that mismatch would have silently
+ * mislabeled the UNDER price's true line/book. This function makes that
+ * impossible by construction: both prices always come from the exact same
+ * RawBookLine entry (same book, same line, same fetch cycle).
+ *
+ * Returns null (never fabricated or cross-substituted from a different
+ * book) when the chosen book didn't post a valid UNDER price at all.
  */
-export function pickBestUnderBook(
-  books: Record<string, RawBookLine>,
-): { book: string; line: number; odds: number } | null {
-  let best: { book: string; line: number; odds: number } | null = null;
-  for (const [book, snap] of Object.entries(books)) {
-    if (book.startsWith("_")) continue;
-    if (snap.underOdds == null || !isFinite(snap.underOdds)) continue;
-    if (!best || snap.underOdds > best.odds) {
-      best = { book, line: snap.line, odds: snap.underOdds };
-    }
-  }
-  return best;
+export function pairedUnderOddsForBook(
+  books: Record<string, RawBookLine> | null | undefined,
+  sportsbook: string | null | undefined,
+): number | null {
+  if (!books || !sportsbook || sportsbook.startsWith("_")) return null;
+  const entry = books[sportsbook];
+  if (!entry || entry.underOdds == null || !isFinite(entry.underOdds)) return null;
+  return entry.underOdds;
 }
 
 export function americanToImpliedProbability(odds: number): number {

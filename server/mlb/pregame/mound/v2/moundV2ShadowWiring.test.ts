@@ -1,17 +1,38 @@
-// Mound V2 shadow wiring — structural safety proof.
+// Mound V2 shadow wiring — structural safety proof (Final Pre-Push Integrity
+// Pass; supersedes the prior version's now-stale ordering assumptions).
 //
 // A full mocked end-to-end run of buildMlbMoundRadar.ts (real game
 // discovery, roster, Stats API, Savant, odds fetches all stubbed) was not
 // built for this pass — that orchestrator has a large real-data dependency
-// surface. Instead, this proves the specific safety property by reading the
-// actual source: the Mound V2 shadow block appears strictly AFTER the real
-// `signal` object (V1's actual output) is fully assembled, contains no
-// assignment INTO `signal` or `signals`, and V1's own
-// carryForwardMoundGradedState/signals.set call appears strictly AFTER the
-// shadow block (so it runs regardless of the shadow block's outcome) —
-// combined with the exhaustive "V2 imports nothing from production Mound"
-// check in moundV2Engine.test.ts, this is a source-level, not just
-// documentation-level, proof that V2 cannot reach V1's output.
+// surface. Instead, this proves the specific safety properties by reading
+// the actual source:
+//
+//   1. `signal` (V1's actual output) is fully assembled BEFORE
+//      carryForwardMoundGradedState pins its durable public-qualification
+//      history (everPubliclyFlagged/everPubliclyFlaggedFade/moundDirection).
+//   2. carryForwardMoundGradedState runs BEFORE the V2 shadow block — this
+//      is the reordering this pass made to fix the V1-qualification-timing
+//      bug (the shadow capture must read the PINNED durable state, never the
+//      fresh per-cycle default that exists before carry-forward runs).
+//   3. The shadow block contains no assignment INTO `signal` or `signals`.
+//   4. The shadow block's only V2-related call is the durable, idempotent
+//      ENQUEUE (enqueueMoundV2ShadowForPitcher) — never a direct call to
+//      evaluateMoundV2Shadow, anywhere in this file. Evaluation now happens
+//      exclusively in moundV2ShadowWorker.ts's own independent tick; see
+//      moundV2ShadowNeverWaits.integration.test.ts for the BEHAVIORAL (not
+//      just structural) proof that V1 does not wait for it.
+//   5. The shadow block has its own try/catch.
+//   6. V1's own signals.set(signalId, signal) call site appears strictly
+//      AFTER the shadow block's closing brace, so V1 publishes unconditionally
+//      regardless of the shadow block's outcome (enqueue success, enqueue
+//      failure, or an unexpected throw during construction).
+//
+// Combined with the exhaustive "V2 imports nothing from production Mound"
+// check in moundV2Engine.test.ts and the "V1's enqueue path cannot even
+// reach the worker" import-absence checks in
+// moundV2ShadowNeverWaits.integration.test.ts, this is a source-level, not
+// just documentation-level, proof that V2 cannot reach V1's output and V1
+// cannot be gated by V2.
 //
 // Run: npx tsx server/mlb/pregame/mound/v2/moundV2ShadowWiring.test.ts
 
@@ -30,34 +51,52 @@ const buildFilePath = path.join(dir, "..", "buildMlbMoundRadar.ts");
 const source = readFileSync(buildFilePath, "utf-8");
 
 const signalAssemblyIdx = source.indexOf("const signal: MoundSignal = {");
-const shadowBlockStartIdx = source.indexOf("if (isMoundV2ShadowEnabled())");
 const carryForwardIdx = source.indexOf("carryForwardMoundGradedState(signal, prevSignals?.get(signalId));");
+const shadowBlockStartIdx = source.indexOf("if (isMoundV2ShadowEnabled())");
+const signalsSetIdx = source.indexOf("signals.set(signalId, signal);");
 
 ok(signalAssemblyIdx !== -1, "found the real `signal` object assembly in buildMlbMoundRadar.ts");
+ok(carryForwardIdx !== -1, "found V1's own carryForwardMoundGradedState call site");
 ok(shadowBlockStartIdx !== -1, "found the Mound V2 shadow block's flag check");
-ok(carryForwardIdx !== -1, "found V1's own carryForwardMoundGradedState/signals.set call site");
+ok(signalsSetIdx !== -1, "found V1's own signals.set(signalId, signal) publication call site");
 
 ok(
-  signalAssemblyIdx < shadowBlockStartIdx,
-  "the real `signal` object is fully assembled BEFORE the shadow block begins — the shadow evaluation can only ever read an already-complete V1 signal, never influence its construction",
+  signalAssemblyIdx < carryForwardIdx,
+  "the real `signal` object is fully assembled BEFORE carryForwardMoundGradedState runs — carry-forward mutates an already-complete signal, never a partially-built one",
 );
 ok(
-  shadowBlockStartIdx < carryForwardIdx,
-  "V1's own carryForwardMoundGradedState/signals.set call comes AFTER the shadow block in source order, confirming the shadow block sits in between assembly and persistence rather than wrapping/gating it",
+  carryForwardIdx < shadowBlockStartIdx,
+  "carryForwardMoundGradedState runs BEFORE the V2 shadow block begins — this is the Final Pre-Push Integrity Pass reordering fix: the shadow capture can only ever read signal.everPubliclyFlagged/everPubliclyFlaggedFade/moundDirection AFTER they are pinned to their real, durable, restart-safe values, never the fresh per-cycle default that exists before carry-forward runs",
+);
+ok(
+  shadowBlockStartIdx < signalsSetIdx,
+  "the shadow block appears BEFORE V1's own signals.set(signalId, signal) call in source order (the checks below prove this is not a gate — publication happens unconditionally after the block, success or failure)",
 );
 
-// Extract just the shadow block's own text span (from its `if` to the line
-// right before carryForwardMoundGradedState) and verify it never assigns
-// into `signal` or the `signals` map.
-const shadowBlockText = source.slice(shadowBlockStartIdx, carryForwardIdx);
+// Extract just the shadow block's own text span (from its `if` to V1's own
+// publication call site) and verify its actual content.
+const shadowBlockText = source.slice(shadowBlockStartIdx, signalsSetIdx);
 ok(shadowBlockText.length > 100, "the extracted shadow block span is non-trivial (sanity check on the slice itself)");
-// `(?!=)` excludes ==/=== (a comparison/read, e.g. `signal.moundDirection === "follow"`,
-// which Correction 1 legitimately added to read V1's own recommended side) —
+
+// `(?!=)` excludes ==/=== (a comparison/read, e.g. `signal.everPubliclyFlagged === true`,
+// which this pass legitimately added to read V1's own carried-forward state) —
 // only a genuine single `=` assignment trips this check.
 ok(!/\bsignal\.\w+\s*=(?!=)/.test(shadowBlockText), "no assignment INTO the `signal` object appears anywhere in the shadow block");
-ok(!/\bsignals\.set\(/.test(shadowBlockText), "no `signals.set(...)` call appears anywhere in the shadow block — only V1's own call site (outside the block) writes to the signals map");
-ok(/runMoundV2ShadowForPitcher\(/.test(shadowBlockText), "the shadow block does call runMoundV2ShadowForPitcher (sanity check that we sliced the right region) — Correction 2 extracted the evaluate/record/log wrapper into its own testable function, see moundV2ShadowRunner.test.ts for the behavioral (not just structural) proof of its never-throws guarantee");
-ok(/catch\s*\(/.test(shadowBlockText), "the shadow block has its own try/catch — a defect inside it cannot throw into the surrounding per-pitcher loop");
+ok(!/\bsignals\.set\(/.test(shadowBlockText), "no `signals.set(...)` call appears anywhere in the shadow block — only V1's own call site (outside/after the block) writes to the signals map");
+
+ok(
+  /enqueueMoundV2ShadowForPitcher\(/.test(shadowBlockText),
+  "the shadow block calls enqueueMoundV2ShadowForPitcher — its only V2-related obligation is now a single bounded, durable, idempotent INSERT via the outbox (moundV2ShadowJobQueue.ts), not evaluation itself",
+);
+ok(
+  !/evaluateMoundV2Shadow\(/.test(shadowBlockText),
+  "the shadow block never calls evaluateMoundV2Shadow directly — V2 evaluation (computeMoundV2Distribution, parity check, decision-policy application) has been moved entirely out of the build loop into moundV2ShadowWorker.ts's own independent tick",
+);
+ok(
+  !/evaluateMoundV2Shadow\(/.test(source),
+  "evaluateMoundV2Shadow is never called ANYWHERE in buildMlbMoundRadar.ts (not just outside the shadow block) — the file only imports MOUND_V1_MODEL_VERSION/MOUND_V2_MODEL_VERSION constants from that module, never the evaluation function itself",
+);
+ok(/catch\s*\(/.test(shadowBlockText), "the shadow block has its own try/catch — a defect inside it (construction or enqueue) cannot throw into the surrounding per-pitcher loop");
 
 console.log(`\nmoundV2ShadowWiring.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

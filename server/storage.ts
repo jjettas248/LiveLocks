@@ -76,6 +76,9 @@ import {
   moundV2ShadowPredictions,
   type MoundV2ShadowPredictionRow,
   type InsertMoundV2ShadowPrediction,
+  moundV2ShadowJobs,
+  type MoundV2ShadowJobRow,
+  type InsertMoundV2ShadowJob,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -542,6 +545,70 @@ export interface IStorage {
     predictionId: string,
     attempt: { attemptedAt: Date; failureReason: string | null },
   ): Promise<MoundV2ShadowPredictionRow | null>;
+
+  // ── Mound Radar V2 shadow evaluation outbox (Final Pre-Push Integrity Pass) ──
+  // Durable handoff — see shared/schema.ts's moundV2ShadowJobs doc comment.
+  // This is what lets V2 evaluation run entirely outside buildMlbMoundRadar.ts's
+  // publication-critical path: the build's only synchronous obligation is one
+  // bounded, idempotent INSERT here.
+  /** Idempotent INSERT (ON CONFLICT (snapshot_id) DO NOTHING) — returns null when a job for this snapshotId already exists, never a duplicate row. */
+  enqueueMoundV2ShadowJob(job: InsertMoundV2ShadowJob): Promise<MoundV2ShadowJobRow | null>;
+  getMoundV2ShadowJob(jobId: string): Promise<MoundV2ShadowJobRow | null>;
+  /**
+   * Atomically claims up to `limit` jobs that are either pending or whose
+   * in_progress lease has gone stale (claimedAt older than leaseMs) — a
+   * single UPDATE ... FROM (SELECT ... FOR UPDATE SKIP LOCKED) statement,
+   * safe under concurrent worker ticks (two ticks can never claim the same
+   * row). Returns the claimed rows, already stamped status='in_progress'
+   * with a fresh claimedAt/claimedBy.
+   */
+  claimMoundV2ShadowJobs(args: { limit: number; leaseMs: number; claimedBy: string }): Promise<MoundV2ShadowJobRow[]>;
+  /** Column-scoped: status='completed', completedAt=now. Returns null if jobId does not exist. */
+  completeMoundV2ShadowJob(jobId: string, completedAt: Date): Promise<MoundV2ShadowJobRow | null>;
+  /**
+   * Column-scoped: attemptCount+1, lastAttemptedAt, lastFailureReason;
+   * status becomes 'dead_letter' once the incremented attemptCount reaches
+   * maxAttempts, otherwise reverts to 'pending' so a later tick can reclaim
+   * it (the actual backoff delay is enforced by the caller's claim-
+   * eligibility check via lastAttemptedAt, not by this write). Returns null
+   * if jobId does not exist.
+   */
+  failMoundV2ShadowJob(args: { jobId: string; attemptedAt: Date; failureReason: string; maxAttempts: number }): Promise<MoundV2ShadowJobRow | null>;
+  /** Read-only aggregate counts + staleness for admin observability/dead-letter reporting. */
+  getMoundV2ShadowJobQueueStats(staleAfterMs: number): Promise<{
+    pending: number;
+    inProgress: number;
+    completed: number;
+    deadLetter: number;
+    oldestPendingEnqueuedAt: Date | null;
+    staleInProgressCount: number;
+  }>;
+}
+
+// ─── Mound V2 shadow job outbox — raw-row mapper ──────────────────────────
+// db.execute(sql\`...\`) returns snake_case column names (unlike the
+// Drizzle query builder, which auto-maps to the camelCase schema shape) —
+// this is the single mapping point for the two claim/fail queries that must
+// use raw SQL (FOR UPDATE SKIP LOCKED, a CASE-based conditional SET) rather
+// than the query builder.
+function mapMoundV2ShadowJobRow(row: any): MoundV2ShadowJobRow {
+  return {
+    jobId: row.job_id,
+    snapshotId: row.snapshot_id,
+    gameId: row.game_id,
+    pitcherId: row.pitcher_id,
+    signalId: row.signal_id,
+    payload: row.payload,
+    status: row.status,
+    enqueuedAt: row.enqueued_at ? new Date(row.enqueued_at) : row.enqueued_at,
+    attemptCount: row.attempt_count,
+    lastAttemptedAt: row.last_attempted_at ? new Date(row.last_attempted_at) : row.last_attempted_at,
+    lastFailureReason: row.last_failure_reason,
+    claimedAt: row.claimed_at ? new Date(row.claimed_at) : row.claimed_at,
+    claimedBy: row.claimed_by,
+    completedAt: row.completed_at ? new Date(row.completed_at) : row.completed_at,
+    createdAt: row.created_at ? new Date(row.created_at) : row.created_at,
+  };
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -4022,6 +4089,108 @@ export class DatabaseStorage implements IStorage {
       .where(eq(moundV2ShadowPredictions.predictionId, predictionId))
       .returning();
     return updated ?? null;
+  }
+
+  async enqueueMoundV2ShadowJob(job: InsertMoundV2ShadowJob): Promise<MoundV2ShadowJobRow | null> {
+    const [inserted] = await db
+      .insert(moundV2ShadowJobs)
+      .values(job)
+      .onConflictDoNothing({ target: moundV2ShadowJobs.snapshotId })
+      .returning();
+    return inserted ?? null;
+  }
+
+  async getMoundV2ShadowJob(jobId: string): Promise<MoundV2ShadowJobRow | null> {
+    const rows = await db
+      .select()
+      .from(moundV2ShadowJobs)
+      .where(eq(moundV2ShadowJobs.jobId, jobId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async claimMoundV2ShadowJobs(args: { limit: number; leaseMs: number; claimedBy: string }): Promise<MoundV2ShadowJobRow[]> {
+    // A single UPDATE ... WHERE job_id IN (SELECT ... FOR UPDATE SKIP LOCKED)
+    // statement — the subquery locks and skips already-locked candidate rows,
+    // so two concurrent worker ticks can never claim the same job. Claims
+    // either a genuinely pending job, or an in_progress one whose lease has
+    // gone stale (its claiming worker presumably crashed) — the row's own
+    // lease timestamp, not application memory, is the source of truth,
+    // so this is correct even across a full process restart.
+    const result = await db.execute(sql`
+      UPDATE mound_v2_shadow_jobs
+      SET status = 'in_progress', claimed_at = NOW(), claimed_by = ${args.claimedBy}
+      WHERE job_id IN (
+        SELECT job_id FROM mound_v2_shadow_jobs
+        WHERE status = 'pending'
+           OR (status = 'in_progress' AND claimed_at < NOW() - (${args.leaseMs}::text || ' milliseconds')::interval)
+        ORDER BY enqueued_at ASC
+        LIMIT ${args.limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING *
+    `);
+    return result.rows.map(mapMoundV2ShadowJobRow);
+  }
+
+  async completeMoundV2ShadowJob(jobId: string, completedAt: Date): Promise<MoundV2ShadowJobRow | null> {
+    const [updated] = await db
+      .update(moundV2ShadowJobs)
+      .set({ status: "completed", completedAt })
+      .where(eq(moundV2ShadowJobs.jobId, jobId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async failMoundV2ShadowJob(args: { jobId: string; attemptedAt: Date; failureReason: string; maxAttempts: number }): Promise<MoundV2ShadowJobRow | null> {
+    const result = await db.execute(sql`
+      UPDATE mound_v2_shadow_jobs
+      SET
+        attempt_count = attempt_count + 1,
+        last_attempted_at = ${args.attemptedAt},
+        last_failure_reason = ${args.failureReason},
+        status = CASE WHEN attempt_count + 1 >= ${args.maxAttempts} THEN 'dead_letter' ELSE 'pending' END
+      WHERE job_id = ${args.jobId}
+      RETURNING *
+    `);
+    return result.rows.length > 0 ? mapMoundV2ShadowJobRow(result.rows[0]) : null;
+  }
+
+  async getMoundV2ShadowJobQueueStats(staleAfterMs: number): Promise<{
+    pending: number;
+    inProgress: number;
+    completed: number;
+    deadLetter: number;
+    oldestPendingEnqueuedAt: Date | null;
+    staleInProgressCount: number;
+  }> {
+    const counts = await db.execute(sql`
+      SELECT status, COUNT(*)::int AS count
+      FROM mound_v2_shadow_jobs
+      GROUP BY status
+    `);
+    const byStatus: Record<string, number> = {};
+    for (const row of counts.rows as any[]) byStatus[row.status] = row.count;
+
+    const oldestPending = await db.execute(sql`
+      SELECT MIN(enqueued_at) AS oldest FROM mound_v2_shadow_jobs WHERE status = 'pending'
+    `);
+    const oldestPendingEnqueuedAt = (oldestPending.rows[0] as any)?.oldest ?? null;
+
+    const stale = await db.execute(sql`
+      SELECT COUNT(*)::int AS count FROM mound_v2_shadow_jobs
+      WHERE status = 'in_progress' AND claimed_at < NOW() - (${staleAfterMs}::text || ' milliseconds')::interval
+    `);
+    const staleInProgressCount = (stale.rows[0] as any)?.count ?? 0;
+
+    return {
+      pending: byStatus["pending"] ?? 0,
+      inProgress: byStatus["in_progress"] ?? 0,
+      completed: byStatus["completed"] ?? 0,
+      deadLetter: byStatus["dead_letter"] ?? 0,
+      oldestPendingEnqueuedAt: oldestPendingEnqueuedAt ? new Date(oldestPendingEnqueuedAt) : null,
+      staleInProgressCount,
+    };
   }
 
   // ── Task #129 — batter rolling stat snapshots ──────────────────────────

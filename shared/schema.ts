@@ -1728,12 +1728,35 @@ export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
   // uses contractVersion, not this column's nullness alone, to distinguish
   // "V1 genuinely had no recommendation" from "this row predates capture".
   v1RecommendedSide: text("v1_recommended_side"),
+  // (Final Pre-Push Integrity Pass) Whether v1RecommendedSide represents a
+  // genuinely publicly-qualified V1 recommendation (everPubliclyFlagged /
+  // everPubliclyFlaggedFade, captured AFTER carryForwardMoundGradedState has
+  // pinned moundDirection for this build — see buildMlbMoundRadar.ts) —
+  // "recommended" | "not_recommended". A generic model lean that was never
+  // shown to users is "not_recommended" with v1RecommendedSide null, never
+  // silently counted as a real V1 wager. Rows captured before this column
+  // existed have it null; moundV2ComparisonStats.ts treats null the same as
+  // "unknown, exclude from paired comparison", never as "not_recommended".
+  v1QualificationStatus: text("v1_qualification_status"),
 
   // V2's real distributional output.
   v2ExpectedValue: numeric("v2_expected_value").notNull(),
   v2OverProbability: numeric("v2_over_probability").notNull(),
   v2UnderProbability: numeric("v2_under_probability").notNull(),
   v2PushProbability: numeric("v2_push_probability").notNull(),
+
+  // V2's own versioned decision-policy verdict (Final Pre-Push Integrity
+  // Pass) — DISTINCT from the raw probabilities above. "V2's implied side"
+  // (whichever of over/under has higher probability) is NOT a decision
+  // policy; this is the qualify-or-abstain verdict from
+  // moundV2DecisionPolicy.ts, applied to those probabilities plus the real
+  // frozen price/provenance/data-quality context. v2DecisionSide is null
+  // whenever v2Qualified is false — an explicit, reasoned abstention, never
+  // a forced pick.
+  v2DecisionPolicyVersion: text("v2_decision_policy_version"),
+  v2DecisionSide: text("v2_decision_side"),
+  v2Qualified: boolean("v2_qualified"),
+  v2QualificationReason: text("v2_qualification_reason"),
 
   productionModelVersion: text("production_model_version").notNull(),
   v2ModelVersion: text("v2_model_version").notNull(),
@@ -1779,3 +1802,49 @@ export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
 export const insertMoundV2ShadowPredictionSchema = createInsertSchema(moundV2ShadowPredictions).omit({ createdAt: true });
 export type MoundV2ShadowPredictionRow = typeof moundV2ShadowPredictions.$inferSelect;
 export type InsertMoundV2ShadowPrediction = z.infer<typeof insertMoundV2ShadowPredictionSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mound Radar V2 (Final Pre-Push Integrity Pass) — durable shadow-evaluation
+// outbox. One row per frozen snapshot (snapshot_id is UNIQUE — idempotent
+// enqueue, ON CONFLICT DO NOTHING). This table, NOT an in-memory queue, is
+// what makes V2 evaluation safe to move out of buildMlbMoundRadar.ts's
+// publication-critical path: the production build's ONLY synchronous
+// obligation is one bounded INSERT into this table (the "durable handoff").
+// A separate worker tick (moundV2ShadowWorker.ts) claims pending rows with
+// `FOR UPDATE SKIP LOCKED` (safe under concurrent worker ticks), runs the
+// actual V2 evaluation + persistence, and marks the row completed/failed —
+// entirely outside V1's request/build timeline. A crash or restart at ANY
+// point loses nothing: an enqueued-but-unclaimed row is still `pending`;
+// a claimed-but-never-completed row's lease (claimed_at) simply expires and
+// becomes reclaimable again (see MOUND_V2_SHADOW_JOB_LEASE_MS in
+// moundV2ShadowJobQueue.ts).
+// ─────────────────────────────────────────────────────────────────────────────
+export const moundV2ShadowJobs = pgTable("mound_v2_shadow_jobs", {
+  jobId: text("job_id").primaryKey(),
+  /** Idempotency key — one job per frozen snapshot, ever. A repeated enqueue attempt (e.g. a retried build tick) is a harmless no-op. */
+  snapshotId: text("snapshot_id").notNull().unique(),
+  gameId: text("game_id").notNull(),
+  pitcherId: text("pitcher_id").notNull(),
+  signalId: text("signal_id").notNull(),
+  /** The full EvaluateMoundV2ShadowArgs, JSON-serialized (Dates as ISO strings) — everything the worker needs to run evaluateMoundV2Shadow() from scratch, with nothing re-derived from possibly-changed live state. */
+  payload: jsonb("payload").notNull(),
+  /** pending -> in_progress -> completed, or -> dead_letter after MAX_ATTEMPTS failures. Never any other transition. */
+  status: text("status").notNull().default("pending"),
+  enqueuedAt: timestamp("enqueued_at").notNull().defaultNow(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastAttemptedAt: timestamp("last_attempted_at"),
+  lastFailureReason: text("last_failure_reason"),
+  /** Lease fields — a worker claims a batch by stamping these; an expired (stale) lease on a still-in_progress row makes it reclaimable by a later tick, recovering from a worker crash mid-processing. claimedBy is an opaque instance/tick identifier for observability only — the real mutual exclusion is the atomic UPDATE...WHERE...RETURNING claim, not this column. */
+  claimedAt: timestamp("claimed_at"),
+  claimedBy: text("claimed_by"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  statusIdx: index("mound_v2_shadow_jobs_status_idx").on(table.status),
+  enqueuedAtIdx: index("mound_v2_shadow_jobs_enqueued_at_idx").on(table.enqueuedAt),
+  gamePitcherIdx: index("mound_v2_shadow_jobs_game_pitcher_idx").on(table.gameId, table.pitcherId),
+}));
+
+export const insertMoundV2ShadowJobSchema = createInsertSchema(moundV2ShadowJobs).omit({ createdAt: true });
+export type MoundV2ShadowJobRow = typeof moundV2ShadowJobs.$inferSelect;
+export type InsertMoundV2ShadowJob = z.infer<typeof insertMoundV2ShadowJobSchema>;

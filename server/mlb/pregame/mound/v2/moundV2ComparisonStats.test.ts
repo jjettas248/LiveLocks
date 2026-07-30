@@ -9,6 +9,11 @@ import {
   computeMoundV2ProbabilityEvaluation,
   computeMoundV2DecisionPolicyComparison,
   buildMoundV2ComparisonReport,
+  buildMoundV2PromotionSubgroups,
+  computeRoiEligiblePriceRatio,
+  computeSportsbookProvenanceRatio,
+  computePairedPopulationRatio,
+  computeMoundV2VersionDeclaration,
   type MoundV2ComparisonRow,
 } from "./moundV2ComparisonStats";
 import { MOUND_FROZEN_CONTRACT_VERSION } from "./frozenMoundShadowInput";
@@ -30,6 +35,9 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
     v2OverProbability: 0.55, v2UnderProbability: 0.42, v2PushProbability: 0.03,
     v1RecommendedSide: "OVER", contractVersion: MOUND_FROZEN_CONTRACT_VERSION,
     v1Tier: "strong", v2ModelVersion: "v2_v1", productionModelVersion: "prod_v1",
+    v2DecisionPolicyVersion: "mound_v2_decision_policy_v1",
+    dataQuality: "complete", lineupStatus: "confirmed", sportsbook: "draftkings",
+    oddsFetchedAt: "2026-07-29T19:58:00.000Z",
     ...over,
   };
 }
@@ -192,6 +200,128 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
   const outsGroup = report.byMarket.find((r) => r.key === "pitcher_outs");
   ok(outsGroup?.ownMetrics.gradedNoLineCount === 1, "the outs-market group correctly shows its one row as graded-with-no-line");
   ok(outsGroup?.decisionPolicy.pairedN === 0, "the outs-market group has zero paired decision-policy rows (no real line to grade against)");
+}
+
+// ── buildMoundV2PromotionSubgroups (Final Pre-Push Integrity Pass, Section 5) ──
+{
+  const rows: MoundV2ComparisonRow[] = [
+    // draftkings, OVER, strong, complete/confirmed — 10 rows. V1 always
+    // (blindly) recommends OVER; the outcome actually varies (6 over, 4
+    // under) while V2's probabilities correctly track each real outcome —
+    // so V1 wins 6/10 (0.6) and V2 wins 10/10 (1.0): a genuine, constructed
+    // V2-outperforms-V1 gap on this side.
+    ...Array.from({ length: 10 }, (_, i) => {
+      const outcome = i < 6 ? "over" as const : "under" as const;
+      return row({
+        gameId: `dk${i}`, sportsbook: "draftkings", v1RecommendedSide: "OVER", v1Tier: "strong",
+        dataQuality: "complete", lineupStatus: "confirmed", finalResult: outcome,
+        v2OverProbability: outcome === "over" ? 0.6 : 0.35,
+        v2UnderProbability: outcome === "over" ? 0.35 : 0.6,
+      });
+    }),
+    // hardrockbet, UNDER, elite, partial/unconfirmed — 8 rows, V1 clearly better (wins where V2 loses)
+    ...Array.from({ length: 8 }, (_, i) => row({
+      gameId: `hrb${i}`, sportsbook: "hardrockbet", v1RecommendedSide: "UNDER", v1Tier: "elite",
+      dataQuality: "partial", lineupStatus: "unconfirmed", finalResult: "under",
+      v2OverProbability: 0.6, v2UnderProbability: 0.35, // V2 implies OVER, always wrong here
+    })),
+    // A non-paired row (no V1 recommendation) must never leak into any subgroup.
+    row({ gameId: "noRec", v1RecommendedSide: null, sportsbook: "fanduel" }),
+  ];
+
+  const subgroups = buildMoundV2PromotionSubgroups(rows);
+  ok(subgroups.length > 0, "subgroups are produced across multiple dimensions");
+
+  const marketGroup = subgroups.find((s) => s.dimension === "market" && s.key === "pitcher_strikeouts");
+  ok(marketGroup?.sampleSize === 18, `the market dimension groups ALL paired rows regardless of sportsbook/side (10+8=18, got ${marketGroup?.sampleSize})`);
+
+  const overSide = subgroups.find((s) => s.dimension === "side" && s.key === "OVER");
+  const underSide = subgroups.find((s) => s.dimension === "side" && s.key === "UNDER");
+  ok(overSide?.sampleSize === 10 && underSide?.sampleSize === 8, `the side dimension separates OVER (10) from UNDER (8) recommendations (got ${overSide?.sampleSize}/${underSide?.sampleSize})`);
+  ok(overSide!.winRateDelta! > 0, "the OVER-side subgroup shows V2 outperforming V1 (as constructed)");
+  ok(underSide!.winRateDelta! < 0, "the UNDER-side subgroup shows V2 UNDERperforming V1 (as constructed) — a real, distinct per-side signal");
+
+  const dkBook = subgroups.find((s) => s.dimension === "sportsbook" && s.key === "draftkings");
+  const hrbBook = subgroups.find((s) => s.dimension === "sportsbook" && s.key === "hardrockbet");
+  ok(dkBook?.sampleSize === 10 && hrbBook?.sampleSize === 8, "the sportsbook dimension correctly separates draftkings from hardrockbet");
+  ok(subgroups.every((s) => s.key !== "fanduel"), "fanduel (the non-paired row's book) never appears as a subgroup key on its own row's account — the non-paired row is excluded from every dimension entirely");
+
+  const dataQualityGroups = subgroups.filter((s) => s.dimension === "dataQuality");
+  ok(dataQualityGroups.some((s) => s.key === "complete" && s.sampleSize === 10), "dataQuality=complete subgroup captures the 10 draftkings rows");
+  ok(dataQualityGroups.some((s) => s.key === "partial" && s.sampleSize === 8), "dataQuality=partial subgroup captures the 8 hardrockbet rows");
+
+  const setupGradeGroups = subgroups.filter((s) => s.dimension === "setupGrade");
+  ok(setupGradeGroups.some((s) => s.key === "strong") && setupGradeGroups.some((s) => s.key === "elite"), "setupGrade groups by v1Tier (strong/elite)");
+
+  const lineupGroups = subgroups.filter((s) => s.dimension === "lineupStatus");
+  ok(lineupGroups.some((s) => s.key === "confirmed") && lineupGroups.some((s) => s.key === "unconfirmed"), "lineupStatus groups correctly (confirmed/unconfirmed)");
+
+  ok(subgroups.every((s) => s.dimension !== ("workloadBand" as any)), "workloadBand is never emitted — no persisted source data exists yet for it (documented limitation, not silently faked)");
+
+  const emptySubgroups = buildMoundV2PromotionSubgroups([]);
+  ok(emptySubgroups.length === 0, "an empty input produces zero subgroups, never a crash");
+}
+
+// ── computeRoiEligiblePriceRatio ────────────────────────────────────────────
+{
+  ok(computeRoiEligiblePriceRatio([]) === null, "empty input -> null, never fabricated as 0 or 1");
+
+  const allPriced = Array.from({ length: 5 }, (_, i) => row({ gameId: `p${i}`, frozenOverPrice: -120, frozenUnderPrice: 100 }));
+  ok(computeRoiEligiblePriceRatio(allPriced) === 1, "every row has a real price for both V1's recommended side and V2's implied side -> ratio 1.0");
+
+  const halfMissingV1Price = [
+    row({ gameId: "a", v1RecommendedSide: "OVER", frozenOverPrice: -120, frozenUnderPrice: 100 }),
+    row({ gameId: "b", v1RecommendedSide: "OVER", frozenOverPrice: null, frozenUnderPrice: 100 }),
+  ];
+  ok(approx(computeRoiEligiblePriceRatio(halfMissingV1Price), 0.5), "V1's own recommended-side price missing on half the paired rows drags the ratio down to 0.5 (the WORSE of V1's/V2's own ratios)");
+
+  const noneRecommended = [row({ gameId: "x", v1RecommendedSide: null })];
+  ok(computeRoiEligiblePriceRatio(noneRecommended) === null, "zero paired rows (V1 never recommended) -> null, not a fabricated 0");
+}
+
+// ── computeSportsbookProvenanceRatio ────────────────────────────────────────
+{
+  ok(computeSportsbookProvenanceRatio([]) === null, "empty input -> null");
+
+  const allProvenance = Array.from({ length: 4 }, (_, i) => row({ gameId: `pv${i}`, sportsbook: "draftkings", oddsFetchedAt: "2026-07-29T19:58:00.000Z" }));
+  ok(computeSportsbookProvenanceRatio(allProvenance) === 1, "every row carries a real sportsbook + fetch timestamp -> ratio 1.0");
+
+  const mixedProvenance = [
+    row({ gameId: "has", sportsbook: "draftkings", oddsFetchedAt: "2026-07-29T19:58:00.000Z" }),
+    row({ gameId: "noBook", sportsbook: null, oddsFetchedAt: "2026-07-29T19:58:00.000Z" }),
+    row({ gameId: "noTimestamp", sportsbook: "draftkings", oddsFetchedAt: null }),
+    row({ gameId: "emptyBook", sportsbook: "", oddsFetchedAt: "2026-07-29T19:58:00.000Z" }),
+  ];
+  ok(approx(computeSportsbookProvenanceRatio(mixedProvenance), 0.25), `only 1 of 4 rows has BOTH a real (non-empty) sportsbook AND a real fetch timestamp (got ${computeSportsbookProvenanceRatio(mixedProvenance)})`);
+}
+
+// ── computePairedPopulationRatio ────────────────────────────────────────────
+{
+  ok(computePairedPopulationRatio(0, 0, 0) === null, "zero denominator -> null, never a fabricated 0% or 100%");
+  ok(computePairedPopulationRatio(80, 10, 10) === 0.8, "80 paired out of 100 total candidates -> 0.8");
+  ok(computePairedPopulationRatio(0, 5, 5) === 0, "zero paired out of a real, non-empty candidate pool -> a real, honest 0 (not null — the denominator is real)");
+  ok(computePairedPopulationRatio(100, 0, 0) === 1, "every candidate paired -> 1.0");
+}
+
+// ── computeMoundV2VersionDeclaration ────────────────────────────────────────
+{
+  const decl = computeMoundV2VersionDeclaration([]);
+  ok(decl.v2ModelVersionDeclared === false && decl.v2DecisionPolicyVersionDeclared === false, "an empty population is honestly 'not declared' (false), never vacuously true");
+
+  const allDeclared = Array.from({ length: 3 }, (_, i) => row({ gameId: `dv${i}`, v2ModelVersion: "v2_v1", v2DecisionPolicyVersion: "policy_v1" }));
+  const declAll = computeMoundV2VersionDeclaration(allDeclared);
+  ok(declAll.v2ModelVersionDeclared === true && declAll.v2DecisionPolicyVersionDeclared === true, "every row declaring a real version -> both true");
+
+  const oneMissingPolicy = [
+    row({ gameId: "a", v2ModelVersion: "v2_v1", v2DecisionPolicyVersion: "policy_v1" }),
+    row({ gameId: "b", v2ModelVersion: "v2_v1", v2DecisionPolicyVersion: null }),
+  ];
+  const declMixed = computeMoundV2VersionDeclaration(oneMissingPolicy);
+  ok(declMixed.v2ModelVersionDeclared === true, "model version is declared on every row");
+  ok(declMixed.v2DecisionPolicyVersionDeclared === false, "a SINGLE row missing its decision-policy version fails the whole check — 'some rows have no known version' is exactly the ambiguity this guards against");
+
+  const emptyStringVersion = [row({ gameId: "c", v2ModelVersion: "" })];
+  ok(computeMoundV2VersionDeclaration(emptyStringVersion).v2ModelVersionDeclared === false, "an empty-string version is treated the same as missing, never as 'declared'");
 }
 
 console.log(`\nmoundV2ComparisonStats.test: ${passed} passed, ${failed} failed`);

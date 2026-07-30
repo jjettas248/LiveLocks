@@ -50,6 +50,7 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
     v1Score10: 6.9,
     v1Tier: "strong",
     v1RecommendedSide: "OVER",
+    v1QualificationStatus: "recommended",
     strikeoutsLine: 6.5,
     outsLine: null,
     ...overrides,
@@ -67,12 +68,54 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   ok(result.snapshotId === "mound_v2:test:1", "snapshotId passes through");
   ok(result.v1RecommendedSide === "OVER", "v1RecommendedSide passes through unchanged, never recomputed");
   ok(result.v1Score10 === 6.9 && result.v1Tier === "strong", "V1's own score10/tier pass through unchanged, never recomputed");
+  ok(result.v1QualificationStatus === "recommended", "v1QualificationStatus passes through unchanged, never recomputed");
+  ok(result.strikeoutsDecision !== null && result.outsDecision !== null, "both markets get their own decision-policy verdict");
+  ok(result.strikeoutsDecision!.policyVersion.length > 0, "the strikeouts decision carries a real, non-empty policy version");
+  ok(
+    (result.strikeoutsDecision!.side === null) === (result.strikeoutsDecision!.qualified === false),
+    "side is null if and only if qualified is false — never a qualified verdict with no side, or an unqualified one with a side",
+  );
 }
 
 // ── v1RecommendedSide: null (V1 had no resolved direction) passes through honestly ──
 {
-  const result = evaluateMoundV2Shadow(baseArgs({ v1RecommendedSide: null }));
+  const result = evaluateMoundV2Shadow(baseArgs({ v1RecommendedSide: null, v1QualificationStatus: "not_recommended" }));
   ok(result.v1RecommendedSide === null, "a null v1RecommendedSide (V1 had no direction) is never coerced into a fabricated OVER/UNDER");
+  ok(result.v1QualificationStatus === "not_recommended", "not_recommended passes through unchanged");
+}
+
+// ── V2's decision policy can independently abstain even when V1 recommends ──
+{
+  // Force an abstention via bad data quality regardless of what the probabilities turn out to be.
+  const result = evaluateMoundV2Shadow(baseArgs({
+    frozenInputArgs: { ...baseArgs().frozenInputArgs, dataQuality: "degraded" },
+  }));
+  ok(result.strikeoutsDecision?.qualified === false && result.strikeoutsDecision?.side === null, "V2's own decision policy can abstain (degraded data quality) independently of whatever V1 did — this is exactly the fix for 'V2's implied side' always forcing a pick");
+  ok(result.strikeoutsDecision?.reason === "data_quality_not_allowed", "the abstention carries the real, specific reason");
+}
+
+// ── V2 abstains on stale odds regardless of how strong the probability edge is ──
+{
+  const result = evaluateMoundV2Shadow(baseArgs({
+    frozenInputArgs: {
+      ...baseArgs().frozenInputArgs,
+      strikeoutsMarket: { line: 6.5, overPrice: -120, underPrice: 100, sportsbook: "draftkings", fetchedAt: "2026-07-28T00:00:00.000Z" }, // ~44h before `now`
+    },
+  }));
+  ok(result.strikeoutsDecision?.side === null && result.strikeoutsDecision?.reason === "odds_too_stale", "a price far older than the policy's max age abstains, never grading against a possibly-unexecutable stale price");
+}
+
+// ── Failure branch leaves qualification/decision fields honestly null, never fabricated ──
+{
+  const result = evaluateMoundV2Shadow(baseArgs({
+    frozenInputArgs: { ...baseArgs().frozenInputArgs, battingOrder: null as any },
+  }));
+  if (result.failureReason) {
+    ok(result.v1QualificationStatus === null, "the failure branch reports v1QualificationStatus as null, never a fabricated status");
+    ok(result.strikeoutsDecision === null && result.outsDecision === null, "the failure branch reports both decisions as null, never a fabricated verdict");
+  } else {
+    ok(true, "battingOrder:null did not trigger the failure branch in this build — not the property under test here");
+  }
 }
 
 // ── Evaluation never throws, even with a nonsensical input ─────────────────

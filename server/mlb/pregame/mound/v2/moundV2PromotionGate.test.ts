@@ -1,8 +1,15 @@
-// Mound V2 promotion-readiness gate — invariants.
+// Mound V2 promotion-readiness gate — invariants (Final Pre-Push Integrity
+// Pass, Section 5: full failure-condition matrix, fails closed on every
+// unmeasurable/unsupplied evidence field).
 //
 // Run: npx tsx server/mlb/pregame/mound/v2/moundV2PromotionGate.test.ts
 
-import { evaluateMoundV2PromotionReadiness, MOUND_V2_PROMOTION_THRESHOLDS, type MoundV2PromotionEvidence } from "./moundV2PromotionGate";
+import {
+  evaluateMoundV2PromotionReadiness,
+  MOUND_V2_PROMOTION_THRESHOLDS,
+  type MoundV2PromotionEvidence,
+  type MoundV2PromotionSubgroupEvidence,
+} from "./moundV2PromotionGate";
 
 let passed = 0;
 let failed = 0;
@@ -23,6 +30,30 @@ function goodEvidence(overrides: Partial<MoundV2PromotionEvidence> = {}): MoundV
     winRateDelta: 0.01,
     roiDelta: 0.02,
     settlementOrProvenanceRegressionDetected: false,
+    evalWindowStart: "2026-07-01",
+    evalWindowEnd: "2026-07-30",
+    absoluteCalibrationError: 0.05,
+    pairedPopulationRatio: 0.8,
+    roiEligiblePriceRatio: 0.95,
+    sportsbookProvenanceRatio: 0.98,
+    settlementErrorRatio: 0.01,
+    pendingGradingRatio: 0.05,
+    subgroups: [],
+    workerJobFailureRatio: 0.01,
+    shadowEvaluationFailureRatio: 0.01,
+    v2ModelVersionDeclared: true,
+    v2DecisionPolicyVersionDeclared: true,
+    ...overrides,
+  };
+}
+
+function subgroup(overrides: Partial<MoundV2PromotionSubgroupEvidence> = {}): MoundV2PromotionSubgroupEvidence {
+  return {
+    dimension: "market",
+    key: "pitcher_strikeouts",
+    sampleSize: 50,
+    winRateDelta: 0.01,
+    roiDelta: 0.02,
     ...overrides,
   };
 }
@@ -30,9 +61,10 @@ function goodEvidence(overrides: Partial<MoundV2PromotionEvidence> = {}): MoundV
 // ── Fully clean evidence is ready for promotion ─────────────────────────────
 {
   const verdict = evaluateMoundV2PromotionReadiness(goodEvidence());
-  ok(verdict.readyForPromotion === true, "clean evidence across every criterion is ready for promotion");
+  ok(verdict.readyForPromotion === true, "clean evidence across every criterion (old and new) is ready for promotion");
   ok(verdict.blockers.length === 0, "no blockers are reported when every criterion passes");
   ok(verdict.probabilityComparator === "climatology", "the verdict restates which comparator the probability criteria were checked against");
+  ok(verdict.subgroupRegressions.length === 0, "no subgroup regressions reported when subgroups is empty");
 }
 
 // ── Insufficient sample size blocks regardless of everything else ─────────
@@ -113,6 +145,135 @@ function goodEvidence(overrides: Partial<MoundV2PromotionEvidence> = {}): MoundV
 
   const winRateAtThreshold = evaluateMoundV2PromotionReadiness(goodEvidence({ winRateDelta: MOUND_V2_PROMOTION_THRESHOLDS.minWinRateDelta }));
   ok(!winRateAtThreshold.blockers.includes("DECISION_POLICY_WIN_RATE_NOT_NON_INFERIOR"), "a winRateDelta exactly at the minimum tolerance is non-inferior (not a strict >)");
+}
+
+// ── Section 5: missing evaluation window ────────────────────────────────────
+{
+  const noStart = evaluateMoundV2PromotionReadiness(goodEvidence({ evalWindowStart: null }));
+  ok(!noStart.readyForPromotion && noStart.blockers.includes("MISSING_EVAL_WINDOW"), "a null evalWindowStart blocks promotion — a report that never declares when its evidence starts cannot be trusted");
+
+  const noEnd = evaluateMoundV2PromotionReadiness(goodEvidence({ evalWindowEnd: null }));
+  ok(!noEnd.readyForPromotion && noEnd.blockers.includes("MISSING_EVAL_WINDOW"), "a null evalWindowEnd also blocks promotion");
+
+  const emptyStart = evaluateMoundV2PromotionReadiness(goodEvidence({ evalWindowStart: "" }));
+  ok(emptyStart.blockers.includes("MISSING_EVAL_WINDOW"), "an empty-string evalWindowStart is treated the same as null, never as 'declared'");
+}
+
+// ── Section 5: absolute V2 calibration (not just a delta vs. the comparator) ──
+{
+  const tooHigh = evaluateMoundV2PromotionReadiness(goodEvidence({ absoluteCalibrationError: 0.3 }));
+  ok(!tooHigh.readyForPromotion && tooHigh.blockers.includes("ABSOLUTE_CALIBRATION_TOO_HIGH"), "V2's own absolute calibration error above the ceiling blocks promotion EVEN THOUGH calibrationErrorDelta (vs the comparator) is clean — beating a bad comparator is not the same as being well-calibrated");
+
+  const unmeasurable = evaluateMoundV2PromotionReadiness(goodEvidence({ absoluteCalibrationError: null }));
+  ok(!unmeasurable.readyForPromotion && unmeasurable.blockers.includes("ABSOLUTE_CALIBRATION_TOO_HIGH"), "an unmeasurable (null) absolute calibration error fails closed, never silently passes");
+
+  const atCeiling = evaluateMoundV2PromotionReadiness(goodEvidence({ absoluteCalibrationError: MOUND_V2_PROMOTION_THRESHOLDS.maxAbsoluteCalibrationError }));
+  ok(!atCeiling.blockers.includes("ABSOLUTE_CALIBRATION_TOO_HIGH"), "exactly at the ceiling is acceptable (not a strict >)");
+}
+
+// ── Section 5: paired-population ratio (guards against a technically-adequate pairedN drawn from a tiny, unrepresentative sliver) ──
+{
+  const tooLow = evaluateMoundV2PromotionReadiness(goodEvidence({ pairedPopulationRatio: 0.1 }));
+  ok(!tooLow.readyForPromotion && tooLow.blockers.includes("INSUFFICIENT_PAIRED_POPULATION_RATIO"), "a low paired-population ratio blocks promotion even with a large absolute pairedN");
+
+  const unmeasurable = evaluateMoundV2PromotionReadiness(goodEvidence({ pairedPopulationRatio: null }));
+  ok(!unmeasurable.readyForPromotion && unmeasurable.blockers.includes("INSUFFICIENT_PAIRED_POPULATION_RATIO"), "an unmeasurable (null) paired-population ratio (empty denominator) fails closed");
+}
+
+// ── Section 5: ROI price coverage (missing/stale prices) ────────────────────
+{
+  const tooLow = evaluateMoundV2PromotionReadiness(goodEvidence({ roiEligiblePriceRatio: 0.3 }));
+  ok(!tooLow.readyForPromotion && tooLow.blockers.includes("INSUFFICIENT_ROI_PRICE_COVERAGE"), "a low ROI-eligible-price ratio blocks promotion — the ROI conclusion would be drawn from a price-starved subset");
+
+  const unmeasurable = evaluateMoundV2PromotionReadiness(goodEvidence({ roiEligiblePriceRatio: null }));
+  ok(!unmeasurable.readyForPromotion && unmeasurable.blockers.includes("INSUFFICIENT_ROI_PRICE_COVERAGE"), "an unmeasurable (null) price-coverage ratio fails closed");
+}
+
+// ── Section 5: sportsbook provenance ────────────────────────────────────────
+{
+  const tooLow = evaluateMoundV2PromotionReadiness(goodEvidence({ sportsbookProvenanceRatio: 0.5 }));
+  ok(!tooLow.readyForPromotion && tooLow.blockers.includes("INSUFFICIENT_SPORTSBOOK_PROVENANCE"), "too many rows missing a real sportsbook/fetch-timestamp blocks promotion");
+
+  const unmeasurable = evaluateMoundV2PromotionReadiness(goodEvidence({ sportsbookProvenanceRatio: null }));
+  ok(!unmeasurable.readyForPromotion && unmeasurable.blockers.includes("INSUFFICIENT_SPORTSBOOK_PROVENANCE"), "an unmeasurable (null) provenance ratio fails closed");
+}
+
+// ── Section 5: settlement errors vs legitimate voids ────────────────────────
+{
+  const tooHigh = evaluateMoundV2PromotionReadiness(goodEvidence({ settlementErrorRatio: 0.2 }));
+  ok(!tooHigh.readyForPromotion && tooHigh.blockers.includes("EXCESSIVE_SETTLEMENT_ERRORS"), "too many genuine settlement errors (provider failures during grading, not legitimate game_cancelled/pitcher_no_appearance voids) blocks promotion");
+
+  const unmeasurable = evaluateMoundV2PromotionReadiness(goodEvidence({ settlementErrorRatio: null }));
+  ok(!unmeasurable.readyForPromotion && unmeasurable.blockers.includes("EXCESSIVE_SETTLEMENT_ERRORS"), "no grading-coverage evidence supplied at all (null) fails closed rather than silently passing");
+}
+
+// ── Section 5: grading incompleteness ───────────────────────────────────────
+{
+  const tooHigh = evaluateMoundV2PromotionReadiness(goodEvidence({ pendingGradingRatio: 0.5 }));
+  ok(!tooHigh.readyForPromotion && tooHigh.blockers.includes("EXCESSIVE_GRADING_INCOMPLETENESS"), "too large a fraction still pending (ungraded) blocks promotion — the evidence hasn't finished resolving");
+
+  const unmeasurable = evaluateMoundV2PromotionReadiness(goodEvidence({ pendingGradingRatio: null }));
+  ok(!unmeasurable.readyForPromotion && unmeasurable.blockers.includes("EXCESSIVE_GRADING_INCOMPLETENESS"), "no grading-coverage evidence supplied (null) fails closed");
+}
+
+// ── Section 5: worker/capture health ────────────────────────────────────────
+{
+  const tooHigh = evaluateMoundV2PromotionReadiness(goodEvidence({ workerJobFailureRatio: 0.3 }));
+  ok(!tooHigh.readyForPromotion && tooHigh.blockers.includes("EXCESSIVE_WORKER_FAILURES"), "an excessive dead-letter rate among the durable outbox's worker jobs blocks promotion");
+
+  const unmeasurable = evaluateMoundV2PromotionReadiness(goodEvidence({ workerJobFailureRatio: null }));
+  ok(!unmeasurable.readyForPromotion && unmeasurable.blockers.includes("EXCESSIVE_WORKER_FAILURES"), "no worker-queue evidence supplied (null) fails closed");
+
+  const evalTooHigh = evaluateMoundV2PromotionReadiness(goodEvidence({ shadowEvaluationFailureRatio: 0.3 }));
+  ok(!evalTooHigh.readyForPromotion && evalTooHigh.blockers.includes("EXCESSIVE_SHADOW_CAPTURE_LOSS"), "an excessive shadow-EVALUATION failure rate (evaluateMoundV2Shadow itself throwing/reporting a failureReason) blocks promotion, distinctly from marketCoverage");
+
+  // marketCoverage and shadowEvaluationFailureRatio are DIFFERENT signals —
+  // a high failure rate must gate even when marketCoverage happens to look
+  // fine (e.g. coverage math computed over a different/larger population).
+  const highFailureButOkCoverage = evaluateMoundV2PromotionReadiness(goodEvidence({ shadowEvaluationFailureRatio: 0.3, marketCoverage: 0.95 }));
+  ok(!highFailureButOkCoverage.readyForPromotion && highFailureButOkCoverage.blockers.includes("EXCESSIVE_SHADOW_CAPTURE_LOSS"), "excessive evaluation-failure rate blocks promotion even when marketCoverage itself looks healthy — coverage and capture-loss are gated independently");
+}
+
+// ── Section 5: undeclared model/policy version ──────────────────────────────
+{
+  const noModelVersion = evaluateMoundV2PromotionReadiness(goodEvidence({ v2ModelVersionDeclared: false }));
+  ok(!noModelVersion.readyForPromotion && noModelVersion.blockers.includes("UNDECLARED_MODEL_OR_POLICY_VERSION"), "an undeclared probability-model version blocks promotion");
+
+  const noPolicyVersion = evaluateMoundV2PromotionReadiness(goodEvidence({ v2DecisionPolicyVersionDeclared: false }));
+  ok(!noPolicyVersion.readyForPromotion && noPolicyVersion.blockers.includes("UNDECLARED_MODEL_OR_POLICY_VERSION"), "an undeclared decision-policy version ALSO blocks promotion, independently of the model version");
+}
+
+// ── Section 5: subgroup regression, with the minimum-sample-size exclusion ──
+{
+  // A large, clearly-regressed subgroup blocks promotion even though every
+  // TOP-LEVEL (aggregate) metric is clean.
+  const bigRegressedSubgroup = subgroup({ dimension: "sportsbook", key: "hardrockbet", sampleSize: 200, winRateDelta: -0.4, roiDelta: -0.5 });
+  const verdict = evaluateMoundV2PromotionReadiness(goodEvidence({ subgroups: [subgroup(), bigRegressedSubgroup] }));
+  ok(!verdict.readyForPromotion && verdict.blockers.includes("SEVERE_SUBGROUP_REGRESSION"), "a large, severely-regressed subgroup blocks promotion even when every top-level/aggregate metric is otherwise clean");
+  ok(verdict.subgroupRegressions.length === 1 && verdict.subgroupRegressions[0].key === "hardrockbet", "the verdict names the SPECIFIC offending subgroup for diagnosability");
+
+  // A tiny subgroup showing the SAME "regression" numbers must NOT gate —
+  // avoids tiny-subgroup false decisiveness (explicitly required).
+  const tinyRegressedSubgroup = subgroup({ dimension: "lineupStatus", key: "unconfirmed", sampleSize: 5, winRateDelta: -0.9, roiDelta: -0.9 });
+  const tinyVerdict = evaluateMoundV2PromotionReadiness(goodEvidence({ subgroups: [subgroup(), tinyRegressedSubgroup] }));
+  ok(tinyVerdict.readyForPromotion, "a tiny subgroup (below minSubgroupSampleSize) showing a severe regression does NOT block promotion on its own — avoids false decisiveness from a handful of samples");
+  ok(tinyVerdict.subgroupRegressions.length === 0, "the tiny subgroup is not even listed as a regression (it never cleared the minimum sample size to be judged one way or the other)");
+
+  // Exactly at the minimum sample size DOES count.
+  const atMinSample = subgroup({ dimension: "dataQuality", key: "degraded", sampleSize: MOUND_V2_PROMOTION_THRESHOLDS.minSubgroupSampleSize, winRateDelta: -0.9, roiDelta: -0.9 });
+  const atMinVerdict = evaluateMoundV2PromotionReadiness(goodEvidence({ subgroups: [subgroup(), atMinSample] }));
+  ok(!atMinVerdict.readyForPromotion && atMinVerdict.blockers.includes("SEVERE_SUBGROUP_REGRESSION"), "a subgroup exactly AT the minimum sample size is judged (not exempted) — the exclusion is only for BELOW the threshold");
+
+  // A subgroup with a null (unmeasurable) delta, at adequate sample size,
+  // fails closed just like the top-level winRateDelta/roiDelta do.
+  const nullDeltaSubgroup = subgroup({ dimension: "market", key: "pitcher_outs", sampleSize: 100, winRateDelta: null, roiDelta: null });
+  const nullDeltaVerdict = evaluateMoundV2PromotionReadiness(goodEvidence({ subgroups: [subgroup(), nullDeltaSubgroup] }));
+  ok(!nullDeltaVerdict.readyForPromotion && nullDeltaVerdict.blockers.includes("SEVERE_SUBGROUP_REGRESSION"), "a well-sampled subgroup with unmeasurable (null) deltas fails closed, exactly like the top-level metrics");
+
+  // Multiple well-sampled, healthy subgroups never spuriously trigger the gate.
+  const manyHealthy = Array.from({ length: 5 }, (_, i) => subgroup({ dimension: "market", key: `k${i}`, sampleSize: 80, winRateDelta: 0.01, roiDelta: 0.03 }));
+  const healthyVerdict = evaluateMoundV2PromotionReadiness(goodEvidence({ subgroups: manyHealthy }));
+  ok(healthyVerdict.readyForPromotion, "several well-sampled, genuinely healthy subgroups never spuriously trigger SEVERE_SUBGROUP_REGRESSION");
 }
 
 console.log(`\nmoundV2PromotionGate.test: ${passed} passed, ${failed} failed`);

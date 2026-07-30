@@ -42,6 +42,11 @@ function fakeRow(over: Partial<InsertMoundV2ShadowPrediction> = {}): InsertMound
     v1Score10: "6.9",
     v1Tier: "strong",
     v1RecommendedSide: "OVER",
+    v1QualificationStatus: "recommended",
+    v2DecisionPolicyVersion: "mound_v2_decision_policy_v1",
+    v2DecisionSide: "over",
+    v2Qualified: true,
+    v2QualificationReason: "qualified",
     setupGrade: null,
     v2ExpectedValue: "0.12",
     v2OverProbability: "0.55",
@@ -78,6 +83,11 @@ async function testInsertAndIdempotency() {
   const fetched = await storage.getMoundV2ShadowPrediction(row.predictionId);
   ok(fetched !== null && fetched.frozenLine === "6.5" && fetched.sportsbook === "draftkings", "getMoundV2ShadowPrediction reads back the real persisted row with correct values");
   ok(fetched?.v1RecommendedSide === "OVER", "v1RecommendedSide (Correction 1) genuinely round-trips through the real database, not just the in-memory type");
+  ok(fetched?.v1QualificationStatus === "recommended", "v1QualificationStatus (Final Pre-Push Integrity Pass) genuinely round-trips through the real database");
+  ok(fetched?.v2DecisionPolicyVersion === "mound_v2_decision_policy_v1", "v2DecisionPolicyVersion genuinely round-trips through the real database");
+  ok(fetched?.v2DecisionSide === "over", "v2DecisionSide genuinely round-trips through the real database");
+  ok(fetched?.v2Qualified === true, "v2Qualified (boolean column) genuinely round-trips through the real database");
+  ok(fetched?.v2QualificationReason === "qualified", "v2QualificationReason genuinely round-trips through the real database");
   ok(fetched?.gamePk === `${TEST_PREFIX}gamePk_1`, "gamePk (Correction 3) genuinely round-trips through the real database — the field reconciliation depends on to call syncGameBoxScore correctly");
   ok(
     fetched?.scheduledGameTime instanceof Date && fetched.scheduledGameTime.toISOString() === "2026-07-29T23:05:00.000Z",
@@ -114,6 +124,12 @@ async function testImmutabilityAcrossGrading() {
   ok(graded?.featureHash === before?.featureHash, "featureHash is unchanged by grading");
   ok(graded?.snapshotId === before?.snapshotId, "snapshotId is unchanged by grading");
   ok(graded?.createdAt?.getTime() === before?.createdAt?.getTime(), "createdAt is unchanged by grading");
+  ok(graded?.v1RecommendedSide === before?.v1RecommendedSide, "v1RecommendedSide (the captured V1 policy decision) is unchanged by grading — see moundV2V1QualificationLifecycle.integration.test.ts for the full end-to-end proof");
+  ok(graded?.v1QualificationStatus === before?.v1QualificationStatus, "v1QualificationStatus is unchanged by grading");
+  ok(graded?.v2DecisionPolicyVersion === before?.v2DecisionPolicyVersion, "v2DecisionPolicyVersion is unchanged by grading");
+  ok(graded?.v2DecisionSide === before?.v2DecisionSide, "v2DecisionSide is unchanged by grading");
+  ok(graded?.v2Qualified === before?.v2Qualified, "v2Qualified is unchanged by grading");
+  ok(graded?.v2QualificationReason === before?.v2QualificationReason, "v2QualificationReason is unchanged by grading");
 
   const regraded = await storage.gradeMoundV2ShadowPrediction(predictionId, {
     settlementStatus: "graded",
@@ -186,6 +202,9 @@ async function testReconciliationBookkeeping() {
   // Column-scoped: recording an attempt never disturbs a frozen field.
   const stillFrozen = await storage.getMoundV2ShadowPrediction(predictionId);
   ok(stillFrozen?.frozenLine === "6.5", "recording reconciliation attempts never touches frozen prediction fields");
+  ok(stillFrozen?.v1RecommendedSide === "OVER", "recording reconciliation attempts never touches the captured V1 policy decision");
+  ok(stillFrozen?.v1QualificationStatus === "recommended", "recording reconciliation attempts never touches v1QualificationStatus");
+  ok(stillFrozen?.v2DecisionSide === "over", "recording reconciliation attempts never touches V2's own decision-policy verdict");
 
   // voidReason round-trips via the real gradeMoundV2ShadowPrediction storage call directly (not just via the sweep).
   const voided = await storage.gradeMoundV2ShadowPrediction(predictionId, {

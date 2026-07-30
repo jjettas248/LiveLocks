@@ -22,6 +22,8 @@ import {
 import { getMoundV2ShadowMetrics } from "./moundV2ShadowStore";
 import { buildAndEvaluateMoundV2Promotion } from "./moundV2PromotionEvidenceAdapter";
 import type { MoundV2PromotionEvidence, MoundV2PromotionVerdict } from "./moundV2PromotionGate";
+import { gatherMoundV2ShadowGradingCoverageReport } from "./moundV2ShadowReconciliationSweep";
+import { MOUND_V2_SHADOW_JOB_LEASE_MS } from "./moundV2ShadowWorker";
 
 function toComparisonRow(row: MoundV2ShadowPredictionRow): MoundV2ComparisonRow {
   return {
@@ -40,6 +42,11 @@ function toComparisonRow(row: MoundV2ShadowPredictionRow): MoundV2ComparisonRow 
     v1Tier: row.v1Tier ?? null,
     v2ModelVersion: row.v2ModelVersion,
     productionModelVersion: row.productionModelVersion,
+    v2DecisionPolicyVersion: row.v2DecisionPolicyVersion ?? null,
+    dataQuality: row.dataQuality ?? null,
+    lineupStatus: row.lineupStatus ?? null,
+    sportsbook: row.sportsbook ?? null,
+    oddsFetchedAt: row.oddsFetchedAt ? new Date(row.oddsFetchedAt).toISOString() : null,
   };
 }
 
@@ -92,18 +99,41 @@ export interface GatherMoundV2PromotionReadinessOpts extends GatherMoundV2Compar
 /**
  * Evidence + verdict only — never applies a promotion. Uses the SAME
  * comparison-row fetch as gatherMoundV2ComparisonReport (Part 6), plus the
- * in-memory shadow-evaluation counters from Part 3's moundV2ShadowStore
- * for marketCoverage.
+ * in-memory shadow-evaluation counters from Part 3's moundV2ShadowStore for
+ * marketCoverage, plus (Section 5) the real grading-coverage report (over
+ * the SAME declared window, full row population including pending/void —
+ * not just graded-with-line) and real worker-queue stats, so the gate's
+ * evidence-integrity checks (settlementErrorRatio, pendingGradingRatio,
+ * workerJobFailureRatio) are backed by genuine data rather than failing
+ * closed by default.
  */
 export async function gatherMoundV2PromotionReadiness(
   opts: GatherMoundV2PromotionReadinessOpts,
 ): Promise<{ evidence: MoundV2PromotionEvidence; verdict: MoundV2PromotionVerdict }> {
   const comparisonRows = await fetchComparisonRows(opts);
   const shadowMetrics = getMoundV2ShadowMetrics();
+  const [gradingCoverageReport, workerQueueStats] = await Promise.all([
+    gatherMoundV2ShadowGradingCoverageReport({
+      fromEvaluationTimestamp: new Date(`${opts.windowStart}T00:00:00.000Z`),
+      toEvaluationTimestamp: new Date(`${opts.windowEnd}T23:59:59.999Z`),
+    }),
+    storage.getMoundV2ShadowJobQueueStats(MOUND_V2_SHADOW_JOB_LEASE_MS),
+  ]);
   return buildAndEvaluateMoundV2Promotion(comparisonRows, {
     probabilityComparator: opts.probabilityComparator ?? "climatology",
     shadowEvaluationTotal: shadowMetrics.totalEvaluations,
     shadowEvaluationFailures: shadowMetrics.totalFailures,
     settlementOrProvenanceRegressionDetected: opts.settlementOrProvenanceRegressionDetected,
+    evalWindowStart: opts.windowStart,
+    evalWindowEnd: opts.windowEnd,
+    gradingCoverageReport: {
+      totalRows: gradingCoverageReport.totalRows,
+      pendingCount: gradingCoverageReport.pendingCount,
+      providerFailureCount: gradingCoverageReport.providerFailureCount,
+    },
+    workerQueueStats: {
+      completed: workerQueueStats.completed,
+      deadLetter: workerQueueStats.deadLetter,
+    },
   });
 }

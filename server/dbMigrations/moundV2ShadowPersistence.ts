@@ -39,10 +39,15 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
     v1_tier TEXT,
     setup_grade TEXT,
     v1_recommended_side TEXT,
+    v1_qualification_status TEXT,
     v2_expected_value NUMERIC NOT NULL,
     v2_over_probability NUMERIC NOT NULL,
     v2_under_probability NUMERIC NOT NULL,
     v2_push_probability NUMERIC NOT NULL,
+    v2_decision_policy_version TEXT,
+    v2_decision_side TEXT,
+    v2_qualified BOOLEAN,
+    v2_qualification_reason TEXT,
     production_model_version TEXT NOT NULL,
     v2_model_version TEXT NOT NULL,
     contract_version TEXT NOT NULL,
@@ -92,6 +97,18 @@ const MOUND_V2_SHADOW_PREDICTIONS_ADD_SCHEDULING_COLUMNS = `
     ADD COLUMN IF NOT EXISTS scheduled_game_time TIMESTAMP;
 `;
 
+// Self-heal for a table created before the V1 qualification-status and V2
+// decision-policy columns existed (Final Pre-Push Integrity Pass) —
+// additive only, same convention.
+const MOUND_V2_SHADOW_PREDICTIONS_ADD_DECISION_POLICY_COLUMNS = `
+  ALTER TABLE mound_v2_shadow_predictions
+    ADD COLUMN IF NOT EXISTS v1_qualification_status TEXT,
+    ADD COLUMN IF NOT EXISTS v2_decision_policy_version TEXT,
+    ADD COLUMN IF NOT EXISTS v2_decision_side TEXT,
+    ADD COLUMN IF NOT EXISTS v2_qualified BOOLEAN,
+    ADD COLUMN IF NOT EXISTS v2_qualification_reason TEXT;
+`;
+
 const MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX = `
   CREATE INDEX IF NOT EXISTS mound_v2_shadow_predictions_snapshot_idx
     ON mound_v2_shadow_predictions (snapshot_id);
@@ -122,6 +139,7 @@ export const MOUND_V2_SHADOW_PERSISTENCE_STATEMENTS: readonly string[] = [
   MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_RECOMMENDED_SIDE,
   MOUND_V2_SHADOW_PREDICTIONS_ADD_RECONCILIATION_COLUMNS,
   MOUND_V2_SHADOW_PREDICTIONS_ADD_SCHEDULING_COLUMNS,
+  MOUND_V2_SHADOW_PREDICTIONS_ADD_DECISION_POLICY_COLUMNS,
   MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_GAME_PITCHER_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_SETTLEMENT_STATUS_IDX,
