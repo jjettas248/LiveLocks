@@ -8178,7 +8178,6 @@ export async function registerRoutes(
         hasSubscription: !!user.pushSubscription,
         smsAlerts: user.smsAlerts,
         phoneNumber: user.phoneNumber ?? null,
-        emailAlerts: user.emailAlerts,
       });
     } catch (err) {
       res.status(500).json({ error: "Failed to fetch alert settings" });
@@ -8231,26 +8230,6 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: "Failed to update SMS settings" });
-    }
-  });
-
-  app.post("/api/user/alerts/email", requireAuth, async (req, res) => {
-    try {
-      const userId = (req as any).resolvedUserId!;
-      const user = await storage.getUserById(userId);
-      if (!user) return res.status(401).json({ error: "Not found" });
-      // hasMLB (not hasUnlimited) — this toggle gates identically to the feature it
-      // controls (MLB Pre-Game Power Radar lineup alerts, elite-tier only), unlike SMS
-      // which serves broader app-wide alerts across both paid tiers.
-      const emailAccess = resolveAccess(user.subscriptionTier, user.isAdmin ?? false);
-      if (!emailAccess.hasMLB) {
-        return res.status(403).json({ error: "Email alerts require an All Sports subscription" });
-      }
-      const { emailAlerts } = req.body;
-      await storage.updateUserAlerts(userId, { emailAlerts: !!emailAlerts });
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to update email alert settings" });
     }
   });
 

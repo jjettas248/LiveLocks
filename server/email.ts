@@ -223,39 +223,3 @@ export async function sendChurnEmail(to: string, previousTier: string): Promise<
   `);
   await sendHtmlEmail(to, "Your LiveLocks subscription has been cancelled", html);
 }
-
-export interface LineupAlertCandidate {
-  name: string;
-  team: string;
-  opponent: string;
-  score: string;
-}
-
-export async function sendLineupAlertEmail(to: string, candidates: LineupAlertCandidate[]): Promise<void> {
-  const top = candidates[0];
-  const othersCount = candidates.length - 1;
-
-  const subject = othersCount > 0
-    ? `Lineups are live: ${top.name} + ${othersCount} more HR candidate${othersCount === 1 ? "" : "s"}`
-    : `Lineups are live: ${top.name} (${top.team}) is a confirmed HR candidate`;
-
-  const moreCandidates = candidates.slice(1, 5);
-  const overflow = candidates.length > 5 ? candidates.length - 5 : 0;
-  const moreRows = moreCandidates
-    .map((c) => `&bull; <strong style="color:#fff;">${c.name}</strong> (${c.team} vs ${c.opponent}) &middot; ${c.score}/10<br>`)
-    .join("\n       ");
-  const overflowRow = overflow > 0 ? `&bull; +${overflow} more confirmed<br>` : "";
-
-  const html = wrap(`
-    <h1>Today's Lineups Are Live</h1>
-    <p><span class="highlight">${top.name}</span> (${top.team} vs ${top.opponent}) just got confirmed in today's starting lineup — a top HR candidate on the Pre-Game Power Radar.</p>
-    <div>
-      <div class="stat"><div class="stat-label">HR Score</div><div class="stat-value">${top.score}/10</div></div>
-      <div class="stat"><div class="stat-label">Candidates</div><div class="stat-value">${candidates.length}</div></div>
-    </div>
-    ${othersCount > 0 ? `<p style="margin-top:16px;">Also confirmed in this game:<br>
-       ${moreRows}${overflowRow}</p>` : ""}
-    <a href="https://livelocksai.app/dashboard?tab=mlb" class="cta">View Pre-Game Power Radar</a>
-  `);
-  await sendHtmlEmail(to, subject, html);
-}

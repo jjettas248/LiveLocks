@@ -306,7 +306,7 @@ export interface IStorage {
   deleteUser(userId: number): Promise<void>;
   createFeedback(userId: number, message: string): Promise<Feedback>;
   getAllFeedback(): Promise<(Feedback & { userEmail: string | null })[]>;
-  updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean; emailAlerts?: boolean }): Promise<void>;
+  updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean }): Promise<void>;
   // Pass 2 — additive lifecycle helpers. Tier resolution and entitlement gates remain
   // owned by updateUserSubscription / setUserSubscriptionTier; these methods only persist
   // lifecycle metadata (status, source, trial timestamps, alerts channel state) and never
@@ -2180,14 +2180,13 @@ export class DatabaseStorage implements IStorage {
     return rows;
   }
 
-  async updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean; emailAlerts?: boolean }): Promise<void> {
+  async updateUserAlerts(userId: number, data: { pushSubscription?: string | null; pushAlerts?: boolean; phoneNumber?: string | null; smsAlerts?: boolean; smsConsent?: boolean }): Promise<void> {
     const update: Record<string, any> = {};
     if (data.pushSubscription !== undefined) update.pushSubscription = data.pushSubscription;
     if (data.pushAlerts !== undefined) update.pushAlerts = data.pushAlerts;
     if (data.phoneNumber !== undefined) update.phoneNumber = data.phoneNumber;
     if (data.smsAlerts !== undefined) update.smsAlerts = data.smsAlerts;
     if (data.smsConsent !== undefined) update.smsConsent = data.smsConsent;
-    if (data.emailAlerts !== undefined) update.emailAlerts = data.emailAlerts;
     if (Object.keys(update).length > 0) {
       await db.update(users).set(update).where(eq(users.id, userId));
     }
