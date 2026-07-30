@@ -1183,6 +1183,14 @@ const MLB_BASE_URL = "https://api.the-odds-api.com/v4/sports/baseball_mlb";
 const MLB_PROP_BOOKMAKERS = "draftkings,fanduel,hardrockbet";
 const MLB_PROP_BOOKMAKERS_SET = new Set(MLB_PROP_BOOKMAKERS.split(","));
 
+/** True when `bookKey` is one of the three approved MLB Live Edge books
+ *  (DraftKings, FanDuel, Hard Rock Bet), using the same canonical provider
+ *  keys as the request/filter gate above. Exported for
+ *  server/mlb/mlbOfficialEligibility.ts's approved-sportsbook check. */
+export function isApprovedMlbBookmaker(bookKey: string | null | undefined): boolean {
+  return !!bookKey && MLB_PROP_BOOKMAKERS_SET.has(bookKey);
+}
+
 // MLB game status as understood by the odds-cache layer. "unknown" means the
 // caller could not yet determine pregame/live/final — never spend quota in
 // that state, just read whatever is already cached.

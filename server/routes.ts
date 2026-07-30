@@ -45,6 +45,7 @@ import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
 import { getMarketParkFactor } from "./mlb/dataSources";
 import { isBarrel as isCanonicalBarrel } from "./mlb/statcastXBA";
 import { validateMlbEngineProbability, logMlbPersistReject, MLB_PROB_BUCKETS, bucketPlaysByCanonicalProb } from "./mlb/probabilityEngine";
+import { evaluateMlbOfficialEligibility } from "./mlb/mlbOfficialEligibility";
 import {
   recordMLBDiagnostic,
   getMLBDiagnosticSummary,
@@ -2892,12 +2893,21 @@ export async function registerRoutes(
     // richer orchestrator data with the route's leaner payload.
     if (validatedApiSignals.length > 0) {
       const validIds = new Set(validatedApiSignals.map((s) => `${s.playerId}|${s.market}`));
-      for (const qs of (entry?.qualifiedSignals ?? []) as any[]) {
-        const dir = qs.side === "OVER" ? "over" : qs.side === "UNDER" ? "under" : null;
-        if (!dir) continue;
+      for (const qs of (entry?.qualifiedSignals ?? [])) {
         const normalizedMarketKey = (qs.market as string) === "hr" ? "home_runs" : qs.market;
         if (!validIds.has(`${qs.playerId}|${normalizedMarketKey}`)) continue;
-        if (!Number.isFinite(qs.line) || qs.line <= 0) continue;
+
+        // ── MLB Live Edge Trust Recovery (Phase 4) — single finalized-
+        // eligibility gate. Identical to the orchestrator's primary
+        // persistence path (autoPersistMLBSignals) — this route-side safety
+        // net can never diverge from it or reconstruct its own weaker rules.
+        const eligibility = evaluateMlbOfficialEligibility(qs);
+        if (!eligibility.eligible) {
+          console.log(`[MLB_ROUTE_PERSIST_SAFETY] ineligible player=${qs.playerName} market=${qs.market} reasons=${eligibility.reasons.join(",")}`);
+          continue;
+        }
+
+        const dir = qs.side === "OVER" ? "over" : "under";
         // [MLB Canonical Probability v1] Reject persistence rather than fall back
         // to signalScore. The orchestrator's primary persistence path will retry.
         const validProb = validateMlbEngineProbability(qs);
@@ -2905,7 +2915,7 @@ export async function registerRoutes(
           logMlbPersistReject("missing_engine_probability", qs);
           continue;
         }
-        const sbk = qs.sportsbook && String(qs.sportsbook).trim() !== "" ? qs.sportsbook : "odds_api";
+        const sideOdds = qs.side === "OVER" ? qs.overOdds : qs.underOdds;
         trackPlay({
           gameId,
           playerId: qs.playerId,
@@ -2913,16 +2923,25 @@ export async function registerRoutes(
           team: qs.team ?? null,
           sport: "mlb",
           market: qs.market,
-          direction: dir as "over" | "under",
+          direction: dir,
           line: qs.line,
           projection: qs.projection,
           probability: validProb,
           edge: qs.evPct ?? 0,
-          sportsbook: sbk,
+          sportsbook: qs.sportsbook,
           derivedLine: false,
           createdAt: qs.engineGeneratedAt ?? Date.now(),
           signalScore: qs.signalScore ?? null,
           confidenceTier: qs.confidenceTier ?? null,
+          odds: sideOdds ?? undefined,
+          oddsSourceUpdatedAt: qs.oddsTimestamp ?? null,
+          oddsFetchedAt: qs.oddsFetchedAt ?? null,
+          rawProbability: qs.rawProbability ?? null,
+          officialEligibilityVersion: eligibility.version,
+          officialEligibilityReasons: null,
+          dataQuality: qs.dataQuality ?? null,
+          currentStatKnown: qs.currentStatKnown ?? null,
+          calibrationVersion: qs.calibrationVersion ?? null,
           inning: qs.inning ?? null,
           abNumber: qs.completedAB ?? null,
           opportunityScore: qs.opportunityScore ?? null,

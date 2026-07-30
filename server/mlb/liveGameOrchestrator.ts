@@ -36,6 +36,7 @@ import {
 } from "./dataPullService";
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { computeBatterCurrentStat, evaluatePitcherCurrentStat, validateBatterPitcherMatchup } from "./liveGameStateContract";
+import { evaluateMlbOfficialEligibility } from "./mlbOfficialEligibility";
 import { getMarketParkFactor, isVenueIndoors, mergePitchUsage } from "./dataSources";
 import {
   detectHrEvaluationEpoch,
@@ -2801,6 +2802,14 @@ export class LiveGameOrchestrator {
     // preserved on engineProbabilityDominant for diagnostics only — never used
     // for persistence, analytics bucketing, or UI rendering.
     const sidedCalibrated = getCanonicalSidedProbability(output);
+    // MLB Live Edge Trust Recovery (Phase 4) — the pre-calibration side-
+    // selected probability, frozen alongside the final calibrated value at
+    // official-persistence time for calibration-quality reporting (Phase 6).
+    const sidedRawProbability = output.recommendedSide === "OVER"
+      ? output.rawProbabilityOver
+      : output.recommendedSide === "UNDER"
+        ? output.rawProbabilityUnder
+        : null;
     const previousDominantProbability = output.calibratedProbability;
     console.log("[MLB_CANONICAL_PROBABILITY]", {
       player: output.playerName,
@@ -2841,6 +2850,7 @@ export class LiveGameOrchestrator {
       impliedProbability: null,
       engineProbability: sidedCalibrated,
       engineProbabilityDominant: previousDominantProbability,
+      rawProbability: sidedRawProbability,
       calibratedProbabilityOver: output.calibratedProbabilityOver,
       calibratedProbabilityUnder: output.calibratedProbabilityUnder,
       probabilitySemantics: "recommended_side_calibrated",
@@ -3080,6 +3090,7 @@ export class LiveGameOrchestrator {
       overOdds: output.overOdds ?? null,
       underOdds: output.underOdds ?? null,
       oddsTimestamp: output.oddsUpdatedAt ?? null,
+      oddsFetchedAt: output.oddsFetchedAt ?? null,
       pitcherName: pitcher?.playerName ?? null,
       pitcherHand: pitcher?.throws ?? null,
       pitcherPitchCount: pitcherCtx?.pitchCount ?? gameState?.pitchCount ?? null,
@@ -4743,6 +4754,7 @@ export class LiveGameOrchestrator {
                 xBA: input.contactQuality.xBA != null,
                 bvp: !!bvpData,
               }).filter(Boolean).length >= 4 ? "full" : "partial");
+              qResult.currentStatKnown = boxScorePlayer != null;
               qualifiedSignals.push(qResult);
               allSignals.push(qResult);
               signalsQualified++;
@@ -5131,7 +5143,7 @@ export class LiveGameOrchestrator {
                     hrLiveEdge.hasRealSportsbookLine = !hrRadarOnly;
                     // FSM state stamp — read by the autoPersist HR firewall
                     // (only a real-line BET_NOW may become a persisted play).
-                    (hrLiveEdge as any).hrCurrentState = hrDynSnap?.currentState ?? null;
+                    hrLiveEdge.hrCurrentState = hrDynSnap?.currentState ?? null;
                     if (hrRadarOnly) hrLiveEdge.sportsbook = null;
                     // signalTier reflects the unified canonicalStage conviction
                     // (raw axis): watch→watch, building→lean, attack→elite.
@@ -5143,6 +5155,7 @@ export class LiveGameOrchestrator {
                     else if (canonicalStage === "watch" || canonicalStage === "cooling") hrLiveEdge.signalTier = "watch";
                     hrLiveEdge.currentStats = batterStats;
                     hrLiveEdge.lastABContact = lastABContact;
+                    hrLiveEdge.currentStatKnown = boxScorePlayer != null;
                     qualifiedSignals.push(hrLiveEdge);
                     allSignals.push(hrLiveEdge);
                     signalsQualified++;
@@ -5648,6 +5661,7 @@ export class LiveGameOrchestrator {
             qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
             qResult.isDegraded = !!(input as any).isDegraded;
             qResult.dataQuality = !!(input as any).isDegraded ? "degraded" : "partial";
+            qResult.currentStatKnown = pitcherLiveStatKnown;
             qualifiedSignals.push(qResult);
             allSignals.push(qResult);
             signalsQualified++;
@@ -6017,26 +6031,20 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
   let skipReasons: Record<string, number> = {};
 
   for (const sig of qualifiedSignals) {
-    // ── HR persistence firewall: canonical propagation ≠ wager persistence ──
-    // home_runs rides the canonical bus at WATCH/PREPARE and even when
-    // occurrence-only (no real line), but ONLY an official FIRE — a real cached
-    // sportsbook line AND the unified FSM at BET_NOW — may become a persisted
-    // play. Otherwise the substituted "odds_api" book + synthetic 0.5 line would
-    // fabricate a bet. (isBatterOverWatch below intentionally exempts HR from the
-    // watchlist skip, so this explicit guard is required.)
-    if (sig.market === "home_runs") {
-      const hrState = (sig as any).hrCurrentState;
-      if (sig.hasRealSportsbookLine !== true || hrState !== "BET_NOW") {
-        skipped++; skipReasons["hr_not_fire"] = (skipReasons["hr_not_fire"] ?? 0) + 1; continue;
+    // ── MLB Live Edge Trust Recovery (Phase 4) — single finalized-eligibility
+    // gate. This is the ONLY check deciding whether a signal may become an
+    // official persisted play; the route-side safety net consumes the exact
+    // same function so the two entry points can never disagree.
+    const eligibility = evaluateMlbOfficialEligibility(sig);
+    if (!eligibility.eligible) {
+      skipped++;
+      for (const reason of eligibility.reasons) {
+        skipReasons[reason] = (skipReasons[reason] ?? 0) + 1;
       }
+      continue;
     }
-    const isBatterOverWatch = sig.marketFamily === "batter_over" && sig.mode === "watch";
-    if ((sig.watchlist && !isBatterOverWatch) || sig.isEarlySignal) { skipped++; skipReasons["watchlist"] = (skipReasons["watchlist"] ?? 0) + 1; continue; }
-    const sbk = sig.sportsbook && sig.sportsbook.trim() !== "" ? sig.sportsbook : "odds_api";
-    if (!Number.isFinite(sig.line) || sig.line <= 0) { skipped++; skipReasons["bad_line"] = (skipReasons["bad_line"] ?? 0) + 1; continue; }
 
-    const dir = sig.side === "OVER" ? "over" : sig.side === "UNDER" ? "under" : null;
-    if (!dir) { skipped++; skipReasons["no_dir"] = (skipReasons["no_dir"] ?? 0) + 1; continue; }
+    const dir = sig.side === "OVER" ? "over" : "under";
 
     const canonicalKey = `${sig.playerId}|${sig.market}|${dir}|${gameId}|${today}`;
     const prev = mlbPersistGuard.get(canonicalKey);
@@ -6054,6 +6062,8 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
     }
     mlbPersistGuard.set(canonicalKey, { score: curScore, ts: now });
 
+    const sideOdds = sig.side === "OVER" ? sig.overOdds : sig.underOdds;
+
     trackPlay({
       gameId,
       playerId: sig.playerId,
@@ -6066,11 +6076,20 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
       projection: sig.projection,
       probability: sig.engineProbability,
       edge: sig.evPct ?? 0,
-      sportsbook: sbk,
+      sportsbook: sig.sportsbook,
       derivedLine: false,
       createdAt: sig.engineGeneratedAt ?? Date.now(),
       signalScore: sig.signalScore ?? null,
       confidenceTier: sig.confidenceTier ?? null,
+      odds: sideOdds ?? undefined,
+      oddsSourceUpdatedAt: sig.oddsTimestamp ?? null,
+      oddsFetchedAt: sig.oddsFetchedAt ?? null,
+      rawProbability: sig.rawProbability ?? null,
+      officialEligibilityVersion: eligibility.version,
+      officialEligibilityReasons: eligibility.reasons.length ? eligibility.reasons : null,
+      dataQuality: sig.dataQuality ?? null,
+      currentStatKnown: sig.currentStatKnown ?? null,
+      calibrationVersion: sig.calibrationVersion ?? null,
       inning: sig.inning ?? null,
       abNumber: sig.completedAB ?? null,
       opportunityScore: sig.opportunityScore ?? null,

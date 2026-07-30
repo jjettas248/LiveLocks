@@ -473,6 +473,31 @@ export const persistedPlays = pgTable("persisted_plays", {
   pitchCount: integer("pitch_count"),
   contactQualityScore: numeric("contact_quality_score"),
   confidenceTier: text("confidence_tier"),
+  // ── MLB Live Edge Trust Recovery (Phase 4) — additive, nullable, official-
+  // episode provenance columns. Populated ONLY at first insert for the sport
+  // that supplies them (currently MLB); left null for every existing row and
+  // for sports that don't populate them. No backfill, no fabrication.
+  // Existing columns reused where their semantics are exactly identical:
+  //   - `timestamp` already serves as firstPublicAt (row creation time, and
+  //     — once this row is immutable post-insert — the frozen first-public
+  //     moment).
+  //   - `prob` already serves as finalProbability (the final recommended-
+  //     side calibrated probability MLB has always written here).
+  //   - `odds` already serves as sideOdds (the recommended-side American
+  //     odds) — MLB simply did not populate it before this recovery.
+  //   - `engineVersion`/`calibrationTrack` already exist as generic columns;
+  //     MLB now populates them too.
+  // Genuinely new concepts get their own column below.
+  officialEpisodeKey: text("official_episode_key").unique(),
+  oddsSourceUpdatedAt: timestamp("odds_source_updated_at"),
+  oddsFetchedAt: timestamp("odds_fetched_at"),
+  rawProbability: numeric("raw_probability"),
+  calibrationVersion: text("calibration_version"),
+  inputSnapshotHash: text("input_snapshot_hash"),
+  officialEligibilityVersion: text("official_eligibility_version"),
+  officialEligibilityReasons: text("official_eligibility_reasons"),
+  dataQuality: text("data_quality"),
+  currentStatKnown: boolean("current_stat_known"),
 }, (table) => ({
   gameDateIdx: index("persisted_plays_game_date_idx").on(table.gameDate),
   resultIdx: index("persisted_plays_result_idx").on(table.result),

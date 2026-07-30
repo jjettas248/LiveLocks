@@ -92,7 +92,7 @@ import {
   type InsertHrRadarSignalEvent,
 } from "@shared/schema";
 import { PREGAME_SEED_CAP, pregameSeedTierLabel } from "@shared/hrRadarConviction";
-import { eq, and, asc, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
+import { eq, and, or, asc, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
 
@@ -356,6 +356,18 @@ export interface IStorage {
     abNumber?: number;
     pitchCount?: number;
     contactQualityScore?: number;
+    // ── MLB Live Edge Trust Recovery (Phase 4) — official-episode provenance.
+    // MLB-only; undefined for NBA/NCAAB (their upsert-on-higher-score path on
+    // duplicateGuard is untouched).
+    officialEpisodeKey?: string;
+    oddsSourceUpdatedAt?: number;
+    oddsFetchedAt?: number;
+    rawProbability?: number;
+    officialEligibilityVersion?: string;
+    officialEligibilityReasons?: string;
+    dataQuality?: string;
+    currentStatKnown?: boolean;
+    calibrationVersion?: string;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
   getPendingPlaysForGrading(limit?: number): Promise<PersistedPlay[]>;
@@ -2348,7 +2360,28 @@ export class DatabaseStorage implements IStorage {
     abNumber?: number;
     pitchCount?: number;
     contactQualityScore?: number;
+    officialEpisodeKey?: string;
+    oddsSourceUpdatedAt?: number;
+    oddsFetchedAt?: number;
+    rawProbability?: number;
+    officialEligibilityVersion?: string;
+    officialEligibilityReasons?: string;
+    dataQuality?: string;
+    currentStatKnown?: boolean;
+    calibrationVersion?: string;
   }): Promise<{ id: string; isDuplicate: boolean }> {
+    // ── MLB Live Edge Trust Recovery (Phase 4) — immutable official episode ──
+    // MLB official rows are keyed on officialEpisodeKey (game+player+market),
+    // NOT duplicateGuard (which also encodes direction and would let a side
+    // flip mint a second official row for the same episode). First insert
+    // wins; every later call for the same episode — same side or flipped —
+    // is a no-op that never mutates the frozen first-public snapshot.
+    // NBA/NCAAB never set officialEpisodeKey, so this branch never triggers
+    // for them and their existing upsert-on-higher-score path is unchanged.
+    if (play.sport === "mlb" && play.officialEpisodeKey) {
+      return this.recordMlbOfficialPlay(play as Parameters<IStorage["recordPlay"]>[0] & { officialEpisodeKey: string });
+    }
+
     const existing = await db
       .select({ id: persistedPlays.id, signalScore: persistedPlays.signalScore })
       .from(persistedPlays)
@@ -2467,6 +2500,133 @@ export class DatabaseStorage implements IStorage {
       contactQualityScore: play.contactQualityScore != null ? String(play.contactQualityScore) : null,
     }).onConflictDoNothing({ target: persistedPlays.duplicateGuard });
     return { id: play.id, isDuplicate: false };
+  }
+
+  // ── MLB Live Edge Trust Recovery (Phase 4) — immutable official episode ──
+  // One episode (game+player+market) → one official row, ever. First insert
+  // freezes the entire first-public snapshot; every later call for the same
+  // episode is a no-op that never mutates it, whether the side matches or
+  // has flipped. Atomic: INSERT ... ON CONFLICT DO NOTHING, then re-SELECT
+  // the actual winning row on a lost race — never returns an uninserted
+  // candidate's id. A pre-officialEpisodeKey legacy row for the same
+  // game+player+market (officialEpisodeKey IS NULL) is recognized and
+  // adopted as the existing official record rather than duplicated.
+  private async recordMlbOfficialPlay(
+    play: Parameters<IStorage["recordPlay"]>[0] & { officialEpisodeKey: string }
+  ): Promise<{ id: string; isDuplicate: boolean }> {
+    const legacyOrSameEpisode = await db
+      .select({ id: persistedPlays.id, direction: persistedPlays.direction, officialEpisodeKey: persistedPlays.officialEpisodeKey })
+      .from(persistedPlays)
+      .where(and(
+        eq(persistedPlays.sport, "mlb"),
+        eq(persistedPlays.gameId, play.gameId),
+        eq(persistedPlays.playerId, play.playerId as string),
+        eq(persistedPlays.market, play.market),
+        or(isNull(persistedPlays.officialEpisodeKey), eq(persistedPlays.officialEpisodeKey, play.officialEpisodeKey))
+      ))
+      .limit(1);
+    if (legacyOrSameEpisode.length > 0) {
+      const winner = legacyOrSameEpisode[0];
+      const flipBlocked = winner.direction !== play.direction;
+      console.log(`[MLB_OFFICIAL_EPISODE_DUPLICATE]`, {
+        episodeKey: play.officialEpisodeKey,
+        existingId: winner.id,
+        flipBlocked,
+        legacyRow: winner.officialEpisodeKey == null,
+      });
+      return { id: winner.id, isDuplicate: true };
+    }
+
+    const inserted = await db.insert(persistedPlays).values({
+      id: play.id,
+      gameId: play.gameId,
+      playerId: play.playerId ?? null,
+      playerName: play.playerName,
+      team: play.team ?? null,
+      sport: play.sport,
+      market: play.market,
+      direction: play.direction,
+      line: String(play.line),
+      prob: String(play.prob),
+      engineProb: play.engineProb != null ? String(play.engineProb) : null,
+      bookImplied: play.bookImplied != null ? String(play.bookImplied) : null,
+      edgeGap: play.edgeGap != null ? String(play.edgeGap) : null,
+      engineVersion: play.engineVersion ?? null,
+      projection: play.projection != null ? String(play.projection) : null,
+      sportsbook: play.sportsbook ?? null,
+      derivedLine: play.derivedLine ?? null,
+      gameDate: play.gameDate,
+      timestamp: play.timestamp,
+      duplicateGuard: play.duplicateGuard,
+      archetype: play.archetype ?? null,
+      fragilityScore: play.fragilityScore != null ? String(play.fragilityScore) : null,
+      familyId: play.familyId ?? null,
+      siblingCount: play.siblingCount ?? null,
+      siblingRank: play.siblingRank ?? null,
+      flagshipOrDerivative: play.flagshipOrDerivative ?? null,
+      familyPenaltyFactor: play.familyPenaltyFactor != null ? String(play.familyPenaltyFactor) : null,
+      calibrationTrack: play.calibrationTrack ?? null,
+      confidenceCeilingApplied: play.confidenceCeilingApplied ?? null,
+      ceilingReason: play.ceilingReason ?? null,
+      rawProbOver: play.rawProbOver != null ? String(play.rawProbOver) : null,
+      rawProbUnder: play.rawProbUnder != null ? String(play.rawProbUnder) : null,
+      modelEdge: play.modelEdge != null ? String(play.modelEdge) : null,
+      minutesExpected: play.minutesExpected != null ? String(play.minutesExpected) : null,
+      minutesVariance: play.minutesVariance != null ? String(play.minutesVariance) : null,
+      marketType: play.marketType ?? null,
+      finalProbOver: play.finalProbOver != null ? String(play.finalProbOver) : null,
+      finalProbUnder: play.finalProbUnder != null ? String(play.finalProbUnder) : null,
+      displayConfidence: play.displayConfidence != null ? String(play.displayConfidence) : null,
+      playerVolatilityScore: play.playerVolatilityScore != null ? String(play.playerVolatilityScore) : null,
+      comboCovarianceEstimate: play.comboCovarianceEstimate != null ? String(play.comboCovarianceEstimate) : null,
+      fragilityPenalty: play.fragilityPenalty != null ? String(play.fragilityPenalty) : null,
+      fragilityReasons: play.fragilityReasons ?? null,
+      mu: play.mu != null ? String(play.mu) : null,
+      sigma: play.sigma != null ? String(play.sigma) : null,
+      zScore: play.zScore != null ? String(play.zScore) : null,
+      hrBuildScore: play.hrBuildScore != null ? String(play.hrBuildScore) : null,
+      hrIntensity: play.hrIntensity ?? null,
+      signalScore: play.signalScore != null ? String(play.signalScore) : null,
+      opportunityScore: play.opportunityScore ?? null,
+      liveScore: play.liveScore ?? null,
+      eventBoost: play.eventBoost ?? null,
+      odds: play.odds != null ? String(play.odds) : null,
+      stake: play.stake != null ? String(play.stake) : "1",
+      confidenceTier: play.confidenceTier ?? null,
+      inning: play.inning ?? null,
+      abNumber: play.abNumber ?? null,
+      pitchCount: play.pitchCount ?? null,
+      contactQualityScore: play.contactQualityScore != null ? String(play.contactQualityScore) : null,
+      officialEpisodeKey: play.officialEpisodeKey,
+      oddsSourceUpdatedAt: play.oddsSourceUpdatedAt != null ? new Date(play.oddsSourceUpdatedAt) : null,
+      oddsFetchedAt: play.oddsFetchedAt != null ? new Date(play.oddsFetchedAt) : null,
+      rawProbability: play.rawProbability != null ? String(play.rawProbability) : null,
+      calibrationVersion: play.calibrationVersion ?? null,
+      officialEligibilityVersion: play.officialEligibilityVersion ?? null,
+      officialEligibilityReasons: play.officialEligibilityReasons ?? null,
+      dataQuality: play.dataQuality ?? null,
+      currentStatKnown: play.currentStatKnown ?? null,
+    }).onConflictDoNothing({ target: persistedPlays.officialEpisodeKey }).returning({ id: persistedPlays.id });
+
+    if (inserted.length > 0) {
+      return { id: inserted[0].id, isDuplicate: false };
+    }
+
+    // Lost the race — another concurrent writer's insert won. Re-select the
+    // actual winning row rather than returning this candidate's unused id.
+    const winnerRow = await db
+      .select({ id: persistedPlays.id, direction: persistedPlays.direction })
+      .from(persistedPlays)
+      .where(eq(persistedPlays.officialEpisodeKey, play.officialEpisodeKey))
+      .limit(1);
+    const winner = winnerRow[0];
+    console.log(`[MLB_OFFICIAL_EPISODE_DUPLICATE]`, {
+      episodeKey: play.officialEpisodeKey,
+      existingId: winner?.id ?? null,
+      flipBlocked: winner ? winner.direction !== play.direction : null,
+      concurrentRace: true,
+    });
+    return { id: winner?.id ?? play.id, isDuplicate: true };
   }
 
   async getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }> {
