@@ -5,21 +5,30 @@
  * boots the actual Express app (real requireMLBAccess middleware, real
  * route handlers via registerRoutes, real storage round-tripping through
  * Postgres) and issues real HTTP requests. Exists specifically to prove the
- * fix in server/utils/mlbPreviewAccess.ts behaves correctly through the
- * real stack — a unit test on the extracted pure function alone (see
+ * fixes in server/utils/mlbPreviewAccess.ts behave correctly through the
+ * real stack — a unit test on the extracted pure functions alone (see
  * mlbPreviewAccess.test.ts) cannot prove the full requireMLBAccess wiring
  * does the right thing for admins, subscribers, and the free-preview
- * budget together.
+ * budget together, or that Postgres itself serializes concurrent requests
+ * correctly.
  *
- * Regression under test: requireMLBAccess previously returned a raw 400
- * ("Missing gameId for MLB preview access") for any gated route with no
- * gameId in req.params/req.body — including the pre-existing bare
- * /api/mlb/pregame-power-radar route, not just the 12 newly-gated routes.
- * This proves: (1) that specific 400 is gone, (2) admins/paid MLB
- * subscribers are completely unaffected (bypass before reaching that code
- * at all), and (3) the fix does NOT accidentally grant unlimited free
- * access — a free user's shared "mlb-general" daily budget is still bounded
- * by the same MLB_PREVIEW_LIMIT as any real per-game key.
+ * Regression #1 (fixed prior to Correction 5): requireMLBAccess previously
+ * returned a raw 400 ("Missing gameId for MLB preview access") for any
+ * gated route with no gameId in req.params/req.body.
+ *
+ * Regression #2 (Correction 5, THIS pass): the fix for #1 fell back to one
+ * single flat "mlb-general" key shared by EVERY gameId-less route. Visiting
+ * any ONE of them (e.g. /api/mlb/alerts) silently unlocked every OTHER
+ * gameId-less route (including /api/mlb/props — an arbitrary player/market/
+ * line lookup tool with no gameId requirement at all) for the rest of the
+ * day, with zero further budget consumed. This suite proves: (1) that bug
+ * is gone — different gameId-less routes/resources consume independent
+ * budget slots; (2) raw odds/calculation routes are denied the free-preview
+ * fallback entirely, not merely rate-limited; (3) the global 2/day cap
+ * still holds regardless of how many distinct keys are attempted;
+ * (4) admins/paid MLB subscribers are completely unaffected; (5) concurrent
+ * requests cannot exceed the daily cap (real HTTP-level race, not just a
+ * unit-level argument about the underlying SQL).
  *
  * REQUIREMENTS TO RUN
  *   - A reachable Postgres instance with `drizzle-kit push` already applied.
@@ -92,9 +101,14 @@ async function main() {
 
   await cleanupTestUsers();
 
-  async function req(path: string, token?: string) {
+  async function req(path: string, token?: string, opts: { method?: string; body?: unknown } = {}) {
     const res = await fetch(`${base}${path}`, {
-      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      method: opts.method ?? "GET",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      },
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
     let body: any = null;
     try { body = await res.json(); } catch { /* non-JSON response, ignore body */ }
@@ -122,22 +136,31 @@ async function main() {
     assertEq(second.status, 200, "second hit to the same gameId-less route is still 200 (already unlocked, not re-consumed)");
   });
 
-  test("4. Same free-tier user — a DIFFERENT gameId-less route shares the same 'mlb-general' budget", async () => {
-    const free = await createTestUser("free-shared-budget", { subscriptionTier: null });
-    const first = await req("/api/mlb/pregame-power-radar", free.token); // consumes 1 of 2 (key: mlb-general)
+  test("4. [Correction 5] A DIFFERENT gameId-less route does NOT share the same budget slot", async () => {
+    const free = await createTestUser("free-no-shared-budget", { subscriptionTier: null });
+    const first = await req("/api/mlb/pregame-power-radar", free.token); // consumes credit 1/2
     assertEq(first.status, 200, "first gameId-less route succeeds");
-    const second = await req("/api/mlb/alerts", free.token); // same mlb-general key — already unlocked
-    assertEq(second.status, 200, "a second, different gameId-less route is also 200 under the same shared key");
+    const second = await req("/api/mlb/alerts", free.token); // a DIFFERENT route -> must consume its OWN slot, not reuse the first's
+    assertEq(second.status, 200, "a second, different gameId-less route also succeeds (it consumes credit 2/2, not a free ride)");
+    // With exactly 2 total credits now spent on 2 DIFFERENT routes, a THIRD distinct gameId-less route must be rejected.
+    const third = await req("/api/mlb/hr-radar", free.token);
+    assertEq(third.status, 402, "a THIRD distinct gameId-less route is correctly rejected — proves the first two each consumed their own real credit instead of sharing one");
+    assertEq(third.body?.error, "MLB_UPGRADE_REQUIRED", "the rejection is the normal upgrade prompt");
+    // And the ORIGINAL two routes remain freely re-viewable (already unlocked, not re-charged).
+    const firstAgain = await req("/api/mlb/pregame-power-radar", free.token);
+    assertEq(firstAgain.status, 200, "re-visiting the FIRST already-unlocked route still works after the budget is otherwise exhausted");
+    const secondAgain = await req("/api/mlb/alerts", free.token);
+    assertEq(secondAgain.status, 200, "re-visiting the SECOND already-unlocked route still works too");
   });
 
-  test("5. Free-tier user — the fix does not grant unlimited access; the shared budget still runs out at the same limit", async () => {
+  test("5. Free-tier user — per-game keys and gameId-less keys draw from the SAME global daily cap", async () => {
     const free = await createTestUser("free-exhausts-limit", { subscriptionTier: null });
     const perGame1 = await req("/api/mlb/pregame-power-radar/GATE_TEST_GAME_1", free.token); // distinct key 1/2
     assertEq(perGame1.status, 200, "first distinct per-game key succeeds");
     const perGame2 = await req("/api/mlb/pregame-power-radar/GATE_TEST_GAME_2", free.token); // distinct key 2/2
     assertEq(perGame2.status, 200, "second distinct per-game key succeeds (limit now exhausted)");
-    const bareAfterLimit = await req("/api/mlb/pregame-power-radar", free.token); // 3rd distinct key: mlb-general
-    assertEq(bareAfterLimit.status, 402, "a third distinct key (the shared gameId-less bucket) is correctly rejected once the daily limit is spent");
+    const bareAfterLimit = await req("/api/mlb/pregame-power-radar", free.token); // a 3rd distinct key (route-scoped, not shared with the per-game ones)
+    assertEq(bareAfterLimit.status, 402, "a third distinct key is correctly rejected once the daily limit is spent, regardless of whether it's a per-game or per-route key");
     assertEq(bareAfterLimit.body?.error, "MLB_UPGRADE_REQUIRED", "the rejection is the normal upgrade prompt, not a crash");
   });
 
@@ -155,6 +178,67 @@ async function main() {
     assertEq(bare.status, 200, "admin on a gameId-less route");
     const withGame = await req("/api/mlb/pregame-power-radar/GATE_TEST_GAME_4", admin.token);
     assertEq(withGame.status, 200, "admin on a per-game route");
+  });
+
+  test("8. [Correction 5] Raw odds/calculation routes deny free-tier access entirely — not merely rate-limited", async () => {
+    const free = await createTestUser("free-denylist", { subscriptionTier: null });
+    const odds = await req("/api/mlb/odds?playerName=Aaron+Judge&statType=home_runs", free.token);
+    assertEq(odds.status, 402, "GET /api/mlb/odds is denied for a free user even on their very FIRST request of the day (never consumes a preview credit)");
+    assertEq(odds.body?.error, "MLB_UPGRADE_REQUIRED", "the denial uses the standard upgrade-required error code");
+
+    const propsBody = { market: "hits", line: 1.5, playerName: "Test Player", team: "NYY", opponent: "BOS" };
+    const props = await req("/api/mlb/props", free.token, { method: "POST", body: propsBody });
+    assertEq(props.status, 402, "POST /api/mlb/props is denied for a free user regardless of body content");
+
+    const calc = await req("/api/mlb/calculate", free.token, { method: "POST", body: propsBody });
+    assertEq(calc.status, 402, "POST /api/mlb/calculate is denied identically");
+
+    const manual = await req("/api/mlb/calculate-manual", free.token, { method: "POST", body: { market: "hits", bookLine: 1.5 } });
+    assertEq(manual.status, 402, "POST /api/mlb/calculate-manual (arbitrary manual-input calculator) is denied identically");
+
+    // Denial must NOT consume any of the user's real preview budget — confirm
+    // the 2 real credits are still both available on an ordinary route.
+    const first = await req("/api/mlb/pregame-power-radar", free.token);
+    assertEq(first.status, 200, "the user's first REAL preview credit is still available after 4 denied attempts on raw-lookup routes");
+    const second = await req("/api/mlb/alerts", free.token);
+    assertEq(second.status, 200, "the user's second REAL preview credit is also still available — denylisted routes never silently spent it");
+  });
+
+  test("9. [Correction 5] Raw odds/calculation routes remain fully reachable for paid subscribers and admins", async () => {
+    const elite = await createTestUser("elite-denylist", { subscriptionTier: "elite" });
+    const eliteOdds = await req("/api/mlb/odds?playerName=Aaron+Judge&statType=home_runs", elite.token);
+    assert(eliteOdds.status !== 402, `an elite subscriber must never be denied on a denylisted route (got ${eliteOdds.status})`);
+
+    const admin = await createTestUser("admin-denylist", { isAdmin: true });
+    const adminProps = await req("/api/mlb/props", admin.token, { method: "POST", body: { market: "hits", line: 1.5, playerName: "X", team: "NYY", opponent: "BOS" } });
+    assert(adminProps.status !== 402, `an admin must never be denied on a denylisted route (got ${adminProps.status})`);
+  });
+
+  test("10. [Correction 5] A route with a real per-resource identity scopes independently per resource", async () => {
+    const free = await createTestUser("free-player-history", { subscriptionTier: null });
+    const playerA = await req("/api/mlb/player-history/PLAYER_AAA", free.token);
+    assertEq(playerA.status, 200, "viewing player A's history succeeds (consumes credit 1/2)");
+    const playerARepeat = await req("/api/mlb/player-history/PLAYER_AAA", free.token);
+    assertEq(playerARepeat.status, 200, "re-viewing the SAME player is free (already unlocked)");
+    const playerB = await req("/api/mlb/player-history/PLAYER_BBB", free.token);
+    assertEq(playerB.status, 200, "a DIFFERENT player consumes a genuinely new credit (2/2) rather than riding on player A's unlock");
+    const playerC = await req("/api/mlb/player-history/PLAYER_CCC", free.token);
+    assertEq(playerC.status, 402, "a THIRD distinct player is correctly rejected once the daily limit (2) is spent");
+  });
+
+  test("11. [Correction 5] Concurrent requests cannot exceed the daily cap (real HTTP-level race)", async () => {
+    const free = await createTestUser("free-concurrent", { subscriptionTier: null });
+    // Fire 10 concurrent requests for 10 DISTINCT players simultaneously —
+    // if consumption were not atomic, more than 2 could slip through the
+    // check-then-act window before any commit landed.
+    const N = 10;
+    const responses = await Promise.all(
+      Array.from({ length: N }, (_, i) => req(`/api/mlb/player-history/CONCURRENT_PLAYER_${i}`, free.token)),
+    );
+    const succeeded = responses.filter((r) => r.status === 200).length;
+    const rejected = responses.filter((r) => r.status === 402).length;
+    assertEq(succeeded, 2, `exactly 2 of ${N} concurrent requests for distinct resources succeed — never more, proving atomic consumption under real concurrency (got ${succeeded})`);
+    assertEq(rejected, N - 2, `the remaining ${N - 2} concurrent requests are correctly rejected, not silently allowed through`);
   });
 
   let pass = 0, fail = 0;

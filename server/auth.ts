@@ -10,7 +10,7 @@ import type { User } from "@shared/schema";
 import { sendWallEmail, sendVerificationEmail, sendPasswordResetEmail } from "./email";
 import { resolveAccess } from "./utils/access";
 import { todayET } from "./utils/dateUtils";
-import { resolveMlbPreviewConsumeKey } from "./utils/mlbPreviewAccess";
+import { resolveMlbPreviewConsumeKey, isMlbPreviewDenylistedRoute } from "./utils/mlbPreviewAccess";
 
 // ── Stripe tier-check TTL cache ────────────────────────────────────────────────
 // Limits Stripe API calls to once per 5 minutes per user.
@@ -565,14 +565,38 @@ export async function requireMLBAccess(req: Request, res: Response, next: NextFu
   const access = resolveAccess(user.subscriptionTier, user.isAdmin ?? false);
   if (access.hasMLB) return next();
 
+  // Correction 5: raw odds/calculation routes (arbitrary player+market+line
+  // query-or-body combinations, no bounded resource identity) are never
+  // reachable via the free-preview fallback — real paid MLB access is
+  // required, unconditionally, regardless of whether a gameId happens to be
+  // present (client-supplied and trivially omittable; never a security
+  // boundary). See mlbPreviewAccess.ts's file header for the full reasoning.
+  const routePattern = req.route?.path ?? req.path;
+  if (isMlbPreviewDenylistedRoute(req.method, routePattern)) {
+    return res.status(402).json({
+      error: "MLB_UPGRADE_REQUIRED",
+      message: "This feature requires an MLB subscription — not available in free preview.",
+      limit: MLB_PREVIEW_LIMIT,
+    });
+  }
+
   await storage.resetDailyPlaysIfNeeded(userId);
 
   // Previously returned 400 here for any route without a gameId, turning
   // "2 free previews/day" into a hard error for every such MLB route
   // (confirmed on the pre-existing bare /api/mlb/pregame-power-radar route
-  // too, not just newly-gated ones) — see resolveMlbPreviewConsumeKey.
+  // too, not just newly-gated ones). Then (Correction 5) discovered that
+  // resolveMlbPreviewConsumeKey's fallback collapsed EVERY gameId-less route
+  // onto one shared "mlb-general" key — closed by scoping the fallback key
+  // to the specific route + its own real path params instead.
   const gameId = (req.params as any)?.gameId ?? (req.body as any)?.gameId;
-  const consumeKey = resolveMlbPreviewConsumeKey(gameId);
+  const consumeKey = resolveMlbPreviewConsumeKey(gameId, {
+    method: req.method,
+    routePattern,
+    params: req.params,
+    query: req.query as Record<string, unknown>,
+    body: req.body,
+  });
 
   const alreadyUnlocked = await storage.isGameUnlockedToday(userId, consumeKey);
   if (alreadyUnlocked) return next();

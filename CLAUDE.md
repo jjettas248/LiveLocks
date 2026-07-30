@@ -100,6 +100,8 @@ npx tsx server/mlb/pregame/mound/v2/moundV2PromotionEvidenceAdapter.test.ts # Mo
 npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliation.test.ts # Mound V2 shadow reconciliation policy: eligibility/exponential-backoff/postponed-cooldown decisions, grading coverage report (coverage ratio, oldest pending, stale alerts, provider failures, unresolved pitchers)
 npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliationSweep.integration.test.ts # Mound V2 shadow reconciliation sweep: behavioral proof of per-game single-flight fetch dedup, whole-sweep single-flight, rate limiting, honest failure attribution, never-throws
 npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliationWiring.test.ts # Mound V2 reconciliation structural proof: zero reachability from buildMlbMoundRadar.ts, syncGameBoxScore called from exactly one file, zero sportsbook/odds imports
+npx tsx server/utils/mlbPreviewAccess.test.ts          # MLB free-preview consume-key resolution: gameId always wins, gameId-less routes/resources key independently (never a shared flat key), denylist for raw odds/calculation routes
+npx tsx server/mlbAccessControlGate.integration.test.ts # MLB access-control gate against a REAL app+DB: no cross-route budget sharing, denylisted raw-odds/calc routes always require paid access, per-resource (player) keying, real concurrent-request atomicity, admin/paid bypass unaffected
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
