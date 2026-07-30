@@ -250,7 +250,7 @@ interface BvPMatchupStats {
 
 // ── In-memory cache ───────────────────────────────────────────────────────────
 
-interface GameBoxScorePlayer {
+export interface GameBoxScorePlayer {
   playerId: string;
   playerName: string;
   team: string;

@@ -312,7 +312,12 @@ export interface MLBPropInput {
   weatherPark: WeatherParkContext;
   bullpen: BullpenContext;
 
+  // MLB Live Edge Trust Recovery (Phase 3) — the ACTUAL source snapshot
+  // timestamp and the ACTUAL selected approved sportsbook. Never fabricated:
+  // null means unknown provenance, and engine builders must never substitute
+  // Date.now() (that's engineGeneratedAt's job) or a placeholder book name.
   oddsUpdatedAt?: number | null;
+  sportsbook?: string | null;
   bvpHistory?: BatterVsPitcherHistory;
   hrrComponents?: HRRComponents;
 
@@ -461,7 +466,12 @@ export interface MLBPropOutput {
   explanationBullets: string[];
   warnings: string[];
   engineGeneratedAt: number;
-  oddsUpdatedAt: number;
+  // MLB Live Edge Trust Recovery (Phase 3) — the ACTUAL sportsbook source
+  // snapshot timestamp, forwarded from input.oddsUpdatedAt. Null when the
+  // resolved line carried no provenance (e.g. the stale "prior known line"
+  // fallback) — engine-computation time (engineGeneratedAt) must never be
+  // substituted here.
+  oddsUpdatedAt: number | null;
   projectionUpdatedAt: number;
   sportsbook: string | null;
   isDerivedLine: boolean;
@@ -645,7 +655,9 @@ export interface MLBQualifiedSignal {
   drivers: Record<string, number>;
   timestamps: {
     engineGeneratedAt: string;
-    oddsUpdatedAt: string;
+    // MLB Live Edge Trust Recovery (Phase 3) — null when the resolved odds
+    // line carried no real source-timestamp provenance.
+    oddsUpdatedAt: string | null;
     gameStateUpdatedAt: string;
   };
 

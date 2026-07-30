@@ -2189,7 +2189,7 @@ export async function registerRoutes(
           edge: bestNoRealLine ? null : (bestRawOutput?.edge ?? null),
           probability: bestMarketProb,
           probabilitySemantics: "recommended_side_calibrated" as const,
-          oddsUpdatedAt: bestRawOutput ? new Date(bestRawOutput.oddsUpdatedAt).toISOString() : null,
+          oddsUpdatedAt: bestRawOutput?.oddsUpdatedAt != null ? new Date(bestRawOutput.oddsUpdatedAt).toISOString() : null,
           projectionUpdatedAt: bestRawOutput ? new Date(bestRawOutput.projectionUpdatedAt).toISOString() : null,
         } : null;
 

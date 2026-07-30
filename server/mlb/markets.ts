@@ -13,11 +13,20 @@ import { mlbGameCache } from "./dataPullService";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { computeHRConversionProbability } from "./hrConversionModel";
 import type { HRConversionInput, HRConversionResult } from "./hrConversionModel";
+import { isMlbSelfLearningProductionAdaptationEnabled } from "./mlbAdaptationConfig";
 
 const selfLearningCalibration: Record<string, { shrinkFactor: number; sampleSize: number; lastUpdated: number }> = {};
 const CALIBRATION_REFRESH_MS = 30 * 60 * 1000;
 const DEFAULT_SHRINK = 0.96;
 
+// MLB Live Edge Trust Recovery (Phase 1) — this mirrors the SAME aggregate
+// league-wide-outcome-vs-fixed-default comparison as selfLearning.ts's
+// getLearnedRateAdjustment (fed by liveGameOrchestrator's 30-minute
+// refreshSelfLearningCalibration → getAllCalibrationData()). It is not a
+// valid production calibration signal. The shadow value is still computed
+// and stored (updateSelfLearningCalibration) for diagnostics; production
+// consumption (getSelfLearningShrink) is fail-closed to the static
+// DEFAULT_SHRINK unless mlbAdaptationConfig explicitly enables it.
 export function updateSelfLearningCalibration(market: string, hitRate: number, expectedRate: number, sampleSize: number): void {
   if (sampleSize < 10) return;
   const error = hitRate - expectedRate;
@@ -27,13 +36,22 @@ export function updateSelfLearningCalibration(market: string, hitRate: number, e
   }
   const newShrink = Math.max(0.85, Math.min(1.02, DEFAULT_SHRINK * adjustment));
   selfLearningCalibration[market] = { shrinkFactor: newShrink, sampleSize, lastUpdated: Date.now() };
-  console.log(`[MLB SELF_LEARN] market=${market} hitRate=${(hitRate * 100).toFixed(1)}% expected=${(expectedRate * 100).toFixed(1)}% error=${(error * 100).toFixed(1)}% shrink=${newShrink.toFixed(4)} samples=${sampleSize}`);
+  console.log(`[MLB SELF_LEARN] market=${market} hitRate=${(hitRate * 100).toFixed(1)}% expected=${(expectedRate * 100).toFixed(1)}% error=${(error * 100).toFixed(1)}% shadowShrink=${newShrink.toFixed(4)} samples=${sampleSize}`);
 }
 
 export function getSelfLearningShrink(market: MLBMarket): number {
   const entry = selfLearningCalibration[market];
-  if (!entry || Date.now() - entry.lastUpdated > CALIBRATION_REFRESH_MS * 3) return DEFAULT_SHRINK;
-  return entry.shrinkFactor;
+  const shadowShrink = (!entry || Date.now() - entry.lastUpdated > CALIBRATION_REFRESH_MS * 3) ? DEFAULT_SHRINK : entry.shrinkFactor;
+  if (!isMlbSelfLearningProductionAdaptationEnabled()) {
+    if (entry && shadowShrink !== DEFAULT_SHRINK) {
+      console.log(
+        `[MLB_ADAPTATION_SHADOW] system=aggregate_self_learning_shrink market=${market} ` +
+        `shadowShrink=${shadowShrink.toFixed(4)} productionShrink=${DEFAULT_SHRINK.toFixed(4)} reason=fail_closed_default`,
+      );
+    }
+    return DEFAULT_SHRINK;
+  }
+  return shadowShrink;
 }
 
 export function getSelfLearningStats(): Record<string, { shrinkFactor: number; sampleSize: number }> {
@@ -874,9 +892,9 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     explanationBullets,
     warnings,
     engineGeneratedAt: nowTs,
-    oddsUpdatedAt: nowTs,
+    oddsUpdatedAt: input.oddsUpdatedAt ?? null,
     projectionUpdatedAt: nowTs,
-    sportsbook: null,
+    sportsbook: input.sportsbook ?? null,
     isDerivedLine: false,
     signalTimestamp: nowTs,
     formIndicator: form,
@@ -1014,9 +1032,9 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     explanationBullets,
     warnings,
     engineGeneratedAt: nowTs,
-    oddsUpdatedAt: nowTs,
+    oddsUpdatedAt: hitsInput.oddsUpdatedAt ?? null,
     projectionUpdatedAt: nowTs,
-    sportsbook: null,
+    sportsbook: hitsInput.sportsbook ?? null,
     isDerivedLine: false,
     signalTimestamp: nowTs,
     formIndicator: classifyForm(hitsInput),
@@ -1150,9 +1168,9 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
     explanationBullets,
     warnings,
     engineGeneratedAt: nowTs,
-    oddsUpdatedAt: nowTs,
+    oddsUpdatedAt: tbInput.oddsUpdatedAt ?? null,
     projectionUpdatedAt: nowTs,
-    sportsbook: null,
+    sportsbook: tbInput.sportsbook ?? null,
     isDerivedLine: false,
     signalTimestamp: nowTs,
     formIndicator: classifyForm(tbInput),
@@ -1284,9 +1302,9 @@ export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
     explanationBullets,
     warnings,
     engineGeneratedAt: nowTs,
-    oddsUpdatedAt: nowTs,
+    oddsUpdatedAt: kInput.oddsUpdatedAt ?? null,
     projectionUpdatedAt: nowTs,
-    sportsbook: null,
+    sportsbook: kInput.sportsbook ?? null,
     isDerivedLine: false,
     signalTimestamp: nowTs,
     formIndicator: classifyForm(kInput),
@@ -1463,8 +1481,15 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
   const calibratedSided = calibratedOver;
 
   const bookImplied = computeBookImplied(hrInput, true);
+  // MLB Live Edge Trust Recovery (Phase 1) — hrBuild.score (the same live
+  // contact-evidence score) already feeds hrConversionInput.hrBuildScore/
+  // factors above, which computeHRConversionProbability consumes to shape
+  // hrOccurrenceProbability/calibratedSided. Adding hrBuild.boost here on top
+  // was double-counting the same evidence a second time, in an incompatible
+  // unit (a flat edge-percentage-point bolt-on rather than a probability
+  // input) that the model's own calibration curve had no way to account for.
   const rawEdge = calibratedSided - bookImplied;
-  const edge = rawEdge + hrBuild.boost;
+  const edge = rawEdge;
   const badgeResult = computeBadges(hrInput, features);
   const oddsAge = hrInput.oddsUpdatedAt ? Date.now() - hrInput.oddsUpdatedAt : 0;
   let confidenceTier = determineConfidenceTier(edge, features, badgeResult, oddsAge, "home_runs", "OVER", hrInput.liveInterpretation);
@@ -1534,9 +1559,9 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
     explanationBullets,
     warnings,
     engineGeneratedAt: nowTs,
-    oddsUpdatedAt: nowTs,
+    oddsUpdatedAt: hrInput.oddsUpdatedAt ?? null,
     projectionUpdatedAt: nowTs,
-    sportsbook: null,
+    sportsbook: hrInput.sportsbook ?? null,
     isDerivedLine: false,
     signalTimestamp: nowTs,
     formIndicator: classifyForm(hrInput),

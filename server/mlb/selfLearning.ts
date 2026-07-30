@@ -3,6 +3,7 @@ import { contactEvents, gamePlayerStats, hrOutcomes, hrRadarAnalytics } from "@s
 import { sql, desc, gte, and } from "drizzle-orm";
 import type { MLBMarket } from "./types";
 import { normalizePitchTypeCode } from "./pitchTypeNormalizer";
+import { isMlbSelfLearningProductionAdaptationEnabled } from "./mlbAdaptationConfig";
 
 export interface ContactProfile {
   hitEvThreshold: number;
@@ -98,9 +99,19 @@ export function getAllCalibrationData(): {
 // signal but won't whip wildly off a tiny window. 100+ = full strength.
 // Each tier transition is logged + recorded into the admin diagnostics ring
 // buffer for visibility.
-export function getLearnedRateAdjustment(market: MLBMarket): number {
+//
+// MLB Live Edge Trust Recovery (Phase 1) — this computation compares
+// AGGREGATE league-wide observed rates to fixed static defaults (see
+// learnMarketRates below), never this engine's own prior predictions. It is
+// not a valid production calibration signal. computeShadowRateAdjustment
+// below still runs the full computation for shadow/diagnostic visibility;
+// getLearnedRateAdjustment (the only production consumer, called from
+// liveGameOrchestrator.ts) is fail-closed to a neutral 1.0 unless the
+// explicit config flag in mlbAdaptationConfig.ts is set — which nothing in
+// this codebase currently sets, by design.
+function computeShadowRateAdjustment(market: MLBMarket): { tier: "none" | "partial" | "full"; adjustment: number; cal: MarketCalibrationData | null } {
   const cal = marketCalibrations[market];
-  if (!cal) return 1.0;
+  if (!cal) return { tier: "none", adjustment: 1.0, cal: null };
   const size = cal.sampleSize;
   let tier: "none" | "partial" | "full";
   let adj: number;
@@ -115,7 +126,7 @@ export function getLearnedRateAdjustment(market: MLBMarket): number {
     adj = cal.rateAdjustment;
   }
   try {
-    console.log(`[SELF_LEARN_TIER] market=${market} size=${size} tier=${tier} raw=${cal.rateAdjustment.toFixed(3)} applied=${adj.toFixed(3)}`);
+    console.log(`[SELF_LEARN_TIER] market=${market} size=${size} tier=${tier} raw=${cal.rateAdjustment.toFixed(3)} shadowApplied=${adj.toFixed(3)}`);
     import("./diagnosticsBuffer").then((d) => {
       d.recordSelfLearningCalibration({
         market,
@@ -128,7 +139,28 @@ export function getLearnedRateAdjustment(market: MLBMarket): number {
       });
     }).catch(() => {});
   } catch {}
-  return adj;
+  return { tier, adjustment: adj, cal };
+}
+
+/**
+ * Production entry point. ALWAYS computes the shadow adjustment (so the
+ * diagnostics ring buffer and admin dashboards stay populated), but only
+ * returns it to the caller when production adaptation is explicitly enabled
+ * — which is fail-closed OFF by default (see mlbAdaptationConfig.ts). Every
+ * other case deterministically returns the neutral 1.0.
+ */
+export function getLearnedRateAdjustment(market: MLBMarket): number {
+  const shadow = computeShadowRateAdjustment(market);
+  if (!isMlbSelfLearningProductionAdaptationEnabled()) {
+    if (shadow.tier !== "none") {
+      console.log(
+        `[MLB_ADAPTATION_SHADOW] system=aggregate_self_learning_rate market=${market} ` +
+        `shadowAdjustment=${shadow.adjustment.toFixed(3)} tier=${shadow.tier} productionAdjustment=1.000 reason=fail_closed_default`,
+      );
+    }
+    return 1.0;
+  }
+  return shadow.adjustment;
 }
 
 async function learnContactProfile(): Promise<ContactProfile> {
@@ -410,6 +442,16 @@ export function getContactQualityScore(exitVelocity: number | null, launchAngle:
     xbhLikelihood: Math.round(xbhLikelihood * 1000) / 1000,
     hrLikelihood: Math.round(hrLikelihood * 1000) / 1000,
   };
+}
+
+// ── Test-only hooks ──────────────────────────────────────────────────────────
+// Lets unit tests inject calibration state without a live DB, mirroring the
+// _resetXForTests()/_setXForTests() convention used elsewhere in server/mlb.
+export function _setMarketCalibrationForTests(market: MLBMarket, cal: MarketCalibrationData): void {
+  marketCalibrations[market] = cal;
+}
+export function _clearMarketCalibrationsForTests(): void {
+  marketCalibrations = {};
 }
 
 export function getPitchTypeHrRisk(pitchType: string | null): number {
