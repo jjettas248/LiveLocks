@@ -41,6 +41,14 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
     // decision-policy/ROI function. Tests that need a specific model
     // side/qualification/executability override these explicitly.
     v2ModelSide: "OVER", v2ModelQualified: true, v2Executable: true,
+    // The atomic executable offer's own price/line fields (Final
+    // Line-Provenance and V1 Purity Correction) — a SEPARATE field from
+    // frozenOverPrice/frozenUnderPrice above, since v2ExecutablePriceForRow
+    // now reads this directly rather than branching on v2ModelSide into the
+    // frozen fields. Defaults match frozenOverPrice/6.5 for a coherent
+    // default fixture; tests exercising UNDER or a missing/mismatched price
+    // override explicitly.
+    v2ExecutablePrice: -120, v2ExecutableLine: 6.5,
     dataQuality: "complete", lineupStatus: "confirmed", sportsbook: "draftkings",
     oddsFetchedAt: "2026-07-29T19:58:00.000Z",
     ...over,
@@ -54,14 +62,14 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
   ok(v2UnitsForRow(row({ v2Executable: false })) === null, "a model-qualified-but-not-executable row never has units — no real price was ever tradeable");
   ok(v2UnitsForRow(row({ finalResult: "push" })) === 0, "push -> 0 units (stake returned), for a qualified+executable bet");
 
-  const winOver = row({ v2ModelSide: "OVER", v2Executable: true, frozenOverPrice: -120, finalResult: "over" });
+  const winOver = row({ v2ModelSide: "OVER", v2Executable: true, v2ExecutablePrice: -120, finalResult: "over" });
   ok(approx(v2UnitsForRow(winOver), 100 / 120), "a winning OVER bet at -120 returns 100/120 units, not a flat -110 assumption");
 
-  const loseOver = row({ v2ModelSide: "OVER", v2Executable: true, frozenOverPrice: -120, finalResult: "under" });
+  const loseOver = row({ v2ModelSide: "OVER", v2Executable: true, v2ExecutablePrice: -120, finalResult: "under" });
   ok(v2UnitsForRow(loseOver) === -1, "a losing bet returns exactly -1 unit regardless of price");
 
-  const winUnder = row({ v2ModelSide: "UNDER", v2Executable: true, frozenUnderPrice: 150, finalResult: "under" });
-  ok(approx(v2UnitsForRow(winUnder), 150 / 100), "a winning UNDER bet uses the UNDER price, never the OVER price, when the model's own side is UNDER");
+  const winUnder = row({ v2ModelSide: "UNDER", v2Executable: true, v2ExecutablePrice: 150, finalResult: "under" });
+  ok(approx(v2UnitsForRow(winUnder), 150 / 100), "a winning UNDER bet uses the atomic offer's OWN price (v2ExecutablePrice), never frozenOverPrice/frozenUnderPrice, when the model's own side is UNDER");
 }
 
 // ── computeMoundV2OwnMetrics — pure counts, no probability/ROI math here anymore ──
@@ -281,7 +289,7 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
 
   const halfMissingV1Price = [
     row({ gameId: "a", v1RecommendedSide: "OVER", frozenOverPrice: -120, frozenUnderPrice: 100 }),
-    row({ gameId: "b", v1RecommendedSide: "OVER", frozenOverPrice: null, frozenUnderPrice: 100 }),
+    row({ gameId: "b", v1RecommendedSide: "OVER", frozenOverPrice: null, frozenUnderPrice: 100, v2ExecutablePrice: null }),
   ];
   ok(approx(computeRoiEligiblePriceRatio(halfMissingV1Price), 0.5), "V1's own recommended-side price missing on half the paired rows drags the ratio down to 0.5 (the WORSE of V1's/V2's own ratios)");
 

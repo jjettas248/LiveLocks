@@ -104,41 +104,15 @@ function ok(cond: boolean, msg: string) {
   ok(under === 100, `the resulting frozen quote's over (line=${ctx?.line}, sportsbook=${ctx?.sportsbook}) and under (${under}) are internally consistent — same book, same line, same fetch moment, never fanduel's 7.5-line pricing`);
 }
 
-// ── selectCanonicalMoundV2Line — mode across books, NEVER price ────────────
-// (Mound V2 purity pass, Section 3: the line V2's model evaluates must be
-// chosen without looking at any price at all.)
+// ── selectCanonicalMoundV2Line — basic null/empty/malformed cases ─────────
+// (Full fixture coverage of the neutral median + fixed-priority-tiebreak
+// rule, plus the no-systematic-bias proof, lives in the dedicated
+// moundV2LineSelection.test.ts.)
 {
   ok(selectCanonicalMoundV2Line(null) === null, "null books -> null, never throws");
   ok(selectCanonicalMoundV2Line({}) === null, "empty books -> null");
   ok(selectCanonicalMoundV2Line({ _meta: { line: 6.5, overOdds: -50, underOdds: -50 } as any }) === null, "an underscore-prefixed pseudo-book key never counts as a real posted line");
   ok(selectCanonicalMoundV2Line({ draftkings: { line: NaN, overOdds: -110, underOdds: 100 } }) === null, "a non-finite line is treated as not posted, never a fabricated line");
-
-  // 3 books at 6.5, 1 book at 7.5 -> mode is 6.5, regardless of price.
-  const modeBooks = {
-    draftkings: { line: 6.5, overOdds: -300, underOdds: 250 }, // deliberately the WORST over price of the group
-    fanduel: { line: 6.5, overOdds: -110, underOdds: -110 },
-    hardrockbet: { line: 6.5, overOdds: -108, underOdds: -112 },
-    onextra: { line: 7.5, overOdds: 200, underOdds: -250 }, // deliberately the BEST over price of the group, at a DIFFERENT line
-  };
-  const mode = selectCanonicalMoundV2Line(modeBooks);
-  ok(mode?.line === 6.5, `the mode line (3 books) wins over the minority line (1 book) EVEN THOUGH the minority line's book posts the best price (got ${mode?.line})`);
-  ok(mode?.booksAtLine.length === 3 && mode.booksAtLine.includes("draftkings") && mode.booksAtLine.includes("fanduel") && mode.booksAtLine.includes("hardrockbet"), "booksAtLine lists exactly the 3 books that posted the winning line, sorted");
-  ok(!mode?.booksAtLine.includes("onextra"), "the minority-line book is excluded from booksAtLine — its price can never rescue its line into contention");
-
-  // Tie (2 books at 6.5, 2 books at 7.5) -> deterministic lowest-value tie-break.
-  const tieBooks = {
-    draftkings: { line: 7.5, overOdds: -110, underOdds: -110 },
-    fanduel: { line: 7.5, overOdds: -110, underOdds: -110 },
-    hardrockbet: { line: 6.5, overOdds: -110, underOdds: -110 },
-    onextra: { line: 6.5, overOdds: -110, underOdds: -110 },
-  };
-  const tie = selectCanonicalMoundV2Line(tieBooks);
-  ok(tie?.line === 6.5, `a tied book-count breaks toward the strictly LOWER line value (6.5, not 7.5) — deterministic regardless of object key order (got ${tie?.line})`);
-
-  // Price invariance: changing ONLY prices (never lines) cannot change the result.
-  const samePricesChanged = { ...modeBooks, draftkings: { ...modeBooks.draftkings, overOdds: +500 }, onextra: { ...modeBooks.onextra, overOdds: -500 } };
-  const afterPriceChange = selectCanonicalMoundV2Line(samePricesChanged);
-  ok(afterPriceChange?.line === mode?.line, "swinging prices to the opposite extreme (without touching any `line` field) never changes the selected canonical line");
 }
 
 // ── selectExecutablePriceAtLine — price comparison ONLY among books already restricted to the fixed line ──
@@ -169,7 +143,7 @@ function ok(cond: boolean, msg: string) {
     hardrockbet: { line: 7.5, overOdds: -110, underOdds: -110 },
   };
   const canonical = selectCanonicalMoundV2Line(books);
-  ok(canonical?.line === 6.5, "sanity: 6.5 is the 2-book majority line");
+  ok(canonical?.line === 6.5, "sanity: 6.5 is the median of the 3 offered lines (6.5, 6.5, 7.5)");
   const executable = canonical ? selectExecutablePriceAtLine(books, canonical.line) : null;
   ok(executable?.sportsbook === "fanduel" && executable.overPrice === -105, "once the line is fixed independently of price, price legitimately determines WHICH BOOK's price is captured for display/executability/ROI");
 }

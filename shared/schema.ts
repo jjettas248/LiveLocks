@@ -1767,9 +1767,22 @@ export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
   // already-decided side; never feeds back into v2ModelSide/v2ModelQualified
   // above. v2Executable is false (never null-as-true) whenever the price is
   // missing, unprovenanced, or stale, or the model itself abstained.
+  //
+  // ATOMICITY (Final Line-Provenance and V1 Purity Correction): sportsbook/
+  // line/price/fetchedAt below are ALWAYS written together from the SAME
+  // atomic MoundV2ExecutableOffer object (moundV2Executability.ts) in one
+  // INSERT — never populated from separately-sourced variables, so they can
+  // never independently mismatch. v2ExecutableLine is a NEW column added in
+  // this correction; a prior version of this contract had no line column at
+  // all for the executable offer, forcing a reader to cross-reference
+  // frozen_line (a DIFFERENT part of the row, sourced from the model's own
+  // line-conditioned-probability input) to know which line an executable
+  // price belonged to — exactly the kind of separately-selected-fields risk
+  // this column removes.
   v2ExecutabilityPolicyVersion: text("v2_executability_policy_version"),
   v2Executable: boolean("v2_executable"),
   v2ExecutableSportsbook: text("v2_executable_sportsbook"),
+  v2ExecutableLine: numeric("v2_executable_line"),
   v2ExecutablePrice: integer("v2_executable_price"),
   v2ExecutableFetchedAt: timestamp("v2_executable_fetched_at"),
   v2ExecutabilityFailureReason: text("v2_executability_failure_reason"),

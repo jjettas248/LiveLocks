@@ -96,9 +96,17 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   ok(strikeoutsRow.v2ModelQualificationReason === result.strikeoutsModelDecision?.qualificationReason, "the persisted qualification reason matches the strikeouts model decision exactly");
   ok(strikeoutsRow.v2ExecutabilityPolicyVersion === result.strikeoutsExecutability?.policyVersion, "the persisted executability policy version matches the strikeouts market's own executability result — a SEPARATE version from the model policy above");
   ok(strikeoutsRow.v2Executable === result.strikeoutsExecutability?.executable, "the persisted executable flag matches the strikeouts executability result exactly");
-  ok(strikeoutsRow.v2ExecutableSportsbook === result.strikeoutsExecutability?.sportsbook, "the persisted executable sportsbook matches exactly");
-  ok(strikeoutsRow.v2ExecutablePrice === result.strikeoutsExecutability?.price, "the persisted executable price matches exactly");
+  // All 4 fields below are read from the SAME atomic offer object
+  // (result.strikeoutsExecutability.offer) — proving persistence never
+  // reassembles an offer from separately-sourced variables.
+  ok(strikeoutsRow.v2ExecutableSportsbook === result.strikeoutsExecutability?.offer?.sportsbook, "the persisted executable sportsbook matches the atomic offer's own sportsbook exactly");
+  ok(strikeoutsRow.v2ExecutablePrice === result.strikeoutsExecutability?.offer?.price, "the persisted executable price matches the atomic offer's own price exactly");
+  ok(strikeoutsRow.v2ExecutableLine === (result.strikeoutsExecutability?.offer?.line != null ? String(result.strikeoutsExecutability.offer.line) : null), "the persisted executable line matches the atomic offer's own line exactly");
   ok(strikeoutsRow.v2ExecutabilityFailureReason === result.strikeoutsExecutability?.failureReason, "the persisted executability failure reason matches exactly");
+  ok(
+    strikeoutsRow.v2Executable !== true || strikeoutsRow.v2ExecutableLine === strikeoutsRow.frozenLine,
+    `atomicity proof: whenever executable, the persisted executable line equals the persisted frozen line — the model's evaluated line and the executed offer's line can never independently drift in this canonical-line architecture (got executableLine=${strikeoutsRow.v2ExecutableLine} frozenLine=${strikeoutsRow.frozenLine})`,
+  );
   ok(strikeoutsRow.gamePk === "gamePk_1", "gamePk (MLB Stats API id) carries through — the only durable way a later reconciliation pass can call syncGameBoxScore for this exact game");
   ok(
     strikeoutsRow.scheduledGameTime instanceof Date && strikeoutsRow.scheduledGameTime.toISOString() === "2026-07-29T23:05:00.000Z",

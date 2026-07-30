@@ -47,9 +47,10 @@ function fakeRow(over: Partial<InsertMoundV2ShadowPrediction> = {}): InsertMound
     v2ModelSide: "OVER",
     v2ModelQualified: true,
     v2ModelQualificationReason: "qualified",
-    v2ExecutabilityPolicyVersion: "mound_v2_executability_policy_v1",
+    v2ExecutabilityPolicyVersion: "mound_v2_executability_policy_v2",
     v2Executable: true,
     v2ExecutableSportsbook: "draftkings",
+    v2ExecutableLine: "6.5",
     v2ExecutablePrice: -120,
     v2ExecutableFetchedAt: new Date("2026-07-29T19:58:00.000Z"),
     v2ExecutabilityFailureReason: null,
@@ -94,9 +95,10 @@ async function testInsertAndIdempotency() {
   ok(fetched?.v2ModelSide === "OVER", "v2ModelSide genuinely round-trips through the real database");
   ok(fetched?.v2ModelQualified === true, "v2ModelQualified (boolean column) genuinely round-trips through the real database");
   ok(fetched?.v2ModelQualificationReason === "qualified", "v2ModelQualificationReason genuinely round-trips through the real database");
-  ok(fetched?.v2ExecutabilityPolicyVersion === "mound_v2_executability_policy_v1", "v2ExecutabilityPolicyVersion (a SEPARATE version from the model policy) genuinely round-trips through the real database");
+  ok(fetched?.v2ExecutabilityPolicyVersion === "mound_v2_executability_policy_v2", "v2ExecutabilityPolicyVersion (a SEPARATE version from the model policy) genuinely round-trips through the real database");
   ok(fetched?.v2Executable === true, "v2Executable (boolean column) genuinely round-trips through the real database");
   ok(fetched?.v2ExecutableSportsbook === "draftkings", "v2ExecutableSportsbook genuinely round-trips through the real database");
+  ok(fetched?.v2ExecutableLine === "6.5", "v2ExecutableLine (the atomic offer's own line — Final Line-Provenance Correction) genuinely round-trips through the real database");
   ok(fetched?.v2ExecutablePrice === -120, "v2ExecutablePrice genuinely round-trips through the real database");
   ok(fetched?.v2ExecutabilityFailureReason === null, "v2ExecutabilityFailureReason is null for a genuinely executable row");
   ok(fetched?.gamePk === `${TEST_PREFIX}gamePk_1`, "gamePk (Correction 3) genuinely round-trips through the real database — the field reconciliation depends on to call syncGameBoxScore correctly");
@@ -144,6 +146,7 @@ async function testImmutabilityAcrossGrading() {
   ok(graded?.v2ExecutabilityPolicyVersion === before?.v2ExecutabilityPolicyVersion, "v2ExecutabilityPolicyVersion is unchanged by grading");
   ok(graded?.v2Executable === before?.v2Executable, "v2Executable is unchanged by grading — a settlement write never re-evaluates executability");
   ok(graded?.v2ExecutablePrice === before?.v2ExecutablePrice, "v2ExecutablePrice is unchanged by grading");
+  ok(graded?.v2ExecutableLine === before?.v2ExecutableLine, "v2ExecutableLine is unchanged by grading — the atomic offer's line/price/sportsbook stay frozen together");
 
   const regraded = await storage.gradeMoundV2ShadowPrediction(predictionId, {
     settlementStatus: "graded",

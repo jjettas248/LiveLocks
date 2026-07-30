@@ -54,8 +54,8 @@ function fakeEvalResult(over: Partial<MoundV2ShadowEvaluationResult> = {}): Moun
     v1Score10: 6.9, v1Tier: "strong", v1RecommendedSide: "OVER", v1QualificationStatus: "recommended",
     strikeoutsModelDecision: { policyVersion: "mound_v2_model_policy_v1", market: "pitcher_strikeouts", side: "OVER", modelQualified: true, qualificationReason: "qualified", qualifyingProbability: 0.6 },
     outsModelDecision: { policyVersion: "mound_v2_model_policy_v1", market: "pitcher_outs", side: null, modelQualified: false, qualificationReason: "below_minimum_probability", qualifyingProbability: null },
-    strikeoutsExecutability: { policyVersion: "mound_v2_executability_policy_v1", executable: true, sportsbook: "draftkings", price: -120, fetchedAt: "2026-07-30T19:58:00.000Z", failureReason: null },
-    outsExecutability: { policyVersion: "mound_v2_executability_policy_v1", executable: false, sportsbook: null, price: null, fetchedAt: null, failureReason: "not_applicable" },
+    strikeoutsExecutability: { policyVersion: "mound_v2_executability_policy_v2", executable: true, offer: { market: "pitcher_strikeouts", side: "OVER", sportsbook: "draftkings", line: 6.5, price: -120, fetchedAt: "2026-07-30T19:58:00.000Z" }, failureReason: null },
+    outsExecutability: { policyVersion: "mound_v2_executability_policy_v2", executable: false, offer: null, failureReason: "not_applicable" },
     latencyMs: 0.5, failureReason: null,
     ...over,
   };

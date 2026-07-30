@@ -26,6 +26,7 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
     v1Tier: "strong", v2ModelVersion: "v2_v1", productionModelVersion: "prod_v1",
     v2ModelPolicyVersion: "mound_v2_model_policy_v1",
     v2ModelSide: "OVER", v2ModelQualified: true, v2Executable: true,
+    v2ExecutablePrice: -120, v2ExecutableLine: 6.5,
     dataQuality: "complete", lineupStatus: "confirmed", sportsbook: "draftkings",
     oddsFetchedAt: "2026-07-29T19:58:00.000Z",
     ...over,
@@ -102,8 +103,8 @@ const cleanOpts = {
   const great: MoundV2ComparisonRow[] = [
     ...Array.from({ length: 90 }, (_, i) => row({ gameId: `ga${i}`, finalResult: "over", v2OverProbability: 0.9, v2UnderProbability: 0.1, v2PushProbability: 0, v1RecommendedSide: "OVER", v2ModelSide: "OVER" })),
     ...Array.from({ length: 10 }, (_, i) => row({ gameId: `gb${i}`, finalResult: "under", v2OverProbability: 0.9, v2UnderProbability: 0.1, v2PushProbability: 0, v1RecommendedSide: "OVER", v2ModelSide: "OVER" })),
-    ...Array.from({ length: 10 }, (_, i) => row({ gameId: `gc${i}`, finalResult: "over", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER", v2ModelSide: "UNDER" })),
-    ...Array.from({ length: 90 }, (_, i) => row({ gameId: `gd${i}`, finalResult: "under", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER", v2ModelSide: "UNDER" })),
+    ...Array.from({ length: 10 }, (_, i) => row({ gameId: `gc${i}`, finalResult: "over", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER", v2ModelSide: "UNDER", v2ExecutablePrice: 100 })),
+    ...Array.from({ length: 90 }, (_, i) => row({ gameId: `gd${i}`, finalResult: "under", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER", v2ModelSide: "UNDER", v2ExecutablePrice: 100 })),
   ];
   const cleanVerdict = buildAndEvaluateMoundV2Promotion(great, { ...cleanOpts, shadowEvaluationTotal: 300 }).verdict;
   ok(cleanVerdict.readyForPromotion, `a large, well-calibrated, fully-covered, paired-decision-policy-clean sample with no regression and clean Section-5 evidence IS ready for promotion (blockers: ${cleanVerdict.blockers.join(", ")})`);

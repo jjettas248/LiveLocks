@@ -71,6 +71,10 @@ export interface MoundV2ComparisonRow {
   v2ModelQualified: boolean | null;
   /** Whether v2ModelSide (if any) has a real, fresh, provenanced sportsbook price to actually trade — moundV2Executability.ts, evaluated strictly AFTER and never influencing v2ModelSide/v2ModelQualified. null (treated as NOT executable, fail-closed) for a legacy/unknown row. */
   v2Executable: boolean | null;
+  /** V2's OWN atomic executable price — sourced from the SAME atomic MoundV2ExecutableOffer object (moundV2Executability.ts) v2ExecutableLine below was also stamped from, never re-derived by branching on v2ModelSide into frozenOverPrice/frozenUnderPrice (a prior design that read the model's price from a DIFFERENT part of the row than its own executability check validated). Null whenever v2Executable is not true. */
+  v2ExecutablePrice: number | null;
+  /** The line the atomic executable offer belonged to — the same line the model's own PMF was conditioned on when v2Executable is true (proven in moundV2ShadowPersistenceBuilder.test.ts). Null whenever v2Executable is not true. */
+  v2ExecutableLine: number | null;
   /** Frozen data-quality band captured at evaluation time ("complete" | "partial" | "degraded") — a promotion-gate subgroup dimension, never a probability/decision-policy input. */
   dataQuality: string | null;
   /** Frozen lineup-confirmation status at evaluation time — a promotion-gate subgroup dimension. */
@@ -91,10 +95,16 @@ function clampProbability(p: number): number {
  * genuinely executable (v2Executable is not exactly true) — never the old
  * "always pick the higher-probability side" behavior, and never a price
  * used despite the executability check failing.
+ *
+ * Reads row.v2ExecutablePrice DIRECTLY — the atomic offer's own price field,
+ * never re-derived by branching on v2ModelSide into frozenOverPrice/
+ * frozenUnderPrice (a prior design that reached into a DIFFERENT part of the
+ * row than the one the executability check itself validated — exactly the
+ * kind of separately-selected-fields risk the atomic offer contract closes).
  */
 function v2ExecutablePriceForRow(row: MoundV2ComparisonRow): number | null {
   if (row.v2ModelSide == null || row.v2Executable !== true) return null;
-  return row.v2ModelSide === "OVER" ? row.frozenOverPrice : row.frozenUnderPrice;
+  return row.v2ExecutablePrice;
 }
 
 /**

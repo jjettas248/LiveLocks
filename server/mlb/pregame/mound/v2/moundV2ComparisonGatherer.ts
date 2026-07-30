@@ -46,6 +46,8 @@ function toComparisonRow(row: MoundV2ShadowPredictionRow): MoundV2ComparisonRow 
     v2ModelSide: (row.v2ModelSide as "OVER" | "UNDER" | null) ?? null,
     v2ModelQualified: row.v2ModelQualified ?? null,
     v2Executable: row.v2Executable ?? null,
+    v2ExecutablePrice: row.v2ExecutablePrice ?? null,
+    v2ExecutableLine: row.v2ExecutableLine != null ? Number(row.v2ExecutableLine) : null,
     dataQuality: row.dataQuality ?? null,
     lineupStatus: row.lineupStatus ?? null,
     sportsbook: row.sportsbook ?? null,

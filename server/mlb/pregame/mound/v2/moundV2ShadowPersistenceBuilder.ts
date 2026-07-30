@@ -54,11 +54,16 @@ export function buildMoundV2ShadowPredictionRows(
       v2ModelQualified: modelDecision?.modelQualified ?? null,
       v2ModelQualificationReason: modelDecision?.qualificationReason ?? null,
       // Executability — separate, downstream, price/provenance-aware.
+      // All 4 offer fields below are read from the SAME atomic
+      // executability.offer object (see moundV2Executability.ts) — never
+      // reassembled from separately-sourced variables, so they can never
+      // independently mismatch.
       v2ExecutabilityPolicyVersion: executability?.policyVersion ?? null,
       v2Executable: executability?.executable ?? null,
-      v2ExecutableSportsbook: executability?.sportsbook ?? null,
-      v2ExecutablePrice: executability?.price ?? null,
-      v2ExecutableFetchedAt: executability?.fetchedAt ? new Date(executability.fetchedAt) : null,
+      v2ExecutableSportsbook: executability?.offer?.sportsbook ?? null,
+      v2ExecutableLine: executability?.offer?.line != null ? String(executability.offer.line) : null,
+      v2ExecutablePrice: executability?.offer?.price ?? null,
+      v2ExecutableFetchedAt: executability?.offer?.fetchedAt ? new Date(executability.offer.fetchedAt) : null,
       v2ExecutabilityFailureReason: executability?.failureReason ?? null,
       v2ExpectedValue: String(marketResult.expectedValue),
       v2OverProbability: String(marketResult.overProbability),

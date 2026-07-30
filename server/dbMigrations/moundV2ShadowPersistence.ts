@@ -51,6 +51,7 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
     v2_executability_policy_version TEXT,
     v2_executable BOOLEAN,
     v2_executable_sportsbook TEXT,
+    v2_executable_line NUMERIC,
     v2_executable_price INTEGER,
     v2_executable_fetched_at TIMESTAMP,
     v2_executability_failure_reason TEXT,
@@ -129,6 +130,17 @@ const MOUND_V2_SHADOW_PREDICTIONS_ADD_MODEL_AND_EXECUTABILITY_COLUMNS = `
     ADD COLUMN IF NOT EXISTS v2_executability_failure_reason TEXT;
 `;
 
+// Self-heal for a table created before the atomic executable-offer's own
+// `line` column existed (Final Line-Provenance and V1 Purity Correction) —
+// additive only, same convention. Before this, an executable offer's price
+// had no line column of its own at all, forcing a reader to cross-reference
+// frozen_line (a DIFFERENT part of the row) to know which line it belonged
+// to — see moundV2Executability.ts's MoundV2ExecutableOffer doc comment.
+const MOUND_V2_SHADOW_PREDICTIONS_ADD_EXECUTABLE_LINE = `
+  ALTER TABLE mound_v2_shadow_predictions
+    ADD COLUMN IF NOT EXISTS v2_executable_line NUMERIC;
+`;
+
 const MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX = `
   CREATE INDEX IF NOT EXISTS mound_v2_shadow_predictions_snapshot_idx
     ON mound_v2_shadow_predictions (snapshot_id);
@@ -161,6 +173,7 @@ export const MOUND_V2_SHADOW_PERSISTENCE_STATEMENTS: readonly string[] = [
   MOUND_V2_SHADOW_PREDICTIONS_ADD_SCHEDULING_COLUMNS,
   MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_QUALIFICATION_STATUS,
   MOUND_V2_SHADOW_PREDICTIONS_ADD_MODEL_AND_EXECUTABILITY_COLUMNS,
+  MOUND_V2_SHADOW_PREDICTIONS_ADD_EXECUTABLE_LINE,
   MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_GAME_PITCHER_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_SETTLEMENT_STATUS_IDX,

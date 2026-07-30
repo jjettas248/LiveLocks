@@ -156,7 +156,9 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
     // on a missing/stale/unprovenanced price, but it has no path back into
     // strikeoutsModelDecision/outsModelDecision above.
     const strikeoutsExecutability = applyMoundV2Executability(MOUND_V2_DEFAULT_EXECUTABILITY_POLICY, {
+      market: "pitcher_strikeouts",
       side: strikeoutsModelDecision.side,
+      line: frozen.strikeoutsMarket.line,
       overPrice: frozen.strikeoutsMarket.overPrice,
       underPrice: frozen.strikeoutsMarket.underPrice,
       sportsbook: frozen.strikeoutsMarket.sportsbook,
@@ -164,7 +166,9 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
       now: args.now,
     });
     const outsExecutability = applyMoundV2Executability(MOUND_V2_DEFAULT_EXECUTABILITY_POLICY, {
+      market: "pitcher_outs",
       side: outsModelDecision.side,
+      line: frozen.outsMarket.line,
       overPrice: frozen.outsMarket.overPrice,
       underPrice: frozen.outsMarket.underPrice,
       sportsbook: frozen.outsMarket.sportsbook,

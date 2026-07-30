@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url";
 import { evaluateMoundV2Shadow, MOUND_V1_MODEL_VERSION, MOUND_V2_MODEL_VERSION } from "./moundV2ShadowEvaluation";
 import type { EvaluateMoundV2ShadowArgs } from "./moundV2ShadowEvaluation";
 import { selectCanonicalMoundV2Line, selectExecutablePriceAtLine } from "../oddsDisplay";
-import { v2UnitsForRow, type MoundV2ComparisonRow } from "./moundV2ComparisonStats";
+import { v2UnitsForRow, computeMoundV2ProbabilityEvaluation, computeMoundV2DecisionPolicyComparison, type MoundV2ComparisonRow } from "./moundV2ComparisonStats";
 import { MOUND_FROZEN_CONTRACT_VERSION } from "./frozenMoundShadowInput";
 
 let passed = 0;
@@ -249,20 +249,93 @@ function strikeoutsMarket(over: Partial<EvaluateMoundV2ShadowArgs["frozenInputAr
       v1Tier: "strong", v2ModelVersion: "v2_v1", productionModelVersion: "prod_v1",
       v2ModelPolicyVersion: "mound_v2_model_policy_v1",
       v2ModelSide: "OVER", v2ModelQualified: true, v2Executable: true,
+      v2ExecutablePrice: -120, v2ExecutableLine: 6.5,
       dataQuality: "complete", lineupStatus: "confirmed", sportsbook: "draftkings",
       oddsFetchedAt: "2026-07-29T19:58:00.000Z",
       ...over,
     };
   }
 
-  const cheapPrice = row({ frozenOverPrice: -300 });
-  const juicyPrice = row({ frozenOverPrice: +250 });
+  // v2UnitsForRow reads v2ExecutablePrice (the atomic offer's OWN price
+  // field) directly — never frozenOverPrice/frozenUnderPrice — so THIS is
+  // the field that must vary to exercise ROI's price sensitivity.
+  const cheapPrice = row({ v2ExecutablePrice: -300 });
+  const juicyPrice = row({ v2ExecutablePrice: +250 });
   ok(cheapPrice.v2ModelSide === juicyPrice.v2ModelSide && cheapPrice.v2ModelQualified === juicyPrice.v2ModelQualified, "(8) the recommendation (v2ModelSide/v2ModelQualified) is the SAME regardless of the captured price — it was decided upstream, before any price entered the picture");
 
   const cheapUnits = v2UnitsForRow(cheapPrice);
   const juicyUnits = v2UnitsForRow(juicyPrice);
   ok(cheapUnits !== null && juicyUnits !== null && cheapUnits !== juicyUnits, `(8) ROI (v2UnitsForRow) legitimately DOES vary with the captured price (got ${cheapUnits} vs ${juicyUnits}) — this is the intended one-way use of price for measurement`);
   ok(juicyUnits! > cheapUnits!, "(8) the better captured price correctly yields more ROI units for the same win outcome, confirming price feeds ROI in the expected direction");
+}
+
+// ── market_implied analytics isolation (Final Line-Provenance and V1 Purity
+// Correction, Section 4) — the sportsbook-diagnostic probability comparator
+// must be: clearly labeled, absent from the model/decision-policy call
+// graphs, unable to alter individual model decisions, never mislabeled as
+// V1 performance, and never used as EV-based recommendation logic ─────────
+{
+  function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
+    return {
+      gameId: "g1", pitcherId: "p1", market: "pitcher_strikeouts",
+      settlementStatus: "graded", finalResult: "over",
+      frozenOverPrice: -110, frozenUnderPrice: -110,
+      v2OverProbability: 0.6, v2UnderProbability: 0.37, v2PushProbability: 0.03,
+      v1RecommendedSide: "OVER", contractVersion: MOUND_FROZEN_CONTRACT_VERSION,
+      v1Tier: "strong", v2ModelVersion: "v2_v1", productionModelVersion: "prod_v1",
+      v2ModelPolicyVersion: "mound_v2_model_policy_v1",
+      v2ModelSide: "OVER", v2ModelQualified: true, v2Executable: true,
+      v2ExecutablePrice: -120, v2ExecutableLine: 6.5,
+      dataQuality: "complete", lineupStatus: "confirmed", sportsbook: "draftkings",
+      oddsFetchedAt: "2026-07-29T19:58:00.000Z",
+      ...over,
+    };
+  }
+  const rows = Array.from({ length: 40 }, (_, i) => row({ gameId: `mi${i}`, finalResult: i % 2 === 0 ? "over" : "under" }));
+
+  // 1. Clearly labeled — never silently defaulted or left ambiguous.
+  const climatologyEval = computeMoundV2ProbabilityEvaluation(rows, "climatology");
+  const marketImpliedEval = computeMoundV2ProbabilityEvaluation(rows, "market_implied");
+  ok(climatologyEval.comparator === "climatology", "the climatology evaluation is explicitly labeled as such");
+  ok(marketImpliedEval.comparator === "market_implied", "the market_implied evaluation is explicitly labeled as such — never silently defaulted to climatology or left unlabeled");
+
+  // 2. Absent from the model/decision-policy call graphs — moundV2ModelPolicy.ts
+  // has ZERO imports (see test 7 above); moundV2Executability.ts's only
+  // import is a type-only reference to moundV2ModelPolicy.ts itself (also
+  // zero-import) — neither ever imports oddsDisplay.ts (americanToImpliedProbability)
+  // or moundV2ComparisonStats.ts (marketImpliedProbs), the only two places a
+  // market-implied probability concept exists in this codebase.
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const executabilitySource = readFileSync(path.join(dir, "moundV2Executability.ts"), "utf-8");
+  ok(!executabilitySource.includes("oddsDisplay") && !executabilitySource.includes("moundV2ComparisonStats") && !executabilitySource.includes("marketImpliedProbs"), "moundV2Executability.ts never imports oddsDisplay.ts or moundV2ComparisonStats.ts, and never references marketImpliedProbs — market_implied cannot reach it");
+  const decisionPolicySource = readFileSync(path.join(dir, "moundV2ComparisonStats.ts"), "utf-8");
+  const decisionPolicyFnBody = decisionPolicySource.match(/export function computeMoundV2DecisionPolicyComparison\([\s\S]*?\n\}/)?.[0] ?? "";
+  ok(decisionPolicyFnBody.length > 0, "sanity: computeMoundV2DecisionPolicyComparison's body was located in source");
+  ok(!decisionPolicyFnBody.includes("marketImpliedProbs") && !decisionPolicyFnBody.includes("market_implied"), "computeMoundV2DecisionPolicyComparison's own function body never references marketImpliedProbs/market_implied — the decision-policy (win-rate/ROI) call graph is entirely separate from the probability-quality comparator");
+
+  // 3. Unable to alter individual model decisions — computeMoundV2ProbabilityEvaluation
+  // is a pure, read-only scoring function; running it (under either
+  // comparator) never mutates the rows it was given.
+  const beforeJson = JSON.stringify(rows);
+  computeMoundV2ProbabilityEvaluation(rows, "market_implied");
+  const afterJson = JSON.stringify(rows);
+  ok(beforeJson === afterJson, "calling computeMoundV2ProbabilityEvaluation with the market_implied comparator never mutates the input rows — v2ModelSide/v2ModelQualified on each row are exactly what they were before");
+  const decisionBefore = computeMoundV2DecisionPolicyComparison(rows);
+  computeMoundV2ProbabilityEvaluation(rows, "market_implied");
+  const decisionAfter = computeMoundV2DecisionPolicyComparison(rows);
+  ok(JSON.stringify(decisionBefore) === JSON.stringify(decisionAfter), "the decision-policy comparison (win-rate/ROI) is byte-identical whether or not the market_implied probability evaluation was ever run alongside it");
+
+  // 4. Never mislabeled as V1 performance — no field anywhere claims a "v1"
+  // probability metric, for EITHER comparator.
+  ok(!("v1BrierScore" in marketImpliedEval) && !("v1CalibrationError" in marketImpliedEval) && !("v1LogLoss" in marketImpliedEval), "no field on the market_implied evaluation result claims a 'V1' probability metric — V1 has no probability to score, under any comparator");
+
+  // 5. Never used as EV-based recommendation logic — no "expectedValue"/"edge"
+  // concept combining with market_implied exists anywhere in the v2/ call
+  // graph the model/decision-policy actually use (moundV2Engine.ts's own
+  // expectedValue is the PMF's mean — computed BEFORE and INDEPENDENTLY of
+  // any market_implied comparator, never combined with it).
+  const modelPolicySource = readFileSync(path.join(dir, "moundV2ModelPolicy.ts"), "utf-8");
+  ok(!modelPolicySource.includes("marketImplied") && !modelPolicySource.includes("expectedValue"), "moundV2ModelPolicy.ts references neither marketImplied* nor expectedValue anywhere — no EV-vs-market-implied recommendation rule exists");
 }
 
 console.log(`\nmoundV2PriceIndependence.test: ${passed} passed, ${failed} failed`);
