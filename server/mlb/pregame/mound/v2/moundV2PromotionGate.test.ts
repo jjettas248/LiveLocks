@@ -42,7 +42,7 @@ function goodEvidence(overrides: Partial<MoundV2PromotionEvidence> = {}): MoundV
     workerJobFailureRatio: 0.01,
     shadowEvaluationFailureRatio: 0.01,
     v2ModelVersionDeclared: true,
-    v2DecisionPolicyVersionDeclared: true,
+    v2ModelPolicyVersionDeclared: true,
     ...overrides,
   };
 }
@@ -239,8 +239,8 @@ function subgroup(overrides: Partial<MoundV2PromotionSubgroupEvidence> = {}): Mo
   const noModelVersion = evaluateMoundV2PromotionReadiness(goodEvidence({ v2ModelVersionDeclared: false }));
   ok(!noModelVersion.readyForPromotion && noModelVersion.blockers.includes("UNDECLARED_MODEL_OR_POLICY_VERSION"), "an undeclared probability-model version blocks promotion");
 
-  const noPolicyVersion = evaluateMoundV2PromotionReadiness(goodEvidence({ v2DecisionPolicyVersionDeclared: false }));
-  ok(!noPolicyVersion.readyForPromotion && noPolicyVersion.blockers.includes("UNDECLARED_MODEL_OR_POLICY_VERSION"), "an undeclared decision-policy version ALSO blocks promotion, independently of the model version");
+  const noPolicyVersion = evaluateMoundV2PromotionReadiness(goodEvidence({ v2ModelPolicyVersionDeclared: false }));
+  ok(!noPolicyVersion.readyForPromotion && noPolicyVersion.blockers.includes("UNDECLARED_MODEL_OR_POLICY_VERSION"), "an undeclared model-policy version ALSO blocks promotion, independently of the probability-model version");
 }
 
 // ── Section 5: subgroup regression, with the minimum-sample-size exclusion ──

@@ -43,10 +43,16 @@ function fakeRow(over: Partial<InsertMoundV2ShadowPrediction> = {}): InsertMound
     v1Tier: "strong",
     v1RecommendedSide: "OVER",
     v1QualificationStatus: "recommended",
-    v2DecisionPolicyVersion: "mound_v2_decision_policy_v1",
-    v2DecisionSide: "over",
-    v2Qualified: true,
-    v2QualificationReason: "qualified",
+    v2ModelPolicyVersion: "mound_v2_model_policy_v1",
+    v2ModelSide: "OVER",
+    v2ModelQualified: true,
+    v2ModelQualificationReason: "qualified",
+    v2ExecutabilityPolicyVersion: "mound_v2_executability_policy_v1",
+    v2Executable: true,
+    v2ExecutableSportsbook: "draftkings",
+    v2ExecutablePrice: -120,
+    v2ExecutableFetchedAt: new Date("2026-07-29T19:58:00.000Z"),
+    v2ExecutabilityFailureReason: null,
     setupGrade: null,
     v2ExpectedValue: "0.12",
     v2OverProbability: "0.55",
@@ -84,10 +90,15 @@ async function testInsertAndIdempotency() {
   ok(fetched !== null && fetched.frozenLine === "6.5" && fetched.sportsbook === "draftkings", "getMoundV2ShadowPrediction reads back the real persisted row with correct values");
   ok(fetched?.v1RecommendedSide === "OVER", "v1RecommendedSide (Correction 1) genuinely round-trips through the real database, not just the in-memory type");
   ok(fetched?.v1QualificationStatus === "recommended", "v1QualificationStatus (Final Pre-Push Integrity Pass) genuinely round-trips through the real database");
-  ok(fetched?.v2DecisionPolicyVersion === "mound_v2_decision_policy_v1", "v2DecisionPolicyVersion genuinely round-trips through the real database");
-  ok(fetched?.v2DecisionSide === "over", "v2DecisionSide genuinely round-trips through the real database");
-  ok(fetched?.v2Qualified === true, "v2Qualified (boolean column) genuinely round-trips through the real database");
-  ok(fetched?.v2QualificationReason === "qualified", "v2QualificationReason genuinely round-trips through the real database");
+  ok(fetched?.v2ModelPolicyVersion === "mound_v2_model_policy_v1", "v2ModelPolicyVersion genuinely round-trips through the real database");
+  ok(fetched?.v2ModelSide === "OVER", "v2ModelSide genuinely round-trips through the real database");
+  ok(fetched?.v2ModelQualified === true, "v2ModelQualified (boolean column) genuinely round-trips through the real database");
+  ok(fetched?.v2ModelQualificationReason === "qualified", "v2ModelQualificationReason genuinely round-trips through the real database");
+  ok(fetched?.v2ExecutabilityPolicyVersion === "mound_v2_executability_policy_v1", "v2ExecutabilityPolicyVersion (a SEPARATE version from the model policy) genuinely round-trips through the real database");
+  ok(fetched?.v2Executable === true, "v2Executable (boolean column) genuinely round-trips through the real database");
+  ok(fetched?.v2ExecutableSportsbook === "draftkings", "v2ExecutableSportsbook genuinely round-trips through the real database");
+  ok(fetched?.v2ExecutablePrice === -120, "v2ExecutablePrice genuinely round-trips through the real database");
+  ok(fetched?.v2ExecutabilityFailureReason === null, "v2ExecutabilityFailureReason is null for a genuinely executable row");
   ok(fetched?.gamePk === `${TEST_PREFIX}gamePk_1`, "gamePk (Correction 3) genuinely round-trips through the real database — the field reconciliation depends on to call syncGameBoxScore correctly");
   ok(
     fetched?.scheduledGameTime instanceof Date && fetched.scheduledGameTime.toISOString() === "2026-07-29T23:05:00.000Z",
@@ -126,10 +137,13 @@ async function testImmutabilityAcrossGrading() {
   ok(graded?.createdAt?.getTime() === before?.createdAt?.getTime(), "createdAt is unchanged by grading");
   ok(graded?.v1RecommendedSide === before?.v1RecommendedSide, "v1RecommendedSide (the captured V1 policy decision) is unchanged by grading — see moundV2V1QualificationLifecycle.integration.test.ts for the full end-to-end proof");
   ok(graded?.v1QualificationStatus === before?.v1QualificationStatus, "v1QualificationStatus is unchanged by grading");
-  ok(graded?.v2DecisionPolicyVersion === before?.v2DecisionPolicyVersion, "v2DecisionPolicyVersion is unchanged by grading");
-  ok(graded?.v2DecisionSide === before?.v2DecisionSide, "v2DecisionSide is unchanged by grading");
-  ok(graded?.v2Qualified === before?.v2Qualified, "v2Qualified is unchanged by grading");
-  ok(graded?.v2QualificationReason === before?.v2QualificationReason, "v2QualificationReason is unchanged by grading");
+  ok(graded?.v2ModelPolicyVersion === before?.v2ModelPolicyVersion, "v2ModelPolicyVersion is unchanged by grading");
+  ok(graded?.v2ModelSide === before?.v2ModelSide, "v2ModelSide is unchanged by grading");
+  ok(graded?.v2ModelQualified === before?.v2ModelQualified, "v2ModelQualified is unchanged by grading");
+  ok(graded?.v2ModelQualificationReason === before?.v2ModelQualificationReason, "v2ModelQualificationReason is unchanged by grading");
+  ok(graded?.v2ExecutabilityPolicyVersion === before?.v2ExecutabilityPolicyVersion, "v2ExecutabilityPolicyVersion is unchanged by grading");
+  ok(graded?.v2Executable === before?.v2Executable, "v2Executable is unchanged by grading — a settlement write never re-evaluates executability");
+  ok(graded?.v2ExecutablePrice === before?.v2ExecutablePrice, "v2ExecutablePrice is unchanged by grading");
 
   const regraded = await storage.gradeMoundV2ShadowPrediction(predictionId, {
     settlementStatus: "graded",
@@ -204,7 +218,8 @@ async function testReconciliationBookkeeping() {
   ok(stillFrozen?.frozenLine === "6.5", "recording reconciliation attempts never touches frozen prediction fields");
   ok(stillFrozen?.v1RecommendedSide === "OVER", "recording reconciliation attempts never touches the captured V1 policy decision");
   ok(stillFrozen?.v1QualificationStatus === "recommended", "recording reconciliation attempts never touches v1QualificationStatus");
-  ok(stillFrozen?.v2DecisionSide === "over", "recording reconciliation attempts never touches V2's own decision-policy verdict");
+  ok(stillFrozen?.v2ModelSide === "OVER", "recording reconciliation attempts never touches V2's own MODEL decision");
+  ok(stillFrozen?.v2Executable === true, "recording reconciliation attempts never touches V2's own executability verdict");
 
   // voidReason round-trips via the real gradeMoundV2ShadowPrediction storage call directly (not just via the sweep).
   const voided = await storage.gradeMoundV2ShadowPrediction(predictionId, {

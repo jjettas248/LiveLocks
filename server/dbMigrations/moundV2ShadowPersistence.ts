@@ -44,10 +44,16 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
     v2_over_probability NUMERIC NOT NULL,
     v2_under_probability NUMERIC NOT NULL,
     v2_push_probability NUMERIC NOT NULL,
-    v2_decision_policy_version TEXT,
-    v2_decision_side TEXT,
-    v2_qualified BOOLEAN,
-    v2_qualification_reason TEXT,
+    v2_model_policy_version TEXT,
+    v2_model_side TEXT,
+    v2_model_qualified BOOLEAN,
+    v2_model_qualification_reason TEXT,
+    v2_executability_policy_version TEXT,
+    v2_executable BOOLEAN,
+    v2_executable_sportsbook TEXT,
+    v2_executable_price INTEGER,
+    v2_executable_fetched_at TIMESTAMP,
+    v2_executability_failure_reason TEXT,
     production_model_version TEXT NOT NULL,
     v2_model_version TEXT NOT NULL,
     contract_version TEXT NOT NULL,
@@ -97,16 +103,30 @@ const MOUND_V2_SHADOW_PREDICTIONS_ADD_SCHEDULING_COLUMNS = `
     ADD COLUMN IF NOT EXISTS scheduled_game_time TIMESTAMP;
 `;
 
-// Self-heal for a table created before the V1 qualification-status and V2
-// decision-policy columns existed (Final Pre-Push Integrity Pass) —
-// additive only, same convention.
-const MOUND_V2_SHADOW_PREDICTIONS_ADD_DECISION_POLICY_COLUMNS = `
+// Self-heal for a table created before the V1 qualification-status column
+// existed (Final Pre-Push Integrity Pass) — additive only, same convention.
+const MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_QUALIFICATION_STATUS = `
   ALTER TABLE mound_v2_shadow_predictions
-    ADD COLUMN IF NOT EXISTS v1_qualification_status TEXT,
-    ADD COLUMN IF NOT EXISTS v2_decision_policy_version TEXT,
-    ADD COLUMN IF NOT EXISTS v2_decision_side TEXT,
-    ADD COLUMN IF NOT EXISTS v2_qualified BOOLEAN,
-    ADD COLUMN IF NOT EXISTS v2_qualification_reason TEXT;
+    ADD COLUMN IF NOT EXISTS v1_qualification_status TEXT;
+`;
+
+// Self-heal for a table created before the model-policy/executability split
+// existed (Mound V2 purity pass) — additive only, same convention. Replaces
+// the earlier v2_decision_policy_version/v2_decision_side/v2_qualified/
+// v2_qualification_reason columns (never deployed with real data — this
+// table is shadow-only/research-only) with the model-vs-executability split.
+const MOUND_V2_SHADOW_PREDICTIONS_ADD_MODEL_AND_EXECUTABILITY_COLUMNS = `
+  ALTER TABLE mound_v2_shadow_predictions
+    ADD COLUMN IF NOT EXISTS v2_model_policy_version TEXT,
+    ADD COLUMN IF NOT EXISTS v2_model_side TEXT,
+    ADD COLUMN IF NOT EXISTS v2_model_qualified BOOLEAN,
+    ADD COLUMN IF NOT EXISTS v2_model_qualification_reason TEXT,
+    ADD COLUMN IF NOT EXISTS v2_executability_policy_version TEXT,
+    ADD COLUMN IF NOT EXISTS v2_executable BOOLEAN,
+    ADD COLUMN IF NOT EXISTS v2_executable_sportsbook TEXT,
+    ADD COLUMN IF NOT EXISTS v2_executable_price INTEGER,
+    ADD COLUMN IF NOT EXISTS v2_executable_fetched_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS v2_executability_failure_reason TEXT;
 `;
 
 const MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX = `
@@ -139,7 +159,8 @@ export const MOUND_V2_SHADOW_PERSISTENCE_STATEMENTS: readonly string[] = [
   MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_RECOMMENDED_SIDE,
   MOUND_V2_SHADOW_PREDICTIONS_ADD_RECONCILIATION_COLUMNS,
   MOUND_V2_SHADOW_PREDICTIONS_ADD_SCHEDULING_COLUMNS,
-  MOUND_V2_SHADOW_PREDICTIONS_ADD_DECISION_POLICY_COLUMNS,
+  MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_QUALIFICATION_STATUS,
+  MOUND_V2_SHADOW_PREDICTIONS_ADD_MODEL_AND_EXECUTABILITY_COLUMNS,
   MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_GAME_PITCHER_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_SETTLEMENT_STATUS_IDX,

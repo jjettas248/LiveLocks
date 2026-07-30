@@ -3,7 +3,6 @@
 // Run: npx tsx server/mlb/pregame/mound/v2/moundV2ComparisonStats.test.ts
 
 import {
-  impliedV2Side,
   v2UnitsForRow,
   computeMoundV2OwnMetrics,
   computeMoundV2ProbabilityEvaluation,
@@ -35,27 +34,34 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
     v2OverProbability: 0.55, v2UnderProbability: 0.42, v2PushProbability: 0.03,
     v1RecommendedSide: "OVER", contractVersion: MOUND_FROZEN_CONTRACT_VERSION,
     v1Tier: "strong", v2ModelVersion: "v2_v1", productionModelVersion: "prod_v1",
-    v2DecisionPolicyVersion: "mound_v2_decision_policy_v1",
+    v2ModelPolicyVersion: "mound_v2_model_policy_v1",
+    // v2ModelSide/v2ModelQualified/v2Executable are the model's OWN
+    // already-decided fields (Mound V2 purity pass) — plain data on the row,
+    // never re-derived from v2OverProbability/v2UnderProbability by any
+    // decision-policy/ROI function. Tests that need a specific model
+    // side/qualification/executability override these explicitly.
+    v2ModelSide: "OVER", v2ModelQualified: true, v2Executable: true,
     dataQuality: "complete", lineupStatus: "confirmed", sportsbook: "draftkings",
     oddsFetchedAt: "2026-07-29T19:58:00.000Z",
     ...over,
   };
 }
 
-// ── impliedV2Side / v2UnitsForRow (unchanged core mechanics) ─────────────
+// ── v2UnitsForRow respects the model's OWN already-decided side/executability — never re-derives a pick from probabilities ──
 {
-  ok(impliedV2Side(row({ v2OverProbability: 0.6, v2UnderProbability: 0.35 })) === "over", "higher over probability -> implied side over");
-  ok(impliedV2Side(row({ v2OverProbability: 0.3, v2UnderProbability: 0.65 })) === "under", "higher under probability -> implied side under");
-  ok(impliedV2Side(row({ v2OverProbability: 0.5, v2UnderProbability: 0.5 })) === "over", "tie breaks toward over (>=)");
-
   ok(v2UnitsForRow(row({ finalResult: null })) === null, "ungraded row (no finalResult) -> null units, never fabricated");
-  ok(v2UnitsForRow(row({ finalResult: "push" })) === 0, "push -> 0 units (stake returned)");
+  ok(v2UnitsForRow(row({ v2ModelSide: null, v2ModelQualified: false })) === null, "an abstained model (v2ModelSide null) never has units — it never placed a bet, regardless of probabilities");
+  ok(v2UnitsForRow(row({ v2Executable: false })) === null, "a model-qualified-but-not-executable row never has units — no real price was ever tradeable");
+  ok(v2UnitsForRow(row({ finalResult: "push" })) === 0, "push -> 0 units (stake returned), for a qualified+executable bet");
 
-  const winOver = row({ v2OverProbability: 0.6, v2UnderProbability: 0.35, frozenOverPrice: -120, finalResult: "over" });
+  const winOver = row({ v2ModelSide: "OVER", v2Executable: true, frozenOverPrice: -120, finalResult: "over" });
   ok(approx(v2UnitsForRow(winOver), 100 / 120), "a winning OVER bet at -120 returns 100/120 units, not a flat -110 assumption");
 
-  const loseOver = row({ v2OverProbability: 0.6, v2UnderProbability: 0.35, frozenOverPrice: -120, finalResult: "under" });
+  const loseOver = row({ v2ModelSide: "OVER", v2Executable: true, frozenOverPrice: -120, finalResult: "under" });
   ok(v2UnitsForRow(loseOver) === -1, "a losing bet returns exactly -1 unit regardless of price");
+
+  const winUnder = row({ v2ModelSide: "UNDER", v2Executable: true, frozenUnderPrice: 150, finalResult: "under" });
+  ok(approx(v2UnitsForRow(winUnder), 150 / 100), "a winning UNDER bet uses the UNDER price, never the OVER price, when the model's own side is UNDER");
 }
 
 // ── computeMoundV2OwnMetrics — pure counts, no probability/ROI math here anymore ──
@@ -139,10 +145,12 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
   const empty = computeMoundV2DecisionPolicyComparison([]);
   ok(empty.pairedN === 0 && empty.v1.winRate === null && empty.v2.winRate === null, "empty input -> zero/null, no crash");
 
-  // V1 recommends OVER at -120 and wins every time; V2 is a coin-flip.
+  // V1 recommends OVER at -120 and wins every time; V2's own MODEL decision
+  // (v2ModelSide, plain data on the row — not derived from probabilities) is
+  // a coin-flip between OVER and UNDER.
   const rows = Array.from({ length: 20 }, (_, i) => row({
     gameId: `d${i}`, finalResult: "over", v1RecommendedSide: "OVER", frozenOverPrice: -120, frozenUnderPrice: 100,
-    v2OverProbability: i % 2 === 0 ? 0.6 : 0.4, v2UnderProbability: i % 2 === 0 ? 0.4 : 0.6,
+    v2ModelSide: i % 2 === 0 ? "OVER" : "UNDER",
   }));
   const comparison = computeMoundV2DecisionPolicyComparison(rows);
   ok(comparison.pairedN === 20, "every row pairs (real V1 side+price, graded V2)");
@@ -181,7 +189,7 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
   const rows: MoundV2ComparisonRow[] = [
     row({ gameId: "g1", pitcherId: "p1", market: "pitcher_strikeouts", v1Tier: "strong", finalResult: "over", v2ModelVersion: "v2_a", productionModelVersion: "prod_a" }),
     row({ gameId: "g1", pitcherId: "p1", market: "pitcher_outs", v1Tier: "strong", finalResult: null, v2ModelVersion: "v2_a", productionModelVersion: "prod_a" }),
-    row({ gameId: "g2", pitcherId: "p2", market: "pitcher_strikeouts", v1Tier: "elite", finalResult: "under", v2OverProbability: 0.3, v2UnderProbability: 0.65, v1RecommendedSide: "UNDER", v2ModelVersion: "v2_a", productionModelVersion: "prod_a" }),
+    row({ gameId: "g2", pitcherId: "p2", market: "pitcher_strikeouts", v1Tier: "elite", finalResult: "under", v2OverProbability: 0.3, v2UnderProbability: 0.65, v2ModelSide: "UNDER", v1RecommendedSide: "UNDER", v2ModelVersion: "v2_a", productionModelVersion: "prod_a" }),
   ];
 
   const report = buildMoundV2ComparisonReport(rows, { windowStart: "2026-07-01", windowEnd: "2026-07-29" });
@@ -215,15 +223,17 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
       return row({
         gameId: `dk${i}`, sportsbook: "draftkings", v1RecommendedSide: "OVER", v1Tier: "strong",
         dataQuality: "complete", lineupStatus: "confirmed", finalResult: outcome,
-        v2OverProbability: outcome === "over" ? 0.6 : 0.35,
-        v2UnderProbability: outcome === "over" ? 0.35 : 0.6,
+        // V2's own MODEL decision correctly tracks each real outcome here —
+        // plain data on the row (never derived from probabilities by any
+        // decision-policy function).
+        v2ModelSide: outcome === "over" ? "OVER" : "UNDER",
       });
     }),
     // hardrockbet, UNDER, elite, partial/unconfirmed — 8 rows, V1 clearly better (wins where V2 loses)
     ...Array.from({ length: 8 }, (_, i) => row({
       gameId: `hrb${i}`, sportsbook: "hardrockbet", v1RecommendedSide: "UNDER", v1Tier: "elite",
       dataQuality: "partial", lineupStatus: "unconfirmed", finalResult: "under",
-      v2OverProbability: 0.6, v2UnderProbability: 0.35, // V2 implies OVER, always wrong here
+      v2ModelSide: "OVER", // V2's own model decision is always wrong here
     })),
     // A non-paired row (no V1 recommendation) must never leak into any subgroup.
     row({ gameId: "noRec", v1RecommendedSide: null, sportsbook: "fanduel" }),
@@ -306,19 +316,19 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
 // ── computeMoundV2VersionDeclaration ────────────────────────────────────────
 {
   const decl = computeMoundV2VersionDeclaration([]);
-  ok(decl.v2ModelVersionDeclared === false && decl.v2DecisionPolicyVersionDeclared === false, "an empty population is honestly 'not declared' (false), never vacuously true");
+  ok(decl.v2ModelVersionDeclared === false && decl.v2ModelPolicyVersionDeclared === false, "an empty population is honestly 'not declared' (false), never vacuously true");
 
-  const allDeclared = Array.from({ length: 3 }, (_, i) => row({ gameId: `dv${i}`, v2ModelVersion: "v2_v1", v2DecisionPolicyVersion: "policy_v1" }));
+  const allDeclared = Array.from({ length: 3 }, (_, i) => row({ gameId: `dv${i}`, v2ModelVersion: "v2_v1", v2ModelPolicyVersion: "policy_v1" }));
   const declAll = computeMoundV2VersionDeclaration(allDeclared);
-  ok(declAll.v2ModelVersionDeclared === true && declAll.v2DecisionPolicyVersionDeclared === true, "every row declaring a real version -> both true");
+  ok(declAll.v2ModelVersionDeclared === true && declAll.v2ModelPolicyVersionDeclared === true, "every row declaring a real version -> both true");
 
   const oneMissingPolicy = [
-    row({ gameId: "a", v2ModelVersion: "v2_v1", v2DecisionPolicyVersion: "policy_v1" }),
-    row({ gameId: "b", v2ModelVersion: "v2_v1", v2DecisionPolicyVersion: null }),
+    row({ gameId: "a", v2ModelVersion: "v2_v1", v2ModelPolicyVersion: "policy_v1" }),
+    row({ gameId: "b", v2ModelVersion: "v2_v1", v2ModelPolicyVersion: null }),
   ];
   const declMixed = computeMoundV2VersionDeclaration(oneMissingPolicy);
   ok(declMixed.v2ModelVersionDeclared === true, "model version is declared on every row");
-  ok(declMixed.v2DecisionPolicyVersionDeclared === false, "a SINGLE row missing its decision-policy version fails the whole check — 'some rows have no known version' is exactly the ambiguity this guards against");
+  ok(declMixed.v2ModelPolicyVersionDeclared === false, "a SINGLE row missing its model-policy version fails the whole check — 'some rows have no known version' is exactly the ambiguity this guards against");
 
   const emptyStringVersion = [row({ gameId: "c", v2ModelVersion: "" })];
   ok(computeMoundV2VersionDeclaration(emptyStringVersion).v2ModelVersionDeclared === false, "an empty-string version is treated the same as missing, never as 'declared'");

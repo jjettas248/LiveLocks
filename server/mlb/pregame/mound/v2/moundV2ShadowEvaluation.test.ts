@@ -69,11 +69,17 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   ok(result.v1RecommendedSide === "OVER", "v1RecommendedSide passes through unchanged, never recomputed");
   ok(result.v1Score10 === 6.9 && result.v1Tier === "strong", "V1's own score10/tier pass through unchanged, never recomputed");
   ok(result.v1QualificationStatus === "recommended", "v1QualificationStatus passes through unchanged, never recomputed");
-  ok(result.strikeoutsDecision !== null && result.outsDecision !== null, "both markets get their own decision-policy verdict");
-  ok(result.strikeoutsDecision!.policyVersion.length > 0, "the strikeouts decision carries a real, non-empty policy version");
+  ok(result.strikeoutsModelDecision !== null && result.outsModelDecision !== null, "both markets get their own MODEL-policy verdict");
+  ok(result.strikeoutsModelDecision!.policyVersion.length > 0, "the strikeouts model decision carries a real, non-empty policy version");
   ok(
-    (result.strikeoutsDecision!.side === null) === (result.strikeoutsDecision!.qualified === false),
-    "side is null if and only if qualified is false — never a qualified verdict with no side, or an unqualified one with a side",
+    (result.strikeoutsModelDecision!.side === null) === (result.strikeoutsModelDecision!.modelQualified === false),
+    "side is null if and only if modelQualified is false — never a qualified verdict with no side, or an unqualified one with a side",
+  );
+  ok(result.strikeoutsExecutability !== null && result.outsExecutability !== null, "both markets get their own SEPARATE executability verdict");
+  ok(result.strikeoutsExecutability!.policyVersion.length > 0, "the strikeouts executability result carries a real, non-empty policy version");
+  ok(
+    result.strikeoutsExecutability!.executable === (result.strikeoutsExecutability!.failureReason === null),
+    "executable is true if and only if failureReason is null",
   );
 }
 
@@ -84,25 +90,43 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   ok(result.v1QualificationStatus === "not_recommended", "not_recommended passes through unchanged");
 }
 
-// ── V2's decision policy can independently abstain even when V1 recommends ──
+// ── V2's MODEL policy can independently abstain even when V1 recommends ───
 {
   // Force an abstention via bad data quality regardless of what the probabilities turn out to be.
   const result = evaluateMoundV2Shadow(baseArgs({
     frozenInputArgs: { ...baseArgs().frozenInputArgs, dataQuality: "degraded" },
   }));
-  ok(result.strikeoutsDecision?.qualified === false && result.strikeoutsDecision?.side === null, "V2's own decision policy can abstain (degraded data quality) independently of whatever V1 did — this is exactly the fix for 'V2's implied side' always forcing a pick");
-  ok(result.strikeoutsDecision?.reason === "data_quality_not_allowed", "the abstention carries the real, specific reason");
+  ok(result.strikeoutsModelDecision?.modelQualified === false && result.strikeoutsModelDecision?.side === null, "V2's own MODEL policy can abstain (degraded data quality) independently of whatever V1 did — this is exactly the fix for 'V2's implied side' always forcing a pick");
+  ok(result.strikeoutsModelDecision?.qualificationReason === "data_quality_not_allowed", "the abstention carries the real, specific reason");
 }
 
-// ── V2 abstains on stale odds regardless of how strong the probability edge is ──
+// ── Stale odds change ONLY executability — never the model's own decision ─
+// (Mound V2 purity pass, required purity test #3: "making the price missing
+// or stale changes only executability".) Before this pass, stale odds forced
+// the (then-combined) decision policy itself to abstain — conflating a
+// sportsbook-freshness fact with the model's own qualify/abstain verdict.
 {
-  const result = evaluateMoundV2Shadow(baseArgs({
+  const freshResult = evaluateMoundV2Shadow(baseArgs());
+  const staleResult = evaluateMoundV2Shadow(baseArgs({
     frozenInputArgs: {
       ...baseArgs().frozenInputArgs,
       strikeoutsMarket: { line: 6.5, overPrice: -120, underPrice: 100, sportsbook: "draftkings", fetchedAt: "2026-07-28T00:00:00.000Z" }, // ~44h before `now`
     },
   }));
-  ok(result.strikeoutsDecision?.side === null && result.strikeoutsDecision?.reason === "odds_too_stale", "a price far older than the policy's max age abstains, never grading against a possibly-unexecutable stale price");
+  ok(
+    staleResult.strikeoutsModelDecision?.side === freshResult.strikeoutsModelDecision?.side
+    && staleResult.strikeoutsModelDecision?.modelQualified === freshResult.strikeoutsModelDecision?.modelQualified
+    && staleResult.strikeoutsModelDecision?.qualificationReason === freshResult.strikeoutsModelDecision?.qualificationReason,
+    "a price far older than the policy's max age leaves the MODEL's own side/qualification completely unchanged — staleness is a sportsbook-executability fact, never a model input",
+  );
+  ok(
+    staleResult.strikeoutsExecutability?.executable === false && staleResult.strikeoutsExecutability?.failureReason === "odds_too_stale",
+    "the SAME staleness instead marks the separate executability verdict as not executable, with the real reason",
+  );
+  ok(
+    freshResult.strikeoutsExecutability?.executable === true,
+    "sanity check: the fresh-odds baseline this comparison is against is itself genuinely executable",
+  );
 }
 
 // ── Failure branch leaves qualification/decision fields honestly null, never fabricated ──
@@ -112,7 +136,8 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   }));
   if (result.failureReason) {
     ok(result.v1QualificationStatus === null, "the failure branch reports v1QualificationStatus as null, never a fabricated status");
-    ok(result.strikeoutsDecision === null && result.outsDecision === null, "the failure branch reports both decisions as null, never a fabricated verdict");
+    ok(result.strikeoutsModelDecision === null && result.outsModelDecision === null, "the failure branch reports both model decisions as null, never a fabricated verdict");
+    ok(result.strikeoutsExecutability === null && result.outsExecutability === null, "the failure branch reports both executability verdicts as null too");
   } else {
     ok(true, "battingOrder:null did not trigger the failure branch in this build — not the property under test here");
   }

@@ -25,10 +25,12 @@
 //   3. Once persisted, grading (a real storage.gradeMoundV2ShadowPrediction
 //      call, run twice to also cover re-grading/correction) NEVER rewrites
 //      the captured V1 policy decision (v1RecommendedSide,
-//      v1QualificationStatus) or V2's own decision-policy verdict
-//      (v2DecisionPolicyVersion/v2DecisionSide/v2Qualified/
-//      v2QualificationReason) — re-fetched values after grading are
-//      byte-identical to what was captured at evaluation time. A duplicate
+//      v1QualificationStatus), V2's own MODEL decision
+//      (v2ModelPolicyVersion/v2ModelSide/v2ModelQualified/
+//      v2ModelQualificationReason), or V2's separate executability verdict
+//      (v2ExecutabilityPolicyVersion/v2Executable/v2ExecutablePrice) —
+//      re-fetched values after grading are byte-identical to what was
+//      captured at evaluation time. A duplicate
 //      insert attempt with a deliberately DIFFERENT v1RecommendedSide (a
 //      stand-in for a hypothetical future "re-capture" bug) is also proven
 //      to be silently dropped (ON CONFLICT DO NOTHING) rather than
@@ -196,10 +198,13 @@ async function main() {
   const afterFirstGrade = await storage.getMoundV2ShadowPrediction(qualifiedKRow.predictionId);
   ok(afterFirstGrade?.v1RecommendedSide === beforeGrading?.v1RecommendedSide, "v1RecommendedSide is byte-identical after grading");
   ok(afterFirstGrade?.v1QualificationStatus === beforeGrading?.v1QualificationStatus, "v1QualificationStatus is byte-identical after grading");
-  ok(afterFirstGrade?.v2DecisionPolicyVersion === beforeGrading?.v2DecisionPolicyVersion, "v2DecisionPolicyVersion is byte-identical after grading");
-  ok(afterFirstGrade?.v2DecisionSide === beforeGrading?.v2DecisionSide, "v2DecisionSide is byte-identical after grading");
-  ok(afterFirstGrade?.v2Qualified === beforeGrading?.v2Qualified, "v2Qualified is byte-identical after grading");
-  ok(afterFirstGrade?.v2QualificationReason === beforeGrading?.v2QualificationReason, "v2QualificationReason is byte-identical after grading");
+  ok(afterFirstGrade?.v2ModelPolicyVersion === beforeGrading?.v2ModelPolicyVersion, "v2ModelPolicyVersion is byte-identical after grading");
+  ok(afterFirstGrade?.v2ModelSide === beforeGrading?.v2ModelSide, "v2ModelSide is byte-identical after grading");
+  ok(afterFirstGrade?.v2ModelQualified === beforeGrading?.v2ModelQualified, "v2ModelQualified is byte-identical after grading");
+  ok(afterFirstGrade?.v2ModelQualificationReason === beforeGrading?.v2ModelQualificationReason, "v2ModelQualificationReason is byte-identical after grading");
+  ok(afterFirstGrade?.v2ExecutabilityPolicyVersion === beforeGrading?.v2ExecutabilityPolicyVersion, "v2ExecutabilityPolicyVersion is byte-identical after grading");
+  ok(afterFirstGrade?.v2Executable === beforeGrading?.v2Executable, "v2Executable is byte-identical after grading");
+  ok(afterFirstGrade?.v2ExecutablePrice === beforeGrading?.v2ExecutablePrice, "v2ExecutablePrice is byte-identical after grading");
 
   // A second grading write (a correction) must ALSO leave these untouched.
   await storage.gradeMoundV2ShadowPrediction(qualifiedKRow.predictionId, {
@@ -209,8 +214,9 @@ async function main() {
   ok(afterSecondGrade?.finalStatValue === "9", "the second grading write does update the grading columns (sanity check the regrade really happened)");
   ok(afterSecondGrade?.v1RecommendedSide === beforeGrading?.v1RecommendedSide, "v1RecommendedSide survives a SECOND grading write (a correction) unchanged");
   ok(afterSecondGrade?.v1QualificationStatus === beforeGrading?.v1QualificationStatus, "v1QualificationStatus survives a second grading write unchanged");
-  ok(afterSecondGrade?.v2DecisionSide === beforeGrading?.v2DecisionSide, "v2DecisionSide survives a second grading write unchanged");
-  ok(afterSecondGrade?.v2Qualified === beforeGrading?.v2Qualified, "v2Qualified survives a second grading write unchanged");
+  ok(afterSecondGrade?.v2ModelSide === beforeGrading?.v2ModelSide, "v2ModelSide survives a second grading write unchanged");
+  ok(afterSecondGrade?.v2ModelQualified === beforeGrading?.v2ModelQualified, "v2ModelQualified survives a second grading write unchanged");
+  ok(afterSecondGrade?.v2Executable === beforeGrading?.v2Executable, "v2Executable survives a second grading write unchanged");
 
   // ── A duplicate insert attempt with a DIFFERENT v1RecommendedSide must be
   // silently dropped — the ORIGINAL captured decision can never be

@@ -1745,18 +1745,34 @@ export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
   v2UnderProbability: numeric("v2_under_probability").notNull(),
   v2PushProbability: numeric("v2_push_probability").notNull(),
 
-  // V2's own versioned decision-policy verdict (Final Pre-Push Integrity
-  // Pass) — DISTINCT from the raw probabilities above. "V2's implied side"
-  // (whichever of over/under has higher probability) is NOT a decision
-  // policy; this is the qualify-or-abstain verdict from
-  // moundV2DecisionPolicy.ts, applied to those probabilities plus the real
-  // frozen price/provenance/data-quality context. v2DecisionSide is null
-  // whenever v2Qualified is false — an explicit, reasoned abstention, never
-  // a forced pick.
-  v2DecisionPolicyVersion: text("v2_decision_policy_version"),
-  v2DecisionSide: text("v2_decision_side"),
-  v2Qualified: boolean("v2_qualified"),
-  v2QualificationReason: text("v2_qualification_reason"),
+  // V2's own versioned MODEL-policy verdict (Mound V2 purity pass; renamed
+  // from v2DecisionPolicy/v2Qualified/v2DecisionSide/v2QualificationReason
+  // — the OLD names ambiguously combined the model decision with sportsbook
+  // executability in one concept). DISTINCT from the raw probabilities
+  // above. "V2's implied side" (whichever of over/under has higher
+  // probability) is NOT a decision policy; this is the qualify-or-abstain
+  // verdict from moundV2ModelPolicy.ts, computed from ONLY the model's own
+  // probabilities + data-quality/lineup-status — NEVER price, sportsbook
+  // identity, or odds freshness (that module's input type structurally has
+  // no such field). v2ModelSide is null whenever v2ModelQualified is false
+  // — an explicit, reasoned abstention, never a forced pick.
+  v2ModelPolicyVersion: text("v2_model_policy_version"),
+  v2ModelSide: text("v2_model_side"),
+  v2ModelQualified: boolean("v2_model_qualified"),
+  v2ModelQualificationReason: text("v2_model_qualification_reason"),
+
+  // SEPARATE, downstream-of-the-model sportsbook EXECUTABILITY verdict
+  // (moundV2Executability.ts) — whether v2ModelSide (if any) has a real,
+  // fresh, provenanced price to trade against. Reads the model's OWN
+  // already-decided side; never feeds back into v2ModelSide/v2ModelQualified
+  // above. v2Executable is false (never null-as-true) whenever the price is
+  // missing, unprovenanced, or stale, or the model itself abstained.
+  v2ExecutabilityPolicyVersion: text("v2_executability_policy_version"),
+  v2Executable: boolean("v2_executable"),
+  v2ExecutableSportsbook: text("v2_executable_sportsbook"),
+  v2ExecutablePrice: integer("v2_executable_price"),
+  v2ExecutableFetchedAt: timestamp("v2_executable_fetched_at"),
+  v2ExecutabilityFailureReason: text("v2_executability_failure_reason"),
 
   productionModelVersion: text("production_model_version").notNull(),
   v2ModelVersion: text("v2_model_version").notNull(),

@@ -121,7 +121,7 @@ async function main() {
     const summary = await runMoundV2ShadowWorkerTick({ workerInstanceId: "zero-provider-calls-test" });
     ok(summary.claimed >= 1, `sanity: the worker tick actually claimed the job just enqueued (claimed=${summary.claimed})`);
     ok(summary.completed >= 1 || summary.failed >= 1, "sanity: the claimed job was actually processed (completed or failed), not silently dropped");
-    ok(fetchCallCount === 0, `the REAL worker tick — claim, evaluateMoundV2Shadow (computeMoundV2Distribution, checkMoundV1Parity, applyMoundV2DecisionPolicy), buildMoundV2ShadowPredictionRows, storage.createMoundV2ShadowPrediction, storage.completeMoundV2ShadowJob — makes ZERO network calls end to end (got ${fetchCallCount}: ${fetchCallLog.join(", ")})`);
+    ok(fetchCallCount === 0, `the REAL worker tick — claim, evaluateMoundV2Shadow (computeMoundV2Distribution, checkMoundV1Parity, applyMoundV2ModelPolicy, applyMoundV2Executability), buildMoundV2ShadowPredictionRows, storage.createMoundV2ShadowPrediction, storage.completeMoundV2ShadowJob — makes ZERO network calls end to end (got ${fetchCallCount}: ${fetchCallLog.join(", ")})`);
 
     // ── Phase 3: even a SECOND worker tick (covering the reclaim/retry path
     // when nothing is pending) makes zero network calls ──────────────────

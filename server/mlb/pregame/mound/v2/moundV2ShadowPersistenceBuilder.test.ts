@@ -90,10 +90,15 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   ok(strikeoutsRow.v1Score10 === "6.9" && strikeoutsRow.v1Tier === "strong", "V1's own score10/tier carry through, never recomputed");
   ok(strikeoutsRow.v1RecommendedSide === "OVER", "V1's own frozen recommended side carries through, never recomputed");
   ok(strikeoutsRow.v1QualificationStatus === "recommended", "v1QualificationStatus carries through onto the persisted row");
-  ok(strikeoutsRow.v2DecisionPolicyVersion === result.strikeoutsDecision?.policyVersion, "the persisted decision policy version matches the strikeouts market's own decision result, not the outs market's");
-  ok(strikeoutsRow.v2DecisionSide === result.strikeoutsDecision?.side, "the persisted decision side matches the strikeouts decision exactly");
-  ok(strikeoutsRow.v2Qualified === result.strikeoutsDecision?.qualified, "the persisted qualified flag matches the strikeouts decision exactly");
-  ok(strikeoutsRow.v2QualificationReason === result.strikeoutsDecision?.reason, "the persisted qualification reason matches the strikeouts decision exactly");
+  ok(strikeoutsRow.v2ModelPolicyVersion === result.strikeoutsModelDecision?.policyVersion, "the persisted MODEL policy version matches the strikeouts market's own model decision, not the outs market's");
+  ok(strikeoutsRow.v2ModelSide === result.strikeoutsModelDecision?.side, "the persisted model side matches the strikeouts model decision exactly");
+  ok(strikeoutsRow.v2ModelQualified === result.strikeoutsModelDecision?.modelQualified, "the persisted modelQualified flag matches the strikeouts model decision exactly");
+  ok(strikeoutsRow.v2ModelQualificationReason === result.strikeoutsModelDecision?.qualificationReason, "the persisted qualification reason matches the strikeouts model decision exactly");
+  ok(strikeoutsRow.v2ExecutabilityPolicyVersion === result.strikeoutsExecutability?.policyVersion, "the persisted executability policy version matches the strikeouts market's own executability result — a SEPARATE version from the model policy above");
+  ok(strikeoutsRow.v2Executable === result.strikeoutsExecutability?.executable, "the persisted executable flag matches the strikeouts executability result exactly");
+  ok(strikeoutsRow.v2ExecutableSportsbook === result.strikeoutsExecutability?.sportsbook, "the persisted executable sportsbook matches exactly");
+  ok(strikeoutsRow.v2ExecutablePrice === result.strikeoutsExecutability?.price, "the persisted executable price matches exactly");
+  ok(strikeoutsRow.v2ExecutabilityFailureReason === result.strikeoutsExecutability?.failureReason, "the persisted executability failure reason matches exactly");
   ok(strikeoutsRow.gamePk === "gamePk_1", "gamePk (MLB Stats API id) carries through — the only durable way a later reconciliation pass can call syncGameBoxScore for this exact game");
   ok(
     strikeoutsRow.scheduledGameTime instanceof Date && strikeoutsRow.scheduledGameTime.toISOString() === "2026-07-29T23:05:00.000Z",
@@ -107,14 +112,15 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   const outsRow = rows.find((r) => r.market === "pitcher_outs")!;
   ok(outsRow.frozenLine === null && outsRow.sportsbook === null, "outs market has no real fetch path today — honestly null, never fabricated or cross-substituted from strikeouts");
   ok(outsRow.v1RecommendedSide === "OVER", "v1RecommendedSide is the same V1 decision for both markets (it's a per-pitcher call, not per-market)");
-  ok(outsRow.v2DecisionPolicyVersion === result.outsDecision?.policyVersion, "the outs row's decision policy version matches the OUTS market's own decision, not strikeouts'");
-  ok(outsRow.v2QualificationReason === result.outsDecision?.reason, "the outs row's qualification reason matches the OUTS market's own decision");
+  ok(outsRow.v2ModelPolicyVersion === result.outsModelDecision?.policyVersion, "the outs row's model policy version matches the OUTS market's own model decision, not strikeouts'");
+  ok(outsRow.v2ModelQualificationReason === result.outsModelDecision?.qualificationReason, "the outs row's qualification reason matches the OUTS market's own model decision");
   // outsLine is null in this fixture -> MoundV2MarketResult's own contract
   // (moundV2Types.ts) makes over/under/push all 0 in that case -> the
-  // decision policy's probability floor (0 >= 0.55 is false) is the real,
+  // model policy's probability floor (0 >= 0.55 is false) is the real,
   // honest reason it never qualifies — never a fabricated recommendation
   // against a market that was never even posted.
-  ok(outsRow.v2Qualified === false && outsRow.v2QualificationReason === "below_minimum_probability", `the outs market (no real posted line today) never fabricates a qualified recommendation (got qualified=${outsRow.v2Qualified} reason=${outsRow.v2QualificationReason})`);
+  ok(outsRow.v2ModelQualified === false && outsRow.v2ModelQualificationReason === "below_minimum_probability", `the outs market (no real posted line today) never fabricates a qualified model recommendation (got modelQualified=${outsRow.v2ModelQualified} reason=${outsRow.v2ModelQualificationReason})`);
+  ok(outsRow.v2Executable === false && outsRow.v2ExecutabilityFailureReason === "not_applicable", "the outs market's executability is honestly not_applicable — the model itself never qualified a side to even check a price for");
 }
 
 // ── v1RecommendedSide null (V1 had no direction) is never fabricated ──────

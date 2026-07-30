@@ -63,8 +63,14 @@ export interface MoundV2ComparisonRow {
   v1Tier: string | null;
   v2ModelVersion: string;
   productionModelVersion: string;
-  /** V2's own versioned qualify/abstain decision-policy version (distinct from v2ModelVersion, the probability model's own version) — see moundV2DecisionPolicy.ts. Used for the promotion gate's undeclared-version check, never for probability/decision-policy math itself. */
-  v2DecisionPolicyVersion: string | null;
+  /** V2's own versioned qualify/abstain MODEL-policy version (distinct from v2ModelVersion, the probability model's own version) — see moundV2ModelPolicy.ts. Never combined with sportsbook executability (Mound V2 purity pass). Used for the promotion gate's undeclared-version check, never for probability/decision-policy math itself. */
+  v2ModelPolicyVersion: string | null;
+  /** V2's OWN model decision — null means the model itself abstained (moundV2ModelPolicy.ts), computed from probabilities/data-quality/lineup-status ONLY, never price. This is what "V2 recommendationsProduced" means below — NOT the old "always pick the higher probability" implied lean. */
+  v2ModelSide: "OVER" | "UNDER" | null;
+  /** Redundant with v2ModelSide != null in practice (the policy never sets one without the other) but persisted/carried explicitly so a legacy/unknown row (null) is never conflated with a genuine false abstention. */
+  v2ModelQualified: boolean | null;
+  /** Whether v2ModelSide (if any) has a real, fresh, provenanced sportsbook price to actually trade — moundV2Executability.ts, evaluated strictly AFTER and never influencing v2ModelSide/v2ModelQualified. null (treated as NOT executable, fail-closed) for a legacy/unknown row. */
+  v2Executable: boolean | null;
   /** Frozen data-quality band captured at evaluation time ("complete" | "partial" | "degraded") — a promotion-gate subgroup dimension, never a probability/decision-policy input. */
   dataQuality: string | null;
   /** Frozen lineup-confirmation status at evaluation time — a promotion-gate subgroup dimension. */
@@ -79,22 +85,34 @@ function clampProbability(p: number): number {
   return Math.min(1 - CALIBRATION_EPSILON, Math.max(CALIBRATION_EPSILON, p));
 }
 
-/** V2's own implied pick — whichever of over/under it assigns the higher probability to. Push is never a "pick" (you can't bet a push). */
-export function impliedV2Side(row: MoundV2ComparisonRow): "over" | "under" {
-  return row.v2OverProbability >= row.v2UnderProbability ? "over" : "under";
+/**
+ * V2's real captured price for its OWN qualified side — null whenever the
+ * model abstained (v2ModelSide is null) OR the recommendation was not
+ * genuinely executable (v2Executable is not exactly true) — never the old
+ * "always pick the higher-probability side" behavior, and never a price
+ * used despite the executability check failing.
+ */
+function v2ExecutablePriceForRow(row: MoundV2ComparisonRow): number | null {
+  if (row.v2ModelSide == null || row.v2Executable !== true) return null;
+  return row.v2ModelSide === "OVER" ? row.frozenOverPrice : row.frozenUnderPrice;
 }
 
-function v2PriceForImpliedSide(row: MoundV2ComparisonRow): number | null {
-  return impliedV2Side(row) === "over" ? row.frozenOverPrice : row.frozenUnderPrice;
-}
-
-/** Net units for ONE graded-with-line row, using V2's OWN captured price on its own implied side. Null when no real price was ever captured for that side. */
+/**
+ * Net units for ONE graded-with-line row, using V2's OWN model-qualified
+ * side AND only when it was genuinely executable. A model-qualified-but-
+ * not-executable row (missing/stale/unprovenanced price) returns null here
+ * — excluded from ROI, never silently graded against a price that was
+ * never really tradeable. An abstained row (v2ModelSide null) also returns
+ * null — it was never a bet at all.
+ */
 export function v2UnitsForRow(row: MoundV2ComparisonRow): number | null {
   if (row.finalResult == null) return null;
+  if (row.v2ModelSide == null) return null;
+  if (row.v2Executable !== true) return null;
   if (row.finalResult === "push") return 0;
-  const price = v2PriceForImpliedSide(row);
+  const price = v2ExecutablePriceForRow(row);
   if (price == null || !Number.isFinite(price)) return null;
-  return impliedV2Side(row) === row.finalResult ? unitsWonPerDollarStaked(price) : -1;
+  return row.v2ModelSide.toLowerCase() === row.finalResult ? unitsWonPerDollarStaked(price) : -1;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -315,6 +333,8 @@ export interface MoundV2DecisionPolicyMetrics {
   units: number | null;
   roi: number | null;
   avgCapturedPrice: number | null;
+  /** recommendationsProduced - roiEligibleCount: a real recommendation excluded from ROI for missing/stale/unprovenanced price (V2) or a missing captured price (V1) — tracked as its own explicit count per Section 4's "missing/stale-price exclusions separately" requirement, not silently folded into the ROI denominator. */
+  modelQualifiedNotExecutableCount: number;
 }
 
 function v1PriceForSide(row: MoundV2ComparisonRow, side: "OVER" | "UNDER"): number | null {
@@ -349,32 +369,42 @@ function buildV1Metrics(eligibleSnapshots: readonly MoundV2ComparisonRow[]): Mou
     units: unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) : null,
     roi: unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) / unitsList.length : null,
     avgCapturedPrice: prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : null,
+    modelQualifiedNotExecutableCount: withRecommendation.length - unitsList.length,
   };
 }
 
 function buildV2Metrics(eligibleSnapshots: readonly MoundV2ComparisonRow[]): MoundV2DecisionPolicyMetrics {
-  // V2 always produces an implied side (over>=under or under>over) — it
-  // never has a "no recommendation" case the way V1's track-tier signals
-  // do, so recommendationsProduced === eligibleSnapshots for V2 by
-  // construction. Reported explicitly rather than assumed, for symmetry
-  // with V1's own metrics shape.
-  const decided = eligibleSnapshots.filter((r) => r.finalResult !== "push");
-  const wins = decided.filter((r) => impliedV2Side(r) === r.finalResult).length;
+  // (Mound V2 purity pass) V2's own MODEL decision (v2ModelSide,
+  // moundV2ModelPolicy.ts) is a genuine qualify/abstain verdict, exactly
+  // like V1's v1RecommendedSide — it is NOT "always pick the higher
+  // probability" (a prior "implied side" design that always forced a pick
+  // regardless of qualification; removed entirely, never wired into any
+  // decision-policy/ROI math). recommendationsProduced therefore reflects
+  // genuine MODEL coverage (no price required — Section 4's "model coverage
+  // without requiring price"), and can be less than eligibleSnapshots when
+  // the model abstains, symmetric with V1's own shape.
+  const withRecommendation = eligibleSnapshots.filter((r) => r.v2ModelSide != null);
+  const decided = withRecommendation.filter((r) => r.finalResult !== "push");
+  const wins = decided.filter((r) => r.v2ModelSide!.toLowerCase() === r.finalResult).length;
   const losses = decided.length - wins;
-  const pushes = eligibleSnapshots.filter((r) => r.finalResult === "push").length;
-  const unitsList = eligibleSnapshots.map(v2UnitsForRow).filter((u): u is number => u != null);
-  const prices = eligibleSnapshots.map(v2PriceForImpliedSide).filter((p): p is number => p != null && Number.isFinite(p));
+  const pushes = withRecommendation.filter((r) => r.finalResult === "push").length;
+  // roiEligibleCount/units/roi additionally require v2Executable === true
+  // (see v2UnitsForRow) — Section 4's "captured-price ROI only for
+  // executable recommendations."
+  const unitsList = withRecommendation.map(v2UnitsForRow).filter((u): u is number => u != null);
+  const prices = withRecommendation.map(v2ExecutablePriceForRow).filter((p): p is number => p != null && Number.isFinite(p));
 
   return {
     eligibleSnapshots: eligibleSnapshots.length,
-    recommendationsProduced: eligibleSnapshots.length,
-    coverage: eligibleSnapshots.length > 0 ? 1 : 0,
+    recommendationsProduced: withRecommendation.length,
+    coverage: eligibleSnapshots.length > 0 ? withRecommendation.length / eligibleSnapshots.length : 0,
     wins, losses, pushes,
     winRate: decided.length > 0 ? wins / decided.length : null,
     roiEligibleCount: unitsList.length,
     units: unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) : null,
     roi: unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) / unitsList.length : null,
     avgCapturedPrice: prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : null,
+    modelQualifiedNotExecutableCount: withRecommendation.length - unitsList.length,
   };
 }
 
@@ -530,11 +560,11 @@ export function computePairedPopulationRatio(pairedN: number, legacyIncompleteCo
 /** Every row in the population must declare a real (non-empty) version — a single undeclared row fails the WHOLE check, since "some rows have no known version" is exactly the ambiguity this guards against. An empty population is honestly "not declared" (false), never vacuously true. */
 export function computeMoundV2VersionDeclaration(
   rows: readonly MoundV2ComparisonRow[],
-): { v2ModelVersionDeclared: boolean; v2DecisionPolicyVersionDeclared: boolean } {
-  if (rows.length === 0) return { v2ModelVersionDeclared: false, v2DecisionPolicyVersionDeclared: false };
+): { v2ModelVersionDeclared: boolean; v2ModelPolicyVersionDeclared: boolean } {
+  if (rows.length === 0) return { v2ModelVersionDeclared: false, v2ModelPolicyVersionDeclared: false };
   return {
     v2ModelVersionDeclared: rows.every((r) => !!r.v2ModelVersion),
-    v2DecisionPolicyVersionDeclared: rows.every((r) => !!r.v2DecisionPolicyVersion),
+    v2ModelPolicyVersionDeclared: rows.every((r) => !!r.v2ModelPolicyVersion),
   };
 }
 

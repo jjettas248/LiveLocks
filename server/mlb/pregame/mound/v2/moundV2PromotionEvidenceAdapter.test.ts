@@ -24,7 +24,8 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
     v2OverProbability: 0.6, v2UnderProbability: 0.37, v2PushProbability: 0.03,
     v1RecommendedSide: "OVER", contractVersion: MOUND_FROZEN_CONTRACT_VERSION,
     v1Tier: "strong", v2ModelVersion: "v2_v1", productionModelVersion: "prod_v1",
-    v2DecisionPolicyVersion: "mound_v2_decision_policy_v1",
+    v2ModelPolicyVersion: "mound_v2_model_policy_v1",
+    v2ModelSide: "OVER", v2ModelQualified: true, v2Executable: true,
     dataQuality: "complete", lineupStatus: "confirmed", sportsbook: "draftkings",
     oddsFetchedAt: "2026-07-29T19:58:00.000Z",
     ...over,
@@ -93,15 +94,16 @@ const cleanOpts = {
   // its own generating sample, so beating it on calibration requires V2 to
   // ALSO be well-calibrated at each of its own confidence levels — two
   // symmetric, individually-well-calibrated 90%-confidence buckets satisfy
-  // that. Each row also carries a real V1 decision that agrees with V2's own
-  // implied side on every row (so both models genuinely tie at a 90% win
+  // that. Each row also carries V2's OWN model decision (v2ModelSide — plain
+  // data, never derived from the probabilities below) agreeing with V1's
+  // real decision on every row (so both models genuinely tie at a 90% win
   // rate on this sample, rather than one being artificially perfect) — a
   // fair, fully-clean happy path for BOTH criteria families.
   const great: MoundV2ComparisonRow[] = [
-    ...Array.from({ length: 90 }, (_, i) => row({ gameId: `ga${i}`, finalResult: "over", v2OverProbability: 0.9, v2UnderProbability: 0.1, v2PushProbability: 0, v1RecommendedSide: "OVER" })),
-    ...Array.from({ length: 10 }, (_, i) => row({ gameId: `gb${i}`, finalResult: "under", v2OverProbability: 0.9, v2UnderProbability: 0.1, v2PushProbability: 0, v1RecommendedSide: "OVER" })),
-    ...Array.from({ length: 10 }, (_, i) => row({ gameId: `gc${i}`, finalResult: "over", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER" })),
-    ...Array.from({ length: 90 }, (_, i) => row({ gameId: `gd${i}`, finalResult: "under", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER" })),
+    ...Array.from({ length: 90 }, (_, i) => row({ gameId: `ga${i}`, finalResult: "over", v2OverProbability: 0.9, v2UnderProbability: 0.1, v2PushProbability: 0, v1RecommendedSide: "OVER", v2ModelSide: "OVER" })),
+    ...Array.from({ length: 10 }, (_, i) => row({ gameId: `gb${i}`, finalResult: "under", v2OverProbability: 0.9, v2UnderProbability: 0.1, v2PushProbability: 0, v1RecommendedSide: "OVER", v2ModelSide: "OVER" })),
+    ...Array.from({ length: 10 }, (_, i) => row({ gameId: `gc${i}`, finalResult: "over", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER", v2ModelSide: "UNDER" })),
+    ...Array.from({ length: 90 }, (_, i) => row({ gameId: `gd${i}`, finalResult: "under", v2OverProbability: 0.1, v2UnderProbability: 0.9, v2PushProbability: 0, v1RecommendedSide: "UNDER", v2ModelSide: "UNDER" })),
   ];
   const cleanVerdict = buildAndEvaluateMoundV2Promotion(great, { ...cleanOpts, shadowEvaluationTotal: 300 }).verdict;
   ok(cleanVerdict.readyForPromotion, `a large, well-calibrated, fully-covered, paired-decision-policy-clean sample with no regression and clean Section-5 evidence IS ready for promotion (blockers: ${cleanVerdict.blockers.join(", ")})`);
@@ -134,11 +136,12 @@ const cleanOpts = {
 {
   // V1 recommends OVER on every row at -120 and wins every time (finalResult
   // always "over") — a real, decisive, profitable V1 policy on this sample.
-  // V2, meanwhile, is a coin-flip that only wins half the time.
+  // V2's OWN model decision (v2ModelSide — plain data, never derived from
+  // probabilities), meanwhile, is a coin-flip that only wins half the time.
   const rows: MoundV2ComparisonRow[] = Array.from({ length: 150 }, (_, i) => row({
     gameId: `d${i}`, finalResult: "over",
     v1RecommendedSide: "OVER", frozenOverPrice: -120, frozenUnderPrice: 100,
-    v2OverProbability: i % 2 === 0 ? 0.51 : 0.49, v2UnderProbability: i % 2 === 0 ? 0.49 : 0.51, v2PushProbability: 0,
+    v2ModelSide: i % 2 === 0 ? "OVER" : "UNDER",
   }));
   const evidence = buildMoundV2PromotionEvidence(rows, { ...baseOpts, shadowEvaluationTotal: 150 });
   ok(evidence.decisionPolicyPairedN === 150, "every row pairs (V1 has a real side+price, V2 graded with a line)");
@@ -239,13 +242,13 @@ const cleanOpts = {
 // ── Section 5: version declaration end to end ────────────────────────────
 {
   const declared = buildMoundV2PromotionEvidence(Array.from({ length: 5 }, (_, i) => row({ gameId: `vd${i}` })), cleanOpts);
-  ok(declared.v2ModelVersionDeclared === true && declared.v2DecisionPolicyVersionDeclared === true, "a population where every row declares both versions reads as fully declared");
+  ok(declared.v2ModelVersionDeclared === true && declared.v2ModelPolicyVersionDeclared === true, "a population where every row declares both versions reads as fully declared");
 
   const oneUndeclared = buildMoundV2PromotionEvidence(
-    [...Array.from({ length: 4 }, (_, i) => row({ gameId: `ud${i}` })), row({ gameId: "missing", v2DecisionPolicyVersion: null })],
+    [...Array.from({ length: 4 }, (_, i) => row({ gameId: `ud${i}` })), row({ gameId: "missing", v2ModelPolicyVersion: null })],
     cleanOpts,
   );
-  ok(oneUndeclared.v2DecisionPolicyVersionDeclared === false, "a single row missing its decision-policy version fails the whole evidence's declaration check");
+  ok(oneUndeclared.v2ModelPolicyVersionDeclared === false, "a single row missing its model-policy version fails the whole evidence's declaration check");
 }
 
 // ── Section 5: subgroups/pairedPopulationRatio/roiEligiblePriceRatio/sportsbookProvenanceRatio/absoluteCalibrationError all flow end to end from real rows ──

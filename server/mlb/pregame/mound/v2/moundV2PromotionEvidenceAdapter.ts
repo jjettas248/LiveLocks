@@ -114,7 +114,7 @@ export function buildMoundV2PromotionEvidence(
   // meant to require PROVEN improvement.
   const toBlockingDelta = (d: number | null): number => d ?? Number.POSITIVE_INFINITY;
 
-  const { v2ModelVersionDeclared, v2DecisionPolicyVersionDeclared } = computeMoundV2VersionDeclaration(gradedWithLine);
+  const { v2ModelVersionDeclared, v2ModelPolicyVersionDeclared } = computeMoundV2VersionDeclaration(gradedWithLine);
 
   const settlementErrorRatio = opts.gradingCoverageReport && opts.gradingCoverageReport.totalRows > 0
     ? opts.gradingCoverageReport.providerFailureCount / opts.gradingCoverageReport.totalRows
@@ -152,7 +152,7 @@ export function buildMoundV2PromotionEvidence(
     workerJobFailureRatio,
     shadowEvaluationFailureRatio,
     v2ModelVersionDeclared,
-    v2DecisionPolicyVersionDeclared,
+    v2ModelPolicyVersionDeclared,
   };
 }
 

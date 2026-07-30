@@ -55,7 +55,7 @@ import { composeMoundScore } from "./scoring";
 import { computeMoundDirection } from "./moundDirection";
 import { projectedStrikeoutsFromKPer9, computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMatchupAdjustedStrikeouts } from "./matchupAdjustedKs";
-import { buildMoundMarketEdgeContext, pairedUnderOddsForBook } from "./oddsDisplay";
+import { buildMoundMarketEdgeContext, selectCanonicalMoundV2Line, selectExecutablePriceAtLine } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
 import { applyMoundEvaluationSnapshots } from "./evaluationSnapshot";
 import { aggregateRawPitcherContactSnapshot, type RawContactSupportingInputs, type RawPitcherContactSnapshot } from "./rawPitcherContactSnapshot";
@@ -633,13 +633,21 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             const throwsForShadow: "L" | "R" | null = starter.throws === "L" || starter.throws === "R" ? starter.throws : null;
             const dataQuality: MoundFrozenDataQuality =
               opposingLineupConfirmed && seasonStats != null ? "complete" : seasonStats != null ? "partial" : "degraded";
-            // Paired-market design: the under price MUST come from the exact
-            // same book (and therefore the exact same line) marketEdgeContext
-            // already chose for the over side — never independently shopped
-            // across all books, which could silently pair an OVER from one
-            // book with an UNDER from a different book or even a different
-            // line (see oddsDisplay.ts's pairedUnderOddsForBook doc comment).
-            const pairedUnderPrice = pairedUnderOddsForBook(strikeoutSnap?.books, marketEdgeContext?.sportsbook);
+            // Price-independent line selection (Mound V2 purity pass): the
+            // line V2's model evaluates against is chosen WITHOUT looking at
+            // any price at all (selectCanonicalMoundV2Line — mode across
+            // books, deterministic lowest-value tie-break). Only AFTER that
+            // line is fixed does price enter the picture, to pick which
+            // book's price is captured for display/executability/ROI — and
+            // that price search is restricted to books that actually posted
+            // this exact line, so it can never reach for a different line.
+            // marketEdgeContext (V1's own best-OVER-price display context)
+            // must never drive V2's line choice — see oddsDisplay.ts's
+            // price-purity-boundary header comment.
+            const canonicalLine = selectCanonicalMoundV2Line(strikeoutSnap?.books ?? null);
+            const executablePriceAtLine = canonicalLine
+              ? selectExecutablePriceAtLine(strikeoutSnap?.books ?? null, canonicalLine.line)
+              : null;
             // V1's own frozen recommended side — captured ONLY when it
             // represents a genuinely publicly-qualified recommendation
             // (everPubliclyFlagged/everPubliclyFlaggedFade), never a generic
@@ -652,8 +660,9 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             const v1QualificationStatus: "recommended" | "not_recommended" = v1Qualified ? "recommended" : "not_recommended";
 
             // This outer try/catch covers both the construction above
-            // (battingOrder, pairedUnderPrice, v1RecommendedSide) and the
-            // enqueue call below — a defect in either can never affect V1's
+            // (battingOrder, canonicalLine, executablePriceAtLine,
+            // v1RecommendedSide) and the enqueue call below — a defect in
+            // either can never affect V1's
             // own signal, which is already fully assembled and carried
             // forward above. enqueueMoundV2ShadowForPitcher itself also
             // never throws (defense in depth, not redundant — its own
@@ -691,11 +700,11 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
                   // unavailable, never fabricated or cross-substituted from
                   // strikeouts.
                   strikeoutsMarket: {
-                    line: marketEdgeContext?.line ?? null,
-                    overPrice: marketEdgeContext?.odds ?? null,
-                    underPrice: pairedUnderPrice,
-                    sportsbook: marketEdgeContext?.sportsbook ?? null,
-                    fetchedAt: marketEdgeContext?.oddsUpdatedAt ?? null,
+                    line: canonicalLine?.line ?? null,
+                    overPrice: executablePriceAtLine?.overPrice ?? null,
+                    underPrice: executablePriceAtLine?.underPrice ?? null,
+                    sportsbook: executablePriceAtLine?.sportsbook ?? null,
+                    fetchedAt: strikeoutSnap?.fetchedAt != null ? new Date(strikeoutSnap.fetchedAt).toISOString() : null,
                   },
                   outsMarket: { line: null, overPrice: null, underPrice: null, sportsbook: null, fetchedAt: null },
                   dataQuality,
@@ -711,17 +720,17 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
                 v1Tier: scoring.tier,
                 v1RecommendedSide,
                 v1QualificationStatus,
-                strikeoutsLine: marketEdgeContext?.line ?? null,
+                strikeoutsLine: canonicalLine?.line ?? null,
                 outsLine: null,
               },
             });
           } catch (err: any) {
             // Belt-and-suspenders: enqueueMoundV2ShadowForPitcher itself
             // never throws, but this outer guard also covers the
-            // construction above (battingOrder, pairedUnderPrice,
-            // v1RecommendedSide) — a defect there can never affect V1's own
-            // signal, which is already fully assembled and carried forward
-            // above.
+            // construction above (battingOrder, canonicalLine,
+            // executablePriceAtLine, v1RecommendedSide) — a defect there can
+            // never affect V1's own signal, which is already fully assembled
+            // and carried forward above.
             console.warn(`[MOUND_V2_SHADOW_UNEXPECTED_ERROR] ${signalId}`, err?.message ?? err);
           }
         }

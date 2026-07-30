@@ -19,8 +19,9 @@
 //
 // Measured result (this machine, N=500, 9-batter lineup): mean ~0.6ms,
 // p95 ~0.9ms, max ~1.6ms per pitcher (unchanged in magnitude by the
-// decision-policy addition — applyMoundV2DecisionPolicy is O(1) arithmetic
-// per market, negligible next to the O(n^2)-or-better DP in moundV2Math.ts).
+// model-policy/executability split — applyMoundV2ModelPolicy and
+// applyMoundV2Executability are each O(1) arithmetic per market, negligible
+// next to the O(n^2)-or-better DP in moundV2Math.ts).
 //
 // Run: npx tsx server/mlb/pregame/mound/v2/moundV2ShadowLatency.test.ts
 

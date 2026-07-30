@@ -25,7 +25,8 @@ export function buildMoundV2ShadowPredictionRows(
   return MOUND_V2_MARKETS.map((market) => {
     const marketQuote = market === "pitcher_strikeouts" ? frozen.strikeoutsMarket : frozen.outsMarket;
     const marketResult = market === "pitcher_strikeouts" ? distribution.strikeouts : distribution.outs;
-    const decision = market === "pitcher_strikeouts" ? result.strikeoutsDecision : result.outsDecision;
+    const modelDecision = market === "pitcher_strikeouts" ? result.strikeoutsModelDecision : result.outsModelDecision;
+    const executability = market === "pitcher_strikeouts" ? result.strikeoutsExecutability : result.outsExecutability;
 
     const row: InsertMoundV2ShadowPrediction = {
       predictionId: `${result.snapshotId}:${market}`,
@@ -47,10 +48,18 @@ export function buildMoundV2ShadowPredictionRows(
       setupGrade: result.v1Tier,
       v1RecommendedSide: result.v1RecommendedSide,
       v1QualificationStatus: result.v1QualificationStatus,
-      v2DecisionPolicyVersion: decision?.policyVersion ?? null,
-      v2DecisionSide: decision?.side ?? null,
-      v2Qualified: decision?.qualified ?? null,
-      v2QualificationReason: decision?.reason ?? null,
+      // MODEL decision — never price-influenced (see moundV2ModelPolicy.ts).
+      v2ModelPolicyVersion: modelDecision?.policyVersion ?? null,
+      v2ModelSide: modelDecision?.side ?? null,
+      v2ModelQualified: modelDecision?.modelQualified ?? null,
+      v2ModelQualificationReason: modelDecision?.qualificationReason ?? null,
+      // Executability — separate, downstream, price/provenance-aware.
+      v2ExecutabilityPolicyVersion: executability?.policyVersion ?? null,
+      v2Executable: executability?.executable ?? null,
+      v2ExecutableSportsbook: executability?.sportsbook ?? null,
+      v2ExecutablePrice: executability?.price ?? null,
+      v2ExecutableFetchedAt: executability?.fetchedAt ? new Date(executability.fetchedAt) : null,
+      v2ExecutabilityFailureReason: executability?.failureReason ?? null,
       v2ExpectedValue: String(marketResult.expectedValue),
       v2OverProbability: String(marketResult.overProbability),
       v2UnderProbability: String(marketResult.underProbability),

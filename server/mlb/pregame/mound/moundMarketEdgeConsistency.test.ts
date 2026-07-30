@@ -1,20 +1,24 @@
 // Mound Radar — market-edge provenance consistency at the buildMlbMoundRadar.ts
-// integration level (Final Pre-Push Integrity Pass, Section 4). Goes beyond
-// oddsDisplay.test.ts's pure-function unit coverage of pairedUnderOddsForBook
-// in two ways:
+// integration level (Final Pre-Push Integrity Pass, Section 4; Mound V2
+// purity pass, Section 3 line-selection fix). Goes beyond oddsDisplay.test.ts's
+// pure-function unit coverage in two ways:
 //
 //   1. A realistic THREE-book fixture using the real MLB_PROP_BOOKMAKERS
 //      allowlist (draftkings, fanduel, hardrockbet — see CLAUDE.md §3.2b),
-//      with all three quoting DIFFERENT lines and prices, proving the paired
-//      over/under always come from the one book actually chosen for OVER —
-//      never a shared "best of all three" fabrication.
+//      with all three quoting DIFFERENT lines and prices, proving V1's own
+//      paired over/under always come from the one book actually chosen for
+//      OVER — never a shared "best of all three" fabrication.
 //   2. A STRUCTURAL proof, reading buildMlbMoundRadar.ts's real source, that
-//      the two real call sites (marketEdgeContext's construction and the
-//      pairedUnderPrice lookup) read from the exact same `strikeoutSnap`
-//      binding — declared `const` (so it is LANGUAGE-LEVEL impossible to
-//      reassign to a different snapshot in between, not just "nothing
-//      happens to reassign it today") — with no intervening re-fetch that
-//      could introduce a different snapshot between the two reads.
+//      V2's line/price selection (canonicalLine, executablePriceAtLine) is
+//      built from the exact same `strikeoutSnap` binding — declared `const`
+//      (so it is LANGUAGE-LEVEL impossible to reassign to a different
+//      snapshot in between, not just "nothing happens to reassign it
+//      today") — with no intervening re-fetch that could introduce a
+//      different snapshot between the two reads, AND that the executable
+//      price lookup is parameterized by canonicalLine's own line (never
+//      marketEdgeContext's price-chosen line) — the structural proof that
+//      Blocker 2 (price-driven line selection) is fixed at the real call
+//      site, not just inside the standalone oddsDisplay.ts functions.
 //
 // Together with oddsDisplay.test.ts (the math) this closes the loop Section
 // 4 asks for without needing a full mocked run of the orchestrator (which
@@ -70,9 +74,10 @@ function ok(cond: boolean, msg: string) {
   ok(paired === null, "draftkings (the chosen OVER book) has no valid UNDER price -> honestly null, never fanduel's -105 or hardrockbet's +100, even though both are real prices at the same line");
 }
 
-// ── Structural proof: buildMlbMoundRadar.ts's two real call sites share one
-// const-bound snapshot — reassignment to a different snapshot in between is
-// language-level impossible, not just something that "doesn't happen today".
+// ── Structural proof: buildMlbMoundRadar.ts's V2 line/price selection reads
+// from the same const-bound snapshot as V1's own display path, and — the
+// critical price-purity property — is parameterized by canonicalLine's OWN
+// (price-independent) line, never marketEdgeContext's price-chosen one.
 {
   const dir = path.dirname(fileURLToPath(import.meta.url));
   const source = readFileSync(path.join(dir, "buildMlbMoundRadar.ts"), "utf-8");
@@ -82,39 +87,44 @@ function ok(cond: boolean, msg: string) {
   ok(!/\blet\s+strikeoutSnap\b/.test(source), "strikeoutSnap is never separately declared with `let` anywhere in the file (no shadowing/mutable escape hatch)");
 
   const marketEdgeContextLine = source.match(/const\s+marketEdgeContext\s*=\s*buildMoundMarketEdgeContext\(([^)]*)\)/);
-  ok(marketEdgeContextLine !== null && /strikeoutSnap\?\.books/.test(marketEdgeContextLine[1]), "marketEdgeContext is built directly from strikeoutSnap?.books (the same binding), not a separately-fetched snapshot");
+  ok(marketEdgeContextLine !== null && /strikeoutSnap\?\.books/.test(marketEdgeContextLine[1]), "V1's own marketEdgeContext is built directly from strikeoutSnap?.books (the same binding), not a separately-fetched snapshot");
   ok(!/\blet\s+marketEdgeContext\b/.test(source), "marketEdgeContext is also `const`, never `let` — it too cannot be reassigned after its one construction from strikeoutSnap?.books");
 
-  const pairedUnderPriceLine = source.match(/const\s+pairedUnderPrice\s*=\s*pairedUnderOddsForBook\(([^)]*)\)/);
-  ok(pairedUnderPriceLine !== null && /strikeoutSnap\?\.books/.test(pairedUnderPriceLine[1]), "pairedUnderPrice is looked up from strikeoutSnap?.books (the SAME binding used for marketEdgeContext), not a re-fetched or independently-scoped snapshot");
+  const canonicalLineDecl = source.match(/const\s+canonicalLine\s*=\s*selectCanonicalMoundV2Line\(([^)]*)\)/);
+  ok(canonicalLineDecl !== null && /strikeoutSnap\?\.books/.test(canonicalLineDecl[1]), "V2's canonicalLine is built from strikeoutSnap?.books (the SAME binding as V1's marketEdgeContext) — never a re-fetched or independently-scoped snapshot");
+  ok(!/\blet\s+canonicalLine\b/.test(source), "canonicalLine is `const`, never `let`");
+
+  const executablePriceDecl = source.match(/selectExecutablePriceAtLine\(([^,]*),\s*([^)]*)\)/);
+  ok(executablePriceDecl !== null && /strikeoutSnap\?\.books/.test(executablePriceDecl[1]), "selectExecutablePriceAtLine's books argument is strikeoutSnap?.books — the same binding, never a different snapshot");
   ok(
-    pairedUnderPriceLine !== null && /marketEdgeContext\?\.sportsbook/.test(pairedUnderPriceLine[1]),
-    "pairedUnderPrice's sportsbook argument is marketEdgeContext's own chosen book — the two calls are structurally chained, not independently parameterized in a way that could drift apart",
+    executablePriceDecl !== null && /canonicalLine\.line/.test(executablePriceDecl[2]),
+    "THE critical price-purity property: selectExecutablePriceAtLine's line argument is canonicalLine's OWN (price-independent) line — NEVER marketEdgeContext's price-chosen line. A price search that could reach for a different line than the one the model actually evaluates would silently reintroduce indirect price contamination.",
   );
+  ok(!/selectExecutablePriceAtLine\([^)]*marketEdgeContext/.test(source), "selectExecutablePriceAtLine is never called with any marketEdgeContext-derived argument anywhere in this file");
 
   // Confirm no BLOCKING re-fetch/reassignment of odds happens between the
   // two read sites that could introduce a race even in principle (defense
-  // in depth beyond the const-binding guarantee above, which already rules
-  // this out at the language level for `strikeoutSnap`/`marketEdgeContext`
+  // in depth beyond the const-binding guarantees above, which already rule
+  // this out at the language level for `strikeoutSnap`/`canonicalLine`
   // themselves). A fire-and-forget cache-warm call for a FUTURE cycle
   // (`getMLBPlayerOdds(...).catch(() => {})`, guarded by `!strikeoutSnap`)
   // is expected and harmless here: it only fires when strikeoutSnap is
-  // already null, at which point marketEdgeContext is already
-  // deterministically null too (buildMoundMarketEdgeContext short-circuits
-  // on a null oddsResult) — there is nothing left for a race to corrupt,
-  // and since it is never awaited, it cannot run before pairedUnderPrice is
-  // computed regardless. What would be a real hazard is an AWAITED re-fetch
-  // (which could yield the event loop and interleave other state changes)
-  // or a second `readOddsSnapshot(` call — neither exists.
+  // already null, at which point canonicalLine is already deterministically
+  // null too (selectCanonicalMoundV2Line short-circuits on a null books
+  // argument) — there is nothing left for a race to corrupt, and since it
+  // is never awaited, it cannot run before canonicalLine is computed
+  // regardless. What would be a real hazard is an AWAITED re-fetch (which
+  // could yield the event loop and interleave other state changes) or a
+  // second `readOddsSnapshot(` call — neither exists.
   const firstUseIdx = source.indexOf("const marketEdgeContext = buildMoundMarketEdgeContext(");
-  const secondUseIdx = source.indexOf("const pairedUnderPrice = pairedUnderOddsForBook(");
+  const secondUseIdx = source.indexOf("const canonicalLine = selectCanonicalMoundV2Line(");
   ok(firstUseIdx !== -1 && secondUseIdx !== -1 && firstUseIdx < secondUseIdx, "the two read sites appear in the expected order in source");
   const between = source.slice(firstUseIdx, secondUseIdx);
   ok(!/await\s+getMLBPlayerOdds\(/.test(between), "no AWAITED odds re-fetch appears between the two read sites (a fire-and-forget cache-warm for a future cycle, guarded by !strikeoutSnap, is fine and expected)");
   ok(!/readOddsSnapshot\(/.test(between), "no snapshot re-read call appears between the two read sites — strikeoutSnap is read exactly once from the provider-cache layer");
   const fireAndForgetMatch = between.match(/getMLBPlayerOdds\([^)]*\)\.catch\(/);
   ok(fireAndForgetMatch !== null, "the one getMLBPlayerOdds call that does appear between the two sites is the expected fire-and-forget cache-warm (.catch-chained, never awaited)");
-  ok(/if\s*\(oddsEventId\s*&&\s*!strikeoutSnap\)/.test(between), "that fire-and-forget call is guarded by !strikeoutSnap — it only fires in the branch where marketEdgeContext is already null, so it can never race a real, present snapshot");
+  ok(/if\s*\(oddsEventId\s*&&\s*!strikeoutSnap\)/.test(between), "that fire-and-forget call is guarded by !strikeoutSnap — it only fires in the branch where canonicalLine is already null, so it can never race a real, present snapshot");
 }
 
 console.log(`\nmoundMarketEdgeConsistency.test: ${passed} passed, ${failed} failed`);

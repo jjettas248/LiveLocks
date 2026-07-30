@@ -102,8 +102,8 @@ export interface MoundV2PromotionEvidence {
 
   /** Every row in the evaluated population carries a non-empty v2ModelVersion. */
   v2ModelVersionDeclared: boolean;
-  /** Every row in the evaluated population carries a non-empty v2DecisionPolicyVersion (the qualify/abstain policy version, distinct from the probability-model version above). */
-  v2DecisionPolicyVersionDeclared: boolean;
+  /** Every row in the evaluated population carries a non-empty v2ModelPolicyVersion (the price-independent qualify/abstain policy version, distinct from the probability-model version above and from the separate executability-policy version). */
+  v2ModelPolicyVersionDeclared: boolean;
 }
 
 export const MOUND_V2_PROMOTION_THRESHOLDS = {
@@ -213,7 +213,7 @@ export function evaluateMoundV2PromotionReadiness(evidence: MoundV2PromotionEvid
   if (evidence.shadowEvaluationFailureRatio > MOUND_V2_PROMOTION_THRESHOLDS.maxShadowEvaluationFailureRatio) {
     blockers.push("EXCESSIVE_SHADOW_CAPTURE_LOSS");
   }
-  if (!evidence.v2ModelVersionDeclared || !evidence.v2DecisionPolicyVersionDeclared) {
+  if (!evidence.v2ModelVersionDeclared || !evidence.v2ModelPolicyVersionDeclared) {
     blockers.push("UNDECLARED_MODEL_OR_POLICY_VERSION");
   }
 

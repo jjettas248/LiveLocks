@@ -30,10 +30,15 @@ import { toMoundV2Inputs, checkMoundV1Parity, type MoundV1ComponentScores, type 
 import { computeMoundV2Distribution } from "./moundV2Engine";
 import type { MoundV2Distribution } from "./moundV2Types";
 import {
-  applyMoundV2DecisionPolicy,
-  MOUND_V2_DEFAULT_DECISION_POLICIES,
-  type MoundV2DecisionPolicyResult,
-} from "./moundV2DecisionPolicy";
+  applyMoundV2ModelPolicy,
+  MOUND_V2_DEFAULT_MODEL_POLICIES,
+  type MoundV2ModelPolicyResult,
+} from "./moundV2ModelPolicy";
+import {
+  applyMoundV2Executability,
+  MOUND_V2_DEFAULT_EXECUTABILITY_POLICY,
+  type MoundV2ExecutabilityResult,
+} from "./moundV2Executability";
 
 export const MOUND_V1_MODEL_VERSION = "mound_v1_production";
 export const MOUND_V2_MODEL_VERSION = "mound_v2_shadow_v1";
@@ -63,9 +68,24 @@ export interface MoundV2ShadowEvaluationResult {
   v1RecommendedSide: "OVER" | "UNDER" | null;
   /** Whether v1RecommendedSide represents a real, publicly-qualified V1 wager — see the type's own doc comment. Null only in the failure branch (frozen input itself could not be built), where no V1 capture context was ever resolved. */
   v1QualificationStatus: MoundV1QualificationStatus | null;
-  /** V2's OWN versioned decision-policy verdict for each market — qualify-or-abstain, distinct from the raw distribution probabilities. Null only in the failure branch. */
-  strikeoutsDecision: MoundV2DecisionPolicyResult | null;
-  outsDecision: MoundV2DecisionPolicyResult | null;
+  /**
+   * V2's OWN versioned MODEL verdict for each market — qualify-or-abstain,
+   * computed from probabilities/data-quality/lineup-status ONLY (see
+   * moundV2ModelPolicy.ts's structural purity guarantee — this type has no
+   * price/sportsbook field to even leak one). Null only in the failure
+   * branch.
+   */
+  strikeoutsModelDecision: MoundV2ModelPolicyResult | null;
+  outsModelDecision: MoundV2ModelPolicyResult | null;
+  /**
+   * SEPARATE, downstream-of-the-model executability verdict — whether the
+   * model's own selected side (if any) has a real, fresh, provenanced price
+   * to trade against. Never influences strikeoutsModelDecision/
+   * outsModelDecision above; see moundV2Executability.ts. Null only in the
+   * failure branch.
+   */
+  strikeoutsExecutability: MoundV2ExecutabilityResult | null;
+  outsExecutability: MoundV2ExecutabilityResult | null;
   latencyMs: number;
   failureReason: string | null;
 }
@@ -110,28 +130,41 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
     const distribution = computeMoundV2Distribution(v2Inputs);
     const parity = checkMoundV1Parity(frozen, args.productionComponentScores);
 
-    // Decision-policy application happens HERE, downstream of the pure
-    // probability computation above — price/provenance/data-quality are
-    // read here to decide qualify-or-abstain, never fed back into
-    // computeMoundV2Distribution itself.
-    const strikeoutsDecision = applyMoundV2DecisionPolicy(MOUND_V2_DEFAULT_DECISION_POLICIES.pitcher_strikeouts, {
+    // MODEL policy application happens HERE, downstream of the pure
+    // probability computation above — data-quality/lineup-status are read
+    // here to decide qualify-or-abstain. Deliberately NO price/sportsbook/
+    // odds-timestamp field exists on MoundV2ModelPolicyInput at all (see
+    // moundV2ModelPolicy.ts's structural purity guarantee) — this call
+    // could not leak price into the model decision even by accident.
+    const strikeoutsModelDecision = applyMoundV2ModelPolicy(MOUND_V2_DEFAULT_MODEL_POLICIES.pitcher_strikeouts, {
       overProbability: distribution.strikeouts.overProbability,
       underProbability: distribution.strikeouts.underProbability,
       pushProbability: distribution.strikeouts.pushProbability,
       dataQuality: frozen.dataQuality,
       lineupStatus: frozen.lineupStatus,
+    });
+    const outsModelDecision = applyMoundV2ModelPolicy(MOUND_V2_DEFAULT_MODEL_POLICIES.pitcher_outs, {
+      overProbability: distribution.outs.overProbability,
+      underProbability: distribution.outs.underProbability,
+      pushProbability: distribution.outs.pushProbability,
+      dataQuality: frozen.dataQuality,
+      lineupStatus: frozen.lineupStatus,
+    });
+
+    // Executability is evaluated SEPARATELY, reading each model decision's
+    // OWN `side` output as a read-only input — it can set executable:false
+    // on a missing/stale/unprovenanced price, but it has no path back into
+    // strikeoutsModelDecision/outsModelDecision above.
+    const strikeoutsExecutability = applyMoundV2Executability(MOUND_V2_DEFAULT_EXECUTABILITY_POLICY, {
+      side: strikeoutsModelDecision.side,
       overPrice: frozen.strikeoutsMarket.overPrice,
       underPrice: frozen.strikeoutsMarket.underPrice,
       sportsbook: frozen.strikeoutsMarket.sportsbook,
       oddsFetchedAt: frozen.strikeoutsMarket.fetchedAt,
       now: args.now,
     });
-    const outsDecision = applyMoundV2DecisionPolicy(MOUND_V2_DEFAULT_DECISION_POLICIES.pitcher_outs, {
-      overProbability: distribution.outs.overProbability,
-      underProbability: distribution.outs.underProbability,
-      pushProbability: distribution.outs.pushProbability,
-      dataQuality: frozen.dataQuality,
-      lineupStatus: frozen.lineupStatus,
+    const outsExecutability = applyMoundV2Executability(MOUND_V2_DEFAULT_EXECUTABILITY_POLICY, {
+      side: outsModelDecision.side,
       overPrice: frozen.outsMarket.overPrice,
       underPrice: frozen.outsMarket.underPrice,
       sportsbook: frozen.outsMarket.sportsbook,
@@ -148,8 +181,10 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
       v1Tier: args.v1Tier,
       v1RecommendedSide: args.v1RecommendedSide,
       v1QualificationStatus: args.v1QualificationStatus,
-      strikeoutsDecision,
-      outsDecision,
+      strikeoutsModelDecision,
+      outsModelDecision,
+      strikeoutsExecutability,
+      outsExecutability,
       latencyMs: performance.now() - start,
       failureReason: null,
     };
@@ -163,8 +198,10 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
       v1Tier: args.v1Tier,
       v1RecommendedSide: args.v1RecommendedSide,
       v1QualificationStatus: null,
-      strikeoutsDecision: null,
-      outsDecision: null,
+      strikeoutsModelDecision: null,
+      outsModelDecision: null,
+      strikeoutsExecutability: null,
+      outsExecutability: null,
       latencyMs: performance.now() - start,
       failureReason: err instanceof Error ? err.message : String(err),
     };

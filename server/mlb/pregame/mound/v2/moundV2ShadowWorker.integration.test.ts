@@ -52,8 +52,10 @@ function fakeEvalResult(over: Partial<MoundV2ShadowEvaluationResult> = {}): Moun
     snapshotId: "snap_1", gameId: "g1", pitcherId: "p1", evaluatedAt: "2026-07-30T20:00:00.000Z",
     frozen: {} as any, distribution: {} as any, parity: { matches: true, mismatches: [] } as any,
     v1Score10: 6.9, v1Tier: "strong", v1RecommendedSide: "OVER", v1QualificationStatus: "recommended",
-    strikeoutsDecision: { policyVersion: "v1", market: "pitcher_strikeouts", side: "OVER", qualified: true, reason: "qualified", qualifyingProbability: 0.6 },
-    outsDecision: { policyVersion: "v1", market: "pitcher_outs", side: null, qualified: false, reason: "missing_price", qualifyingProbability: null },
+    strikeoutsModelDecision: { policyVersion: "mound_v2_model_policy_v1", market: "pitcher_strikeouts", side: "OVER", modelQualified: true, qualificationReason: "qualified", qualifyingProbability: 0.6 },
+    outsModelDecision: { policyVersion: "mound_v2_model_policy_v1", market: "pitcher_outs", side: null, modelQualified: false, qualificationReason: "below_minimum_probability", qualifyingProbability: null },
+    strikeoutsExecutability: { policyVersion: "mound_v2_executability_policy_v1", executable: true, sportsbook: "draftkings", price: -120, fetchedAt: "2026-07-30T19:58:00.000Z", failureReason: null },
+    outsExecutability: { policyVersion: "mound_v2_executability_policy_v1", executable: false, sportsbook: null, price: null, fetchedAt: null, failureReason: "not_applicable" },
     latencyMs: 0.5, failureReason: null,
     ...over,
   };
