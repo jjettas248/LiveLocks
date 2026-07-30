@@ -1,41 +1,27 @@
 // Mound Radar V2 (shadow) — comparison report gatherer (Flagship Program
-// Phase 2, Part 6). Storage-touching; assembles real
-// MoundV2ComparisonRow/MoundV1OutcomeSummary arrays for the pure engine in
-// the sibling moundV2ComparisonStats.ts. Admin-only, read-only — this file
-// never writes anything.
+// Phase 2, Part 6, corrected). Storage-touching; assembles real
+// MoundV2ComparisonRow arrays for the pure engine in the sibling
+// moundV2ComparisonStats.ts. Admin-only, read-only — this file never
+// writes anything.
+//
+// Correction 1 simplified this considerably: since the V2 shadow row now
+// carries V1's OWN frozen recommended side (v1RecommendedSide) and its
+// captured price (frozenOverPrice/frozenUnderPrice, now genuinely
+// two-sided), everything the decision-policy comparison needs for BOTH
+// models lives on this ONE table. There is no longer a cross-table join
+// against mlb_mound_radar_signals for this report at all.
 
 import { storage } from "../../../../storage";
-import type { MoundSignal } from "../types";
-import type { MlbMoundRadarSignalRow, MoundV2ShadowPredictionRow } from "@shared/schema";
+import type { MoundV2ShadowPredictionRow } from "@shared/schema";
 import {
   buildMoundV2ComparisonReport,
   type MoundV2ComparisonRow,
   type MoundV2ComparisonFinalResult,
-  type MoundV1OutcomeSummary,
   type MoundV2ComparisonReport,
 } from "./moundV2ComparisonStats";
 import { getMoundV2ShadowMetrics } from "./moundV2ShadowStore";
 import { buildAndEvaluateMoundV2Promotion } from "./moundV2PromotionEvidenceAdapter";
 import type { MoundV2PromotionEvidence, MoundV2PromotionVerdict } from "./moundV2PromotionGate";
-
-/**
- * Every ET calendar-date string from startDate to endDate inclusive. Pure
- * calendar-string arithmetic over two GIVEN date strings (never derives
- * "today" from wall-clock time), so this doesn't fall under the
- * todayET()-only rule that governs slate/window logic from an instant.
- */
-function enumerateEtDates(startDate: string, endDate: string): string[] {
-  const dates: string[] = [];
-  const start = new Date(`${startDate}T00:00:00Z`);
-  const end = new Date(`${endDate}T00:00:00Z`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) return dates;
-  const cursor = new Date(start);
-  while (cursor.getTime() <= end.getTime()) {
-    dates.push(cursor.toISOString().slice(0, 10));
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return dates;
-}
 
 function toComparisonRow(row: MoundV2ShadowPredictionRow): MoundV2ComparisonRow {
   return {
@@ -49,20 +35,11 @@ function toComparisonRow(row: MoundV2ShadowPredictionRow): MoundV2ComparisonRow 
     v2OverProbability: Number(row.v2OverProbability),
     v2UnderProbability: Number(row.v2UnderProbability),
     v2PushProbability: Number(row.v2PushProbability),
+    v1RecommendedSide: (row.v1RecommendedSide as "OVER" | "UNDER" | null) ?? null,
+    contractVersion: row.contractVersion,
     v1Tier: row.v1Tier ?? null,
     v2ModelVersion: row.v2ModelVersion,
     productionModelVersion: row.productionModelVersion,
-  };
-}
-
-function toV1OutcomeSummary(signal: MlbMoundRadarSignalRow): MoundV1OutcomeSummary {
-  const outcomes = (signal.outcomes as MoundSignal["outcomes"]) ?? null;
-  return {
-    gameId: signal.gameId,
-    pitcherId: signal.pitcherId,
-    market: signal.primaryMarket,
-    marketOutcome: outcomes?.marketOutcome ?? "unavailable",
-    tier: signal.tier ?? null,
   };
 }
 
@@ -85,32 +62,22 @@ async function fetchComparisonRows(opts: GatherMoundV2ComparisonOpts): Promise<M
 }
 
 /**
- * Assembles the real V2 shadow predictions + real V1 settlement outcomes
- * for the declared window and hands them to the pure comparison engine.
- * V2's window is applied server-side via listMoundV2ShadowPredictions'
- * evaluationTimestamp filter (UTC day boundaries — a coarse reporting
- * window, not per-game settlement, so ET-precision at the edges isn't
- * required). V1's window walks each ET slate date in range via
- * getMlbMoundRadarSignalsByDate, mirroring how V1's own sessionDate
- * column is keyed.
+ * Assembles real V2 shadow predictions for the declared window and hands
+ * them to the pure comparison engine. The window is applied server-side via
+ * listMoundV2ShadowPredictions' evaluationTimestamp filter (UTC day
+ * boundaries — a coarse reporting window, not per-game settlement, so
+ * ET-precision at the edges isn't required).
  */
 export async function gatherMoundV2ComparisonReport(
   opts: GatherMoundV2ComparisonOpts,
 ): Promise<MoundV2ComparisonReport> {
   const comparisonRows = await fetchComparisonRows(opts);
-
-  const etDates = enumerateEtDates(opts.windowStart, opts.windowEnd);
-  const v1SignalArrays = await Promise.all(etDates.map((d) => storage.getMlbMoundRadarSignalsByDate(d)));
-  const v1Outcomes = v1SignalArrays.flat().map(toV1OutcomeSummary);
-
-  return buildMoundV2ComparisonReport(
-    comparisonRows,
-    v1Outcomes,
-    { windowStart: opts.windowStart, windowEnd: opts.windowEnd },
-  );
+  return buildMoundV2ComparisonReport(comparisonRows, { windowStart: opts.windowStart, windowEnd: opts.windowEnd });
 }
 
 export interface GatherMoundV2PromotionReadinessOpts extends GatherMoundV2ComparisonOpts {
+  /** Which non-V1 reference to score V2's absolute probability quality against. Defaults to "climatology" if omitted. */
+  probabilityComparator?: "climatology" | "market_implied";
   /**
    * Required, not defaulted — see moundV2PromotionEvidenceAdapter.ts's own
    * doc comment. No live runtime monitor for a V2-caused settlement/
@@ -134,6 +101,7 @@ export async function gatherMoundV2PromotionReadiness(
   const comparisonRows = await fetchComparisonRows(opts);
   const shadowMetrics = getMoundV2ShadowMetrics();
   return buildAndEvaluateMoundV2Promotion(comparisonRows, {
+    probabilityComparator: opts.probabilityComparator ?? "climatology",
     shadowEvaluationTotal: shadowMetrics.totalEvaluations,
     shadowEvaluationFailures: shadowMetrics.totalFailures,
     settlementOrProvenanceRegressionDetected: opts.settlementOrProvenanceRegressionDetected,

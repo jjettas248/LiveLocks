@@ -83,6 +83,7 @@ export function registerMoundRadarStatsRoutes(
   //   ?date=YYYY-MM-DD          single slate day
   //   ?from=YYYY-MM-DD&to=...   inclusive range
   //   ?regressionDetected=false lifts the fail-closed regression blocker (explicit opt-in only)
+  //   ?comparator=climatology|market_implied  which non-V1 probability reference to score against (default climatology)
   app.get("/api/admin/mlb/mound-v2-promotion-readiness", guards.requireAdmin, async (req, res) => {
     try {
       const today = slateDateET();
@@ -94,9 +95,11 @@ export function registerMoundRadarStatsRoutes(
       }
       if (from > to) return res.status(400).json({ error: "from must not be after to" });
       const settlementOrProvenanceRegressionDetected = req.query.regressionDetected !== "false";
+      const probabilityComparator = req.query.comparator === "market_implied" ? "market_implied" : "climatology";
       const result = await gatherMoundV2PromotionReadiness({
         windowStart: from,
         windowEnd: to,
+        probabilityComparator,
         settlementOrProvenanceRegressionDetected,
       });
       return res.json(result);

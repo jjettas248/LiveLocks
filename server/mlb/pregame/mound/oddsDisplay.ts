@@ -28,6 +28,28 @@ export function pickBestOverBook(
   return best;
 }
 
+/**
+ * Mirrors pickBestOverBook for the UNDER side. The raw odds snapshot
+ * (RawBookLine) already carries underOdds for every book — this was
+ * previously never extracted anywhere in Mound's own code, so every
+ * consumer that needed an UNDER price (Fade captured-price grading, the
+ * V2 shadow frozen market snapshot) had it hardcoded to null even though
+ * the real data was already being fetched. Zero new provider calls.
+ */
+export function pickBestUnderBook(
+  books: Record<string, RawBookLine>,
+): { book: string; line: number; odds: number } | null {
+  let best: { book: string; line: number; odds: number } | null = null;
+  for (const [book, snap] of Object.entries(books)) {
+    if (book.startsWith("_")) continue;
+    if (snap.underOdds == null || !isFinite(snap.underOdds)) continue;
+    if (!best || snap.underOdds > best.odds) {
+      best = { book, line: snap.line, odds: snap.underOdds };
+    }
+  }
+  return best;
+}
+
 export function americanToImpliedProbability(odds: number): number {
   if (odds > 0) return 100 / (odds + 100);
   return -odds / (-odds + 100);

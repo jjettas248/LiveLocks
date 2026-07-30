@@ -9,9 +9,11 @@
 // schema/types — this is a runtime safety net, not a replacement for
 // `drizzle-kit push`.
 //
-// This table is brand new, so there is no pre-existing older shape to
-// self-heal from. No DROP / destructive-ALTER statements anywhere in this
-// file — see moundV2ShadowPersistence.test.ts.
+// This table was brand new when first created; it has since gained one
+// additive column (v1_recommended_side, Correction 1) via the exact same
+// self-heal `ADD COLUMN IF NOT EXISTS` pattern already established in
+// pregameRadarPersistence.ts/plateHrV2Persistence.ts. No DROP / destructive
+// ALTER statements anywhere in this file — see moundV2ShadowPersistence.test.ts.
 
 export interface SqlExecutor {
   query(sql: string): Promise<unknown>;
@@ -34,6 +36,7 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
     v1_score_10 NUMERIC,
     v1_tier TEXT,
     setup_grade TEXT,
+    v1_recommended_side TEXT,
     v2_expected_value NUMERIC NOT NULL,
     v2_over_probability NUMERIC NOT NULL,
     v2_under_probability NUMERIC NOT NULL,
@@ -52,6 +55,15 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
     graded_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW()
   );
+`;
+
+// Self-heal for a table created before v1_recommended_side existed
+// (Correction 1) — additive only, mirrors pregameRadarPersistence.ts's
+// mound_direction self-heal exactly. A no-op on a fresh table, since the
+// CREATE TABLE above already includes the column.
+const MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_RECOMMENDED_SIDE = `
+  ALTER TABLE mound_v2_shadow_predictions
+    ADD COLUMN IF NOT EXISTS v1_recommended_side TEXT;
 `;
 
 const MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX = `
@@ -81,6 +93,7 @@ const MOUND_V2_SHADOW_PREDICTIONS_MARKET_VERSION_IDX = `
 
 export const MOUND_V2_SHADOW_PERSISTENCE_STATEMENTS: readonly string[] = [
   MOUND_V2_SHADOW_PREDICTIONS,
+  MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_RECOMMENDED_SIDE,
   MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_GAME_PITCHER_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_SETTLEMENT_STATUS_IDX,

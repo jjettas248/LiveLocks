@@ -44,6 +44,17 @@ export interface MoundV2ShadowEvaluationResult {
   /** V1's own overall output for the same candidate — captured for side-by-side persistence/comparison (Part 4/6), never derived or recomputed here. */
   v1Score10: number | null;
   v1Tier: string | null;
+  /**
+   * V1's own frozen recommended side for THIS exact candidate at THIS exact
+   * evaluation moment (derived from moundDirection: follow->OVER,
+   * fade->UNDER, null if V1 had no resolved direction) — captured, never
+   * recomputed. Combined with the frozen strikeoutsMarket prices already on
+   * `frozen`, this is what makes a real V1 captured-price decision-policy
+   * evaluation possible going forward (see moundV2ComparisonStats.ts's
+   * decision-policy evaluation) — correcting the earlier assumption that
+   * V1's captured-price performance was structurally unavailable.
+   */
+  v1RecommendedSide: "OVER" | "UNDER" | null;
   latencyMs: number;
   failureReason: string | null;
 }
@@ -56,6 +67,8 @@ export interface EvaluateMoundV2ShadowArgs {
   /** V1's own already-computed overall score10/tier for this exact candidate — passed straight through, never recomputed. */
   v1Score10: number | null;
   v1Tier: string | null;
+  /** V1's own frozen recommended side — see the result field's doc comment. */
+  v1RecommendedSide: "OVER" | "UNDER" | null;
   strikeoutsLine?: number | null;
   outsLine?: number | null;
 }
@@ -90,6 +103,7 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
       parity,
       v1Score10: args.v1Score10,
       v1Tier: args.v1Tier,
+      v1RecommendedSide: args.v1RecommendedSide,
       latencyMs: performance.now() - start,
       failureReason: null,
     };
@@ -101,6 +115,7 @@ export function evaluateMoundV2Shadow(args: EvaluateMoundV2ShadowArgs): MoundV2S
       parity: null,
       v1Score10: args.v1Score10,
       v1Tier: args.v1Tier,
+      v1RecommendedSide: args.v1RecommendedSide,
       latencyMs: performance.now() - start,
       failureReason: err instanceof Error ? err.message : String(err),
     };

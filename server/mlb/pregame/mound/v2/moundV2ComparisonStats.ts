@@ -1,37 +1,47 @@
 // Mound Radar V2 (shadow) — V1-vs-V2 comparison statistics (Flagship
-// Program Phase 2, Part 6). Pure math, no I/O — mirrors the conventions
-// already established in server/mlb/episodes/mlbEpisodeMeasurement.ts
-// (clamped-probability Brier/log-loss/ECE, ROI from each row's own
-// captured American odds, never a flat -110 assumption) generalized to
-// V2's three-way over/under/push forecast. The DB-touching gatherer that
-// assembles real MoundV2ComparisonRow/MoundV1OutcomeSummary arrays lives in
-// the sibling moundV2ComparisonGatherer.ts.
+// Program Phase 2, Part 6, corrected). Pure math, no I/O.
 //
-// Central asymmetry this file makes explicit rather than papering over:
-// V1's own settlement record (MoundSignal.outcomes) captures the frozen
-// LINE it graded against but never captures a sportsbook PRICE — so a real,
-// non-fabricated V1 ROI simply cannot be computed (doing so would require
-// assuming a price, e.g. -110, which is exactly what "never assume -110"
-// forbids). V1's side of every comparison is therefore win-rate-only, with
-// an explicit roiNote saying why, while V2 gets a full ROI computed from
-// its own genuinely captured frozenOverPrice/frozenUnderPrice (immutable
-// since Part 4). This is a real, useful finding about V1's existing
-// settlement schema, not a limitation of this report.
+// TWO EXPLICITLY SEPARATE EVALUATIONS — never blended, never mislabeled:
 //
-// "Never double-counts": the paired comparison and coverage/exclusion
-// report are built from the SAME single pass over v2Rows joined against a
-// v1Outcomes map keyed by gameId:pitcherId:market — every v2 row lands in
-// exactly one of {no V1 match, V1 match with no real bet, paired} and the
-// coverage funnel's counts are drawn from that same partition, so nothing
-// can appear in more than one bucket or be silently dropped.
+// (A) PROBABILITY-MODEL EVALUATION (computeMoundV2ProbabilityEvaluation)
+//     Scores V2's own Brier/log-loss/calibration against an HONESTLY NAMED
+//     probability reference — "climatology" (a constant forecast equal to
+//     the sample's own empirical over/under/push rate — the standard Brier
+//     Skill Score baseline) or "market_implied" (the de-vigged two-sided
+//     sportsbook price, when both sides were really captured). V1 has NO
+//     probability (score10 is a matchup-quality composite, never a
+//     probability — CLAUDE.md §3.9), so it is NEVER a comparator here and
+//     every field name/struct makes the comparator explicit — no consumer
+//     of this report can mistake a climatology delta for "V2 beats V1".
+//
+// (B) DECISION-POLICY EVALUATION (computeMoundV2DecisionPolicyComparison)
+//     Compares V1 and V2 as two competing BETTORS on the same paired
+//     population, using REAL captured prices for both — never assumes
+//     -110. V1's own frozen recommended side (v1RecommendedSide, captured
+//     going forward per Correction 1 — this was previously and incorrectly
+//     treated as permanently unavailable) selects the correspondingly
+//     frozen price (frozenOverPrice/frozenUnderPrice) for real units/ROI,
+//     exactly the same captured-price discipline V2 already used. Legacy
+//     rows captured before v1RecommendedSide existed (contractVersion
+//     predates it) are excluded from this comparison with an explicit
+//     count — never silently blended in as "V1 had no recommendation",
+//     which is a different, legitimate bucket of its own.
+//
+// "Never double-counts": every row lands in exactly one of {legacy
+// incomplete, V1 had no recommendation, paired-eligible} for decision-policy
+// purposes, and the funnel's counts are drawn from that same single pass.
 
 import { unitsWonPerDollarStaked } from "../../../episodes/mlbEpisodeMeasurement";
+import { americanToImpliedProbability } from "../oddsDisplay";
 
 const CALIBRATION_EPSILON = 1e-6;
 
+/** Contract versions captured before v1RecommendedSide existed (Correction 1) — a fixed historical list, not a moving "predates current" check, since a future contract bump needs its own explicit judgment call rather than silently reclassifying old data. */
+const CONTRACT_VERSIONS_MISSING_V1_RECOMMENDED_SIDE: ReadonlySet<string> = new Set(["mound_frozen_input_v1"]);
+
 export type MoundV2ComparisonMarket = "pitcher_strikeouts" | "pitcher_outs";
 export type MoundV2ComparisonFinalResult = "over" | "under" | "push";
-export type MoundV1MarketOutcome = "cashed" | "missed" | "push" | "unavailable";
+export type MoundV2ProbabilityComparator = "climatology" | "market_implied";
 
 /** One graded/void/pending V2 shadow prediction, reduced to what this report needs. */
 export interface MoundV2ComparisonRow {
@@ -45,27 +55,13 @@ export interface MoundV2ComparisonRow {
   v2OverProbability: number;
   v2UnderProbability: number;
   v2PushProbability: number;
+  /** V1's own frozen recommended side — see Correction 1. Null means EITHER V1 genuinely had no direction OR this row predates capture; disambiguated via contractVersion, never via this field alone. */
+  v1RecommendedSide: "OVER" | "UNDER" | null;
+  /** Which capture-contract version produced this row — the authority for the legacy-exclusion distinction above. */
+  contractVersion: string;
   v1Tier: string | null;
   v2ModelVersion: string;
   productionModelVersion: string;
-}
-
-/**
- * V1's own real settlement outcome for the SAME (gameId, pitcherId, market)
- * — deliberately minimal (no price field: V1 doesn't capture one). See
- * moundOutcomeAttribution.ts's deriveMoundMarketOutcome / MoundSignal's
- * outcomes.marketOutcome for what this is built from in the real gatherer.
- */
-export interface MoundV1OutcomeSummary {
-  gameId: string;
-  pitcherId: string;
-  market: string;
-  marketOutcome: MoundV1MarketOutcome;
-  tier: string | null;
-}
-
-function keyOf(gameId: string, pitcherId: string, market: string): string {
-  return `${gameId}:${pitcherId}:${market}`;
 }
 
 function clampProbability(p: number): number {
@@ -90,49 +86,63 @@ export function v2UnitsForRow(row: MoundV2ComparisonRow): number | null {
   return impliedV2Side(row) === row.finalResult ? unitsWonPerDollarStaked(price) : -1;
 }
 
-function trueClassProbability(row: MoundV2ComparisonRow): number | null {
-  if (row.finalResult === "over") return row.v2OverProbability;
-  if (row.finalResult === "under") return row.v2UnderProbability;
-  if (row.finalResult === "push") return row.v2PushProbability;
-  return null;
+// ─────────────────────────────────────────────────────────────────────────
+// (A) PROBABILITY-MODEL EVALUATION — V2 vs an explicitly named comparator
+// ─────────────────────────────────────────────────────────────────────────
+
+function trueClassProbabilities(row: MoundV2ComparisonRow): { over: number; under: number; push: number } {
+  return {
+    over: row.finalResult === "over" ? 1 : 0,
+    under: row.finalResult === "under" ? 1 : 0,
+    push: row.finalResult === "push" ? 1 : 0,
+  };
 }
 
-/** Multi-class (3-way) Brier score — reduces to the familiar binary formula when push probability is ~0. */
-function computeV2Brier(gradedWithLine: readonly MoundV2ComparisonRow[]): number | null {
-  if (gradedWithLine.length === 0) return null;
-  const sum = gradedWithLine.reduce((acc, row) => {
-    const yOver = row.finalResult === "over" ? 1 : 0;
-    const yUnder = row.finalResult === "under" ? 1 : 0;
-    const yPush = row.finalResult === "push" ? 1 : 0;
-    return acc + (row.v2OverProbability - yOver) ** 2 + (row.v2UnderProbability - yUnder) ** 2 + (row.v2PushProbability - yPush) ** 2;
+/** Multi-class (3-way) Brier score for a set of (forecastProbs, trueClass) pairs — reduces to the familiar binary formula when push probability is ~0. */
+function computeBrier(rows: readonly MoundV2ComparisonRow[], probsOf: (r: MoundV2ComparisonRow) => { over: number; under: number; push: number }): number | null {
+  if (rows.length === 0) return null;
+  const sum = rows.reduce((acc, row) => {
+    const p = probsOf(row);
+    const y = trueClassProbabilities(row);
+    return acc + (p.over - y.over) ** 2 + (p.under - y.under) ** 2 + (p.push - y.push) ** 2;
   }, 0);
-  return sum / gradedWithLine.length;
+  return sum / rows.length;
 }
 
 /** Multi-class log loss: -log(probability assigned to whatever actually happened). */
-function computeV2LogLoss(gradedWithLine: readonly MoundV2ComparisonRow[]): number | null {
-  if (gradedWithLine.length === 0) return null;
+function computeLogLoss(rows: readonly MoundV2ComparisonRow[], probsOf: (r: MoundV2ComparisonRow) => { over: number; under: number; push: number }): number | null {
+  if (rows.length === 0) return null;
   let sum = 0;
   let n = 0;
-  for (const row of gradedWithLine) {
-    const p = trueClassProbability(row);
-    if (p == null) continue;
-    sum += -Math.log(clampProbability(p));
+  for (const row of rows) {
+    const p = probsOf(row);
+    const trueP = row.finalResult === "over" ? p.over : row.finalResult === "under" ? p.under : row.finalResult === "push" ? p.push : null;
+    if (trueP == null) continue;
+    sum += -Math.log(clampProbability(trueP));
     n++;
   }
   return n > 0 ? sum / n : null;
 }
 
-/** Top-label expected calibration error: bucket by V2's own highest-confidence class, compare stated confidence to that class's actual hit rate. */
-function computeV2CalibrationError(gradedWithLine: readonly MoundV2ComparisonRow[], bucketCount = 10): number | null {
-  if (gradedWithLine.length === 0) return null;
+export interface MoundV2CalibrationBucket {
+  bucketMin: number;
+  bucketMax: number;
+  n: number;
+  avgConfidence: number;
+  avgAccuracy: number;
+}
+
+/** Top-label expected calibration error + the per-bucket breakdown with sample sizes (never just the summary number — a bucket with n=2 is not evidence the way a bucket with n=200 is). */
+function computeCalibrationErrorAndBuckets(
+  rows: readonly MoundV2ComparisonRow[],
+  probsOf: (r: MoundV2ComparisonRow) => { over: number; under: number; push: number },
+  bucketCount = 10,
+): { calibrationError: number | null; buckets: MoundV2CalibrationBucket[] } {
+  if (rows.length === 0) return { calibrationError: null, buckets: [] };
   const buckets = Array.from({ length: bucketCount }, () => ({ sumConf: 0, sumCorrect: 0, n: 0 }));
-  for (const row of gradedWithLine) {
-    const candidates: Array<[MoundV2ComparisonFinalResult, number]> = [
-      ["over", row.v2OverProbability],
-      ["under", row.v2UnderProbability],
-      ["push", row.v2PushProbability],
-    ];
+  for (const row of rows) {
+    const p = probsOf(row);
+    const candidates: Array<[MoundV2ComparisonFinalResult, number]> = [["over", p.over], ["under", p.under], ["push", p.push]];
     const [topClass, topProbRaw] = candidates.reduce((best, cur) => (cur[1] > best[1] ? cur : best));
     const conf = clampProbability(topProbRaw);
     const correct = topClass === row.finalResult ? 1 : 0;
@@ -141,14 +151,283 @@ function computeV2CalibrationError(gradedWithLine: readonly MoundV2ComparisonRow
     buckets[idx].sumCorrect += correct;
     buckets[idx].n += 1;
   }
-  const total = gradedWithLine.length;
+  const total = rows.length;
   let ece = 0;
-  for (const b of buckets) {
-    if (b.n === 0) continue;
+  const bucketRows: MoundV2CalibrationBucket[] = [];
+  buckets.forEach((b, idx) => {
+    if (b.n === 0) return;
     ece += (b.n / total) * Math.abs(b.sumConf / b.n - b.sumCorrect / b.n);
-  }
-  return ece;
+    bucketRows.push({
+      bucketMin: idx / bucketCount,
+      bucketMax: (idx + 1) / bucketCount,
+      n: b.n,
+      avgConfidence: b.sumConf / b.n,
+      avgAccuracy: b.sumCorrect / b.n,
+    });
+  });
+  return { calibrationError: ece, buckets: bucketRows };
 }
+
+/** Average distance of V2's own top-class probability from an uninformative 1/3 — how decisive V2's forecasts are, independent of whether they're right. Not compared against any baseline (sharpness has no "delta" — it's a property of the forecaster alone). */
+function computeSharpness(rows: readonly MoundV2ComparisonRow[]): number | null {
+  if (rows.length === 0) return null;
+  const sum = rows.reduce((acc, row) => {
+    const top = Math.max(row.v2OverProbability, row.v2UnderProbability, row.v2PushProbability);
+    return acc + (top - 1 / 3);
+  }, 0);
+  return sum / rows.length;
+}
+
+function v2Probs(row: MoundV2ComparisonRow) {
+  return { over: row.v2OverProbability, under: row.v2UnderProbability, push: row.v2PushProbability };
+}
+
+function climatologyRate(rows: readonly MoundV2ComparisonRow[]): { over: number; under: number; push: number } {
+  const n = rows.length;
+  if (n === 0) return { over: 1 / 3, under: 1 / 3, push: 1 / 3 };
+  return {
+    over: rows.filter((r) => r.finalResult === "over").length / n,
+    under: rows.filter((r) => r.finalResult === "under").length / n,
+    push: rows.filter((r) => r.finalResult === "push").length / n,
+  };
+}
+
+/** De-vigged two-sided market-implied probability — proportional (multiplicative) de-vig, the standard simplest method. Null when either side's real price is missing (never fabricated, never falls back to a single-sided raw-implied number, which would still carry the vig). */
+function marketImpliedProbs(row: MoundV2ComparisonRow): { over: number; under: number; push: number } | null {
+  if (row.frozenOverPrice == null || row.frozenUnderPrice == null) return null;
+  if (!Number.isFinite(row.frozenOverPrice) || !Number.isFinite(row.frozenUnderPrice)) return null;
+  const rawOver = americanToImpliedProbability(row.frozenOverPrice);
+  const rawUnder = americanToImpliedProbability(row.frozenUnderPrice);
+  const total = rawOver + rawUnder;
+  if (!(total > 0)) return null;
+  // Market-implied is a genuinely 2-outcome forecast (a standard American
+  // over/under price does not encode a push probability at all) — pushProb
+  // stays 0 by construction. Rows that actually settle "push" are excluded
+  // from this specific comparator upstream (see the exported builder) since
+  // scoring a 2-outcome forecast against a 3rd, structurally-unpriced
+  // outcome would be a category error, not honest measurement.
+  return { over: rawOver / total, under: rawUnder / total, push: 0 };
+}
+
+export interface MoundV2ProbabilityEvaluation {
+  comparator: MoundV2ProbabilityComparator;
+  sampleSize: number;
+  v2BrierScore: number | null;
+  v2LogLoss: number | null;
+  v2CalibrationError: number | null;
+  v2CalibrationBuckets: MoundV2CalibrationBucket[];
+  v2Sharpness: number | null;
+  comparatorBrierScore: number | null;
+  comparatorLogLoss: number | null;
+  comparatorCalibrationError: number | null;
+  /** V2 minus comparator. Negative/zero = V2 at least as good. Never labeled or usable as a "V2 vs V1" number — see the module header. */
+  brierDelta: number | null;
+  logLossDelta: number | null;
+  calibrationErrorDelta: number | null;
+}
+
+/**
+ * Probability-model evaluation against an EXPLICITLY NAMED, non-V1
+ * comparator. `rows` should already be filtered to graded-with-a-real-line
+ * (finalResult != null) — computeMoundV2OwnMetrics's gradedWithLine subset,
+ * or equivalent.
+ */
+export function computeMoundV2ProbabilityEvaluation(
+  gradedWithLine: readonly MoundV2ComparisonRow[],
+  comparator: MoundV2ProbabilityComparator,
+): MoundV2ProbabilityEvaluation {
+  // The population BOTH V2 and the comparator are scored over — for
+  // climatology this is every graded-with-line row; for market_implied
+  // it's restricted to rows with a real two-sided captured price and a
+  // non-push outcome (a standard American over/under price has no push
+  // probability to compare against — see marketImpliedProbs). Scoring both
+  // sides over the SAME population is what makes the delta a fair
+  // apples-to-apples comparison rather than two differently-scoped numbers.
+  const scoredRows = comparator === "climatology"
+    ? gradedWithLine
+    : gradedWithLine.filter((r) => marketImpliedProbs(r) != null && r.finalResult !== "push");
+
+  let comparatorProbsOf: (r: MoundV2ComparisonRow) => { over: number; under: number; push: number };
+  if (comparator === "climatology") {
+    const rate = climatologyRate(gradedWithLine);
+    comparatorProbsOf = () => rate;
+  } else {
+    comparatorProbsOf = (r) => marketImpliedProbs(r)!;
+  }
+
+  const v2BrierScore = computeBrier(scoredRows, v2Probs);
+  const v2LogLoss = computeLogLoss(scoredRows, v2Probs);
+  const { calibrationError: v2CalibrationError, buckets: v2CalibrationBuckets } = computeCalibrationErrorAndBuckets(scoredRows, v2Probs);
+  const v2Sharpness = computeSharpness(scoredRows);
+
+  const comparatorBrierScore = computeBrier(scoredRows, comparatorProbsOf);
+  const comparatorLogLoss = computeLogLoss(scoredRows, comparatorProbsOf);
+  const { calibrationError: comparatorCalibrationError } = computeCalibrationErrorAndBuckets(scoredRows, comparatorProbsOf);
+
+  return {
+    comparator,
+    sampleSize: scoredRows.length,
+    v2BrierScore,
+    v2LogLoss,
+    v2CalibrationError,
+    v2CalibrationBuckets,
+    v2Sharpness,
+    comparatorBrierScore,
+    comparatorLogLoss,
+    comparatorCalibrationError,
+    brierDelta: deltaOrUnmeasurable(v2BrierScore, comparatorBrierScore),
+    logLossDelta: deltaOrUnmeasurable(v2LogLoss, comparatorLogLoss),
+    calibrationErrorDelta: deltaOrUnmeasurable(v2CalibrationError, comparatorCalibrationError),
+  };
+}
+
+const DELTA_EPSILON = 1e-9;
+function deltaOrUnmeasurable(v2Metric: number | null, comparatorMetric: number | null): number | null {
+  if (v2Metric == null || comparatorMetric == null) return null;
+  const raw = v2Metric - comparatorMetric;
+  return Math.abs(raw) < DELTA_EPSILON ? 0 : raw;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// (B) DECISION-POLICY EVALUATION — V1 vs V2, real captured prices, paired
+// ─────────────────────────────────────────────────────────────────────────
+
+export interface MoundV2DecisionPolicyMetrics {
+  eligibleSnapshots: number;
+  recommendationsProduced: number;
+  coverage: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  winRate: number | null;
+  roiEligibleCount: number;
+  units: number | null;
+  roi: number | null;
+  avgCapturedPrice: number | null;
+}
+
+function v1PriceForSide(row: MoundV2ComparisonRow, side: "OVER" | "UNDER"): number | null {
+  return side === "OVER" ? row.frozenOverPrice : row.frozenUnderPrice;
+}
+
+function v1UnitsForRow(row: MoundV2ComparisonRow): number | null {
+  if (row.v1RecommendedSide == null || row.finalResult == null) return null;
+  if (row.finalResult === "push") return 0;
+  const price = v1PriceForSide(row, row.v1RecommendedSide);
+  if (price == null || !Number.isFinite(price)) return null;
+  const won = row.v1RecommendedSide.toLowerCase() === row.finalResult;
+  return won ? unitsWonPerDollarStaked(price) : -1;
+}
+
+function buildV1Metrics(eligibleSnapshots: readonly MoundV2ComparisonRow[]): MoundV2DecisionPolicyMetrics {
+  const withRecommendation = eligibleSnapshots.filter((r) => r.v1RecommendedSide != null);
+  const decided = withRecommendation.filter((r) => r.finalResult !== "push");
+  const wins = decided.filter((r) => r.v1RecommendedSide!.toLowerCase() === r.finalResult).length;
+  const losses = decided.length - wins;
+  const pushes = withRecommendation.filter((r) => r.finalResult === "push").length;
+  const unitsList = withRecommendation.map(v1UnitsForRow).filter((u): u is number => u != null);
+  const prices = withRecommendation.map((r) => v1PriceForSide(r, r.v1RecommendedSide!)).filter((p): p is number => p != null && Number.isFinite(p));
+
+  return {
+    eligibleSnapshots: eligibleSnapshots.length,
+    recommendationsProduced: withRecommendation.length,
+    coverage: eligibleSnapshots.length > 0 ? withRecommendation.length / eligibleSnapshots.length : 0,
+    wins, losses, pushes,
+    winRate: decided.length > 0 ? wins / decided.length : null,
+    roiEligibleCount: unitsList.length,
+    units: unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) : null,
+    roi: unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) / unitsList.length : null,
+    avgCapturedPrice: prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : null,
+  };
+}
+
+function buildV2Metrics(eligibleSnapshots: readonly MoundV2ComparisonRow[]): MoundV2DecisionPolicyMetrics {
+  // V2 always produces an implied side (over>=under or under>over) — it
+  // never has a "no recommendation" case the way V1's track-tier signals
+  // do, so recommendationsProduced === eligibleSnapshots for V2 by
+  // construction. Reported explicitly rather than assumed, for symmetry
+  // with V1's own metrics shape.
+  const decided = eligibleSnapshots.filter((r) => r.finalResult !== "push");
+  const wins = decided.filter((r) => impliedV2Side(r) === r.finalResult).length;
+  const losses = decided.length - wins;
+  const pushes = eligibleSnapshots.filter((r) => r.finalResult === "push").length;
+  const unitsList = eligibleSnapshots.map(v2UnitsForRow).filter((u): u is number => u != null);
+  const prices = eligibleSnapshots.map(v2PriceForImpliedSide).filter((p): p is number => p != null && Number.isFinite(p));
+
+  return {
+    eligibleSnapshots: eligibleSnapshots.length,
+    recommendationsProduced: eligibleSnapshots.length,
+    coverage: eligibleSnapshots.length > 0 ? 1 : 0,
+    wins, losses, pushes,
+    winRate: decided.length > 0 ? wins / decided.length : null,
+    roiEligibleCount: unitsList.length,
+    units: unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) : null,
+    roi: unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) / unitsList.length : null,
+    avgCapturedPrice: prices.length > 0 ? prices.reduce((a, b) => a + b, 0) / prices.length : null,
+  };
+}
+
+export interface MoundV2DecisionPolicyComparison {
+  pairedN: number;
+  legacyIncompleteDataCount: number;
+  v1NoRecommendationCount: number;
+  v1: MoundV2DecisionPolicyMetrics;
+  v2: MoundV2DecisionPolicyMetrics;
+  winRateDelta: number | null;
+  roiDelta: number | null;
+}
+
+/**
+ * Splits v2Rows (already restricted to graded-with-a-real-line) into the
+ * three buckets the decision-policy comparison needs, in one pass:
+ * legacy (predates v1RecommendedSide capture), V1-had-no-recommendation
+ * (a legitimate "track" tier case, not incomplete data), and paired-eligible
+ * (both V1 and V2 have a real, gradeable decision).
+ */
+function partitionForDecisionPolicy(gradedWithLine: readonly MoundV2ComparisonRow[]) {
+  const legacy: MoundV2ComparisonRow[] = [];
+  const noRecommendation: MoundV2ComparisonRow[] = [];
+  const paired: MoundV2ComparisonRow[] = [];
+  for (const row of gradedWithLine) {
+    if (CONTRACT_VERSIONS_MISSING_V1_RECOMMENDED_SIDE.has(row.contractVersion)) {
+      legacy.push(row);
+    } else if (row.v1RecommendedSide == null) {
+      noRecommendation.push(row);
+    } else {
+      paired.push(row);
+    }
+  }
+  return { legacy, noRecommendation, paired };
+}
+
+/**
+ * The core decision-policy comparison — V1 and V2 as two real bettors on
+ * the same paired population, both graded from their own captured prices.
+ * `gradedWithLine` should be the graded-with-a-real-line subset for the
+ * scope being compared (overall, or one market/tier breakdown group).
+ */
+export function computeMoundV2DecisionPolicyComparison(
+  gradedWithLine: readonly MoundV2ComparisonRow[],
+): MoundV2DecisionPolicyComparison {
+  const { legacy, noRecommendation, paired } = partitionForDecisionPolicy(gradedWithLine);
+
+  const v1 = buildV1Metrics(paired);
+  const v2 = buildV2Metrics(paired);
+
+  return {
+    pairedN: paired.length,
+    legacyIncompleteDataCount: legacy.length,
+    v1NoRecommendationCount: noRecommendation.length,
+    v1,
+    v2,
+    winRateDelta: v1.winRate != null && v2.winRate != null ? v2.winRate - v1.winRate : null,
+    roiDelta: v1.roi != null && v2.roi != null ? v2.roi - v1.roi : null,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// V2's own standalone metrics (self-contained, unrelated to V1)
+// ─────────────────────────────────────────────────────────────────────────
 
 export interface MoundV2OwnMetrics {
   sampleSize: number;
@@ -158,16 +437,8 @@ export interface MoundV2OwnMetrics {
   coverage: number;
   gradedWithLineCount: number;
   gradedNoLineCount: number;
-  brierScore: number | null;
-  logLoss: number | null;
-  calibrationError: number | null;
-  winRate: number | null;
-  roi: number | null;
-  roiSampleSize: number;
-  unitsWonLost: number | null;
 }
 
-/** V2's own metrics — fully self-contained (needs no V1 data at all). */
 export function computeMoundV2OwnMetrics(rows: readonly MoundV2ComparisonRow[]): MoundV2OwnMetrics {
   const sampleSize = rows.length;
   const graded = rows.filter((r) => r.settlementStatus === "graded");
@@ -175,15 +446,6 @@ export function computeMoundV2OwnMetrics(rows: readonly MoundV2ComparisonRow[]):
   const pending = rows.filter((r) => r.settlementStatus === "pending");
   const gradedWithLine = graded.filter((r) => r.finalResult != null);
   const gradedNoLine = graded.filter((r) => r.finalResult == null);
-
-  const decided = gradedWithLine.filter((r) => r.finalResult !== "push");
-  const wins = decided.filter((r) => impliedV2Side(r) === r.finalResult).length;
-  const winRate = decided.length > 0 ? wins / decided.length : null;
-
-  const unitsList = gradedWithLine.map(v2UnitsForRow).filter((u): u is number => u != null);
-  const unitsWonLost = unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) : null;
-  const roi = unitsList.length > 0 ? unitsList.reduce((a, b) => a + b, 0) / unitsList.length : null;
-
   return {
     sampleSize,
     gradedCount: graded.length,
@@ -192,195 +454,45 @@ export function computeMoundV2OwnMetrics(rows: readonly MoundV2ComparisonRow[]):
     coverage: sampleSize > 0 ? graded.length / sampleSize : 0,
     gradedWithLineCount: gradedWithLine.length,
     gradedNoLineCount: gradedNoLine.length,
-    brierScore: computeV2Brier(gradedWithLine),
-    logLoss: computeV2LogLoss(gradedWithLine),
-    calibrationError: computeV2CalibrationError(gradedWithLine),
-    winRate,
-    roi,
-    roiSampleSize: unitsList.length,
-    unitsWonLost,
   };
 }
 
-export interface MoundV1Metrics {
-  sampleSize: number;
-  cashed: number;
-  missed: number;
-  push: number;
-  unavailable: number;
-  winRate: number | null;
-  roiNote: string;
+function gradedWithLineOf(rows: readonly MoundV2ComparisonRow[]): MoundV2ComparisonRow[] {
+  return rows.filter((r) => r.settlementStatus === "graded" && r.finalResult != null);
 }
 
-const V1_ROI_NOTE =
-  "not computable — V1's settlement record (MoundSignal.outcomes) captures the frozen line it graded against but never a sportsbook price, and assuming one (e.g. -110) is not permitted";
-
-/** V1's own metrics from its real settlement record — win-rate only; see V1_ROI_NOTE for why ROI is absent rather than fabricated. */
-export function computeMoundV1Metrics(outcomes: readonly MoundV1OutcomeSummary[]): MoundV1Metrics {
-  const sampleSize = outcomes.length;
-  const cashed = outcomes.filter((o) => o.marketOutcome === "cashed").length;
-  const missed = outcomes.filter((o) => o.marketOutcome === "missed").length;
-  const push = outcomes.filter((o) => o.marketOutcome === "push").length;
-  const unavailable = outcomes.filter((o) => o.marketOutcome === "unavailable").length;
-  const decided = cashed + missed;
-  return {
-    sampleSize, cashed, missed, push, unavailable,
-    winRate: decided > 0 ? cashed / decided : null,
-    roiNote: V1_ROI_NOTE,
-  };
-}
-
-export interface MoundV2PairedComparison {
-  pairedN: number;
-  v1WinRate: number | null;
-  v2WinRate: number | null;
-  winRateDelta: number | null;
-  v2Roi: number | null;
-  v1RoiNote: string;
-}
-
-interface PairedEntry {
-  v2: MoundV2ComparisonRow;
-  v1: MoundV1OutcomeSummary;
-}
-
-/** The single join every paired/coverage computation shares — a v2 row pairs with V1 only when V2 graded a real line AND V1 recorded a real (non-"unavailable") bet for the same key. */
-function pairRows(
-  v2Rows: readonly MoundV2ComparisonRow[],
-  v1Outcomes: readonly MoundV1OutcomeSummary[],
-): PairedEntry[] {
-  const v1ByKey = new Map(v1Outcomes.map((o) => [keyOf(o.gameId, o.pitcherId, o.market), o]));
-  const paired: PairedEntry[] = [];
-  for (const row of v2Rows) {
-    if (row.settlementStatus !== "graded" || row.finalResult == null) continue;
-    const v1 = v1ByKey.get(keyOf(row.gameId, row.pitcherId, row.market));
-    if (!v1 || v1.marketOutcome === "unavailable") continue;
-    paired.push({ v2: row, v1 });
-  }
-  return paired;
-}
-
-/** Both-models-valid comparison, computed ONLY over the paired subset (never blended with V2-only or V1-only rows). */
-export function computeMoundV2PairedComparison(
-  v2Rows: readonly MoundV2ComparisonRow[],
-  v1Outcomes: readonly MoundV1OutcomeSummary[],
-): MoundV2PairedComparison {
-  const paired = pairRows(v2Rows, v1Outcomes);
-
-  const v1Decided = paired.filter((p) => p.v1.marketOutcome === "cashed" || p.v1.marketOutcome === "missed");
-  const v1WinRate = v1Decided.length > 0
-    ? v1Decided.filter((p) => p.v1.marketOutcome === "cashed").length / v1Decided.length
-    : null;
-
-  const v2Decided = paired.filter((p) => p.v2.finalResult !== "push");
-  const v2Wins = v2Decided.filter((p) => impliedV2Side(p.v2) === p.v2.finalResult).length;
-  const v2WinRate = v2Decided.length > 0 ? v2Wins / v2Decided.length : null;
-
-  const v2UnitsList = paired.map((p) => v2UnitsForRow(p.v2)).filter((u): u is number => u != null);
-  const v2Roi = v2UnitsList.length > 0 ? v2UnitsList.reduce((a, b) => a + b, 0) / v2UnitsList.length : null;
-
-  return {
-    pairedN: paired.length,
-    v1WinRate,
-    v2WinRate,
-    winRateDelta: v1WinRate != null && v2WinRate != null ? v2WinRate - v1WinRate : null,
-    v2Roi,
-    v1RoiNote: V1_ROI_NOTE,
-  };
-}
-
-export interface MoundV2CoverageReport {
-  totalV2InWindow: number;
-  v2Graded: number;
-  v2Void: number;
-  v2Pending: number;
-  v2GradedWithLine: number;
-  v2GradedNoLine: number;
-  v2WithV1Match: number;
-  v2WithNoV1Match: number;
-  v1MatchedWithRealBet: number;
-  v1MatchedUnavailableBet: number;
-  pairedN: number;
-}
-
-/** Explicit funnel — every v2Row lands in exactly one of {no V1 match, V1 match / unavailable bet, V1 match / real bet}, so nothing is silently dropped or double-counted. */
-export function computeMoundV2CoverageReport(
-  v2Rows: readonly MoundV2ComparisonRow[],
-  v1Outcomes: readonly MoundV1OutcomeSummary[],
-): MoundV2CoverageReport {
-  const v1ByKey = new Map(v1Outcomes.map((o) => [keyOf(o.gameId, o.pitcherId, o.market), o]));
-  const gradedRows = v2Rows.filter((r) => r.settlementStatus === "graded");
-
-  let v2WithV1Match = 0;
-  let v2WithNoV1Match = 0;
-  let v1MatchedWithRealBet = 0;
-  let v1MatchedUnavailableBet = 0;
-
-  for (const row of v2Rows) {
-    const v1 = v1ByKey.get(keyOf(row.gameId, row.pitcherId, row.market));
-    if (!v1) {
-      v2WithNoV1Match++;
-      continue;
-    }
-    v2WithV1Match++;
-    if (v1.marketOutcome === "unavailable") v1MatchedUnavailableBet++;
-    else v1MatchedWithRealBet++;
-  }
-
-  return {
-    totalV2InWindow: v2Rows.length,
-    v2Graded: gradedRows.length,
-    v2Void: v2Rows.filter((r) => r.settlementStatus === "void").length,
-    v2Pending: v2Rows.filter((r) => r.settlementStatus === "pending").length,
-    v2GradedWithLine: gradedRows.filter((r) => r.finalResult != null).length,
-    v2GradedNoLine: gradedRows.filter((r) => r.finalResult == null).length,
-    v2WithV1Match,
-    v2WithNoV1Match,
-    v1MatchedWithRealBet,
-    v1MatchedUnavailableBet,
-    pairedN: pairRows(v2Rows, v1Outcomes).length,
-  };
-}
+// ─────────────────────────────────────────────────────────────────────────
+// Top-level report
+// ─────────────────────────────────────────────────────────────────────────
 
 export interface MoundV2ComparisonBreakdownRow {
   dimension: "market" | "tier";
   key: string;
-  v2: MoundV2OwnMetrics;
-  v1: MoundV1Metrics;
-  paired: MoundV2PairedComparison;
+  ownMetrics: MoundV2OwnMetrics;
+  probabilityEvaluation: MoundV2ProbabilityEvaluation;
+  decisionPolicy: MoundV2DecisionPolicyComparison;
 }
 
 function groupKey(dimension: "market" | "tier", market: string, tier: string | null): string {
   return dimension === "market" ? market : (tier ?? "unknown");
 }
 
-function buildBreakdown(
-  v2Rows: readonly MoundV2ComparisonRow[],
-  v1Outcomes: readonly MoundV1OutcomeSummary[],
-  dimension: "market" | "tier",
-): MoundV2ComparisonBreakdownRow[] {
-  const v2Groups = new Map<string, MoundV2ComparisonRow[]>();
-  for (const row of v2Rows) {
+function buildBreakdown(rows: readonly MoundV2ComparisonRow[], dimension: "market" | "tier"): MoundV2ComparisonBreakdownRow[] {
+  const groups = new Map<string, MoundV2ComparisonRow[]>();
+  for (const row of rows) {
     const key = groupKey(dimension, row.market, row.v1Tier);
-    const arr = v2Groups.get(key);
-    if (arr) arr.push(row); else v2Groups.set(key, [row]);
+    const arr = groups.get(key);
+    if (arr) arr.push(row); else groups.set(key, [row]);
   }
-  const v1Groups = new Map<string, MoundV1OutcomeSummary[]>();
-  for (const o of v1Outcomes) {
-    const key = groupKey(dimension, o.market, o.tier);
-    const arr = v1Groups.get(key);
-    if (arr) arr.push(o); else v1Groups.set(key, [o]);
-  }
-  const keys = new Set<string>([...Array.from(v2Groups.keys()), ...Array.from(v1Groups.keys())]);
-  return Array.from(keys).sort().map((key) => {
-    const v2Subset = v2Groups.get(key) ?? [];
-    const v1Subset = v1Groups.get(key) ?? [];
+  return Array.from(groups.keys()).sort().map((key) => {
+    const subset = groups.get(key)!;
+    const gwl = gradedWithLineOf(subset);
     return {
       dimension,
       key,
-      v2: computeMoundV2OwnMetrics(v2Subset),
-      v1: computeMoundV1Metrics(v1Subset),
-      paired: computeMoundV2PairedComparison(v2Subset, v1Subset),
+      ownMetrics: computeMoundV2OwnMetrics(subset),
+      probabilityEvaluation: computeMoundV2ProbabilityEvaluation(gwl, "climatology"),
+      decisionPolicy: computeMoundV2DecisionPolicyComparison(gwl),
     };
   });
 }
@@ -390,38 +502,35 @@ export interface MoundV2ComparisonReport {
   windowEnd: string | null;
   v2ModelVersions: string[];
   productionModelVersions: string[];
-  overallV2: MoundV2OwnMetrics;
-  overallV1: MoundV1Metrics;
-  overallPaired: MoundV2PairedComparison;
-  coverage: MoundV2CoverageReport;
+  ownMetrics: MoundV2OwnMetrics;
+  probabilityEvaluationVsClimatology: MoundV2ProbabilityEvaluation;
+  probabilityEvaluationVsMarketImplied: MoundV2ProbabilityEvaluation;
+  decisionPolicy: MoundV2DecisionPolicyComparison;
   byMarket: MoundV2ComparisonBreakdownRow[];
   byTier: MoundV2ComparisonBreakdownRow[];
 }
 
 /**
  * Top-level report builder. windowStart/windowEnd are metadata only (what
- * window the caller declares it queried for) — unlike
- * mlbEpisodeMeasurement.ts's in-memory filterEpisodesByWindow, Mound V2's
- * storage.listMoundV2ShadowPredictions already supports server-side
- * fromEvaluationTimestamp/toEvaluationTimestamp filtering (Part 4), so the
- * window is expected to already be applied by the caller/gatherer before
- * rows reach this function, not re-filtered here.
+ * window the caller declares it queried for) — Mound V2's storage layer
+ * already supports server-side evaluationTimestamp filtering (Part 4), so
+ * the window is expected to already be applied by the caller/gatherer.
  */
 export function buildMoundV2ComparisonReport(
-  v2Rows: readonly MoundV2ComparisonRow[],
-  v1Outcomes: readonly MoundV1OutcomeSummary[],
+  rows: readonly MoundV2ComparisonRow[],
   opts: { windowStart?: string | null; windowEnd?: string | null } = {},
 ): MoundV2ComparisonReport {
+  const gwl = gradedWithLineOf(rows);
   return {
     windowStart: opts.windowStart ?? null,
     windowEnd: opts.windowEnd ?? null,
-    v2ModelVersions: Array.from(new Set(v2Rows.map((r) => r.v2ModelVersion))).sort(),
-    productionModelVersions: Array.from(new Set(v2Rows.map((r) => r.productionModelVersion))).sort(),
-    overallV2: computeMoundV2OwnMetrics(v2Rows),
-    overallV1: computeMoundV1Metrics(v1Outcomes),
-    overallPaired: computeMoundV2PairedComparison(v2Rows, v1Outcomes),
-    coverage: computeMoundV2CoverageReport(v2Rows, v1Outcomes),
-    byMarket: buildBreakdown(v2Rows, v1Outcomes, "market"),
-    byTier: buildBreakdown(v2Rows, v1Outcomes, "tier"),
+    v2ModelVersions: Array.from(new Set(rows.map((r) => r.v2ModelVersion))).sort(),
+    productionModelVersions: Array.from(new Set(rows.map((r) => r.productionModelVersion))).sort(),
+    ownMetrics: computeMoundV2OwnMetrics(rows),
+    probabilityEvaluationVsClimatology: computeMoundV2ProbabilityEvaluation(gwl, "climatology"),
+    probabilityEvaluationVsMarketImplied: computeMoundV2ProbabilityEvaluation(gwl, "market_implied"),
+    decisionPolicy: computeMoundV2DecisionPolicyComparison(gwl),
+    byMarket: buildBreakdown(rows, "market"),
+    byTier: buildBreakdown(rows, "tier"),
   };
 }

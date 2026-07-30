@@ -1707,6 +1707,13 @@ export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
   v1Score10: numeric("v1_score_10"),
   v1Tier: text("v1_tier"),
   setupGrade: text("setup_grade"),
+  // V1's own frozen recommended side ("OVER"|"UNDER"|null — derived from
+  // moundDirection at the same evaluation moment). Additive; rows captured
+  // before this column existed have it null AND carry the pre-bump
+  // contractVersion ("mound_frozen_input_v1") — moundV2ComparisonStats.ts
+  // uses contractVersion, not this column's nullness alone, to distinguish
+  // "V1 genuinely had no recommendation" from "this row predates capture".
+  v1RecommendedSide: text("v1_recommended_side"),
 
   // V2's real distributional output.
   v2ExpectedValue: numeric("v2_expected_value").notNull(),

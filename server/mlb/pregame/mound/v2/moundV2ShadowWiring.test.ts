@@ -51,7 +51,10 @@ ok(
 // into `signal` or the `signals` map.
 const shadowBlockText = source.slice(shadowBlockStartIdx, carryForwardIdx);
 ok(shadowBlockText.length > 100, "the extracted shadow block span is non-trivial (sanity check on the slice itself)");
-ok(!/\bsignal\.\w+\s*=/.test(shadowBlockText), "no assignment INTO the `signal` object appears anywhere in the shadow block");
+// `(?!=)` excludes ==/=== (a comparison/read, e.g. `signal.moundDirection === "follow"`,
+// which Correction 1 legitimately added to read V1's own recommended side) —
+// only a genuine single `=` assignment trips this check.
+ok(!/\bsignal\.\w+\s*=(?!=)/.test(shadowBlockText), "no assignment INTO the `signal` object appears anywhere in the shadow block");
 ok(!/\bsignals\.set\(/.test(shadowBlockText), "no `signals.set(...)` call appears anywhere in the shadow block — only V1's own call site (outside the block) writes to the signals map");
 ok(/evaluateMoundV2Shadow\(/.test(shadowBlockText), "the shadow block does call evaluateMoundV2Shadow (sanity check that we sliced the right region)");
 ok(/catch\s*\(/.test(shadowBlockText), "the shadow block has its own try/catch — a defect inside it cannot throw into the surrounding per-pitcher loop");

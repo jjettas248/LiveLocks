@@ -49,6 +49,7 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
     productionComponentScores: { pitcherSkillScore: 7.2, workloadScore: 6.5, opponentKProfileScore: 6.8 },
     v1Score10: 6.9,
     v1Tier: "strong",
+    v1RecommendedSide: "OVER",
     strikeoutsLine: 6.5,
     outsLine: null,
     ...overrides,
@@ -85,9 +86,18 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   ok(strikeoutsRow.sportsbook === "draftkings", "frozen sportsbook carries through");
   ok(strikeoutsRow.featureHash === result.frozen!.featureHash, "featureHash matches the frozen snapshot's own hash exactly");
   ok(strikeoutsRow.v1Score10 === "6.9" && strikeoutsRow.v1Tier === "strong", "V1's own score10/tier carry through, never recomputed");
+  ok(strikeoutsRow.v1RecommendedSide === "OVER", "V1's own frozen recommended side carries through, never recomputed");
 
   const outsRow = rows.find((r) => r.market === "pitcher_outs")!;
   ok(outsRow.frozenLine === null && outsRow.sportsbook === null, "outs market has no real fetch path today — honestly null, never fabricated or cross-substituted from strikeouts");
+  ok(outsRow.v1RecommendedSide === "OVER", "v1RecommendedSide is the same V1 decision for both markets (it's a per-pitcher call, not per-market)");
+}
+
+// ── v1RecommendedSide null (V1 had no direction) is never fabricated ──────
+{
+  const result = evaluateMoundV2Shadow(baseArgs({ v1RecommendedSide: null }));
+  const rows = buildMoundV2ShadowPredictionRows(result);
+  ok(rows.every((r) => r.v1RecommendedSide === null), "when V1 had no resolved direction, every persisted row honestly carries v1RecommendedSide=null");
 }
 
 // ── Every row starts pending, never pre-graded ───────────────────────────────

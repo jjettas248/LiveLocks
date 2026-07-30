@@ -48,6 +48,7 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
     productionComponentScores: { pitcherSkillScore: 7.2, workloadScore: 6.5, opponentKProfileScore: 6.8 },
     v1Score10: 6.9,
     v1Tier: "strong",
+    v1RecommendedSide: "OVER",
     strikeoutsLine: 6.5,
     outsLine: null,
     ...overrides,
@@ -63,7 +64,14 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   ok(result.parity !== null, "a parity result is returned");
   ok(result.latencyMs >= 0 && Number.isFinite(result.latencyMs), `latencyMs is a real, finite, non-negative measurement (got ${result.latencyMs})`);
   ok(result.snapshotId === "mound_v2:test:1", "snapshotId passes through");
+  ok(result.v1RecommendedSide === "OVER", "v1RecommendedSide passes through unchanged, never recomputed");
   ok(result.v1Score10 === 6.9 && result.v1Tier === "strong", "V1's own score10/tier pass through unchanged, never recomputed");
+}
+
+// ── v1RecommendedSide: null (V1 had no resolved direction) passes through honestly ──
+{
+  const result = evaluateMoundV2Shadow(baseArgs({ v1RecommendedSide: null }));
+  ok(result.v1RecommendedSide === null, "a null v1RecommendedSide (V1 had no direction) is never coerced into a fabricated OVER/UNDER");
 }
 
 // ── Evaluation never throws, even with a nonsensical input ─────────────────

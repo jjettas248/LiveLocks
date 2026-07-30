@@ -114,7 +114,18 @@ export interface FrozenMoundInput {
 
 import { createHash } from "node:crypto";
 
-export const MOUND_FROZEN_CONTRACT_VERSION = "mound_frozen_input_v1";
+// v2 (Correction 1): strikeoutsMarket.underPrice is now genuinely populated
+// from the same already-fetched raw odds snapshot (pickBestUnderBook in
+// oddsDisplay.ts) instead of being permanently hardcoded to null — v1 rows
+// captured before this change have real overPrice but always-null
+// underPrice. Persisted rows also gain a sibling v1RecommendedSide field
+// (not part of this contract itself — it is V1's own output, not an input —
+// but captured at the same moment). This version string, persisted as each
+// row's own contractVersion, is what moundV2ComparisonStats.ts uses to
+// distinguish "V1 genuinely had no recommendation" (v1RecommendedSide null
+// under v2) from "this row predates v1RecommendedSide capture entirely"
+// (contractVersion is the OLD v1 string) — never conflated.
+export const MOUND_FROZEN_CONTRACT_VERSION = "mound_frozen_input_v2";
 
 // ── Deterministic feature hash ──────────────────────────────────────────────
 // Self-contained (not imported from pregamePowerRadar/frozenPlateInput.ts) —

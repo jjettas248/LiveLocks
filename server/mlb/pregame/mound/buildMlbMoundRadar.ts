@@ -55,7 +55,7 @@ import { composeMoundScore } from "./scoring";
 import { computeMoundDirection } from "./moundDirection";
 import { projectedStrikeoutsFromKPer9, computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMatchupAdjustedStrikeouts } from "./matchupAdjustedKs";
-import { buildMoundMarketEdgeContext } from "./oddsDisplay";
+import { buildMoundMarketEdgeContext, pickBestUnderBook } from "./oddsDisplay";
 import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./moundGradedStateCarry";
 import { applyMoundEvaluationSnapshots } from "./evaluationSnapshot";
 import { aggregateRawPitcherContactSnapshot, type RawContactSupportingInputs, type RawPitcherContactSnapshot } from "./rawPitcherContactSnapshot";
@@ -612,6 +612,19 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             const throwsForShadow: "L" | "R" | null = starter.throws === "L" || starter.throws === "R" ? starter.throws : null;
             const dataQuality: MoundFrozenDataQuality =
               opposingLineupConfirmed && seasonStats != null ? "complete" : seasonStats != null ? "partial" : "degraded";
+            // Correction 1: the raw odds snapshot (strikeoutSnap.books) already
+            // carries an UNDER price for every book — buildMoundMarketEdgeContext
+            // only ever surfaces the OVER side for V1's own display purposes, so
+            // the shadow capture previously hardcoded underPrice to null even
+            // though the real data was already fetched. Zero new provider calls.
+            const underBook = strikeoutSnap?.books ? pickBestUnderBook(strikeoutSnap.books) : null;
+            // V1's own frozen recommended side at this exact evaluation moment —
+            // captured, never recomputed, so the decision-policy comparison
+            // (moundV2ComparisonStats.ts) can grade V1's actual pick against its
+            // own captured price rather than treating V1's performance as
+            // structurally unavailable.
+            const v1RecommendedSide: "OVER" | "UNDER" | null =
+              signal.moundDirection === "follow" ? "OVER" : signal.moundDirection === "fade" ? "UNDER" : null;
 
             const shadowResult = evaluateMoundV2Shadow({
               snapshotId: shadowSnapshotId,
@@ -644,7 +657,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
                 strikeoutsMarket: {
                   line: marketEdgeContext?.line ?? null,
                   overPrice: marketEdgeContext?.odds ?? null,
-                  underPrice: null,
+                  underPrice: underBook?.odds ?? null,
                   sportsbook: marketEdgeContext?.sportsbook ?? null,
                   fetchedAt: marketEdgeContext?.oddsUpdatedAt ?? null,
                 },
@@ -660,6 +673,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
               },
               v1Score10: scoring.score10,
               v1Tier: scoring.tier,
+              v1RecommendedSide,
               strikeoutsLine: marketEdgeContext?.line ?? null,
               outsLine: null,
             });

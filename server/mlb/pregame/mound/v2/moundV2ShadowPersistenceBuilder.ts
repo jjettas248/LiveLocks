@@ -42,6 +42,7 @@ export function buildMoundV2ShadowPredictionRows(
       v1Score10: result.v1Score10 != null ? String(result.v1Score10) : null,
       v1Tier: result.v1Tier,
       setupGrade: result.v1Tier,
+      v1RecommendedSide: result.v1RecommendedSide,
       v2ExpectedValue: String(marketResult.expectedValue),
       v2OverProbability: String(marketResult.overProbability),
       v2UnderProbability: String(marketResult.underProbability),

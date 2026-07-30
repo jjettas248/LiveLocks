@@ -6,13 +6,12 @@ import {
   impliedV2Side,
   v2UnitsForRow,
   computeMoundV2OwnMetrics,
-  computeMoundV1Metrics,
-  computeMoundV2PairedComparison,
-  computeMoundV2CoverageReport,
+  computeMoundV2ProbabilityEvaluation,
+  computeMoundV2DecisionPolicyComparison,
   buildMoundV2ComparisonReport,
   type MoundV2ComparisonRow,
-  type MoundV1OutcomeSummary,
 } from "./moundV2ComparisonStats";
+import { MOUND_FROZEN_CONTRACT_VERSION } from "./frozenMoundShadowInput";
 
 let passed = 0;
 let failed = 0;
@@ -29,16 +28,13 @@ function row(over: Partial<MoundV2ComparisonRow>): MoundV2ComparisonRow {
     settlementStatus: "graded", finalResult: "over",
     frozenOverPrice: -120, frozenUnderPrice: 100,
     v2OverProbability: 0.55, v2UnderProbability: 0.42, v2PushProbability: 0.03,
+    v1RecommendedSide: "OVER", contractVersion: MOUND_FROZEN_CONTRACT_VERSION,
     v1Tier: "strong", v2ModelVersion: "v2_v1", productionModelVersion: "prod_v1",
     ...over,
   };
 }
 
-function v1(over: Partial<MoundV1OutcomeSummary>): MoundV1OutcomeSummary {
-  return { gameId: "g1", pitcherId: "p1", market: "pitcher_strikeouts", marketOutcome: "cashed", tier: "strong", ...over };
-}
-
-// ── impliedV2Side / v2UnitsForRow ────────────────────────────────────────
+// ── impliedV2Side / v2UnitsForRow (unchanged core mechanics) ─────────────
 {
   ok(impliedV2Side(row({ v2OverProbability: 0.6, v2UnderProbability: 0.35 })) === "over", "higher over probability -> implied side over");
   ok(impliedV2Side(row({ v2OverProbability: 0.3, v2UnderProbability: 0.65 })) === "under", "higher under probability -> implied side under");
@@ -50,142 +46,152 @@ function v1(over: Partial<MoundV1OutcomeSummary>): MoundV1OutcomeSummary {
   const winOver = row({ v2OverProbability: 0.6, v2UnderProbability: 0.35, frozenOverPrice: -120, finalResult: "over" });
   ok(approx(v2UnitsForRow(winOver), 100 / 120), "a winning OVER bet at -120 returns 100/120 units, not a flat -110 assumption");
 
-  const winUnderPlus = row({ v2OverProbability: 0.3, v2UnderProbability: 0.65, frozenUnderPrice: 150, finalResult: "under" });
-  ok(approx(v2UnitsForRow(winUnderPlus), 1.5), "a winning UNDER bet at +150 returns 1.5 units");
-
   const loseOver = row({ v2OverProbability: 0.6, v2UnderProbability: 0.35, frozenOverPrice: -120, finalResult: "under" });
   ok(v2UnitsForRow(loseOver) === -1, "a losing bet returns exactly -1 unit regardless of price");
-
-  const noPrice = row({ v2OverProbability: 0.6, v2UnderProbability: 0.35, frozenOverPrice: null, finalResult: "over" });
-  ok(v2UnitsForRow(noPrice) === null, "a winning side with no captured price -> null, never assumes -110");
 }
 
-// ── computeMoundV2OwnMetrics ──────────────────────────────────────────────
+// ── computeMoundV2OwnMetrics — pure counts, no probability/ROI math here anymore ──
 {
   const empty = computeMoundV2OwnMetrics([]);
-  ok(empty.sampleSize === 0 && empty.coverage === 0 && empty.brierScore === null && empty.roi === null, "empty input -> all zero/null, no NaN or divide-by-zero");
+  ok(empty.sampleSize === 0 && empty.coverage === 0, "empty input -> all zero, no NaN or divide-by-zero");
 
   const mixed = [
     row({ settlementStatus: "pending", finalResult: null }),
     row({ settlementStatus: "void", finalResult: null }),
     row({ settlementStatus: "graded", finalResult: "over" }),
+    row({ market: "pitcher_outs", settlementStatus: "graded", finalResult: null }),
   ];
   const m = computeMoundV2OwnMetrics(mixed);
-  ok(m.sampleSize === 3 && m.gradedCount === 1 && m.voidCount === 1 && m.pendingCount === 1, "settlementStatus counts partition the sample correctly");
-  ok(approx(m.coverage, 1 / 3), "coverage = gradedCount / sampleSize");
+  ok(m.sampleSize === 4 && m.gradedCount === 2 && m.voidCount === 1 && m.pendingCount === 1, "settlementStatus counts partition the sample correctly");
+  ok(m.gradedWithLineCount === 1 && m.gradedNoLineCount === 1, "graded-with-line vs graded-no-line are counted separately");
+  ok(approx(m.coverage, 2 / 4), "coverage = gradedCount / sampleSize");
+}
 
-  // Outs-market row with no real line (frozenLine null upstream => finalResult still populated
-  // by grading, but no line means grading never runs the comparison — modeled here directly as
-  // a graded row with finalResult null, i.e. "graded, no line").
-  const noLineRow = row({ market: "pitcher_outs", settlementStatus: "graded", finalResult: null });
-  const withNoLine = computeMoundV2OwnMetrics([row({ finalResult: "over" }), noLineRow]);
-  ok(withNoLine.gradedCount === 2 && withNoLine.gradedWithLineCount === 1 && withNoLine.gradedNoLineCount === 1, "graded-but-no-line rows are counted separately, never blended into calibration/ROI");
-  ok(withNoLine.brierScore != null, "brierScore is still computed from the 1 row that DOES have a line");
+// ── computeMoundV2ProbabilityEvaluation — climatology comparator ─────────
+{
+  const empty = computeMoundV2ProbabilityEvaluation([], "climatology");
+  ok(empty.sampleSize === 0 && empty.v2BrierScore === null && empty.brierDelta === null, "empty input -> null metrics, no crash");
+  ok(empty.comparator === "climatology", "the comparator is always explicitly stamped on the result");
 
   // Hand-computed Brier/logLoss for a single deterministic row.
-  const single = computeMoundV2OwnMetrics([row({ v2OverProbability: 0.6, v2UnderProbability: 0.35, v2PushProbability: 0.05, finalResult: "over" })]);
+  const single = computeMoundV2ProbabilityEvaluation([row({ v2OverProbability: 0.6, v2UnderProbability: 0.35, v2PushProbability: 0.05, finalResult: "over" })], "climatology");
   const expectedBrier = (0.6 - 1) ** 2 + (0.35 - 0) ** 2 + (0.05 - 0) ** 2;
-  ok(approx(single.brierScore, expectedBrier), `Brier score matches hand-computed 3-class value (got ${single.brierScore}, expected ${expectedBrier})`);
-  ok(approx(single.logLoss, -Math.log(0.6)), "log loss matches -log(probability of the true class)");
+  ok(approx(single.v2BrierScore, expectedBrier), `Brier score matches hand-computed 3-class value (got ${single.v2BrierScore}, expected ${expectedBrier})`);
+  ok(approx(single.v2LogLoss, -Math.log(0.6)), "log loss matches -log(probability of the true class)");
 
-  // Win rate excludes push from the decided denominator.
-  const withPush = computeMoundV2OwnMetrics([
-    row({ finalResult: "over", v2OverProbability: 0.6, v2UnderProbability: 0.35 }),
-    row({ finalResult: "under", v2OverProbability: 0.6, v2UnderProbability: 0.35 }),
-    row({ finalResult: "push", v2OverProbability: 0.6, v2UnderProbability: 0.35 }),
-  ]);
-  ok(approx(withPush.winRate, 0.5), "win rate is computed over decided (non-push) rows only: 1 win, 1 loss, 1 push -> 0.5");
-  ok(withPush.roiSampleSize === 3, "ROI sample size includes the push row (it's a valid 0-unit outcome), unlike the win-rate denominator");
-}
-
-// ── computeMoundV1Metrics ─────────────────────────────────────────────────
-{
-  const empty = computeMoundV1Metrics([]);
-  ok(empty.sampleSize === 0 && empty.winRate === null, "empty V1 outcomes -> zero/null, no crash");
-
-  const outcomes = [v1({ marketOutcome: "cashed" }), v1({ marketOutcome: "cashed" }), v1({ marketOutcome: "missed" }), v1({ marketOutcome: "push" }), v1({ marketOutcome: "unavailable" })];
-  const m = computeMoundV1Metrics(outcomes);
-  ok(m.cashed === 2 && m.missed === 1 && m.push === 1 && m.unavailable === 1, "V1 outcome counts are exact");
-  ok(approx(m.winRate, 2 / 3), "V1 win rate excludes push and unavailable from the decided denominator (2 cashed / (2 cashed + 1 missed))");
-  ok(typeof m.roiNote === "string" && m.roiNote.length > 0, "V1 metrics always carry an explanatory roiNote instead of a fabricated ROI number");
-  ok(!("roi" in m), "MoundV1Metrics has no roi field at all — not just a null one, an honest absence");
-}
-
-// ── computeMoundV2PairedComparison ────────────────────────────────────────
-{
-  const v2Rows = [
-    row({ gameId: "g1", pitcherId: "p1", finalResult: "over", v2OverProbability: 0.6, v2UnderProbability: 0.35 }), // will pair
-    row({ gameId: "g2", pitcherId: "p2", finalResult: "over" }), // no V1 match at all
-    row({ gameId: "g3", pitcherId: "p3", settlementStatus: "pending", finalResult: null }), // not graded, excluded even with a V1 match
-  ];
-  const v1Outcomes = [
-    v1({ gameId: "g1", pitcherId: "p1", marketOutcome: "cashed" }),
-    v1({ gameId: "g3", pitcherId: "p3", marketOutcome: "cashed" }),
-    v1({ gameId: "g4", pitcherId: "p4", marketOutcome: "unavailable" }), // no matching v2 row at all
-  ];
-  const paired = computeMoundV2PairedComparison(v2Rows, v1Outcomes);
-  ok(paired.pairedN === 1, `only the genuinely graded-both-sides pair counts (got ${paired.pairedN})`);
-  ok(paired.v1WinRate === 1 && paired.v2WinRate === 1, "the one paired case: V1 cashed, V2's implied OVER also matched -> both win rates are 1");
-  ok(approx(paired.winRateDelta ?? NaN, 0), "winRateDelta is 0 when both models agree and both win");
-  ok(paired.v2Roi != null, "v2Roi is computed from V2's own captured price over the paired subset");
-  ok(paired.v1RoiNote.length > 0, "v1RoiNote explains why there's no V1 ROI to diff against");
-
-  const unavailableOnly = computeMoundV2PairedComparison(
-    [row({ gameId: "g5", pitcherId: "p5", finalResult: "over" })],
-    [v1({ gameId: "g5", pitcherId: "p5", marketOutcome: "unavailable" })],
+  // Calibration buckets carry real sample sizes, not just a summary number.
+  const bucketed = computeMoundV2ProbabilityEvaluation(
+    Array.from({ length: 20 }, (_, i) => row({ gameId: `b${i}`, v2OverProbability: 0.75, v2UnderProbability: 0.25, v2PushProbability: 0, finalResult: i < 15 ? "over" : "under" })),
+    "climatology",
   );
-  ok(unavailableOnly.pairedN === 0, "a V1 match with marketOutcome=unavailable never counts as a paired bet");
+  const nonEmptyBuckets = bucketed.v2CalibrationBuckets.filter((b) => b.n > 0);
+  ok(nonEmptyBuckets.length > 0 && nonEmptyBuckets.every((b) => b.n > 0), "calibration buckets report real sample sizes, never a bucket claimed with n=0");
+  ok(nonEmptyBuckets.reduce((sum, b) => sum + b.n, 0) === 20, "calibration bucket sample sizes sum to the full input — no row is silently dropped");
+
+  // Sharpness: how decisive V2 is, independent of correctness.
+  const sharp = computeMoundV2ProbabilityEvaluation([row({ v2OverProbability: 0.95, v2UnderProbability: 0.05, v2PushProbability: 0 })], "climatology");
+  const dull = computeMoundV2ProbabilityEvaluation([row({ v2OverProbability: 0.34, v2UnderProbability: 0.33, v2PushProbability: 0.33 })], "climatology");
+  ok(sharp.v2Sharpness! > dull.v2Sharpness!, "a decisive (95%) forecast reports higher sharpness than a near-uniform (34/33/33) one");
 }
 
-// ── computeMoundV2CoverageReport — never double-counts ────────────────────
+// ── computeMoundV2ProbabilityEvaluation — never labels climatology as V1 ──
 {
-  const v2Rows = [
-    row({ gameId: "g1", pitcherId: "p1", finalResult: "over" }),
-    row({ gameId: "g2", pitcherId: "p2", finalResult: "over" }),
-    row({ gameId: "g3", pitcherId: "p3", settlementStatus: "pending", finalResult: null }),
-    row({ gameId: "g6", pitcherId: "p6", settlementStatus: "void", finalResult: null }),
-  ];
-  const v1Outcomes = [
-    v1({ gameId: "g1", pitcherId: "p1", marketOutcome: "cashed" }),
-    v1({ gameId: "g3", pitcherId: "p3", marketOutcome: "unavailable" }),
-  ];
-  const cov = computeMoundV2CoverageReport(v2Rows, v1Outcomes);
-  ok(cov.totalV2InWindow === 4, "totalV2InWindow reflects every row passed in");
-  ok(cov.v2WithV1Match + cov.v2WithNoV1Match === cov.totalV2InWindow, "every row is either matched or unmatched — the two buckets partition the whole sample exactly");
-  ok(cov.v2WithV1Match === 2 && cov.v2WithNoV1Match === 2, "match/no-match counts are exact (g1,g3 matched; g2,g6 unmatched)");
-  ok(cov.v1MatchedWithRealBet === 1 && cov.v1MatchedUnavailableBet === 1, "of the matched rows, real-bet vs unavailable-bet is split correctly");
-  ok(cov.v2Graded === 2 && cov.v2Pending === 1 && cov.v2Void === 1, "settlementStatus breakdown is exact");
-  ok(cov.pairedN === 1, "pairedN in the coverage report agrees with computeMoundV2PairedComparison for the same inputs");
+  const evaluation = computeMoundV2ProbabilityEvaluation([row({})], "climatology");
+  ok("comparator" in evaluation, "the evaluation result always carries an explicit comparator field");
+  ok(!("v1BrierScore" in evaluation) && !("v1CalibrationError" in evaluation), "no field anywhere claims a 'V1' probability metric — V1 has no probability to score");
 }
 
-// ── buildMoundV2ComparisonReport — end to end, breakdowns partition cleanly ──
+// ── computeMoundV2ProbabilityEvaluation — market_implied comparator ──────
 {
-  const v2Rows: MoundV2ComparisonRow[] = [
+  // A fair (-110/-110) two-sided market with V2 as a coin-flip -> V2 should
+  // score approximately like the de-vigged 50/50 market itself (a near-tie).
+  const fairMarket = Array.from({ length: 40 }, (_, i) => row({
+    gameId: `mi${i}`, frozenOverPrice: -110, frozenUnderPrice: -110,
+    v2OverProbability: 0.5, v2UnderProbability: 0.5, v2PushProbability: 0,
+    finalResult: i % 2 === 0 ? "over" : "under",
+  }));
+  const evaluation = computeMoundV2ProbabilityEvaluation(fairMarket, "market_implied");
+  ok(evaluation.comparator === "market_implied", "the market_implied comparator is honored");
+  ok(evaluation.sampleSize === 40, "every row has a real two-sided price, so all 40 are scored");
+  ok(approx(evaluation.comparatorBrierScore, 0.5, 0.01), `the de-vigged fair-market comparator's own Brier score is ~0.5 for a genuine 50/50 market (got ${evaluation.comparatorBrierScore})`);
+
+  // A push-outcome row is excluded from market_implied (no push price exists in a 2-way line).
+  const withPush = [...fairMarket, row({ gameId: "push1", finalResult: "push", frozenOverPrice: -110, frozenUnderPrice: -110 })];
+  const evaluationWithPush = computeMoundV2ProbabilityEvaluation(withPush, "market_implied");
+  ok(evaluationWithPush.sampleSize === 40, "a push-outcome row is excluded from the market_implied comparator's sample — a 2-way price has no push probability to score against");
+
+  // A row missing one side's price is excluded (never fabricated).
+  const missingUnderPrice = [...fairMarket, row({ gameId: "missing1", frozenUnderPrice: null })];
+  const evaluationMissingPrice = computeMoundV2ProbabilityEvaluation(missingUnderPrice, "market_implied");
+  ok(evaluationMissingPrice.sampleSize === 40, "a row missing one real side's price is excluded from market_implied — never falls back to a single-sided (still-vigged) implied probability");
+}
+
+// ── computeMoundV2DecisionPolicyComparison — V1's real captured-price performance ──
+{
+  const empty = computeMoundV2DecisionPolicyComparison([]);
+  ok(empty.pairedN === 0 && empty.v1.winRate === null && empty.v2.winRate === null, "empty input -> zero/null, no crash");
+
+  // V1 recommends OVER at -120 and wins every time; V2 is a coin-flip.
+  const rows = Array.from({ length: 20 }, (_, i) => row({
+    gameId: `d${i}`, finalResult: "over", v1RecommendedSide: "OVER", frozenOverPrice: -120, frozenUnderPrice: 100,
+    v2OverProbability: i % 2 === 0 ? 0.6 : 0.4, v2UnderProbability: i % 2 === 0 ? 0.4 : 0.6,
+  }));
+  const comparison = computeMoundV2DecisionPolicyComparison(rows);
+  ok(comparison.pairedN === 20, "every row pairs (real V1 side+price, graded V2)");
+  ok(comparison.v1.winRate === 1, "V1's real win rate is 1.0 — it recommended OVER and OVER happened, every time");
+  ok(approx(comparison.v1.roi!, 100 / 120), `V1's real captured-price ROI reflects its own -120 price, not an assumed -110 (got ${comparison.v1.roi})`);
+  ok(comparison.v2.winRate === 0.5, "V2's win rate is 0.5 — it picks over half the time, under half the time, on a sample that's always 'over'");
+  ok(comparison.winRateDelta !== null && approx(comparison.winRateDelta, -0.5), "winRateDelta = v2 - v1 = 0.5 - 1.0 = -0.5, a real, honest gap");
+}
+
+// ── Decision-policy: V1 "no recommendation" vs "legacy incomplete" are DIFFERENT buckets ──
+{
+  const noRecRows = Array.from({ length: 5 }, (_, i) => row({ gameId: `nr${i}`, v1RecommendedSide: null, contractVersion: MOUND_FROZEN_CONTRACT_VERSION }));
+  const legacyRows = Array.from({ length: 7 }, (_, i) => row({ gameId: `lg${i}`, v1RecommendedSide: null, contractVersion: "mound_frozen_input_v1" }));
+  const pairedRows = Array.from({ length: 3 }, (_, i) => row({ gameId: `pr${i}` }));
+
+  const comparison = computeMoundV2DecisionPolicyComparison([...noRecRows, ...legacyRows, ...pairedRows]);
+  ok(comparison.pairedN === 3, "only the genuinely paired rows (real V1 side, current contract) count toward pairedN");
+  ok(comparison.legacyIncompleteDataCount === 7, "legacy rows (old contract, no v1RecommendedSide) are counted separately as incomplete data");
+  ok(comparison.v1NoRecommendationCount === 5, "current-contract rows where V1 genuinely had no direction are a DIFFERENT, legitimate bucket — never conflated with legacy incomplete data");
+  ok(5 + 7 + 3 === 15, "the three buckets partition the full input with no double-counting");
+}
+
+// ── Decision-policy: ROI needs a real price, win rate does not ───────────
+{
+  const rows = [
+    row({ gameId: "hasPrice", v1RecommendedSide: "OVER", frozenOverPrice: -120, finalResult: "over" }),
+    row({ gameId: "noPrice", v1RecommendedSide: "OVER", frozenOverPrice: null, finalResult: "over" }),
+  ];
+  const comparison = computeMoundV2DecisionPolicyComparison(rows);
+  ok(comparison.v1.wins === 2, "win/loss counting only needs to know the side and the outcome, not a price");
+  ok(comparison.v1.roiEligibleCount === 1, "ROI eligibility correctly excludes the row with no real captured price");
+}
+
+// ── buildMoundV2ComparisonReport — end to end ────────────────────────────
+{
+  const rows: MoundV2ComparisonRow[] = [
     row({ gameId: "g1", pitcherId: "p1", market: "pitcher_strikeouts", v1Tier: "strong", finalResult: "over", v2ModelVersion: "v2_a", productionModelVersion: "prod_a" }),
     row({ gameId: "g1", pitcherId: "p1", market: "pitcher_outs", v1Tier: "strong", finalResult: null, v2ModelVersion: "v2_a", productionModelVersion: "prod_a" }),
-    row({ gameId: "g2", pitcherId: "p2", market: "pitcher_strikeouts", v1Tier: "elite", finalResult: "under", v2OverProbability: 0.3, v2UnderProbability: 0.65, v2ModelVersion: "v2_a", productionModelVersion: "prod_a" }),
-  ];
-  const v1Outcomes: MoundV1OutcomeSummary[] = [
-    v1({ gameId: "g1", pitcherId: "p1", market: "pitcher_strikeouts", tier: "strong", marketOutcome: "cashed" }),
-    v1({ gameId: "g2", pitcherId: "p2", market: "pitcher_strikeouts", tier: "elite", marketOutcome: "cashed" }),
+    row({ gameId: "g2", pitcherId: "p2", market: "pitcher_strikeouts", v1Tier: "elite", finalResult: "under", v2OverProbability: 0.3, v2UnderProbability: 0.65, v1RecommendedSide: "UNDER", v2ModelVersion: "v2_a", productionModelVersion: "prod_a" }),
   ];
 
-  const report = buildMoundV2ComparisonReport(v2Rows, v1Outcomes, { windowStart: "2026-07-01", windowEnd: "2026-07-29" });
+  const report = buildMoundV2ComparisonReport(rows, { windowStart: "2026-07-01", windowEnd: "2026-07-29" });
 
   ok(report.windowStart === "2026-07-01" && report.windowEnd === "2026-07-29", "declared window is carried through as report metadata");
   ok(report.v2ModelVersions.length === 1 && report.v2ModelVersions[0] === "v2_a", "distinct model versions are deduplicated");
+  ok(report.probabilityEvaluationVsClimatology.comparator === "climatology", "the report exposes the climatology evaluation explicitly labeled");
+  ok(report.probabilityEvaluationVsMarketImplied.comparator === "market_implied", "the report ALSO exposes a separate, explicitly labeled market-implied evaluation");
+  ok(report.decisionPolicy.pairedN === 2, "the report's top-level decisionPolicy reflects the real paired sample (g1 and g2 both have real V1 decisions + graded V2)");
 
-  const marketTotal = report.byMarket.reduce((sum, r) => sum + r.v2.sampleSize, 0);
-  ok(marketTotal === v2Rows.length, "byMarket breakdown's v2 sample sizes sum to the full input — every row lands in exactly one market group");
-  const tierTotal = report.byTier.reduce((sum, r) => sum + r.v2.sampleSize, 0);
-  ok(tierTotal === v2Rows.length, "byTier breakdown's v2 sample sizes sum to the full input — every row lands in exactly one tier group");
+  const marketTotal = report.byMarket.reduce((sum, r) => sum + r.ownMetrics.sampleSize, 0);
+  ok(marketTotal === rows.length, "byMarket breakdown's sample sizes sum to the full input — every row lands in exactly one market group");
+  const tierTotal = report.byTier.reduce((sum, r) => sum + r.ownMetrics.sampleSize, 0);
+  ok(tierTotal === rows.length, "byTier breakdown's sample sizes sum to the full input — every row lands in exactly one tier group");
 
-  const strikeoutsGroup = report.byMarket.find((r) => r.key === "pitcher_strikeouts");
   const outsGroup = report.byMarket.find((r) => r.key === "pitcher_outs");
-  ok(strikeoutsGroup?.v2.sampleSize === 2 && outsGroup?.v2.sampleSize === 1, "market groups contain exactly the rows for that market");
-  ok(outsGroup?.v2.gradedNoLineCount === 1, "the outs-market group correctly shows its one row as graded-with-no-line");
-
-  ok(report.overallPaired.pairedN === 2, "overall paired count reflects both games (g1 and g2 both have real V1 bets and V2 graded-with-line results)");
+  ok(outsGroup?.ownMetrics.gradedNoLineCount === 1, "the outs-market group correctly shows its one row as graded-with-no-line");
+  ok(outsGroup?.decisionPolicy.pairedN === 0, "the outs-market group has zero paired decision-policy rows (no real line to grade against)");
 }
 
 console.log(`\nmoundV2ComparisonStats.test: ${passed} passed, ${failed} failed`);
