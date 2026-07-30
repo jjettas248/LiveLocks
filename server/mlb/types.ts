@@ -312,11 +312,17 @@ export interface MLBPropInput {
   weatherPark: WeatherParkContext;
   bullpen: BullpenContext;
 
-  // MLB Live Edge Trust Recovery (Phase 3) — the ACTUAL source snapshot
-  // timestamp and the ACTUAL selected approved sportsbook. Never fabricated:
-  // null means unknown provenance, and engine builders must never substitute
-  // Date.now() (that's engineGeneratedAt's job) or a placeholder book name.
+  // MLB Live Edge Trust Recovery (Phase 3, tightened after review) — TWO
+  // independent timestamps, never collapsed into one and never fabricated:
+  //   oddsUpdatedAt = the ACTUAL selected sportsbook's provider last_update
+  //     ("oddsSourceUpdatedAt" in the persisted-row/eligibility contract).
+  //     Official freshness reads THIS field.
+  //   oddsFetchedAt  = when LiveLocks received/cached that response. Cache-
+  //     health/staleness bookkeeping ONLY — never substituted for
+  //     oddsUpdatedAt, and never Date.now() (that's engineGeneratedAt's job).
+  // null means unknown provenance for that specific timestamp.
   oddsUpdatedAt?: number | null;
+  oddsFetchedAt?: number | null;
   sportsbook?: string | null;
   bvpHistory?: BatterVsPitcherHistory;
   hrrComponents?: HRRComponents;
@@ -466,12 +472,16 @@ export interface MLBPropOutput {
   explanationBullets: string[];
   warnings: string[];
   engineGeneratedAt: number;
-  // MLB Live Edge Trust Recovery (Phase 3) — the ACTUAL sportsbook source
-  // snapshot timestamp, forwarded from input.oddsUpdatedAt. Null when the
-  // resolved line carried no provenance (e.g. the stale "prior known line"
-  // fallback) — engine-computation time (engineGeneratedAt) must never be
-  // substituted here.
+  // MLB Live Edge Trust Recovery (Phase 3, tightened after review) — the
+  // ACTUAL sportsbook provider last_update, forwarded from
+  // input.oddsUpdatedAt. Null when the resolved line carried no provenance
+  // (e.g. the stale "prior known line" fallback) — engine-computation time
+  // (engineGeneratedAt) must never be substituted here.
   oddsUpdatedAt: number | null;
+  // The SEPARATE LiveLocks cache-write/receipt time, forwarded from
+  // input.oddsFetchedAt. Cache-health bookkeeping only — never substituted
+  // for oddsUpdatedAt.
+  oddsFetchedAt: number | null;
   projectionUpdatedAt: number;
   sportsbook: string | null;
   isDerivedLine: boolean;

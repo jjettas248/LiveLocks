@@ -120,8 +120,14 @@ const evaluatedSides = new Map<string, SideMemoryEntry>();
 const SIDE_MEMORY_TTL_MS = 6 * 60 * 60 * 1000; // one game
 const SIDE_MEMORY_MAX = 5000;
 
-function sideKey(eventId: string, market: string, playerName: string): string {
-  return `${eventId}|${market}|${playerName.toLowerCase().trim()}`;
+// MLB Live Edge Trust Recovery (Phase 3, tightened after review) — keyed by
+// the stable playerId when the caller has one; playerName is only a
+// fallback for call sites that genuinely don't have an id yet (never used
+// for provider text-matching here, only as a memory key). Two real players
+// sharing a name/formatting can no longer collide once playerId is passed.
+function sideKey(eventId: string, market: string, playerName: string, playerId?: string | null): string {
+  const identity = playerId ? `id:${playerId}` : `name:${playerName.toLowerCase().trim()}`;
+  return `${eventId}|${market}|${identity}`;
 }
 
 export function recordEvaluatedSide(
@@ -129,6 +135,7 @@ export function recordEvaluatedSide(
   market: string,
   playerName: string,
   side: EvaluatedSide,
+  playerId?: string | null,
 ): void {
   if (evaluatedSides.size > SIDE_MEMORY_MAX) {
     const cutoff = Date.now() - SIDE_MEMORY_TTL_MS;
@@ -136,7 +143,7 @@ export function recordEvaluatedSide(
       if (v.ts < cutoff) evaluatedSides.delete(k);
     }
   }
-  evaluatedSides.set(sideKey(eventId, market, playerName), { side, ts: Date.now() });
+  evaluatedSides.set(sideKey(eventId, market, playerName, playerId), { side, ts: Date.now() });
 }
 
 /**
@@ -148,11 +155,13 @@ export function getEvaluatedSide(
   eventId: string,
   market: string,
   playerName: string,
+  playerId?: string | null,
 ): EvaluatedSide {
-  const entry = evaluatedSides.get(sideKey(eventId, market, playerName));
+  const key = sideKey(eventId, market, playerName, playerId);
+  const entry = evaluatedSides.get(key);
   if (!entry) return "OVER";
   if (Date.now() - entry.ts > SIDE_MEMORY_TTL_MS) {
-    evaluatedSides.delete(sideKey(eventId, market, playerName));
+    evaluatedSides.delete(key);
     return "OVER";
   }
   return entry.side;

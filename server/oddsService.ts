@@ -1538,7 +1538,12 @@ async function fetchMLBRawOddsFromProvider(oddsEventId: string, marketKey: strin
   throw new Error(`MLB odds fetch failed: all ${ODDS_API_KEYS.length} keys returned errors`);
 }
 
-type MLBOddsResult = Record<string, { line: number; overOdds: number; underOdds: number }> & { _quotaExhausted?: boolean; _isDegraded?: boolean };
+// MLB Live Edge Trust Recovery (Phase 3, tightened after review) — lastUpdate
+// is the REAL sportsbook provider timestamp (bookmaker.last_update /
+// market.last_update), distinct from any cache-write/fetch time. null when
+// the provider payload carried no timestamp for this book — never
+// substituted with fetch/cache time.
+type MLBOddsResult = Record<string, { line: number; overOdds: number; underOdds: number; lastUpdate: number | null }> & { _quotaExhausted?: boolean; _isDegraded?: boolean };
 
 /** Create a degraded copy of an MLBOddsResult (stale-cache path). Uses Object.assign
  *  rather than spread to avoid TypeScript index-signature conflict with the boolean flag. */
@@ -1645,6 +1650,10 @@ function filterMLBBookmakersForPlayer(
         line: over.point,
         overOdds: over.price,
         underOdds: under.price,
+        // Real sportsbook source timestamp — computed above from
+        // bookmaker.last_update / market.last_update. null (never Date.now())
+        // when the provider genuinely supplied neither.
+        lastUpdate: lastUpdate > 0 ? lastUpdate : null,
       };
     } else {
       cntNoOverUnder++;
@@ -1771,7 +1780,16 @@ export interface CachedMLBPlayerLine {
   book: string;
   isDegraded: boolean;
   ageMs: number;
+  /** LiveLocks cache-write/receipt time — cache-health/staleness use ONLY. */
   fetchedAt: number;
+  /**
+   * MLB Live Edge Trust Recovery (Phase 3, tightened after review) — the
+   * REAL selected sportsbook's provider `last_update`, independent of
+   * `fetchedAt`. null when the provider genuinely supplied no timestamp for
+   * this book. Official freshness/eligibility must read THIS field, never
+   * `fetchedAt` and never `Date.now()`.
+   */
+  sourceUpdatedAt: number | null;
 }
 
 export function readMLBPlayerOddsFromCache(
@@ -1805,6 +1823,7 @@ export function readMLBPlayerOddsFromCache(
     isDegraded: !isMLBSnapshotFresh(gameStatus, ageMs),
     ageMs,
     fetchedAt: entry.timestamp,
+    sourceUpdatedAt: line.lastUpdate ?? null,
   };
 }
 

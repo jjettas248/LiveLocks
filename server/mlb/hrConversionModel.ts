@@ -6,7 +6,7 @@ import { computeHROverlay } from "./hr/hrOverlay";
 import type { HROverlayResult, SeasonStatBundle, PitchTypeBatterSplit } from "./hr/hrOverlayTypes";
 import { PREGAME_SEED_CAP } from "@shared/hrRadarConviction";
 import { computePlayerParkWindFit } from "./parkWindFit";
-import { isMlbEmpiricalHrCalibrationEnabled } from "./mlbAdaptationConfig";
+import { isMlbEmpiricalHrCalibrationShadowLoggingEnabled } from "./mlbAdaptationConfig";
 
 export type { SeasonStatBundle, PitchTypeBatterSplit };
 
@@ -224,24 +224,19 @@ const CALIBRATION_TABLE: Array<{ rawMin: number; rawMax: number; calibrated: num
 export const EMPIRICAL_CALIBRATION_CEILING = 0.50;
 
 export function calibrate(rawProb: number): { value: number; source: "static_table" | "empirical_buckets"; bucketLabel: string | null; samples: number } {
-  // MLB Live Edge Trust Recovery (Phase 1) — empirical buckets are built from
-  // settled HR Radar outcome stamps, which (until Phase 4's official-
-  // eligibility/immutability fixes have accumulated a clean sample) may
-  // include watch-only, overwritten, or otherwise non-official rows. Fail-
-  // closed to the static table for production; the empirical value is still
-  // logged as a shadow diagnostic so it stays observable.
-  const empiricalEnabled = isMlbEmpiricalHrCalibrationEnabled();
+  // MLB Live Edge Trust Recovery (Phase 1, tightened after review) —
+  // empirical buckets are built from settled HR Radar outcome stamps, which
+  // (until Phase 4's official-eligibility/immutability fixes have
+  // accumulated a clean sample) may include watch-only, overwritten, or
+  // otherwise non-official rows. There is no environment variable or flag
+  // that can route production through the empirical branch — the static
+  // table is used UNCONDITIONALLY; the empirical value is only ever logged
+  // as a shadow diagnostic. Re-enabling this for real is a deliberate code
+  // change made once Phase 6's clean episode sample exists, not a config
+  // toggle.
   if (EMPIRICAL_BUCKETS.length > 0) {
     const eb = EMPIRICAL_BUCKETS.find(b => rawProb >= b.min && rawProb < b.max);
-    if (eb) {
-      if (empiricalEnabled) {
-        return {
-          value: Math.min(EMPIRICAL_CALIBRATION_CEILING, eb.calibrated),
-          source: "empirical_buckets",
-          bucketLabel: eb.label ?? `${eb.min.toFixed(2)}-${eb.max.toFixed(2)}`,
-          samples: eb.samples,
-        };
-      }
+    if (eb && isMlbEmpiricalHrCalibrationShadowLoggingEnabled()) {
       try {
         console.log(
           `[MLB_ADAPTATION_SHADOW] system=hr_empirical_buckets rawProb=${rawProb.toFixed(3)} ` +

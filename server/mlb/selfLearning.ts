@@ -3,7 +3,7 @@ import { contactEvents, gamePlayerStats, hrOutcomes, hrRadarAnalytics } from "@s
 import { sql, desc, gte, and } from "drizzle-orm";
 import type { MLBMarket } from "./types";
 import { normalizePitchTypeCode } from "./pitchTypeNormalizer";
-import { isMlbSelfLearningProductionAdaptationEnabled } from "./mlbAdaptationConfig";
+import { isMlbSelfLearningShadowLoggingEnabled } from "./mlbAdaptationConfig";
 
 export interface ContactProfile {
   hitEvThreshold: number;
@@ -100,15 +100,15 @@ export function getAllCalibrationData(): {
 // Each tier transition is logged + recorded into the admin diagnostics ring
 // buffer for visibility.
 //
-// MLB Live Edge Trust Recovery (Phase 1) — this computation compares
-// AGGREGATE league-wide observed rates to fixed static defaults (see
-// learnMarketRates below), never this engine's own prior predictions. It is
-// not a valid production calibration signal. computeShadowRateAdjustment
-// below still runs the full computation for shadow/diagnostic visibility;
+// MLB Live Edge Trust Recovery (Phase 1, tightened after review) — this
+// computation compares AGGREGATE league-wide observed rates to fixed static
+// defaults (see learnMarketRates below), never this engine's own prior
+// predictions. It is not a valid production calibration signal and has NO
+// correct "on" state. computeShadowRateAdjustment below still runs the full
+// computation for shadow/diagnostic visibility only;
 // getLearnedRateAdjustment (the only production consumer, called from
-// liveGameOrchestrator.ts) is fail-closed to a neutral 1.0 unless the
-// explicit config flag in mlbAdaptationConfig.ts is set — which nothing in
-// this codebase currently sets, by design.
+// liveGameOrchestrator.ts) unconditionally returns the neutral 1.0 — there
+// is no flag, env var, or code path that can make it return anything else.
 function computeShadowRateAdjustment(market: MLBMarket): { tier: "none" | "partial" | "full"; adjustment: number; cal: MarketCalibrationData | null } {
   const cal = marketCalibrations[market];
   if (!cal) return { tier: "none", adjustment: 1.0, cal: null };
@@ -144,23 +144,22 @@ function computeShadowRateAdjustment(market: MLBMarket): { tier: "none" | "parti
 
 /**
  * Production entry point. ALWAYS computes the shadow adjustment (so the
- * diagnostics ring buffer and admin dashboards stay populated), but only
- * returns it to the caller when production adaptation is explicitly enabled
- * — which is fail-closed OFF by default (see mlbAdaptationConfig.ts). Every
- * other case deterministically returns the neutral 1.0.
+ * diagnostics ring buffer and admin dashboards stay populated) and logs it
+ * via [MLB_ADAPTATION_SHADOW] when logging is enabled, but ALWAYS returns
+ * the neutral 1.0 to the caller — unconditionally, with no flag or env var
+ * capable of changing that. This aggregate-outcome-ratio system has no valid
+ * "on" state (see module header); shadow visibility and production
+ * consumption are permanently decoupled.
  */
 export function getLearnedRateAdjustment(market: MLBMarket): number {
   const shadow = computeShadowRateAdjustment(market);
-  if (!isMlbSelfLearningProductionAdaptationEnabled()) {
-    if (shadow.tier !== "none") {
-      console.log(
-        `[MLB_ADAPTATION_SHADOW] system=aggregate_self_learning_rate market=${market} ` +
-        `shadowAdjustment=${shadow.adjustment.toFixed(3)} tier=${shadow.tier} productionAdjustment=1.000 reason=fail_closed_default`,
-      );
-    }
-    return 1.0;
+  if (shadow.tier !== "none" && isMlbSelfLearningShadowLoggingEnabled()) {
+    console.log(
+      `[MLB_ADAPTATION_SHADOW] system=aggregate_self_learning_rate market=${market} ` +
+      `shadowAdjustment=${shadow.adjustment.toFixed(3)} tier=${shadow.tier} productionAdjustment=1.000 reason=no_production_path`,
+    );
   }
-  return shadow.adjustment;
+  return 1.0;
 }
 
 async function learnContactProfile(): Promise<ContactProfile> {

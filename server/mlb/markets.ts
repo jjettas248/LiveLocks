@@ -13,20 +13,20 @@ import { mlbGameCache } from "./dataPullService";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { computeHRConversionProbability } from "./hrConversionModel";
 import type { HRConversionInput, HRConversionResult } from "./hrConversionModel";
-import { isMlbSelfLearningProductionAdaptationEnabled } from "./mlbAdaptationConfig";
+import { isMlbSelfLearningShadowLoggingEnabled } from "./mlbAdaptationConfig";
 
 const selfLearningCalibration: Record<string, { shrinkFactor: number; sampleSize: number; lastUpdated: number }> = {};
 const CALIBRATION_REFRESH_MS = 30 * 60 * 1000;
 const DEFAULT_SHRINK = 0.96;
 
-// MLB Live Edge Trust Recovery (Phase 1) — this mirrors the SAME aggregate
-// league-wide-outcome-vs-fixed-default comparison as selfLearning.ts's
-// getLearnedRateAdjustment (fed by liveGameOrchestrator's 30-minute
-// refreshSelfLearningCalibration → getAllCalibrationData()). It is not a
-// valid production calibration signal. The shadow value is still computed
-// and stored (updateSelfLearningCalibration) for diagnostics; production
-// consumption (getSelfLearningShrink) is fail-closed to the static
-// DEFAULT_SHRINK unless mlbAdaptationConfig explicitly enables it.
+// MLB Live Edge Trust Recovery (Phase 1, tightened after review) — this
+// mirrors the SAME aggregate league-wide-outcome-vs-fixed-default comparison
+// as selfLearning.ts's getLearnedRateAdjustment (fed by liveGameOrchestrator's
+// 30-minute refreshSelfLearningCalibration → getAllCalibrationData()). It is
+// not a valid production calibration signal and has no correct "on" state.
+// The shadow value is still computed and stored (updateSelfLearningCalibration)
+// for diagnostics only; getSelfLearningShrink unconditionally returns the
+// static DEFAULT_SHRINK — no flag or env var can make it return anything else.
 export function updateSelfLearningCalibration(market: string, hitRate: number, expectedRate: number, sampleSize: number): void {
   if (sampleSize < 10) return;
   const error = hitRate - expectedRate;
@@ -42,16 +42,13 @@ export function updateSelfLearningCalibration(market: string, hitRate: number, e
 export function getSelfLearningShrink(market: MLBMarket): number {
   const entry = selfLearningCalibration[market];
   const shadowShrink = (!entry || Date.now() - entry.lastUpdated > CALIBRATION_REFRESH_MS * 3) ? DEFAULT_SHRINK : entry.shrinkFactor;
-  if (!isMlbSelfLearningProductionAdaptationEnabled()) {
-    if (entry && shadowShrink !== DEFAULT_SHRINK) {
-      console.log(
-        `[MLB_ADAPTATION_SHADOW] system=aggregate_self_learning_shrink market=${market} ` +
-        `shadowShrink=${shadowShrink.toFixed(4)} productionShrink=${DEFAULT_SHRINK.toFixed(4)} reason=fail_closed_default`,
-      );
-    }
-    return DEFAULT_SHRINK;
+  if (entry && shadowShrink !== DEFAULT_SHRINK && isMlbSelfLearningShadowLoggingEnabled()) {
+    console.log(
+      `[MLB_ADAPTATION_SHADOW] system=aggregate_self_learning_shrink market=${market} ` +
+      `shadowShrink=${shadowShrink.toFixed(4)} productionShrink=${DEFAULT_SHRINK.toFixed(4)} reason=no_production_path`,
+    );
   }
-  return shadowShrink;
+  return DEFAULT_SHRINK;
 }
 
 export function getSelfLearningStats(): Record<string, { shrinkFactor: number; sampleSize: number }> {
@@ -893,6 +890,7 @@ function buildOutput(input: MLBPropInput, distParams?: DistributionParams): MLBP
     warnings,
     engineGeneratedAt: nowTs,
     oddsUpdatedAt: input.oddsUpdatedAt ?? null,
+    oddsFetchedAt: input.oddsFetchedAt ?? null,
     projectionUpdatedAt: nowTs,
     sportsbook: input.sportsbook ?? null,
     isDerivedLine: false,
@@ -1033,6 +1031,7 @@ export function calculateHitsEdge(input: MLBPropInput): MLBPropOutput {
     warnings,
     engineGeneratedAt: nowTs,
     oddsUpdatedAt: hitsInput.oddsUpdatedAt ?? null,
+    oddsFetchedAt: hitsInput.oddsFetchedAt ?? null,
     projectionUpdatedAt: nowTs,
     sportsbook: hitsInput.sportsbook ?? null,
     isDerivedLine: false,
@@ -1169,6 +1168,7 @@ export function calculateTBEdge(input: MLBPropInput): MLBPropOutput {
     warnings,
     engineGeneratedAt: nowTs,
     oddsUpdatedAt: tbInput.oddsUpdatedAt ?? null,
+    oddsFetchedAt: tbInput.oddsFetchedAt ?? null,
     projectionUpdatedAt: nowTs,
     sportsbook: tbInput.sportsbook ?? null,
     isDerivedLine: false,
@@ -1303,6 +1303,7 @@ export function calculatePitcherKEdge(input: MLBPropInput): MLBPropOutput {
     warnings,
     engineGeneratedAt: nowTs,
     oddsUpdatedAt: kInput.oddsUpdatedAt ?? null,
+    oddsFetchedAt: kInput.oddsFetchedAt ?? null,
     projectionUpdatedAt: nowTs,
     sportsbook: kInput.sportsbook ?? null,
     isDerivedLine: false,
@@ -1560,6 +1561,7 @@ export function calculateHREdge(input: MLBPropInput): MLBPropOutput {
     warnings,
     engineGeneratedAt: nowTs,
     oddsUpdatedAt: hrInput.oddsUpdatedAt ?? null,
+    oddsFetchedAt: hrInput.oddsFetchedAt ?? null,
     projectionUpdatedAt: nowTs,
     sportsbook: hrInput.sportsbook ?? null,
     isDerivedLine: false,

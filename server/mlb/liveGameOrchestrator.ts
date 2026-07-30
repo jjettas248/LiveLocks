@@ -1047,17 +1047,24 @@ const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hit
 // Key: "oddsEventId|playerNameNorm|market" — Value: last known real line
 const priorResolvedLines = new Map<string, number>();
 
-// MLB Live Edge Trust Recovery (Phase 3) — book/sourceTimestamp carry the
-// ACTUAL selected sportsbook and the ACTUAL source snapshot timestamp
-// (readMLBPlayerOddsFromCache's entry.timestamp), never engine-computation
-// time. Both are null on the "prior" fallback path (priorResolvedLines only
-// ever stored a bare line number, never book/timestamp provenance) — that is
-// the correct, honest value: unknown provenance must never be fabricated.
+// MLB Live Edge Trust Recovery (Phase 3, tightened after review) — book and
+// sourceTimestamp carry the ACTUAL selected sportsbook and the ACTUAL
+// sportsbook provider `last_update` (readMLBPlayerOddsFromCache's
+// sourceUpdatedAt), never engine-computation time and never LiveLocks'
+// cache-write time. fetchedAt is that SEPARATE cache-write/receipt time,
+// kept only for cache-health/staleness bookkeeping — never substituted for
+// sourceTimestamp. All three are null on the "prior" fallback path
+// (priorResolvedLines only ever stored a bare line number, never
+// book/timestamp provenance) — that is the correct, honest value: unknown
+// provenance must never be fabricated.
 type ResolvedLine = {
   line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean;
   source: "live" | "prior" | "cache" | "lkg";
   book: string | null;
+  /** Real sportsbook provider `last_update`. Official freshness reads THIS. */
   sourceTimestamp: number | null;
+  /** LiveLocks cache-write/receipt time. Cache-health bookkeeping ONLY. */
+  fetchedAt: number | null;
 };
 
 // Phase 2 — most-recent resolved batter_home_runs prices per (gameId, playerId).
@@ -1112,6 +1119,7 @@ async function resolveBookLine(
   playerName: string,
   market: MLBMarket,
   refreshPolicy?: ResolveBookLineRefreshPolicy,
+  playerId?: string | null,
 ): Promise<ResolvedLine | null> {
   const normName = playerName.toLowerCase().trim();
   const cacheKey = oddsEventId ? `${oddsEventId}|${normName}|${market}` : `unknown|${normName}|${market}`;
@@ -1129,17 +1137,20 @@ async function resolveBookLine(
     if (refreshPolicy?.allowOddsInterest === false) {
       recordOddsRefreshSkip(oddsEventId, market, "no_material_event", { player: playerName });
     } else {
-      const side = getEvaluatedSide(oddsEventId, market, playerName);
+      // MLB Live Edge Trust Recovery (Phase 3, tightened after review) —
+      // playerName is used ONLY for provider text-matching
+      // (getEvaluatedSide/readMLBApprovedBookPricesFromCache); the refresh
+      // coordinator's consumer identity uses the stable playerId so two
+      // real players who share a name (or a name-formatting difference)
+      // can never collide in dormancy/eligibility tracking.
+      const side = getEvaluatedSide(oddsEventId, market, playerName, playerId ?? undefined);
       const books = readMLBApprovedBookPricesFromCache(oddsEventId, playerName, market);
       const verdict = evaluatePriceFloor(books, side);
       registerMLBMarketInterest({
         eventId: oddsEventId,
         market,
         gameStatus: "live",
-        // MLB Live Edge Trust Recovery (Phase 3) — scope dormancy/eligibility
-        // to this specific player+side so one bad price can never park a
-        // different player's (or the same player's other side's) refresh.
-        player: playerName,
+        player: playerId ?? normName,
         side,
         stale: !cached || cached.isDegraded,
         urgency: refreshPolicy?.urgency ?? null,
@@ -1153,6 +1164,7 @@ async function resolveBookLine(
       priorResolvedLines.set(cacheKey, cached.line);
       pLog(oddsEventId, `odds:bookLine:${cached.isDegraded ? "degraded" : "cache"}`, {
         player: playerName, market, line: cached.line, book: cached.book, ageMs: cached.ageMs,
+        sourceUpdatedAt: cached.sourceUpdatedAt,
       });
       return {
         line: cached.line,
@@ -1161,7 +1173,8 @@ async function resolveBookLine(
         isDegraded: cached.isDegraded,
         source: cached.isDegraded ? "prior" : "cache",
         book: cached.book,
-        sourceTimestamp: cached.fetchedAt,
+        sourceTimestamp: cached.sourceUpdatedAt,
+        fetchedAt: cached.fetchedAt,
       };
     }
   }
@@ -1173,7 +1186,7 @@ async function resolveBookLine(
     pLog(oddsEventId ?? "unknown", "odds:bookLine:priorResolved", { player: playerName, market, line: prior });
     // Only the line survives into this fallback path — book/timestamp were
     // never captured for it, so they stay null rather than being fabricated.
-    return { line: prior, overOdds: null, underOdds: null, isDegraded: true, source: "prior", book: null, sourceTimestamp: null };
+    return { line: prior, overOdds: null, underOdds: null, isDegraded: true, source: "prior", book: null, sourceTimestamp: null, fetchedAt: null };
   }
 
   console.log(`[MLB orchestrator] No real line for ${playerName}/${market} — SKIPPED`);
@@ -4219,7 +4232,7 @@ export class LiveGameOrchestrator {
 
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${batter.playerName}", playerId: "${batter.playerId}", inning: ${state.inning} }`);
 
-        const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market, refreshPolicyFor(batter.playerName, market));
+        const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market, refreshPolicyFor(batter.playerName, market), batter.playerId);
         let hrRadarOnly = false;
         if (resolvedLine === null) {
           if (market === "home_runs") {
@@ -4352,6 +4365,7 @@ export class LiveGameOrchestrator {
           // source snapshot timestamp, never fabricated. hrRadarOnly (no real
           // cached line) correctly stays null on both.
           oddsUpdatedAt: hrRadarOnly ? null : resolvedLine!.sourceTimestamp,
+          oddsFetchedAt: hrRadarOnly ? null : resolvedLine!.fetchedAt,
           sportsbook: hrRadarOnly ? null : resolvedLine!.book,
           seasonAvg: effectiveSeasonAvg,
           // MLB Live Edge Trust Recovery (Phase 2) — real box-score-derived
@@ -5441,7 +5455,7 @@ export class LiveGameOrchestrator {
 
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", playerId: "${pitcherToEval.playerId}", inning: ${state.inning} }`);
 
-        const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market, refreshPolicyFor(pitcherToEval.playerName, market));
+        const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market, refreshPolicyFor(pitcherToEval.playerName, market), pitcherToEval.playerId);
         auditRecordRaw(gameId);
         if (resolvedPitcherLine === null) {
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "no_book_line" }`);
@@ -5493,6 +5507,7 @@ export class LiveGameOrchestrator {
           // MLB Live Edge Trust Recovery (Phase 3) — real sportsbook + real
           // source snapshot timestamp, never fabricated.
           oddsUpdatedAt: resolvedPitcherLine.sourceTimestamp,
+          oddsFetchedAt: resolvedPitcherLine.fetchedAt,
           sportsbook: resolvedPitcherLine.book,
           seasonAvg: pitcherSeasonAvg,
           plateAppearances: pitcherCtx?.pitchCount
@@ -5679,7 +5694,7 @@ export class LiveGameOrchestrator {
     if (oddsEventId) {
       for (const s of allSignals) {
         if (s.side !== "OVER" && s.side !== "UNDER") continue;
-        recordEvaluatedSide(oddsEventId, s.market, s.playerName, s.side);
+        recordEvaluatedSide(oddsEventId, s.market, s.playerName, s.side, s.playerId);
       }
     }
 
