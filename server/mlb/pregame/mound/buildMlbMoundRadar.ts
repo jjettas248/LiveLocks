@@ -60,8 +60,8 @@ import { carryForwardMoundGradedState, carryForwardDroppedFromMound } from "./mo
 import { applyMoundEvaluationSnapshots } from "./evaluationSnapshot";
 import { aggregateRawPitcherContactSnapshot, type RawContactSupportingInputs, type RawPitcherContactSnapshot } from "./rawPitcherContactSnapshot";
 import { isMoundV2ShadowEnabled } from "./v2/moundV2ShadowFlags";
-import { evaluateMoundV2Shadow, MOUND_V1_MODEL_VERSION, MOUND_V2_MODEL_VERSION } from "./v2/moundV2ShadowEvaluation";
-import { recordMoundV2ShadowEvaluation } from "./v2/moundV2ShadowStore";
+import { MOUND_V1_MODEL_VERSION, MOUND_V2_MODEL_VERSION } from "./v2/moundV2ShadowEvaluation";
+import { runMoundV2ShadowForPitcher } from "./v2/moundV2ShadowRunner";
 import type { FrozenMoundBatterInput, MoundFrozenDataQuality } from "./v2/frozenMoundShadowInput";
 
 /**
@@ -626,72 +626,75 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
             const v1RecommendedSide: "OVER" | "UNDER" | null =
               signal.moundDirection === "follow" ? "OVER" : signal.moundDirection === "fade" ? "UNDER" : null;
 
-            const shadowResult = evaluateMoundV2Shadow({
-              snapshotId: shadowSnapshotId,
-              now: new Date(),
-              frozenInputArgs: {
-                gameId: game.gameId,
-                pitcherId: starter.pitcherId,
-                pitcherName: starter.pitcherName,
-                opponent,
-                scheduledGameTime: startsAt,
-                lineupStatus,
-                battingOrder,
-                pitcherThrows: throwsForShadow,
-                kPer9: seasonStats?.kPer9 ?? null,
-                priorSeasonsKPer9,
-                swStrPct: savant?.pitcherSwStrPct ?? null,
-                cswPct: savant?.pitcherCswPct ?? null,
-                missesBatsFamily: savant?.pitcherMissesBatsFamily ?? null,
-                kRateVsLHB: handSplits?.kRateVsLHB ?? null,
-                kRateVsRHB: handSplits?.kRateVsRHB ?? null,
-                avgInningsPerStart,
-                ipVarianceLast3: recentStarts?.ipVarianceLast3 ?? null,
-                lastStartPitchCount: recentStarts?.lastStartPitchCount ?? null,
-                lastStartInningsPitched: recentStarts?.last3StartInningsPitched?.[0] ?? null,
-                bbPer9: seasonStats?.bbPer9 ?? null,
-                // Outs has no real fetch path anywhere in this codebase today
-                // (see types.ts's postedLine.outs comment) — always
-                // unavailable, never fabricated or cross-substituted from
-                // strikeouts.
-                strikeoutsMarket: {
-                  line: marketEdgeContext?.line ?? null,
-                  overPrice: marketEdgeContext?.odds ?? null,
-                  underPrice: underBook?.odds ?? null,
-                  sportsbook: marketEdgeContext?.sportsbook ?? null,
-                  fetchedAt: marketEdgeContext?.oddsUpdatedAt ?? null,
+            // The actual evaluate/record/log/never-throw wrapper is
+            // extracted into runMoundV2ShadowForPitcher (Correction 2) so it
+            // can be exercised with real behavioral tests (including
+            // injected throwing stubs), not just proven by reading source
+            // text. This outer try/catch additionally covers the
+            // construction above (battingOrder, underBook,
+            // v1RecommendedSide) — real defense-in-depth, not redundant,
+            // since that setup code has deep closure dependencies on this
+            // per-pitcher loop and can't be moved into the extracted runner.
+            runMoundV2ShadowForPitcher({
+              signalId,
+              evaluateArgs: {
+                snapshotId: shadowSnapshotId,
+                now: new Date(),
+                frozenInputArgs: {
+                  gameId: game.gameId,
+                  pitcherId: starter.pitcherId,
+                  pitcherName: starter.pitcherName,
+                  opponent,
+                  scheduledGameTime: startsAt,
+                  lineupStatus,
+                  battingOrder,
+                  pitcherThrows: throwsForShadow,
+                  kPer9: seasonStats?.kPer9 ?? null,
+                  priorSeasonsKPer9,
+                  swStrPct: savant?.pitcherSwStrPct ?? null,
+                  cswPct: savant?.pitcherCswPct ?? null,
+                  missesBatsFamily: savant?.pitcherMissesBatsFamily ?? null,
+                  kRateVsLHB: handSplits?.kRateVsLHB ?? null,
+                  kRateVsRHB: handSplits?.kRateVsRHB ?? null,
+                  avgInningsPerStart,
+                  ipVarianceLast3: recentStarts?.ipVarianceLast3 ?? null,
+                  lastStartPitchCount: recentStarts?.lastStartPitchCount ?? null,
+                  lastStartInningsPitched: recentStarts?.last3StartInningsPitched?.[0] ?? null,
+                  bbPer9: seasonStats?.bbPer9 ?? null,
+                  // Outs has no real fetch path anywhere in this codebase today
+                  // (see types.ts's postedLine.outs comment) — always
+                  // unavailable, never fabricated or cross-substituted from
+                  // strikeouts.
+                  strikeoutsMarket: {
+                    line: marketEdgeContext?.line ?? null,
+                    overPrice: marketEdgeContext?.odds ?? null,
+                    underPrice: underBook?.odds ?? null,
+                    sportsbook: marketEdgeContext?.sportsbook ?? null,
+                    fetchedAt: marketEdgeContext?.oddsUpdatedAt ?? null,
+                  },
+                  outsMarket: { line: null, overPrice: null, underPrice: null, sportsbook: null, fetchedAt: null },
+                  dataQuality,
+                  productionModelVersion: MOUND_V1_MODEL_VERSION,
+                  v2ModelVersion: MOUND_V2_MODEL_VERSION,
                 },
-                outsMarket: { line: null, overPrice: null, underPrice: null, sportsbook: null, fetchedAt: null },
-                dataQuality,
-                productionModelVersion: MOUND_V1_MODEL_VERSION,
-                v2ModelVersion: MOUND_V2_MODEL_VERSION,
+                productionComponentScores: {
+                  pitcherSkillScore: pitcherSkill.available ? pitcherSkill.score10 : null,
+                  workloadScore: workload.available ? workload.score10 : null,
+                  opponentKProfileScore: opponentKProfile.available ? opponentKProfile.score10 : null,
+                },
+                v1Score10: scoring.score10,
+                v1Tier: scoring.tier,
+                v1RecommendedSide,
+                strikeoutsLine: marketEdgeContext?.line ?? null,
+                outsLine: null,
               },
-              productionComponentScores: {
-                pitcherSkillScore: pitcherSkill.available ? pitcherSkill.score10 : null,
-                workloadScore: workload.available ? workload.score10 : null,
-                opponentKProfileScore: opponentKProfile.available ? opponentKProfile.score10 : null,
-              },
-              v1Score10: scoring.score10,
-              v1Tier: scoring.tier,
-              v1RecommendedSide,
-              strikeoutsLine: marketEdgeContext?.line ?? null,
-              outsLine: null,
             });
-
-            recordMoundV2ShadowEvaluation(shadowResult);
-
-            if (shadowResult.failureReason) {
-              console.warn(`[MOUND_V2_SHADOW_FAILURE] ${signalId} ${shadowResult.failureReason}`);
-            } else if (shadowResult.parity && !shadowResult.parity.matches) {
-              console.warn(`[MOUND_V2_PARITY_MISMATCH] ${signalId} ${shadowResult.parity.mismatches.join("; ")}`);
-            }
           } catch (err: any) {
-            // Belt-and-suspenders: evaluateMoundV2Shadow itself never throws
-            // (every failure mode inside it is caught and reported via
-            // failureReason instead), but this outer guard ensures a defect
-            // anywhere in THIS block (the flag check, batting-order
-            // construction, the recording call) can never affect V1's own
-            // signal, which is already fully assembled above.
+            // Belt-and-suspenders: runMoundV2ShadowForPitcher itself never
+            // throws, but this outer guard also covers the construction
+            // above (battingOrder, underBook, v1RecommendedSide) — a defect
+            // there can never affect V1's own signal, which is already
+            // fully assembled above.
             console.warn(`[MOUND_V2_SHADOW_UNEXPECTED_ERROR] ${signalId}`, err?.message ?? err);
           }
         }

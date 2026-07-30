@@ -56,7 +56,7 @@ ok(shadowBlockText.length > 100, "the extracted shadow block span is non-trivial
 // only a genuine single `=` assignment trips this check.
 ok(!/\bsignal\.\w+\s*=(?!=)/.test(shadowBlockText), "no assignment INTO the `signal` object appears anywhere in the shadow block");
 ok(!/\bsignals\.set\(/.test(shadowBlockText), "no `signals.set(...)` call appears anywhere in the shadow block — only V1's own call site (outside the block) writes to the signals map");
-ok(/evaluateMoundV2Shadow\(/.test(shadowBlockText), "the shadow block does call evaluateMoundV2Shadow (sanity check that we sliced the right region)");
+ok(/runMoundV2ShadowForPitcher\(/.test(shadowBlockText), "the shadow block does call runMoundV2ShadowForPitcher (sanity check that we sliced the right region) — Correction 2 extracted the evaluate/record/log wrapper into its own testable function, see moundV2ShadowRunner.test.ts for the behavioral (not just structural) proof of its never-throws guarantee");
 ok(/catch\s*\(/.test(shadowBlockText), "the shadow block has its own try/catch — a defect inside it cannot throw into the surrounding per-pitcher loop");
 
 console.log(`\nmoundV2ShadowWiring.test: ${passed} passed, ${failed} failed`);
