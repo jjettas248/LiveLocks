@@ -21,6 +21,9 @@ import { db, pool } from "./db";
 import { ensurePregameRadarPersistenceSchema } from "./dbMigrations/pregameRadarPersistence";
 import { ensureHrRadarResearchPersistenceSchema } from "./dbMigrations/hrRadarResearchPersistence";
 import { ensurePlateHrV2PersistenceSchema } from "./dbMigrations/plateHrV2Persistence";
+import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/mlbRecommendationEpisodePersistence";
+import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2ShadowPersistence";
+import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
@@ -245,6 +248,29 @@ app.use((req, res, next) => {
   await ensurePlateHrV2PersistenceSchema(pool);
   console.log("[startup] Plate HR V2 persistence schema ensured");
   installPlateHrV2CapturePersistence();
+
+  // Durable persistence bootstrap: MLB Recommendation Episode contract
+  // (Flagship Program Phase 1 foundation) — one additive table backing the
+  // new cross-product (Plate/Mound/Live Edge) frozen-recommendation ledger.
+  // Same fail-hard reasoning as the three calls above. No product writes to
+  // this table yet — wiring Plate/Mound/Live Edge to emit episodes is
+  // later-phase work; this call only ever creates schema, never rows.
+  await ensureMlbRecommendationEpisodePersistenceSchema(pool);
+  console.log("[startup] MLB Recommendation Episode persistence schema ensured");
+
+  // Durable persistence bootstrap: Mound Radar V2 (shadow) prediction
+  // capture (Flagship Program Phase 2, Part 4) — one additive table.
+  // MOUND_V2_SHADOW_ENABLED stays off by default; this call only ever
+  // creates schema, never rows, until that flag is set.
+  await ensureMoundV2ShadowPersistenceSchema(pool);
+  console.log("[startup] Mound V2 shadow prediction persistence schema ensured");
+
+  // Durable evaluation outbox (Final Pre-Push Integrity Pass) — the durable
+  // handoff that lets V2 evaluation run entirely outside buildMlbMoundRadar.ts's
+  // publication-critical path. See shared/schema.ts's moundV2ShadowJobs doc
+  // comment. Same MOUND_V2_SHADOW_ENABLED gate; schema-only until then.
+  await ensureMoundV2ShadowJobsPersistenceSchema(pool);
+  console.log("[startup] Mound V2 shadow evaluation outbox schema ensured");
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.
@@ -869,6 +895,63 @@ app.use((req, res, next) => {
           console.warn("[MLB_PREGAME_OUTCOME_SETTLED] grade failed:", e?.message),
         );
       }, 5 * 60 * 1000);
+
+      // Mound V2 (shadow) evaluation WORKER (Final Pre-Push Integrity Pass) —
+      // fully decoupled from buildMlbMoundRadar.ts's publication-critical
+      // path. The build loop's only synchronous obligation toward V2 is a
+      // bounded, idempotent INSERT into the durable outbox
+      // (moundV2ShadowJobQueue.ts); this tick is what actually runs
+      // evaluateMoundV2Shadow + persists the resulting predictions. A short
+      // (30s) interval — cheap to run often since each tick claims only a
+      // bounded batch and no-ops quickly when the queue is empty — keeps
+      // shadow data fresh without ever being on V1's timeline. Same
+      // MOUND_V2_SHADOW_ENABLED gate as the sweeps below: with the flag off,
+      // nothing is ever enqueued, so this is an inert no-op claim of an
+      // empty queue.
+      const { isMoundV2ShadowEnabled } = await import("./mlb/pregame/mound/v2/moundV2ShadowFlags");
+      const { runMoundV2ShadowWorkerTick } = await import("./mlb/pregame/mound/v2/moundV2ShadowWorker");
+      setInterval(() => {
+        if (!isMoundV2ShadowEnabled()) return;
+        runMoundV2ShadowWorkerTick().catch((e) =>
+          console.warn("[MOUND_V2_SHADOW_WORKER] tick failed:", e?.message),
+        );
+      }, 30 * 1000);
+
+      // Mound V2 (shadow) grading — same 5-min cadence as V1's own grading
+      // tick above, since it depends on the same box-score cache. Gated
+      // behind MOUND_V2_SHADOW_ENABLED (default off): with the flag off, no
+      // shadow predictions are ever captured, so this is an inert no-op scan
+      // of an empty pending list until a human deliberately turns it on.
+      const { runMoundV2ShadowGradingSweep } = await import(
+        "./mlb/pregame/mound/v2/moundV2ShadowGradingSweep"
+      );
+      setInterval(() => {
+        if (!isMoundV2ShadowEnabled()) return;
+        runMoundV2ShadowGradingSweep().catch((e) =>
+          console.warn("[MOUND_V2_SHADOW_GRADE] sweep failed:", e?.message),
+        );
+      }, 5 * 60 * 1000);
+
+      // Mound V2 (shadow) reconciliation — Correction 3's bounded backstop
+      // for predictions the passive grading sweep above can never resolve
+      // because mlbGameCache.gamePitchingBoxScore was never (or is no
+      // longer) populated for that game. Deliberately a SEPARATE, longer
+      // (15-min) tick — its own eligibility/cooldown policy
+      // (moundV2ShadowReconciliation.ts) is what actually bounds real
+      // MLB Stats API call volume, not this interval; running the check
+      // itself often is cheap (a DB read that no-ops when nothing is
+      // eligible yet). Same MOUND_V2_SHADOW_ENABLED gate as the sweep
+      // above — with the flag off there are never any pending rows to
+      // reconcile in the first place.
+      const { runMoundV2ShadowReconciliationSweep } = await import(
+        "./mlb/pregame/mound/v2/moundV2ShadowReconciliationSweep"
+      );
+      setInterval(() => {
+        if (!isMoundV2ShadowEnabled()) return;
+        runMoundV2ShadowReconciliationSweep().catch((e) =>
+          console.warn("[MOUND_V2_RECONCILE] sweep failed:", e?.message),
+        );
+      }, 15 * 60 * 1000);
 
       console.log("[MLB_PREGAME_MOUND_TARGETS] scheduled builds armed");
     } catch (err) {

@@ -70,6 +70,15 @@ import {
   type InsertMlbMoundRadarSignal,
   type MlbMoundRadarBuildRow,
   type InsertMlbMoundRadarBuild,
+  mlbRecommendationEpisodes,
+  type MlbRecommendationEpisodeRow,
+  type InsertMlbRecommendationEpisode,
+  moundV2ShadowPredictions,
+  type MoundV2ShadowPredictionRow,
+  type InsertMoundV2ShadowPrediction,
+  moundV2ShadowJobs,
+  type MoundV2ShadowJobRow,
+  type InsertMoundV2ShadowJob,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -92,6 +101,19 @@ import {
   type InsertHrRadarSignalEvent,
 } from "@shared/schema";
 import { PREGAME_SEED_CAP, pregameSeedTierLabel } from "@shared/hrRadarConviction";
+import {
+  applyMlbEpisodeLifecycleEvent as applyMlbEpisodeLifecycleEventPure,
+  settleMlbRecommendationEpisode as settleMlbRecommendationEpisodePure,
+  type MlbRecommendationEpisode,
+  type MlbEpisodeMutableField,
+  type MlbRecommendationProduct,
+  type MlbApprovedSportsbook,
+  type MlbRecommendedSide,
+  type MlbEpisodeDataQuality,
+  type MlbEpisodeStatus,
+  type MlbLifecycleStatus,
+  type MlbSettlementResult,
+} from "@shared/mlbRecommendationEpisode";
 import { eq, and, asc, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
@@ -458,6 +480,135 @@ export interface IStorage {
   getMlbMoundRadarSignalsByGame(sessionDate: string, gameId: string): Promise<MlbMoundRadarSignalRow[]>;
   recordMlbMoundRadarBuild(build: InsertMlbMoundRadarBuild): Promise<void>;
   getLatestMlbMoundRadarBuild(sessionDate: string): Promise<MlbMoundRadarBuildRow | null>;
+
+  // ── MLB Recommendation Episode (Flagship Program Phase 1 foundation) ──────
+  // Creation is INSERT-only — a re-create attempt for an existing episodeId
+  // throws rather than silently overwriting a frozen row. There is
+  // deliberately no upsert/update method that touches frozen fields; the
+  // only mutators are the two below, which apply
+  // shared/mlbRecommendationEpisode.ts's guarded pure function before issuing
+  // a column-scoped UPDATE limited to the mutable columns.
+  createMlbRecommendationEpisode(row: InsertMlbRecommendationEpisode): Promise<MlbRecommendationEpisodeRow>;
+  getMlbRecommendationEpisode(episodeId: string): Promise<MlbRecommendationEpisodeRow | null>;
+  listMlbRecommendationEpisodes(filter?: {
+    product?: MlbRecommendationProduct;
+    status?: MlbEpisodeStatus;
+    gameId?: string;
+    fromCreatedAt?: Date;
+    toCreatedAt?: Date;
+    limit?: number;
+  }): Promise<MlbRecommendationEpisodeRow[]>;
+  /** Returns null if episodeId does not exist. Throws if the patch touches a frozen field, the episode is terminal, or the status transition is invalid. */
+  applyMlbEpisodeLifecycleEvent(
+    episodeId: string,
+    patch: Partial<Pick<MlbRecommendationEpisode, MlbEpisodeMutableField>>,
+  ): Promise<MlbRecommendationEpisodeRow | null>;
+  /** Grades the episode against its own frozen side/line/price. Returns null if episodeId does not exist. Throws if already settled. */
+  settleMlbRecommendationEpisode(
+    episodeId: string,
+    settlementResult: MlbSettlementResult,
+    settledAt: Date,
+  ): Promise<MlbRecommendationEpisodeRow | null>;
+
+  // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
+  // Creation is INSERT-only with ON CONFLICT DO NOTHING — a repeated
+  // evaluation of the exact same frozen (snapshotId, market) is a harmless
+  // no-op (returns null), never a duplicate row and never a silent
+  // overwrite. Grading is a separate, column-scoped UPDATE that never
+  // touches the frozen prediction fields.
+  /** Returns null (not an error) when predictionId already exists — idempotent capture. */
+  createMoundV2ShadowPrediction(row: InsertMoundV2ShadowPrediction): Promise<MoundV2ShadowPredictionRow | null>;
+  getMoundV2ShadowPrediction(predictionId: string): Promise<MoundV2ShadowPredictionRow | null>;
+  listMoundV2ShadowPredictions(filter?: {
+    gameId?: string;
+    pitcherId?: string;
+    market?: string;
+    settlementStatus?: string;
+    v2ModelVersion?: string;
+    fromEvaluationTimestamp?: Date;
+    toEvaluationTimestamp?: Date;
+    limit?: number;
+  }): Promise<MoundV2ShadowPredictionRow[]>;
+  /** Column-scoped: only settlement_status/final_result/final_stat_value/void_reason/graded_at ever change. Returns null if predictionId does not exist. Safe to call more than once (re-grading after an official stat correction updates the same columns again — see moundV2ShadowGrading.ts for the idempotency/audit discipline). */
+  gradeMoundV2ShadowPrediction(
+    predictionId: string,
+    grading: { settlementStatus: string; finalResult: string | null; finalStatValue: number | null; voidReason?: string | null; gradedAt: Date },
+  ): Promise<MoundV2ShadowPredictionRow | null>;
+  /**
+   * Column-scoped: only reconciliation_attempt_count (incremented)/
+   * last_reconciliation_attempt_at/last_reconciliation_failure_reason ever
+   * change — never touches settlement fields (Correction 3's bounded
+   * reconciliation backstop, distinct from gradeMoundV2ShadowPrediction).
+   * Returns null if predictionId does not exist.
+   */
+  recordMoundV2ShadowReconciliationAttempt(
+    predictionId: string,
+    attempt: { attemptedAt: Date; failureReason: string | null },
+  ): Promise<MoundV2ShadowPredictionRow | null>;
+
+  // ── Mound Radar V2 shadow evaluation outbox (Final Pre-Push Integrity Pass) ──
+  // Durable handoff — see shared/schema.ts's moundV2ShadowJobs doc comment.
+  // This is what lets V2 evaluation run entirely outside buildMlbMoundRadar.ts's
+  // publication-critical path: the build's only synchronous obligation is one
+  // bounded, idempotent INSERT here.
+  /** Idempotent INSERT (ON CONFLICT (snapshot_id) DO NOTHING) — returns null when a job for this snapshotId already exists, never a duplicate row. */
+  enqueueMoundV2ShadowJob(job: InsertMoundV2ShadowJob): Promise<MoundV2ShadowJobRow | null>;
+  getMoundV2ShadowJob(jobId: string): Promise<MoundV2ShadowJobRow | null>;
+  /**
+   * Atomically claims up to `limit` jobs that are either pending or whose
+   * in_progress lease has gone stale (claimedAt older than leaseMs) — a
+   * single UPDATE ... FROM (SELECT ... FOR UPDATE SKIP LOCKED) statement,
+   * safe under concurrent worker ticks (two ticks can never claim the same
+   * row). Returns the claimed rows, already stamped status='in_progress'
+   * with a fresh claimedAt/claimedBy.
+   */
+  claimMoundV2ShadowJobs(args: { limit: number; leaseMs: number; claimedBy: string }): Promise<MoundV2ShadowJobRow[]>;
+  /** Column-scoped: status='completed', completedAt=now. Returns null if jobId does not exist. */
+  completeMoundV2ShadowJob(jobId: string, completedAt: Date): Promise<MoundV2ShadowJobRow | null>;
+  /**
+   * Column-scoped: attemptCount+1, lastAttemptedAt, lastFailureReason;
+   * status becomes 'dead_letter' once the incremented attemptCount reaches
+   * maxAttempts, otherwise reverts to 'pending' so a later tick can reclaim
+   * it (the actual backoff delay is enforced by the caller's claim-
+   * eligibility check via lastAttemptedAt, not by this write). Returns null
+   * if jobId does not exist.
+   */
+  failMoundV2ShadowJob(args: { jobId: string; attemptedAt: Date; failureReason: string; maxAttempts: number }): Promise<MoundV2ShadowJobRow | null>;
+  /** Read-only aggregate counts + staleness for admin observability/dead-letter reporting. */
+  getMoundV2ShadowJobQueueStats(staleAfterMs: number): Promise<{
+    pending: number;
+    inProgress: number;
+    completed: number;
+    deadLetter: number;
+    oldestPendingEnqueuedAt: Date | null;
+    staleInProgressCount: number;
+  }>;
+}
+
+// ─── Mound V2 shadow job outbox — raw-row mapper ──────────────────────────
+// db.execute(sql\`...\`) returns snake_case column names (unlike the
+// Drizzle query builder, which auto-maps to the camelCase schema shape) —
+// this is the single mapping point for the two claim/fail queries that must
+// use raw SQL (FOR UPDATE SKIP LOCKED, a CASE-based conditional SET) rather
+// than the query builder.
+function mapMoundV2ShadowJobRow(row: any): MoundV2ShadowJobRow {
+  return {
+    jobId: row.job_id,
+    snapshotId: row.snapshot_id,
+    gameId: row.game_id,
+    pitcherId: row.pitcher_id,
+    signalId: row.signal_id,
+    payload: row.payload,
+    status: row.status,
+    enqueuedAt: row.enqueued_at ? new Date(row.enqueued_at) : row.enqueued_at,
+    attemptCount: row.attempt_count,
+    lastAttemptedAt: row.last_attempted_at ? new Date(row.last_attempted_at) : row.last_attempted_at,
+    lastFailureReason: row.last_failure_reason,
+    claimedAt: row.claimed_at ? new Date(row.claimed_at) : row.claimed_at,
+    claimedBy: row.claimed_by,
+    completedAt: row.completed_at ? new Date(row.completed_at) : row.completed_at,
+    createdAt: row.created_at ? new Date(row.created_at) : row.created_at,
+  };
 }
 
 // ─── Usage compression for blowout games ──────────────────────────────────
@@ -481,6 +632,45 @@ function estimatePossessionsPerMinute(period: number, scoreDiff: number): number
 function americanOddsToProb(odds: number): number {
   if (odds < 0) return Math.abs(odds) / (Math.abs(odds) + 100);
   return 100 / (odds + 100);
+}
+
+// Drizzle's `numeric` columns round-trip as strings (to avoid float
+// precision loss), and `timestamp` columns round-trip as Date objects — this
+// converts an mlb_recommendation_episodes row back into the ISO-string /
+// number-typed MlbRecommendationEpisode domain shape that
+// shared/mlbRecommendationEpisode.ts's guarded pure functions operate on.
+function mlbRecommendationEpisodeRowToDomain(row: MlbRecommendationEpisodeRow): MlbRecommendationEpisode {
+  return {
+    episodeId: row.episodeId,
+    sport: "MLB",
+    product: row.product as MlbRecommendationProduct,
+    gameId: row.gameId,
+    playerId: row.playerId,
+    playerName: row.playerName,
+    market: row.market,
+    recommendedSide: row.recommendedSide as MlbRecommendedSide,
+    line: Number(row.line),
+    americanOdds: row.americanOdds,
+    sportsbook: row.sportsbook as MlbApprovedSportsbook,
+    oddsFetchedAt: row.oddsFetchedAt.toISOString(),
+    recommendationCreatedAt: row.recommendationCreatedAt.toISOString(),
+    modelVersion: row.modelVersion,
+    contractVersion: row.contractVersion,
+    projection: Number(row.projection),
+    modelProbability: Number(row.modelProbability),
+    setupGrade: row.setupGrade,
+    sportsbookEdge: row.sportsbookEdge !== null ? Number(row.sportsbookEdge) : null,
+    dataQuality: row.dataQuality as MlbEpisodeDataQuality,
+    sourceType: "sportsbook",
+    isOfficial: true,
+    gamePhase: row.gamePhase ?? null,
+    surfacedAt: row.surfacedAt ? row.surfacedAt.toISOString() : null,
+    expiresAt: row.expiresAt ? row.expiresAt.toISOString() : null,
+    lifecycleStatus: row.lifecycleStatus as MlbLifecycleStatus,
+    status: row.status as MlbEpisodeStatus,
+    settlementResult: row.settlementResult as MlbSettlementResult | null,
+    settledAt: row.settledAt ? row.settledAt.toISOString() : null,
+  };
 }
 
 // ─── Calibrated probability lookup ─────────────────────────────────────────
@@ -3717,6 +3907,289 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(mlbMoundRadarBuilds.startedAt))
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  // ── MLB Recommendation Episode (Flagship Program Phase 1 foundation) ──────
+  async createMlbRecommendationEpisode(row: InsertMlbRecommendationEpisode): Promise<MlbRecommendationEpisodeRow> {
+    // Deliberately a plain INSERT with no onConflictDoUpdate — a re-create
+    // attempt for an existing episodeId throws a unique-violation instead of
+    // silently overwriting a frozen row.
+    const [inserted] = await db.insert(mlbRecommendationEpisodes).values(row).returning();
+    return inserted;
+  }
+
+  async getMlbRecommendationEpisode(episodeId: string): Promise<MlbRecommendationEpisodeRow | null> {
+    const rows = await db
+      .select()
+      .from(mlbRecommendationEpisodes)
+      .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async listMlbRecommendationEpisodes(filter: {
+    product?: MlbRecommendationProduct;
+    status?: MlbEpisodeStatus;
+    gameId?: string;
+    fromCreatedAt?: Date;
+    toCreatedAt?: Date;
+    limit?: number;
+  } = {}): Promise<MlbRecommendationEpisodeRow[]> {
+    const conditions = [];
+    if (filter.product) conditions.push(eq(mlbRecommendationEpisodes.product, filter.product));
+    if (filter.status) conditions.push(eq(mlbRecommendationEpisodes.status, filter.status));
+    if (filter.gameId) conditions.push(eq(mlbRecommendationEpisodes.gameId, filter.gameId));
+    if (filter.fromCreatedAt) conditions.push(gte(mlbRecommendationEpisodes.recommendationCreatedAt, filter.fromCreatedAt));
+    if (filter.toCreatedAt) conditions.push(lte(mlbRecommendationEpisodes.recommendationCreatedAt, filter.toCreatedAt));
+    const limit = filter.limit ?? 500;
+    if (conditions.length === 0) {
+      return db.select().from(mlbRecommendationEpisodes)
+        .orderBy(desc(mlbRecommendationEpisodes.recommendationCreatedAt))
+        .limit(limit);
+    }
+    return db.select().from(mlbRecommendationEpisodes)
+      .where(and(...conditions))
+      .orderBy(desc(mlbRecommendationEpisodes.recommendationCreatedAt))
+      .limit(limit);
+  }
+
+  async applyMlbEpisodeLifecycleEvent(
+    episodeId: string,
+    patch: Partial<Pick<MlbRecommendationEpisode, MlbEpisodeMutableField>>,
+  ): Promise<MlbRecommendationEpisodeRow | null> {
+    const existing = await this.getMlbRecommendationEpisode(episodeId);
+    if (!existing) return null;
+    // Throws MlbEpisodeMutationError/MlbEpisodeTerminalError/MlbEpisodeTransitionError
+    // if the patch is invalid — this call is the real enforcement, BEFORE any
+    // SQL is issued. The subsequent UPDATE is additionally column-scoped to
+    // the mutable fields only, so frozen columns are never named in a SET
+    // clause regardless.
+    const next = applyMlbEpisodeLifecycleEventPure(mlbRecommendationEpisodeRowToDomain(existing), patch);
+    const [updated] = await db
+      .update(mlbRecommendationEpisodes)
+      .set({
+        surfacedAt: next.surfacedAt ? new Date(next.surfacedAt) : null,
+        expiresAt: next.expiresAt ? new Date(next.expiresAt) : null,
+        lifecycleStatus: next.lifecycleStatus,
+        status: next.status,
+        settlementResult: next.settlementResult,
+        settledAt: next.settledAt ? new Date(next.settledAt) : null,
+        updatedAt: new Date(),
+      })
+      .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async settleMlbRecommendationEpisode(
+    episodeId: string,
+    settlementResult: MlbSettlementResult,
+    settledAt: Date,
+  ): Promise<MlbRecommendationEpisodeRow | null> {
+    const existing = await this.getMlbRecommendationEpisode(episodeId);
+    if (!existing) return null;
+    const next = settleMlbRecommendationEpisodePure(
+      mlbRecommendationEpisodeRowToDomain(existing),
+      settlementResult,
+      settledAt.toISOString(),
+    );
+    const [updated] = await db
+      .update(mlbRecommendationEpisodes)
+      .set({
+        status: next.status,
+        settlementResult: next.settlementResult,
+        settledAt: next.settledAt ? new Date(next.settledAt) : null,
+        lifecycleStatus: next.lifecycleStatus,
+        updatedAt: new Date(),
+      })
+      .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
+      .returning();
+    return updated ?? null;
+  }
+
+  // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
+  async createMoundV2ShadowPrediction(row: InsertMoundV2ShadowPrediction): Promise<MoundV2ShadowPredictionRow | null> {
+    const [inserted] = await db
+      .insert(moundV2ShadowPredictions)
+      .values(row)
+      .onConflictDoNothing({ target: moundV2ShadowPredictions.predictionId })
+      .returning();
+    return inserted ?? null;
+  }
+
+  async getMoundV2ShadowPrediction(predictionId: string): Promise<MoundV2ShadowPredictionRow | null> {
+    const rows = await db
+      .select()
+      .from(moundV2ShadowPredictions)
+      .where(eq(moundV2ShadowPredictions.predictionId, predictionId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async listMoundV2ShadowPredictions(filter: {
+    gameId?: string;
+    pitcherId?: string;
+    market?: string;
+    settlementStatus?: string;
+    v2ModelVersion?: string;
+    fromEvaluationTimestamp?: Date;
+    toEvaluationTimestamp?: Date;
+    limit?: number;
+  } = {}): Promise<MoundV2ShadowPredictionRow[]> {
+    const conditions = [];
+    if (filter.gameId) conditions.push(eq(moundV2ShadowPredictions.gameId, filter.gameId));
+    if (filter.pitcherId) conditions.push(eq(moundV2ShadowPredictions.pitcherId, filter.pitcherId));
+    if (filter.market) conditions.push(eq(moundV2ShadowPredictions.market, filter.market));
+    if (filter.settlementStatus) conditions.push(eq(moundV2ShadowPredictions.settlementStatus, filter.settlementStatus));
+    if (filter.v2ModelVersion) conditions.push(eq(moundV2ShadowPredictions.v2ModelVersion, filter.v2ModelVersion));
+    if (filter.fromEvaluationTimestamp) conditions.push(gte(moundV2ShadowPredictions.evaluationTimestamp, filter.fromEvaluationTimestamp));
+    if (filter.toEvaluationTimestamp) conditions.push(lte(moundV2ShadowPredictions.evaluationTimestamp, filter.toEvaluationTimestamp));
+    const limit = filter.limit ?? 1000;
+    if (conditions.length === 0) {
+      return db.select().from(moundV2ShadowPredictions)
+        .orderBy(desc(moundV2ShadowPredictions.evaluationTimestamp))
+        .limit(limit);
+    }
+    return db.select().from(moundV2ShadowPredictions)
+      .where(and(...conditions))
+      .orderBy(desc(moundV2ShadowPredictions.evaluationTimestamp))
+      .limit(limit);
+  }
+
+  async gradeMoundV2ShadowPrediction(
+    predictionId: string,
+    grading: { settlementStatus: string; finalResult: string | null; finalStatValue: number | null; voidReason?: string | null; gradedAt: Date },
+  ): Promise<MoundV2ShadowPredictionRow | null> {
+    const [updated] = await db
+      .update(moundV2ShadowPredictions)
+      .set({
+        settlementStatus: grading.settlementStatus,
+        finalResult: grading.finalResult,
+        finalStatValue: grading.finalStatValue != null ? String(grading.finalStatValue) : null,
+        voidReason: "voidReason" in grading ? grading.voidReason ?? null : null,
+        gradedAt: grading.gradedAt,
+      })
+      .where(eq(moundV2ShadowPredictions.predictionId, predictionId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async recordMoundV2ShadowReconciliationAttempt(
+    predictionId: string,
+    attempt: { attemptedAt: Date; failureReason: string | null },
+  ): Promise<MoundV2ShadowPredictionRow | null> {
+    const [updated] = await db
+      .update(moundV2ShadowPredictions)
+      .set({
+        reconciliationAttemptCount: sql`${moundV2ShadowPredictions.reconciliationAttemptCount} + 1`,
+        lastReconciliationAttemptAt: attempt.attemptedAt,
+        lastReconciliationFailureReason: attempt.failureReason,
+      })
+      .where(eq(moundV2ShadowPredictions.predictionId, predictionId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async enqueueMoundV2ShadowJob(job: InsertMoundV2ShadowJob): Promise<MoundV2ShadowJobRow | null> {
+    const [inserted] = await db
+      .insert(moundV2ShadowJobs)
+      .values(job)
+      .onConflictDoNothing({ target: moundV2ShadowJobs.snapshotId })
+      .returning();
+    return inserted ?? null;
+  }
+
+  async getMoundV2ShadowJob(jobId: string): Promise<MoundV2ShadowJobRow | null> {
+    const rows = await db
+      .select()
+      .from(moundV2ShadowJobs)
+      .where(eq(moundV2ShadowJobs.jobId, jobId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async claimMoundV2ShadowJobs(args: { limit: number; leaseMs: number; claimedBy: string }): Promise<MoundV2ShadowJobRow[]> {
+    // A single UPDATE ... WHERE job_id IN (SELECT ... FOR UPDATE SKIP LOCKED)
+    // statement — the subquery locks and skips already-locked candidate rows,
+    // so two concurrent worker ticks can never claim the same job. Claims
+    // either a genuinely pending job, or an in_progress one whose lease has
+    // gone stale (its claiming worker presumably crashed) — the row's own
+    // lease timestamp, not application memory, is the source of truth,
+    // so this is correct even across a full process restart.
+    const result = await db.execute(sql`
+      UPDATE mound_v2_shadow_jobs
+      SET status = 'in_progress', claimed_at = NOW(), claimed_by = ${args.claimedBy}
+      WHERE job_id IN (
+        SELECT job_id FROM mound_v2_shadow_jobs
+        WHERE status = 'pending'
+           OR (status = 'in_progress' AND claimed_at < NOW() - (${args.leaseMs}::text || ' milliseconds')::interval)
+        ORDER BY enqueued_at ASC
+        LIMIT ${args.limit}
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING *
+    `);
+    return result.rows.map(mapMoundV2ShadowJobRow);
+  }
+
+  async completeMoundV2ShadowJob(jobId: string, completedAt: Date): Promise<MoundV2ShadowJobRow | null> {
+    const [updated] = await db
+      .update(moundV2ShadowJobs)
+      .set({ status: "completed", completedAt })
+      .where(eq(moundV2ShadowJobs.jobId, jobId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async failMoundV2ShadowJob(args: { jobId: string; attemptedAt: Date; failureReason: string; maxAttempts: number }): Promise<MoundV2ShadowJobRow | null> {
+    const result = await db.execute(sql`
+      UPDATE mound_v2_shadow_jobs
+      SET
+        attempt_count = attempt_count + 1,
+        last_attempted_at = ${args.attemptedAt},
+        last_failure_reason = ${args.failureReason},
+        status = CASE WHEN attempt_count + 1 >= ${args.maxAttempts} THEN 'dead_letter' ELSE 'pending' END
+      WHERE job_id = ${args.jobId}
+      RETURNING *
+    `);
+    return result.rows.length > 0 ? mapMoundV2ShadowJobRow(result.rows[0]) : null;
+  }
+
+  async getMoundV2ShadowJobQueueStats(staleAfterMs: number): Promise<{
+    pending: number;
+    inProgress: number;
+    completed: number;
+    deadLetter: number;
+    oldestPendingEnqueuedAt: Date | null;
+    staleInProgressCount: number;
+  }> {
+    const counts = await db.execute(sql`
+      SELECT status, COUNT(*)::int AS count
+      FROM mound_v2_shadow_jobs
+      GROUP BY status
+    `);
+    const byStatus: Record<string, number> = {};
+    for (const row of counts.rows as any[]) byStatus[row.status] = row.count;
+
+    const oldestPending = await db.execute(sql`
+      SELECT MIN(enqueued_at) AS oldest FROM mound_v2_shadow_jobs WHERE status = 'pending'
+    `);
+    const oldestPendingEnqueuedAt = (oldestPending.rows[0] as any)?.oldest ?? null;
+
+    const stale = await db.execute(sql`
+      SELECT COUNT(*)::int AS count FROM mound_v2_shadow_jobs
+      WHERE status = 'in_progress' AND claimed_at < NOW() - (${staleAfterMs}::text || ' milliseconds')::interval
+    `);
+    const staleInProgressCount = (stale.rows[0] as any)?.count ?? 0;
+
+    return {
+      pending: byStatus["pending"] ?? 0,
+      inProgress: byStatus["in_progress"] ?? 0,
+      completed: byStatus["completed"] ?? 0,
+      deadLetter: byStatus["dead_letter"] ?? 0,
+      oldestPendingEnqueuedAt: oldestPendingEnqueuedAt ? new Date(oldestPendingEnqueuedAt) : null,
+      staleInProgressCount,
+    };
   }
 
   // ── Task #129 — batter rolling stat snapshots ──────────────────────────

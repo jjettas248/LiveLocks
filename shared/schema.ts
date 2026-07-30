@@ -1598,3 +1598,281 @@ export const plateHrV2SufficientStats = pgTable("plate_hr_v2_sufficient_stats", 
 export const insertPlateHrV2SufficientStatsSchema = createInsertSchema(plateHrV2SufficientStats).omit({ computedAt: true });
 export type PlateHrV2SufficientStatsRow = typeof plateHrV2SufficientStats.$inferSelect;
 export type InsertPlateHrV2SufficientStats = z.infer<typeof insertPlateHrV2SufficientStatsSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MLB Recommendation Episode — MLB Flagship Program Phase 1 foundation. The
+// single frozen record an OFFICIAL MLB recommendation (Plate, Mound, or Live
+// Edge) produces. See shared/mlbRecommendationEpisode.ts for the full
+// contract, the frozen/mutable field split, and the guarded mutator
+// (applyMlbEpisodeLifecycleEvent) that is the real enforcement surface.
+//
+// This is a NEW table, not a reuse of persistedPlays — persistedPlays
+// upserts "current best signalScore wins" in place and is shared cross-sport
+// with NBA/NCAAB, with no frozen-price discipline (see Phase 1 persistence
+// audit). episode_id is the primary key and creation is INSERT-only
+// (server/storage.ts's createMlbRecommendationEpisode never upserts), so a
+// re-create attempt fails on the key rather than silently overwriting a
+// frozen row. Every subsequent write is a column-scoped UPDATE limited to
+// the mutable columns below (surfaced_at/expires_at/lifecycle_status/
+// status/settlement_result/settled_at) — frozen columns are never named in
+// any UPDATE ... SET clause anywhere in this codebase.
+// ─────────────────────────────────────────────────────────────────────────────
+export const mlbRecommendationEpisodes = pgTable("mlb_recommendation_episodes", {
+  episodeId: text("episode_id").primaryKey(),
+  sport: text("sport").notNull().default("MLB"),
+  product: text("product").notNull(),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  market: text("market").notNull(),
+  recommendedSide: text("recommended_side").notNull(),
+  line: numeric("line").notNull(),
+  americanOdds: integer("american_odds").notNull(),
+  sportsbook: text("sportsbook").notNull(),
+  oddsFetchedAt: timestamp("odds_fetched_at").notNull(),
+  recommendationCreatedAt: timestamp("recommendation_created_at").notNull(),
+  modelVersion: text("model_version").notNull(),
+  contractVersion: text("contract_version").notNull(),
+  projection: numeric("projection").notNull(),
+  modelProbability: numeric("model_probability").notNull(),
+  setupGrade: text("setup_grade").notNull(),
+  sportsbookEdge: numeric("sportsbook_edge"),
+  dataQuality: text("data_quality").notNull(),
+  sourceType: text("source_type").notNull().default("sportsbook"),
+  isOfficial: boolean("is_official").notNull().default(true),
+  // Additive, nullable: inning/game-phase label for Live Edge episodes
+  // ("pregame" | "1st" | ...), null for single-shot pregame products.
+  gamePhase: text("game_phase"),
+  // Lifecycle — MUTABLE, only via server/storage.ts's
+  // applyMlbEpisodeLifecycleEvent/settleMlbRecommendationEpisode.
+  surfacedAt: timestamp("surfaced_at"),
+  expiresAt: timestamp("expires_at"),
+  lifecycleStatus: text("lifecycle_status").notNull(),
+  status: text("status").notNull().default("created"),
+  settlementResult: text("settlement_result"),
+  settledAt: timestamp("settled_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  gameIdIdx: index("mlb_recommendation_episodes_game_id_idx").on(table.gameId),
+  playerIdIdx: index("mlb_recommendation_episodes_player_id_idx").on(table.playerId),
+  productStatusIdx: index("mlb_recommendation_episodes_product_status_idx").on(table.product, table.status),
+  createdAtIdx: index("mlb_recommendation_episodes_created_at_idx").on(table.recommendationCreatedAt),
+  statusIdx: index("mlb_recommendation_episodes_status_idx").on(table.status),
+  modelVersionIdx: index("mlb_recommendation_episodes_model_version_idx").on(table.modelVersion),
+}));
+
+export const insertMlbRecommendationEpisodeSchema = createInsertSchema(mlbRecommendationEpisodes).omit({ createdAt: true, updatedAt: true });
+export type MlbRecommendationEpisodeRow = typeof mlbRecommendationEpisodes.$inferSelect;
+export type InsertMlbRecommendationEpisode = z.infer<typeof insertMlbRecommendationEpisodeSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mound Radar V2 (Flagship Program Phase 2) — shadow prediction capture.
+// One row per (snapshotId, market) — a pitcher's frozen shadow snapshot
+// produces TWO rows (pitcher_strikeouts, pitcher_outs), never one blended
+// row, so each market can be graded and measured independently. Research/
+// shadow only: this table is never read by buildMlbMoundRadar.ts's public
+// response, moundOutcomeAttribution.ts's settlement, or any official
+// recommendation path — see server/mlb/pregame/mound/v2/ for the isolation
+// discipline this table exists under.
+//
+// prediction_id = `${snapshotId}:${market}` is the natural composite primary
+// key — creation is INSERT-only (server/storage.ts's
+// createMoundV2ShadowPrediction never upserts), so a repeated evaluation of
+// the exact same frozen snapshot+market is a harmless no-op (ON CONFLICT DO
+// NOTHING), not a duplicate row and not a silently-overwritten one. Grading
+// is a separate, column-scoped UPDATE (settlement_status/final_result/
+// final_stat_value/graded_at only) that never touches the frozen prediction
+// fields above it.
+// ─────────────────────────────────────────────────────────────────────────────
+export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
+  predictionId: text("prediction_id").primaryKey(),
+  snapshotId: text("snapshot_id").notNull(),
+  gameId: text("game_id").notNull(),
+  // MLB Stats API gamePk — a DIFFERENT id space than gameId (the ESPN event
+  // id). Captured from the pregame build's already-resolved value (zero
+  // extra network calls) specifically so a later active reconciliation pass
+  // (Correction 3) has a real, durable way to call syncGameBoxScore for this
+  // exact game — gameId alone cannot be used to re-derive it after the fact.
+  // Null only for legacy rows captured before this column existed.
+  gamePk: text("game_pk"),
+  pitcherId: text("pitcher_id").notNull(),
+  pitcherName: text("pitcher_name").notNull(),
+  market: text("market").notNull(),
+
+  // Frozen market state — never rewritten after creation.
+  frozenLine: numeric("frozen_line"),
+  frozenOverPrice: integer("frozen_over_price"),
+  frozenUnderPrice: integer("frozen_under_price"),
+  sportsbook: text("sportsbook"),
+  oddsFetchedAt: timestamp("odds_fetched_at"),
+  // Real scheduled first-pitch time (frozen input's own scheduledGameTime) —
+  // distinct from evaluationTimestamp (when the pregame build ran, always
+  // BEFORE first pitch). Used by reconciliation (Correction 3) to gate "is
+  // this game plausibly over yet" without guessing off build time. Null only
+  // for legacy rows captured before this column existed OR when the
+  // schedule genuinely never supplied a start time.
+  scheduledGameTime: timestamp("scheduled_game_time"),
+
+  evaluationTimestamp: timestamp("evaluation_timestamp").notNull(),
+
+  // V1's own output for the same candidate, captured for side-by-side comparison.
+  v1Score10: numeric("v1_score_10"),
+  v1Tier: text("v1_tier"),
+  setupGrade: text("setup_grade"),
+  // V1's own frozen recommended side ("OVER"|"UNDER"|null — derived from
+  // moundDirection at the same evaluation moment). Additive; rows captured
+  // before this column existed have it null AND carry the pre-bump
+  // contractVersion ("mound_frozen_input_v1") — moundV2ComparisonStats.ts
+  // uses contractVersion, not this column's nullness alone, to distinguish
+  // "V1 genuinely had no recommendation" from "this row predates capture".
+  v1RecommendedSide: text("v1_recommended_side"),
+  // (Final Pre-Push Integrity Pass) Whether v1RecommendedSide represents a
+  // genuinely publicly-qualified V1 recommendation (everPubliclyFlagged /
+  // everPubliclyFlaggedFade, captured AFTER carryForwardMoundGradedState has
+  // pinned moundDirection for this build — see buildMlbMoundRadar.ts) —
+  // "recommended" | "not_recommended". A generic model lean that was never
+  // shown to users is "not_recommended" with v1RecommendedSide null, never
+  // silently counted as a real V1 wager. Rows captured before this column
+  // existed have it null; moundV2ComparisonStats.ts treats null the same as
+  // "unknown, exclude from paired comparison", never as "not_recommended".
+  v1QualificationStatus: text("v1_qualification_status"),
+
+  // V2's real distributional output.
+  v2ExpectedValue: numeric("v2_expected_value").notNull(),
+  v2OverProbability: numeric("v2_over_probability").notNull(),
+  v2UnderProbability: numeric("v2_under_probability").notNull(),
+  v2PushProbability: numeric("v2_push_probability").notNull(),
+
+  // V2's own versioned MODEL-policy verdict (Mound V2 purity pass; renamed
+  // from v2DecisionPolicy/v2Qualified/v2DecisionSide/v2QualificationReason
+  // — the OLD names ambiguously combined the model decision with sportsbook
+  // executability in one concept). DISTINCT from the raw probabilities
+  // above. "V2's implied side" (whichever of over/under has higher
+  // probability) is NOT a decision policy; this is the qualify-or-abstain
+  // verdict from moundV2ModelPolicy.ts, computed from ONLY the model's own
+  // probabilities + data-quality/lineup-status — NEVER price, sportsbook
+  // identity, or odds freshness (that module's input type structurally has
+  // no such field). v2ModelSide is null whenever v2ModelQualified is false
+  // — an explicit, reasoned abstention, never a forced pick.
+  v2ModelPolicyVersion: text("v2_model_policy_version"),
+  v2ModelSide: text("v2_model_side"),
+  v2ModelQualified: boolean("v2_model_qualified"),
+  v2ModelQualificationReason: text("v2_model_qualification_reason"),
+
+  // SEPARATE, downstream-of-the-model sportsbook EXECUTABILITY verdict
+  // (moundV2Executability.ts) — whether v2ModelSide (if any) has a real,
+  // fresh, provenanced price to trade against. Reads the model's OWN
+  // already-decided side; never feeds back into v2ModelSide/v2ModelQualified
+  // above. v2Executable is false (never null-as-true) whenever the price is
+  // missing, unprovenanced, or stale, or the model itself abstained.
+  //
+  // ATOMICITY (Final Line-Provenance and V1 Purity Correction): sportsbook/
+  // line/price/fetchedAt below are ALWAYS written together from the SAME
+  // atomic MoundV2ExecutableOffer object (moundV2Executability.ts) in one
+  // INSERT — never populated from separately-sourced variables, so they can
+  // never independently mismatch. v2ExecutableLine is a NEW column added in
+  // this correction; a prior version of this contract had no line column at
+  // all for the executable offer, forcing a reader to cross-reference
+  // frozen_line (a DIFFERENT part of the row, sourced from the model's own
+  // line-conditioned-probability input) to know which line an executable
+  // price belonged to — exactly the kind of separately-selected-fields risk
+  // this column removes.
+  v2ExecutabilityPolicyVersion: text("v2_executability_policy_version"),
+  v2Executable: boolean("v2_executable"),
+  v2ExecutableSportsbook: text("v2_executable_sportsbook"),
+  v2ExecutableLine: numeric("v2_executable_line"),
+  v2ExecutablePrice: integer("v2_executable_price"),
+  v2ExecutableFetchedAt: timestamp("v2_executable_fetched_at"),
+  v2ExecutabilityFailureReason: text("v2_executability_failure_reason"),
+
+  productionModelVersion: text("production_model_version").notNull(),
+  v2ModelVersion: text("v2_model_version").notNull(),
+  contractVersion: text("contract_version").notNull(),
+  featureHash: text("feature_hash").notNull(),
+
+  dataQuality: text("data_quality").notNull(),
+  lineupStatus: text("lineup_status").notNull(),
+
+  shadowLatencyMs: numeric("shadow_latency_ms"),
+  shadowFailureReason: text("shadow_failure_reason"),
+
+  // Grading — MUTABLE, only via server/storage.ts's gradeMoundV2ShadowPrediction.
+  settlementStatus: text("settlement_status").notNull().default("pending"),
+  finalResult: text("final_result"),
+  finalStatValue: numeric("final_stat_value"),
+  // Why a "void" settlement happened (Part 5's computeMoundV2GradingDecision
+  // already derives this internally — "game_cancelled" | "pitcher_no_appearance"
+  // — but previously discarded it after deciding; persisted so a diagnostic
+  // report can distinguish the two without re-deriving them (Correction 3).
+  // Null for "pending"/"graded" rows.
+  voidReason: text("void_reason"),
+  gradedAt: timestamp("graded_at"),
+
+  // Reconciliation bookkeeping (Correction 3) — MUTABLE, only via
+  // server/storage.ts's recordMoundV2ShadowReconciliationAttempt. Tracks the
+  // bounded backstop pass that re-checks stuck "pending" rows a normal
+  // passive grading tick never saw a fresh box score for. Never touched for
+  // rows that have already graded/voided.
+  reconciliationAttemptCount: integer("reconciliation_attempt_count").notNull().default(0),
+  lastReconciliationAttemptAt: timestamp("last_reconciliation_attempt_at"),
+  lastReconciliationFailureReason: text("last_reconciliation_failure_reason"),
+
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  snapshotIdx: index("mound_v2_shadow_predictions_snapshot_idx").on(table.snapshotId),
+  gamePitcherIdx: index("mound_v2_shadow_predictions_game_pitcher_idx").on(table.gameId, table.pitcherId),
+  settlementStatusIdx: index("mound_v2_shadow_predictions_settlement_status_idx").on(table.settlementStatus),
+  evaluationTimestampIdx: index("mound_v2_shadow_predictions_evaluation_timestamp_idx").on(table.evaluationTimestamp),
+  marketVersionIdx: index("mound_v2_shadow_predictions_market_version_idx").on(table.market, table.v2ModelVersion),
+}));
+
+export const insertMoundV2ShadowPredictionSchema = createInsertSchema(moundV2ShadowPredictions).omit({ createdAt: true });
+export type MoundV2ShadowPredictionRow = typeof moundV2ShadowPredictions.$inferSelect;
+export type InsertMoundV2ShadowPrediction = z.infer<typeof insertMoundV2ShadowPredictionSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mound Radar V2 (Final Pre-Push Integrity Pass) — durable shadow-evaluation
+// outbox. One row per frozen snapshot (snapshot_id is UNIQUE — idempotent
+// enqueue, ON CONFLICT DO NOTHING). This table, NOT an in-memory queue, is
+// what makes V2 evaluation safe to move out of buildMlbMoundRadar.ts's
+// publication-critical path: the production build's ONLY synchronous
+// obligation is one bounded INSERT into this table (the "durable handoff").
+// A separate worker tick (moundV2ShadowWorker.ts) claims pending rows with
+// `FOR UPDATE SKIP LOCKED` (safe under concurrent worker ticks), runs the
+// actual V2 evaluation + persistence, and marks the row completed/failed —
+// entirely outside V1's request/build timeline. A crash or restart at ANY
+// point loses nothing: an enqueued-but-unclaimed row is still `pending`;
+// a claimed-but-never-completed row's lease (claimed_at) simply expires and
+// becomes reclaimable again (see MOUND_V2_SHADOW_JOB_LEASE_MS in
+// moundV2ShadowJobQueue.ts).
+// ─────────────────────────────────────────────────────────────────────────────
+export const moundV2ShadowJobs = pgTable("mound_v2_shadow_jobs", {
+  jobId: text("job_id").primaryKey(),
+  /** Idempotency key — one job per frozen snapshot, ever. A repeated enqueue attempt (e.g. a retried build tick) is a harmless no-op. */
+  snapshotId: text("snapshot_id").notNull().unique(),
+  gameId: text("game_id").notNull(),
+  pitcherId: text("pitcher_id").notNull(),
+  signalId: text("signal_id").notNull(),
+  /** The full EvaluateMoundV2ShadowArgs, JSON-serialized (Dates as ISO strings) — everything the worker needs to run evaluateMoundV2Shadow() from scratch, with nothing re-derived from possibly-changed live state. */
+  payload: jsonb("payload").notNull(),
+  /** pending -> in_progress -> completed, or -> dead_letter after MAX_ATTEMPTS failures. Never any other transition. */
+  status: text("status").notNull().default("pending"),
+  enqueuedAt: timestamp("enqueued_at").notNull().defaultNow(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  lastAttemptedAt: timestamp("last_attempted_at"),
+  lastFailureReason: text("last_failure_reason"),
+  /** Lease fields — a worker claims a batch by stamping these; an expired (stale) lease on a still-in_progress row makes it reclaimable by a later tick, recovering from a worker crash mid-processing. claimedBy is an opaque instance/tick identifier for observability only — the real mutual exclusion is the atomic UPDATE...WHERE...RETURNING claim, not this column. */
+  claimedAt: timestamp("claimed_at"),
+  claimedBy: text("claimed_by"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  statusIdx: index("mound_v2_shadow_jobs_status_idx").on(table.status),
+  enqueuedAtIdx: index("mound_v2_shadow_jobs_enqueued_at_idx").on(table.enqueuedAt),
+  gamePitcherIdx: index("mound_v2_shadow_jobs_game_pitcher_idx").on(table.gameId, table.pitcherId),
+}));
+
+export const insertMoundV2ShadowJobSchema = createInsertSchema(moundV2ShadowJobs).omit({ createdAt: true });
+export type MoundV2ShadowJobRow = typeof moundV2ShadowJobs.$inferSelect;
+export type InsertMoundV2ShadowJob = z.infer<typeof insertMoundV2ShadowJobSchema>;
