@@ -642,6 +642,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
                 now: new Date(),
                 frozenInputArgs: {
                   gameId: game.gameId,
+                  gamePk,
                   pitcherId: starter.pitcherId,
                   pitcherName: starter.pitcherName,
                   opponent,

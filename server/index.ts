@@ -911,6 +911,27 @@ app.use((req, res, next) => {
         );
       }, 5 * 60 * 1000);
 
+      // Mound V2 (shadow) reconciliation — Correction 3's bounded backstop
+      // for predictions the passive grading sweep above can never resolve
+      // because mlbGameCache.gamePitchingBoxScore was never (or is no
+      // longer) populated for that game. Deliberately a SEPARATE, longer
+      // (15-min) tick — its own eligibility/cooldown policy
+      // (moundV2ShadowReconciliation.ts) is what actually bounds real
+      // MLB Stats API call volume, not this interval; running the check
+      // itself often is cheap (a DB read that no-ops when nothing is
+      // eligible yet). Same MOUND_V2_SHADOW_ENABLED gate as the sweep
+      // above — with the flag off there are never any pending rows to
+      // reconcile in the first place.
+      const { runMoundV2ShadowReconciliationSweep } = await import(
+        "./mlb/pregame/mound/v2/moundV2ShadowReconciliationSweep"
+      );
+      setInterval(() => {
+        if (!isMoundV2ShadowEnabled()) return;
+        runMoundV2ShadowReconciliationSweep().catch((e) =>
+          console.warn("[MOUND_V2_RECONCILE] sweep failed:", e?.message),
+        );
+      }, 15 * 60 * 1000);
+
       console.log("[MLB_PREGAME_MOUND_TARGETS] scheduled builds armed");
     } catch (err) {
       console.warn("[MLB_PREGAME_MOUND_TARGETS] boot failed:", (err as Error).message);

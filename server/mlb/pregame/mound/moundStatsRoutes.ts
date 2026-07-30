@@ -8,6 +8,7 @@ import type { Express, RequestHandler } from "express";
 import { slateDateET } from "../../../utils/dateUtils";
 import { getMoundRadarCalibrationStats, getMoundRadarPublicStats } from "./moundStatsService";
 import { gatherMoundV2ComparisonReport, gatherMoundV2PromotionReadiness } from "./v2/moundV2ComparisonGatherer";
+import { gatherMoundV2ShadowGradingCoverageReport } from "./v2/moundV2ShadowReconciliationSweep";
 import { gatherMoundOfficialFirewallMeasurement } from "./moundOfficialFirewallGate";
 
 export function registerMoundRadarStatsRoutes(
@@ -106,6 +107,26 @@ export function registerMoundRadarStatsRoutes(
     } catch (err: any) {
       console.error("[admin/mlb/mound-v2-promotion-readiness]", err?.message ?? err);
       return res.status(500).json({ error: "Failed to build Mound V2 promotion readiness evidence" });
+    }
+  });
+
+  // Mound V2 (shadow) grading coverage/reconciliation report — Correction 3.
+  // Admin-only, read-only diagnostic: pending completed games, oldest
+  // pending prediction, grading coverage ratio, provider-failure count,
+  // unresolved pitcher identities, and suspended/postponed counts. Nothing
+  // is triggered by hitting this endpoint — it only lists and reports.
+  //   ?from=ISO&to=ISO   optional evaluationTimestamp window (defaults to no bound = all rows, bounded internally to 5000)
+  app.get("/api/admin/mlb/mound-v2-grading-coverage", guards.requireAdmin, async (req, res) => {
+    try {
+      const from = req.query.from != null ? new Date(String(req.query.from)) : undefined;
+      const to = req.query.to != null ? new Date(String(req.query.to)) : undefined;
+      if (from && Number.isNaN(from.getTime())) return res.status(400).json({ error: "from must be a valid ISO timestamp" });
+      if (to && Number.isNaN(to.getTime())) return res.status(400).json({ error: "to must be a valid ISO timestamp" });
+      const report = await gatherMoundV2ShadowGradingCoverageReport({ fromEvaluationTimestamp: from, toEvaluationTimestamp: to });
+      return res.json(report);
+    } catch (err: any) {
+      console.error("[admin/mlb/mound-v2-grading-coverage]", err?.message ?? err);
+      return res.status(500).json({ error: "Failed to build Mound V2 grading coverage report" });
     }
   });
 

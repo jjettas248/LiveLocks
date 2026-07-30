@@ -21,6 +21,7 @@ function baseArgs(overrides: Partial<BuildFrozenMoundInputArgs> = {}): BuildFroz
   return {
     snapshotId: "snap_1",
     gameId: "game_1",
+    gamePk: "gamePk_1",
     pitcherId: "pitcher_1",
     pitcherName: "Test Pitcher",
     opponent: "OPP",
@@ -60,6 +61,20 @@ function baseArgs(overrides: Partial<BuildFrozenMoundInputArgs> = {}): BuildFroz
   ok(frozen.snapshotId === "snap_1", "snapshotId passes through");
   ok(frozen.featureHash.length === 64, `featureHash is a 64-char sha256 hex digest (got length ${frozen.featureHash.length})`);
   ok(frozen.battingOrder.length === 2, "batting order passes through");
+  ok(frozen.gameId === "game_1", "gameId (ESPN event id) passes through");
+  ok(frozen.gamePk === "gamePk_1", "gamePk (MLB Stats API id, a DIFFERENT id space than gameId) passes through — Correction 3's reconciliation cannot call syncGameBoxScore correctly without this");
+}
+
+// ── gamePk is a real, distinct identity field, not a gameId alias ──────────
+{
+  const frozen = buildFrozenMoundInput(baseArgs({ gameId: "espn_777", gamePk: "statsapi_999" }));
+  ok(frozen.gameId === "espn_777" && frozen.gamePk === "statsapi_999", "gameId and gamePk are captured independently, never conflated or cross-substituted");
+}
+
+// ── A null gamePk (unresolved at capture time) is honestly null, never fabricated ──
+{
+  const frozen = buildFrozenMoundInput(baseArgs({ gamePk: null }));
+  ok(frozen.gamePk === null, "a null gamePk passes through as null, never defaulted to gameId or any other guessed value");
 }
 
 // ── Deterministic hash: identical feature content -> identical hash ─────────
@@ -75,6 +90,13 @@ function baseArgs(overrides: Partial<BuildFrozenMoundInputArgs> = {}): BuildFroz
   const a = buildFrozenMoundInput(baseArgs());
   const b = buildFrozenMoundInput(baseArgs({ kPer9: 7.0 }));
   ok(a.featureHash !== b.featureHash, "a real evidence change (kPer9) changes the feature hash");
+}
+
+// ── A different gamePk is different feature content too ─────────────────────
+{
+  const a = buildFrozenMoundInput(baseArgs({ gamePk: "pk_a" }));
+  const b = buildFrozenMoundInput(baseArgs({ gamePk: "pk_b" }));
+  ok(a.featureHash !== b.featureHash, "a different gamePk changes the feature hash — it is real captured identity, not incidental metadata");
 }
 
 // ── computeMoundFeatureHash is a pure function of its input shape ─────────

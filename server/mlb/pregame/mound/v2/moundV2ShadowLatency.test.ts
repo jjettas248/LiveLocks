@@ -56,7 +56,7 @@ function buildArgs(i: number): EvaluateMoundV2ShadowArgs {
     snapshotId: `mound_v2:mlb-mound:2026-07-30:game_${i}:pitcher_${i}:build_bench`,
     now: new Date("2026-07-30T20:00:00.000Z"),
     frozenInputArgs: {
-      gameId: `game_${i}`, pitcherId: `pitcher_${i}`, pitcherName: `Pitcher ${i}`, opponent: "OPP",
+      gameId: `game_${i}`, gamePk: `gamePk_${i}`, pitcherId: `pitcher_${i}`, pitcherName: `Pitcher ${i}`, opponent: "OPP",
       scheduledGameTime: "2026-07-30T23:05:00.000Z", lineupStatus: "confirmed",
       battingOrder: nineBatterLineup(),
       pitcherThrows: i % 2 === 0 ? "R" : "L", kPer9: 8.5 + (i % 7) * 0.3, priorSeasonsKPer9: [8.2, 8.9],

@@ -84,6 +84,22 @@ npx tsx server/mlb/pregame/mound/v2/batterStrikeoutProbability.test.ts # Mound V
 npx tsx server/mlb/pregame/mound/v2/battersFacedWorkloadModel.test.ts # Mound V2 batters-faced + outs workload distributions, pull-risk adjustment
 npx tsx server/mlb/pregame/mound/v2/moundV2Engine.test.ts             # Mound V2 distributional engine: OVER/UNDER/push invariants, low-BF/missing-lineup handling, zero production-Mound import edges
 npx tsx server/mlb/pregame/mound/v2/moundV2PromotionGate.test.ts      # Mound V2 promotion-readiness criteria checker (not an auto-promotion)
+npx tsx server/mlb/pregame/mound/v2/frozenMoundShadowInput.test.ts    # Mound V2 frozen input contract: deterministic feature hash, deep-freeze immutability, gameId/gamePk identity capture
+npx tsx server/mlb/pregame/mound/v2/moundV1Adapters.test.ts           # Mound V2 adapters translating V1's own component scores into V2's frozen-input shape
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowEvaluation.test.ts   # Mound V2 shadow evaluation: builds frozen input, runs the V2 engine, captures V1 parity + latency, never throws
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowRunner.test.ts       # Mound V2 shadow runner: behavioral proof (injected throwing evaluate/record stubs) that a shadow-path defect can never propagate into V1's build loop
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowLatency.test.ts      # Mound V2 shadow latency benchmark (committed regression guard, p50/p95/p99/max over a realistic 9-batter lineup)
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowWiring.test.ts       # Mound V2 shadow structural proof: shadow block runs after V1's signal is fully assembled, never assigns into signal/signals
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowPersistenceBuilder.test.ts # Mound V2 shadow persistence row builder: frozen fields incl. v1RecommendedSide/gamePk/scheduledGameTime carry through exactly, 2-rows-per-market invariant
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowStorage.integration.test.ts # Mound V2 shadow storage against a REAL database: insert/idempotency, grading immutability, real regrade audit, reconciliation-attempt bookkeeping, realistic-volume + index-usage proof
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowGrading.test.ts      # Mound V2 shadow grading: pure decision function (hold/void/grade), game-status classification, line-vs-final comparison
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowGrading.integration.test.ts # Mound V2 shadow grading sweep + regrade orchestration against monkey-patched storage: idempotent sweep, void-reason capture, official-stat-correction audit trail
+npx tsx server/dbMigrations/moundV2ShadowPersistence.test.ts          # Mound V2 shadow prediction schema bootstrap: idempotent self-heal ADD COLUMN only, required indexes, no destructive SQL
+npx tsx server/mlb/pregame/mound/v2/moundV2ComparisonStats.test.ts    # Mound V2 vs V1 comparison: honest probability-quality evaluation (named non-V1 comparator) split from paired decision-policy evaluation (captured-price V1 ROI, never -110 assumed, legacy-missing-price exclusion)
+npx tsx server/mlb/pregame/mound/v2/moundV2PromotionEvidenceAdapter.test.ts # Mound V2 promotion evidence adapter: wires the comparison engine's two evaluation split into the gate's required evidence shape
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliation.test.ts # Mound V2 shadow reconciliation policy: eligibility/exponential-backoff/postponed-cooldown decisions, grading coverage report (coverage ratio, oldest pending, stale alerts, provider failures, unresolved pitchers)
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliationSweep.integration.test.ts # Mound V2 shadow reconciliation sweep: behavioral proof of per-game single-flight fetch dedup, whole-sweep single-flight, rate limiting, honest failure attribution, never-throws
+npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliationWiring.test.ts # Mound V2 reconciliation structural proof: zero reachability from buildMlbMoundRadar.ts, syncGameBoxScore called from exactly one file, zero sportsbook/odds imports
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.

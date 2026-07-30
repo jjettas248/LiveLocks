@@ -1690,6 +1690,13 @@ export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
   predictionId: text("prediction_id").primaryKey(),
   snapshotId: text("snapshot_id").notNull(),
   gameId: text("game_id").notNull(),
+  // MLB Stats API gamePk — a DIFFERENT id space than gameId (the ESPN event
+  // id). Captured from the pregame build's already-resolved value (zero
+  // extra network calls) specifically so a later active reconciliation pass
+  // (Correction 3) has a real, durable way to call syncGameBoxScore for this
+  // exact game — gameId alone cannot be used to re-derive it after the fact.
+  // Null only for legacy rows captured before this column existed.
+  gamePk: text("game_pk"),
   pitcherId: text("pitcher_id").notNull(),
   pitcherName: text("pitcher_name").notNull(),
   market: text("market").notNull(),
@@ -1700,6 +1707,13 @@ export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
   frozenUnderPrice: integer("frozen_under_price"),
   sportsbook: text("sportsbook"),
   oddsFetchedAt: timestamp("odds_fetched_at"),
+  // Real scheduled first-pitch time (frozen input's own scheduledGameTime) —
+  // distinct from evaluationTimestamp (when the pregame build ran, always
+  // BEFORE first pitch). Used by reconciliation (Correction 3) to gate "is
+  // this game plausibly over yet" without guessing off build time. Null only
+  // for legacy rows captured before this column existed OR when the
+  // schedule genuinely never supplied a start time.
+  scheduledGameTime: timestamp("scheduled_game_time"),
 
   evaluationTimestamp: timestamp("evaluation_timestamp").notNull(),
 
@@ -1736,7 +1750,22 @@ export const moundV2ShadowPredictions = pgTable("mound_v2_shadow_predictions", {
   settlementStatus: text("settlement_status").notNull().default("pending"),
   finalResult: text("final_result"),
   finalStatValue: numeric("final_stat_value"),
+  // Why a "void" settlement happened (Part 5's computeMoundV2GradingDecision
+  // already derives this internally — "game_cancelled" | "pitcher_no_appearance"
+  // — but previously discarded it after deciding; persisted so a diagnostic
+  // report can distinguish the two without re-deriving them (Correction 3).
+  // Null for "pending"/"graded" rows.
+  voidReason: text("void_reason"),
   gradedAt: timestamp("graded_at"),
+
+  // Reconciliation bookkeeping (Correction 3) — MUTABLE, only via
+  // server/storage.ts's recordMoundV2ShadowReconciliationAttempt. Tracks the
+  // bounded backstop pass that re-checks stuck "pending" rows a normal
+  // passive grading tick never saw a fresh box score for. Never touched for
+  // rows that have already graded/voided.
+  reconciliationAttemptCount: integer("reconciliation_attempt_count").notNull().default(0),
+  lastReconciliationAttemptAt: timestamp("last_reconciliation_attempt_at"),
+  lastReconciliationFailureReason: text("last_reconciliation_failure_reason"),
 
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({

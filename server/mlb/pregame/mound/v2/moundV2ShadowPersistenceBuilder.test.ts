@@ -18,6 +18,7 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
     now: new Date("2026-07-29T20:00:00.000Z"),
     frozenInputArgs: {
       gameId: "game_1",
+      gamePk: "gamePk_1",
       pitcherId: "pitcher_1",
       pitcherName: "Test Pitcher",
       opponent: "OPP",
@@ -87,6 +88,15 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   ok(strikeoutsRow.featureHash === result.frozen!.featureHash, "featureHash matches the frozen snapshot's own hash exactly");
   ok(strikeoutsRow.v1Score10 === "6.9" && strikeoutsRow.v1Tier === "strong", "V1's own score10/tier carry through, never recomputed");
   ok(strikeoutsRow.v1RecommendedSide === "OVER", "V1's own frozen recommended side carries through, never recomputed");
+  ok(strikeoutsRow.gamePk === "gamePk_1", "gamePk (MLB Stats API id) carries through — the only durable way a later reconciliation pass can call syncGameBoxScore for this exact game");
+  ok(
+    strikeoutsRow.scheduledGameTime instanceof Date && strikeoutsRow.scheduledGameTime.toISOString() === "2026-07-29T23:05:00.000Z",
+    `scheduledGameTime carries through as a real Date, distinct from evaluationTimestamp (got ${strikeoutsRow.scheduledGameTime})`,
+  );
+  ok(
+    strikeoutsRow.evaluationTimestamp.getTime() !== strikeoutsRow.scheduledGameTime!.getTime(),
+    "evaluationTimestamp (build time) and scheduledGameTime (first pitch) are captured as genuinely distinct moments, never aliased",
+  );
 
   const outsRow = rows.find((r) => r.market === "pitcher_outs")!;
   ok(outsRow.frozenLine === null && outsRow.sportsbook === null, "outs market has no real fetch path today — honestly null, never fabricated or cross-substituted from strikeouts");
@@ -98,6 +108,16 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
   const result = evaluateMoundV2Shadow(baseArgs({ v1RecommendedSide: null }));
   const rows = buildMoundV2ShadowPredictionRows(result);
   ok(rows.every((r) => r.v1RecommendedSide === null), "when V1 had no resolved direction, every persisted row honestly carries v1RecommendedSide=null");
+}
+
+// ── A null gamePk/scheduledGameTime (unresolved at capture time) is honest, never fabricated ──
+{
+  const result = evaluateMoundV2Shadow(baseArgs({
+    frozenInputArgs: { ...baseArgs().frozenInputArgs, gamePk: null, scheduledGameTime: null },
+  }));
+  const rows = buildMoundV2ShadowPredictionRows(result);
+  ok(rows.every((r) => r.gamePk === null), "a genuinely unresolved gamePk persists as null, never defaulted to gameId or any other guess");
+  ok(rows.every((r) => r.scheduledGameTime === null), "a genuinely unresolved scheduledGameTime persists as null");
 }
 
 // ── Every row starts pending, never pre-graded ───────────────────────────────

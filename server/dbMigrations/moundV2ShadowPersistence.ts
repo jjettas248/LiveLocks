@@ -24,6 +24,7 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
     prediction_id TEXT PRIMARY KEY,
     snapshot_id TEXT NOT NULL,
     game_id TEXT NOT NULL,
+    game_pk TEXT,
     pitcher_id TEXT NOT NULL,
     pitcher_name TEXT NOT NULL,
     market TEXT NOT NULL,
@@ -32,6 +33,7 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
     frozen_under_price INTEGER,
     sportsbook TEXT,
     odds_fetched_at TIMESTAMP,
+    scheduled_game_time TIMESTAMP,
     evaluation_timestamp TIMESTAMP NOT NULL,
     v1_score_10 NUMERIC,
     v1_tier TEXT,
@@ -52,7 +54,11 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
     settlement_status TEXT NOT NULL DEFAULT 'pending',
     final_result TEXT,
     final_stat_value NUMERIC,
+    void_reason TEXT,
     graded_at TIMESTAMP,
+    reconciliation_attempt_count INTEGER NOT NULL DEFAULT 0,
+    last_reconciliation_attempt_at TIMESTAMP,
+    last_reconciliation_failure_reason TEXT,
     created_at TIMESTAMP DEFAULT NOW()
   );
 `;
@@ -64,6 +70,26 @@ const MOUND_V2_SHADOW_PREDICTIONS = `
 const MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_RECOMMENDED_SIDE = `
   ALTER TABLE mound_v2_shadow_predictions
     ADD COLUMN IF NOT EXISTS v1_recommended_side TEXT;
+`;
+
+// Self-heal for a table created before the reconciliation-bookkeeping
+// columns existed (Correction 3) — additive only, same convention.
+const MOUND_V2_SHADOW_PREDICTIONS_ADD_RECONCILIATION_COLUMNS = `
+  ALTER TABLE mound_v2_shadow_predictions
+    ADD COLUMN IF NOT EXISTS void_reason TEXT,
+    ADD COLUMN IF NOT EXISTS reconciliation_attempt_count INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS last_reconciliation_attempt_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS last_reconciliation_failure_reason TEXT;
+`;
+
+// Self-heal for a table created before game_pk/scheduled_game_time existed
+// (Correction 3) — additive only, same convention. Both are captured-at-build
+// identity/context fields (not reconciliation bookkeeping), but arrived in
+// the same correction pass as the columns above.
+const MOUND_V2_SHADOW_PREDICTIONS_ADD_SCHEDULING_COLUMNS = `
+  ALTER TABLE mound_v2_shadow_predictions
+    ADD COLUMN IF NOT EXISTS game_pk TEXT,
+    ADD COLUMN IF NOT EXISTS scheduled_game_time TIMESTAMP;
 `;
 
 const MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX = `
@@ -94,6 +120,8 @@ const MOUND_V2_SHADOW_PREDICTIONS_MARKET_VERSION_IDX = `
 export const MOUND_V2_SHADOW_PERSISTENCE_STATEMENTS: readonly string[] = [
   MOUND_V2_SHADOW_PREDICTIONS,
   MOUND_V2_SHADOW_PREDICTIONS_ADD_V1_RECOMMENDED_SIDE,
+  MOUND_V2_SHADOW_PREDICTIONS_ADD_RECONCILIATION_COLUMNS,
+  MOUND_V2_SHADOW_PREDICTIONS_ADD_SCHEDULING_COLUMNS,
   MOUND_V2_SHADOW_PREDICTIONS_SNAPSHOT_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_GAME_PITCHER_IDX,
   MOUND_V2_SHADOW_PREDICTIONS_SETTLEMENT_STATUS_IDX,

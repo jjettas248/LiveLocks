@@ -25,6 +25,7 @@ function baseArgs(overrides: Partial<BuildFrozenMoundInputArgs> = {}): BuildFroz
   return {
     snapshotId: "snap_1",
     gameId: "game_1",
+    gamePk: "gamePk_1",
     pitcherId: "pitcher_1",
     pitcherName: "Test Pitcher",
     opponent: "OPP",

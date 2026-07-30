@@ -17,6 +17,7 @@ function baseArgs(overrides: Partial<EvaluateMoundV2ShadowArgs> = {}): EvaluateM
     now: new Date("2026-07-29T20:00:00.000Z"),
     frozenInputArgs: {
       gameId: "game_1",
+      gamePk: "gamePk_1",
       pitcherId: "pitcher_1",
       pitcherName: "Test Pitcher",
       opponent: "OPP",

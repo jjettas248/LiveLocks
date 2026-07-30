@@ -28,6 +28,7 @@ function fakeRow(over: Partial<InsertMoundV2ShadowPrediction> = {}): InsertMound
     predictionId: `${TEST_PREFIX}pred_1`,
     snapshotId: `${TEST_PREFIX}snap_1`,
     gameId: `${TEST_PREFIX}game_1`,
+    gamePk: `${TEST_PREFIX}gamePk_1`,
     pitcherId: `${TEST_PREFIX}pitcher_1`,
     pitcherName: "Test Pitcher",
     market: "pitcher_strikeouts",
@@ -36,6 +37,7 @@ function fakeRow(over: Partial<InsertMoundV2ShadowPrediction> = {}): InsertMound
     frozenUnderPrice: 100,
     sportsbook: "draftkings",
     oddsFetchedAt: new Date("2026-07-29T19:58:00.000Z"),
+    scheduledGameTime: new Date("2026-07-29T23:05:00.000Z"),
     evaluationTimestamp: new Date("2026-07-29T20:00:00.000Z"),
     v1Score10: "6.9",
     v1Tier: "strong",
@@ -76,6 +78,15 @@ async function testInsertAndIdempotency() {
   const fetched = await storage.getMoundV2ShadowPrediction(row.predictionId);
   ok(fetched !== null && fetched.frozenLine === "6.5" && fetched.sportsbook === "draftkings", "getMoundV2ShadowPrediction reads back the real persisted row with correct values");
   ok(fetched?.v1RecommendedSide === "OVER", "v1RecommendedSide (Correction 1) genuinely round-trips through the real database, not just the in-memory type");
+  ok(fetched?.gamePk === `${TEST_PREFIX}gamePk_1`, "gamePk (Correction 3) genuinely round-trips through the real database — the field reconciliation depends on to call syncGameBoxScore correctly");
+  ok(
+    fetched?.scheduledGameTime instanceof Date && fetched.scheduledGameTime.toISOString() === "2026-07-29T23:05:00.000Z",
+    `scheduledGameTime (Correction 3) genuinely round-trips as a real Date through the real database (got ${fetched?.scheduledGameTime})`,
+  );
+  ok(fetched?.voidReason === null, "voidReason defaults to null in the real database for a pending row");
+  ok(fetched?.reconciliationAttemptCount === 0, "reconciliationAttemptCount defaults to 0 in the real database (DB-side DEFAULT, not application code)");
+  ok(fetched?.lastReconciliationAttemptAt === null, "lastReconciliationAttemptAt defaults to null in the real database");
+  ok(fetched?.lastReconciliationFailureReason === null, "lastReconciliationFailureReason defaults to null in the real database");
 
   const missing = await storage.getMoundV2ShadowPrediction(`${TEST_PREFIX}does_not_exist`);
   ok(missing === null, "getMoundV2ShadowPrediction returns null for a nonexistent predictionId, never throws");
@@ -151,6 +162,38 @@ async function testRealRegradeAudit() {
   delete mlbGameCache.gamePitchingBoxScore[gameId];
 }
 
+/** Exercises storage.ts's recordMoundV2ShadowReconciliationAttempt (Correction 3) directly against the real DB — the atomic increment, timestamp, and failure-reason bookkeeping the reconciliation sweep depends on. */
+async function testReconciliationBookkeeping() {
+  const predictionId = `${TEST_PREFIX}pred_reconcile`;
+  await storage.createMoundV2ShadowPrediction(fakeRow({ predictionId, gameId: `${TEST_PREFIX}game_1` }));
+
+  const attempt1At = new Date("2026-07-30T04:00:00.000Z");
+  const afterAttempt1 = await storage.recordMoundV2ShadowReconciliationAttempt(predictionId, { attemptedAt: attempt1At, failureReason: "provider timeout" });
+  ok(afterAttempt1?.reconciliationAttemptCount === 1, `first attempt increments the real DB counter to 1 (got ${afterAttempt1?.reconciliationAttemptCount})`);
+  ok(afterAttempt1?.lastReconciliationAttemptAt?.getTime() === attempt1At.getTime(), "lastReconciliationAttemptAt is durably persisted as the real attempted-at timestamp");
+  ok(afterAttempt1?.lastReconciliationFailureReason === "provider timeout", "lastReconciliationFailureReason is durably persisted");
+  ok(afterAttempt1?.settlementStatus === "pending", "recording a reconciliation attempt never touches settlement_status — it is a purely bookkeeping-scoped write");
+
+  const attempt2At = new Date("2026-07-30T04:30:00.000Z");
+  const afterAttempt2 = await storage.recordMoundV2ShadowReconciliationAttempt(predictionId, { attemptedAt: attempt2At, failureReason: null });
+  ok(afterAttempt2?.reconciliationAttemptCount === 2, `the counter increments atomically in the DB (SQL +1, not a read-modify-write race) across repeated real calls (got ${afterAttempt2?.reconciliationAttemptCount})`);
+  ok(afterAttempt2?.lastReconciliationAttemptAt?.getTime() === attempt2At.getTime(), "lastReconciliationAttemptAt reflects the MOST RECENT attempt");
+  ok(afterAttempt2?.lastReconciliationFailureReason === null, "a successful (non-error) attempt clears a previously-recorded failure reason back to null");
+
+  const missing = await storage.recordMoundV2ShadowReconciliationAttempt(`${TEST_PREFIX}does_not_exist`, { attemptedAt: new Date(), failureReason: null });
+  ok(missing === null, "recording a reconciliation attempt for a nonexistent predictionId returns null, never throws");
+
+  // Column-scoped: recording an attempt never disturbs a frozen field.
+  const stillFrozen = await storage.getMoundV2ShadowPrediction(predictionId);
+  ok(stillFrozen?.frozenLine === "6.5", "recording reconciliation attempts never touches frozen prediction fields");
+
+  // voidReason round-trips via the real gradeMoundV2ShadowPrediction storage call directly (not just via the sweep).
+  const voided = await storage.gradeMoundV2ShadowPrediction(predictionId, {
+    settlementStatus: "void", finalResult: null, finalStatValue: null, voidReason: "game_cancelled", gradedAt: new Date("2026-07-30T05:00:00.000Z"),
+  });
+  ok(voided?.settlementStatus === "void" && voided?.voidReason === "game_cancelled", "gradeMoundV2ShadowPrediction's voidReason param genuinely persists through the real database");
+}
+
 async function testListFiltering() {
   const gameId = `${TEST_PREFIX}game_1`;
   await storage.createMoundV2ShadowPrediction(fakeRow({ predictionId: `${TEST_PREFIX}pred_outs`, gameId, market: "pitcher_outs", frozenLine: null }));
@@ -223,6 +266,7 @@ async function main() {
   await testInsertAndIdempotency();
   await testImmutabilityAcrossGrading();
   await testRealRegradeAudit();
+  await testReconciliationBookkeeping();
   await testListFiltering();
   await testRealisticVolumeAndIndexUsage();
   await cleanup();

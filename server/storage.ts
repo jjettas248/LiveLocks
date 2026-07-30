@@ -526,10 +526,21 @@ export interface IStorage {
     toEvaluationTimestamp?: Date;
     limit?: number;
   }): Promise<MoundV2ShadowPredictionRow[]>;
-  /** Column-scoped: only settlement_status/final_result/final_stat_value/graded_at ever change. Returns null if predictionId does not exist. Safe to call more than once (re-grading after an official stat correction updates the same four columns again — see moundV2ShadowGrading.ts for the idempotency/audit discipline). */
+  /** Column-scoped: only settlement_status/final_result/final_stat_value/void_reason/graded_at ever change. Returns null if predictionId does not exist. Safe to call more than once (re-grading after an official stat correction updates the same columns again — see moundV2ShadowGrading.ts for the idempotency/audit discipline). */
   gradeMoundV2ShadowPrediction(
     predictionId: string,
-    grading: { settlementStatus: string; finalResult: string | null; finalStatValue: number | null; gradedAt: Date },
+    grading: { settlementStatus: string; finalResult: string | null; finalStatValue: number | null; voidReason?: string | null; gradedAt: Date },
+  ): Promise<MoundV2ShadowPredictionRow | null>;
+  /**
+   * Column-scoped: only reconciliation_attempt_count (incremented)/
+   * last_reconciliation_attempt_at/last_reconciliation_failure_reason ever
+   * change — never touches settlement fields (Correction 3's bounded
+   * reconciliation backstop, distinct from gradeMoundV2ShadowPrediction).
+   * Returns null if predictionId does not exist.
+   */
+  recordMoundV2ShadowReconciliationAttempt(
+    predictionId: string,
+    attempt: { attemptedAt: Date; failureReason: string | null },
   ): Promise<MoundV2ShadowPredictionRow | null>;
 }
 
@@ -3981,7 +3992,7 @@ export class DatabaseStorage implements IStorage {
 
   async gradeMoundV2ShadowPrediction(
     predictionId: string,
-    grading: { settlementStatus: string; finalResult: string | null; finalStatValue: number | null; gradedAt: Date },
+    grading: { settlementStatus: string; finalResult: string | null; finalStatValue: number | null; voidReason?: string | null; gradedAt: Date },
   ): Promise<MoundV2ShadowPredictionRow | null> {
     const [updated] = await db
       .update(moundV2ShadowPredictions)
@@ -3989,7 +4000,24 @@ export class DatabaseStorage implements IStorage {
         settlementStatus: grading.settlementStatus,
         finalResult: grading.finalResult,
         finalStatValue: grading.finalStatValue != null ? String(grading.finalStatValue) : null,
+        voidReason: "voidReason" in grading ? grading.voidReason ?? null : null,
         gradedAt: grading.gradedAt,
+      })
+      .where(eq(moundV2ShadowPredictions.predictionId, predictionId))
+      .returning();
+    return updated ?? null;
+  }
+
+  async recordMoundV2ShadowReconciliationAttempt(
+    predictionId: string,
+    attempt: { attemptedAt: Date; failureReason: string | null },
+  ): Promise<MoundV2ShadowPredictionRow | null> {
+    const [updated] = await db
+      .update(moundV2ShadowPredictions)
+      .set({
+        reconciliationAttemptCount: sql`${moundV2ShadowPredictions.reconciliationAttemptCount} + 1`,
+        lastReconciliationAttemptAt: attempt.attemptedAt,
+        lastReconciliationFailureReason: attempt.failureReason,
       })
       .where(eq(moundV2ShadowPredictions.predictionId, predictionId))
       .returning();

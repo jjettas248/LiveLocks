@@ -15,7 +15,8 @@ export interface MoundV2ShadowGradingSweepSummary {
   errors: number;
 }
 
-function lookupOfficialStats(row: Pick<MoundV2ShadowPredictionRow, "gameId" | "pitcherId">): MoundV2OfficialStatsLookup {
+/** Exported so the reconciliation sweep sibling (Correction 3) reuses the exact same lookup rather than duplicating it — both live at the same V2 storage-touching layer, unlike the deliberate V1/V2 duplication elsewhere in this package. */
+export function lookupOfficialStats(row: Pick<MoundV2ShadowPredictionRow, "gameId" | "pitcherId">): MoundV2OfficialStatsLookup {
   const box = mlbGameCache.gamePitchingBoxScore[row.gameId];
   const pitcherLine = box?.byPitcherId?.[row.pitcherId];
   const pitcherOrderForTeam = pitcherLine ? box?.pitcherOrderByTeam?.[pitcherLine.team] : null;
@@ -64,6 +65,7 @@ export async function runMoundV2ShadowGradingSweep(): Promise<MoundV2ShadowGradi
           settlementStatus: "void",
           finalResult: null,
           finalStatValue: null,
+          voidReason: decision.reason,
           gradedAt,
         });
         summary.voided++;
@@ -125,24 +127,27 @@ export async function regradeMoundV2ShadowPrediction(predictionId: string): Prom
   const nextStatus = decision.kind === "void" ? "void" : "graded";
   const nextFinalResult = decision.kind === "void" ? null : decision.finalResult;
   const nextFinalStatValue = decision.kind === "void" ? null : decision.finalStatValue;
+  const nextVoidReason = decision.kind === "void" ? decision.reason : null;
   const existingFinalStatValue = existing.finalStatValue != null ? Number(existing.finalStatValue) : null;
 
   const unchanged =
     existing.settlementStatus === nextStatus &&
     existing.finalResult === nextFinalResult &&
-    existingFinalStatValue === nextFinalStatValue;
+    existingFinalStatValue === nextFinalStatValue &&
+    existing.voidReason === nextVoidReason;
 
   if (unchanged) {
     return { changed: false, reason: "no_material_change" };
   }
 
   console.warn(
-    `[MOUND_V2_SHADOW_REGRADE] ${predictionId}: ${existing.settlementStatus}/${existing.finalResult}/${existingFinalStatValue} -> ${nextStatus}/${nextFinalResult}/${nextFinalStatValue}`,
+    `[MOUND_V2_SHADOW_REGRADE] ${predictionId}: ${existing.settlementStatus}/${existing.finalResult}/${existingFinalStatValue}/${existing.voidReason} -> ${nextStatus}/${nextFinalResult}/${nextFinalStatValue}/${nextVoidReason}`,
   );
   const updated = await storage.gradeMoundV2ShadowPrediction(predictionId, {
     settlementStatus: nextStatus,
     finalResult: nextFinalResult,
     finalStatValue: nextFinalStatValue,
+    voidReason: nextVoidReason,
     gradedAt: new Date(),
   });
   return { changed: true, reason: "regraded", row: updated };

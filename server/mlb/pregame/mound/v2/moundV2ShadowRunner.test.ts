@@ -20,7 +20,7 @@ function baseEvaluateArgs(): EvaluateMoundV2ShadowArgs {
     snapshotId: "mound_v2:test:1",
     now: new Date("2026-07-30T20:00:00.000Z"),
     frozenInputArgs: {
-      gameId: "game_1", pitcherId: "pitcher_1", pitcherName: "Test Pitcher", opponent: "OPP",
+      gameId: "game_1", gamePk: "gamePk_1", pitcherId: "pitcher_1", pitcherName: "Test Pitcher", opponent: "OPP",
       scheduledGameTime: "2026-07-30T23:05:00.000Z", lineupStatus: "confirmed",
       battingOrder: [{ playerId: "b1", playerName: "Batter One", battingOrderSlot: 1, handedness: "L", kRateVsThrowHand: 0.27, kRateSamplePa: 200, bvpAtBats: 8, bvpStrikeouts: 2 }],
       pitcherThrows: "R", kPer9: 9.8, priorSeasonsKPer9: [9.2, 8.9], swStrPct: 13.0, cswPct: 29.5, missesBatsFamily: null,

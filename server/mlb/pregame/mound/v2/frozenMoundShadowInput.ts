@@ -67,6 +67,19 @@ export interface FrozenMoundInput {
   // Identity — frozen forever ------------------------------------------------
   snapshotId: string;
   gameId: string;
+  /**
+   * MLB Stats API gamePk — a DIFFERENT id space than gameId (the ESPN event
+   * id; see gameDiscoveryService.ts's discoverTodaysGames / buildMlbMoundRadar.ts's
+   * own `game.gamePk ?? null`). Captured here because it is cheaply available
+   * NOW (already resolved by the pregame build loop before this snapshot is
+   * ever constructed) but is NOT reliably re-derivable long after the fact —
+   * the only existing gameId->gamePk resolver (fetchMlbGamePkMap) re-fetches
+   * and fuzzy-matches against just today's/yesterday's MLB schedule. Without
+   * a durably captured gamePk, a later active box-score reconciliation pass
+   * (Correction 3) would have no correct way to call syncGameBoxScore for a
+   * game the live orchestrator has since stopped tracking.
+   */
+  gamePk: string | null;
   pitcherId: string;
   pitcherName: string;
   opponent: string;
@@ -160,6 +173,7 @@ export function deepFreezeMoundInput<T>(value: T): Readonly<T> {
 export interface BuildFrozenMoundInputArgs {
   snapshotId: string;
   gameId: string;
+  gamePk: string | null;
   pitcherId: string;
   pitcherName: string;
   opponent: string;
@@ -200,6 +214,7 @@ export interface BuildFrozenMoundInputArgs {
 export function buildFrozenMoundInput(args: BuildFrozenMoundInputArgs): Readonly<FrozenMoundInput> {
   const withoutHash: Omit<FrozenMoundInput, "snapshotId" | "evaluationTimestamp" | "featureHash"> = {
     gameId: args.gameId,
+    gamePk: args.gamePk,
     pitcherId: args.pitcherId,
     pitcherName: args.pitcherName,
     opponent: args.opponent,

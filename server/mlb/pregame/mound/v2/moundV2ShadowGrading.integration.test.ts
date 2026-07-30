@@ -41,7 +41,8 @@ function fakeRow(over: Partial<MoundV2ShadowPredictionRow>): MoundV2ShadowPredic
     productionModelVersion: "prod_v1", v2ModelVersion: "v2_v1", contractVersion: "mound_frozen_input_v1",
     featureHash: "abc123", dataQuality: "complete", lineupStatus: "confirmed",
     shadowLatencyMs: "2.1", shadowFailureReason: null,
-    settlementStatus: "pending", finalResult: null, finalStatValue: null, gradedAt: null,
+    settlementStatus: "pending", finalResult: null, finalStatValue: null, voidReason: null, gradedAt: null,
+    reconciliationAttemptCount: 0, lastReconciliationAttemptAt: null, lastReconciliationFailureReason: null,
     createdAt: new Date(),
     ...over,
   } as MoundV2ShadowPredictionRow;
@@ -96,6 +97,8 @@ async function testSweep() {
 
   const cancelledCall = gradeCalls.find((c) => c.predictionId === "pred_cancelled");
   ok(cancelledCall?.grading.settlementStatus === "void" && cancelledCall?.grading.finalResult === null && cancelledCall?.grading.finalStatValue === null, "cancelled-game row is written as void with no fabricated result/stat");
+  ok(cancelledCall?.grading.voidReason === "game_cancelled", "the void write carries the REAL reason computeMoundV2GradingDecision derived (game_cancelled), not a discarded/generic one");
+  ok(finalCall?.grading.voidReason === undefined || finalCall?.grading.voidReason === null, "a graded (non-void) row never carries a voidReason");
 
   const stillLiveCall = gradeCalls.find((c) => c.predictionId === "pred_still_live");
   ok(stillLiveCall === undefined, "still-live, not-yet-pulled row is never written at all — stays pending in the DB");
@@ -188,6 +191,27 @@ async function testRegrade() {
   const gap = await regradeMoundV2ShadowPrediction("p_gap");
   ok(gap.changed === false && gap.reason === "hold_would_not_regrade", "a cache gap that can only produce 'hold' never retracts an existing grade");
   ok(!gapWriteCalled, "hold_would_not_regrade never writes — the stored grade is left exactly as-is");
+
+  // Official-scorer correction that flips a VOID row to a real grade: originally
+  // voided as "pitcher_no_appearance" (box score had no line for this pitcher yet),
+  // a later-corrected box score now shows he did pitch. The regrade must both
+  // produce a real grade AND clear the stale voidReason back to null.
+  mlbGameCache.gamePitchingBoxScore.g1 = {
+    byPitcherId: { p1: { pitcherId: "p1", pitcherName: "P", team: "NYY", strikeOuts: 8, outsRecorded: 15, baseOnBalls: 2, earnedRuns: 1, hits: 4, homeRuns: 1 } },
+    pitcherOrderByTeam: { NYY: ["p1"] },
+    gameStatus: { abstractGameState: "Final", detailedState: "Final", codedGameState: "F" },
+    fetchedAt: Date.now(),
+  };
+  (storage as any).getMoundV2ShadowPrediction = async () => fakeRow({
+    predictionId: "p_void_to_graded", gameId: "g1", pitcherId: "p1", market: "pitcher_strikeouts",
+    frozenLine: "6.5", settlementStatus: "void", finalResult: null, finalStatValue: null, voidReason: "pitcher_no_appearance",
+  });
+  let voidToGradedGrading: any = null;
+  (storage as any).gradeMoundV2ShadowPrediction = async (_id: string, grading: any) => { voidToGradedGrading = grading; return null; };
+  const voidToGraded = await regradeMoundV2ShadowPrediction("p_void_to_graded");
+  ok(voidToGraded.changed === true && voidToGraded.reason === "regraded", "a corrected box score that now shows the pitcher's line flips a stale void back to a real grade");
+  ok(voidToGradedGrading?.settlementStatus === "graded" && voidToGradedGrading?.finalStatValue === 8, "the flip writes the real final stat value (8 Ks), not the void placeholder");
+  ok(voidToGradedGrading?.voidReason === null, "flipping void->graded clears the stale voidReason back to null rather than leaving the old reason stranded on a now-graded row");
 
   restoreStorage();
   delete mlbGameCache.gamePitchingBoxScore.g1;
