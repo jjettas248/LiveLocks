@@ -5905,6 +5905,10 @@ export class LiveGameOrchestrator {
         isDegraded: anyDegraded,
         signalLocked,
         carriedForwardCount: merged.carriedSignals,
+        // Read-time expiration guard input — see edgeCache.ts's
+        // applyReadTimeGuards. Only signals still carried AND already
+        // revalidated this write need a per-read time-bound recheck later.
+        carriedSignalIds: revalidated.survivingCarriedIds,
       });
       const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} carried=${merged.carriedSignals} avgScore=${avgScore} gameCardTags=[${cacheGameCardTags.join(",")}]`);

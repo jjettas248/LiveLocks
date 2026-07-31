@@ -118,6 +118,14 @@ export interface CarryForwardFilterOutcome {
   qualifiedSignals: MLBQualifiedSignal[];
   demoted: number;
   demotionReasonCounts: Record<CarryForwardRejectionReason, number> | Record<string, number>;
+  /**
+   * IDs of carried signals that survived THIS write-time revalidation pass.
+   * The read-time guard (server/mlb/edgeCache.ts) uses this list to know
+   * which cached signals still need a lightweight time-bound recheck on
+   * every future read — a freshly computed signal never needs one, and a
+   * signal already demoted here never reaches the cache at all.
+   */
+  survivingCarriedIds: string[];
 }
 
 /**
@@ -138,11 +146,12 @@ export function applyCarryForwardRevalidation(
   buildContext: (sig: MLBQualifiedSignal) => CarryForwardRevalidationContext
 ): CarryForwardFilterOutcome {
   if (merged.carriedSignalIds.length === 0) {
-    return { allSignals: merged.allSignals, qualifiedSignals: merged.qualifiedSignals, demoted: 0, demotionReasonCounts: {} };
+    return { allSignals: merged.allSignals, qualifiedSignals: merged.qualifiedSignals, demoted: 0, demotionReasonCounts: {}, survivingCarriedIds: [] };
   }
 
   const carriedIdSet = new Set(merged.carriedSignalIds);
   const survivingIds = new Set<string>();
+  const survivingCarriedIds: string[] = [];
   let demoted = 0;
   const demotionReasonCounts: Record<string, number> = {};
 
@@ -157,10 +166,41 @@ export function applyCarryForwardRevalidation(
       return false;
     }
     survivingIds.add(sig.id);
+    survivingCarriedIds.push(sig.id);
     return true;
   });
 
   const qualifiedSignals = merged.qualifiedSignals.filter((sig) => survivingIds.has(sig.id));
 
-  return { allSignals, qualifiedSignals, demoted, demotionReasonCounts };
+  return { allSignals, qualifiedSignals, demoted, demotionReasonCounts, survivingCarriedIds };
+}
+
+// ── Read-time expiration guard (fail-closed, time-only) ──────────────────
+// Deliberately narrow: this is NOT a second copy of revalidateCarriedSignal.
+// It exists because MLB Live Edge is event-driven (see CLAUDE.md §3.2a-1) —
+// applyCarryForwardRevalidation above only re-runs when a real baseball
+// event triggers triggerEngine and a fresh mlbEdgeCache write happens. State
+// changes (pitching changes, matchup flips, family suppression) are always
+// accompanied by a triggering event, so the next write-time pass catches
+// them. Pure TIME passing is NOT accompanied by any event — a quiet 90s gap
+// with no state change never re-enters triggerEngine, so a carried signal's
+// frozen oddsTimestamp/engineGeneratedAt can silently age past their
+// validity window while it sits untouched in the cache, served to every
+// reader in the meantime. This function is the read-boundary fix for
+// exactly that gap: it re-checks ONLY the two time-based bounds
+// (stale_source_price, max_age_exceeded) against the CURRENT clock, every
+// read — never pitching/matchup/family/degraded state, which stays
+// write-time-only by design (re-deriving those here would require live
+// game/pitcher state this module does not have, and would duplicate
+// complete signal finalization).
+export function isCarriedSignalWithinReadTimeBounds(
+  sig: MLBQualifiedSignal,
+  nowMs: number,
+  bounds: { maxCarryAgeMs: number; oddsFreshnessThresholdMs: number }
+): boolean {
+  const generatedAt = sig.engineGeneratedAt ?? 0;
+  if (generatedAt > 0 && nowMs - generatedAt > bounds.maxCarryAgeMs) return false;
+  if (sig.oddsTimestamp == null) return false; // no provenance — fails closed, never assumed fresh
+  if (nowMs - sig.oddsTimestamp > bounds.oddsFreshnessThresholdMs) return false;
+  return true;
 }
