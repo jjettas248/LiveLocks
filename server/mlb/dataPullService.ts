@@ -291,6 +291,13 @@ export interface GamePitchingBoxScorePitcher {
   homeRuns: number;
 }
 
+/** Official MLB Stats API game-status block, straight from gameData.status — the same authority the live feed itself uses, independent of Mound V1's own ESPN-derived MoundGameStatus (mapGameStatus in buildMlbMoundRadar.ts). Additive: consumed by Mound V2 shadow grading (moundV2ShadowGrading.ts) to classify final/live/postponed/suspended/cancelled without a second fetch. */
+export interface GamePitchingBoxScoreGameStatus {
+  abstractGameState: string;
+  detailedState: string;
+  codedGameState: string;
+}
+
 interface GamePitchingBoxScoreCache {
   byPitcherId: Record<string, GamePitchingBoxScorePitcher>;
   /**
@@ -302,6 +309,8 @@ interface GamePitchingBoxScoreCache {
    * over well before the whole game reaches final.
    */
   pitcherOrderByTeam: Record<string, string[]>;
+  /** Optional so snapshots cached before this field existed (and test fixtures) still typecheck — see battedBallEvents above for the same convention. */
+  gameStatus?: GamePitchingBoxScoreGameStatus | null;
   fetchedAt: number;
 }
 
@@ -648,6 +657,15 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
     // block read below but was never ingested anywhere in the codebase before.
     const byPitcherId: Record<string, GamePitchingBoxScorePitcher> = {};
     const pitcherOrderByTeam: Record<string, string[]> = {};
+    // Same already-fetched payload's own status block — no second call.
+    const statusRaw = data?.gameData?.status;
+    const gameStatus: GamePitchingBoxScoreGameStatus | null = statusRaw
+      ? {
+          abstractGameState: String(statusRaw.abstractGameState ?? ""),
+          detailedState: String(statusRaw.detailedState ?? ""),
+          codedGameState: String(statusRaw.codedGameState ?? ""),
+        }
+      : null;
 
     for (const side of ["home", "away"] as const) {
       const team = boxTeams[side];
@@ -704,7 +722,7 @@ export async function syncGameBoxScore(statsPk: string, cacheKey?: string): Prom
       }
     }
 
-    mlbGameCache.gamePitchingBoxScore[gameId] = { byPitcherId, pitcherOrderByTeam, fetchedAt: Date.now() };
+    mlbGameCache.gamePitchingBoxScore[gameId] = { byPitcherId, pitcherOrderByTeam, gameStatus, fetchedAt: Date.now() };
     // No Tank01-style fallback source exists for pitching lines (unlike batting
     // below) — surface an empty/partial parse so a transient live-feed gap is
     // observable rather than silently producing no settlement data. This is

@@ -2447,7 +2447,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/player-history/:playerId", requireAuth, async (req, res) => {
+  app.get("/api/mlb/player-history/:playerId", requireMLBAccess, async (req, res) => {
     try {
       const playerId = req.params.playerId as string;
       const limit = Math.min(parseInt(req.query.limit as string) || 10, 50);
@@ -2464,7 +2464,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/alerts", requireAuth, async (req, res) => {
+  app.get("/api/mlb/alerts", requireMLBAccess, async (req, res) => {
     try {
       const minutes = Math.max(1, Math.min(parseInt(req.query.minutes as string) || 60, 120));
       const [alerts, conversionStats] = await Promise.all([
@@ -3435,7 +3435,7 @@ export async function registerRoutes(
   });
 
   // ── MLB HR Radar Route ───────────────────────────────────────────────────────
-  app.get("/api/mlb/hr-radar", requireAuth, async (req, res) => {
+  app.get("/api/mlb/hr-radar", requireMLBAccess, async (req, res) => {
     try {
       // NOTE: this endpoint is the canonical HR Radar data source consumed by
       // the active ladder (client/src/components/mlb/HrRadarLadder.tsx). It is
@@ -4059,7 +4059,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/hr-radar-grading-history", requireAuth, async (req, res) => {
+  app.get("/api/mlb/hr-radar-grading-history", requireMLBAccess, async (req, res) => {
     try {
       const days = Math.min(parseInt(String(req.query.days ?? "14"), 10) || 14, 30);
       const history = await storage.getHrRadarGradingHistory(days);
@@ -4121,7 +4121,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/hr-radar-grading/:sessionDate", requireAuth, async (req, res) => {
+  app.get("/api/mlb/hr-radar-grading/:sessionDate", requireMLBAccess, async (req, res) => {
     try {
       const sessionDate = String(req.params.sessionDate);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
@@ -4155,7 +4155,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/hr-radar/ladder", requireAuth, async (req, res) => {
+  app.get("/api/mlb/hr-radar/ladder", requireMLBAccess, async (req, res) => {
     // ── LiveLocks Batch D — HR Radar canonical-aware read ──────────
     // Read bus inventory of HR-Watch-flagged canonicals first; the
     // ladder still sources its FIRE/READY/BUILDING buckets from the
@@ -4406,7 +4406,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/hr-radar-board", requireAuth, async (req, res) => {
+  app.get("/api/mlb/hr-radar-board", requireMLBAccess, async (req, res) => {
     try {
       const board = await storage.getTodayHrRadarBoard();
       // HR Radar Master Fix Step 2 + 14 — apply canonical lifecycle/section/
@@ -4522,7 +4522,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/hr-radar-analyze/:playerId/:gameId", requireAuth, async (req, res) => {
+  app.get("/api/mlb/hr-radar-analyze/:playerId/:gameId", requireMLBAccess, async (req, res) => {
     try {
       try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/hr-radar-analyze"); } catch {}
       const playerId = String(req.params.playerId);
@@ -4757,7 +4757,7 @@ export async function registerRoutes(
   });
 
   // ── OnlyHomers Data API ────────────────────────────────────────────────────────
-  app.get("/api/mlb/onlyhomers/stats", requireAuth, async (_req, res) => {
+  app.get("/api/mlb/onlyhomers/stats", requireMLBAccess, async (_req, res) => {
     try {
       const { getHrOutcomeStats } = await import("./mlb/onlyHomersService");
       const stats = await getHrOutcomeStats();
@@ -4768,7 +4768,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/onlyhomers/hot-hitters", requireAuth, async (req, res) => {
+  app.get("/api/mlb/onlyhomers/hot-hitters", requireMLBAccess, async (req, res) => {
     try {
       const period = String(req.query.period || "7d");
       const { getHotHitters } = await import("./mlb/onlyHomersService");
@@ -4780,7 +4780,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/onlyhomers/batter/:name", requireAuth, async (req, res) => {
+  app.get("/api/mlb/onlyhomers/batter/:name", requireMLBAccess, async (req, res) => {
     try {
       const { getBatterHrHistory } = await import("./mlb/onlyHomersService");
       const history = await getBatterHrHistory(decodeURIComponent(req.params.name as string));
@@ -4791,7 +4791,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/mlb/onlyhomers/bvp/:batter/:pitcher", requireAuth, async (req, res) => {
+  app.get("/api/mlb/onlyhomers/bvp/:batter/:pitcher", requireMLBAccess, async (req, res) => {
     try {
       const { getBatterVsPitcherHrHistory } = await import("./mlb/onlyHomersService");
       const history = await getBatterVsPitcherHrHistory(
@@ -5329,7 +5329,7 @@ export async function registerRoutes(
   app.post("/api/mlb/props", requireMLBAccess, mlbPropsHandler);
   app.post("/api/mlb/calculate", requireMLBAccess, mlbPropsHandler);
 
-  app.get("/api/mlb/odds", requireAuth, async (req, res) => {
+  app.get("/api/mlb/odds", requireMLBAccess, async (req, res) => {
     try {
       const { playerTeam, opponentTeam, playerName, statType, inPlay } = req.query;
 
