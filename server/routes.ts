@@ -45,6 +45,7 @@ import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
 import { getMarketParkFactor } from "./mlb/dataSources";
 import { isBarrel as isCanonicalBarrel } from "./mlb/statcastXBA";
 import { validateMlbEngineProbability, logMlbPersistReject, MLB_PROB_BUCKETS, bucketPlaysByCanonicalProb } from "./mlb/probabilityEngine";
+import { finalizeMlbSignal } from "./mlb/mlbSignalFinalizer";
 import {
   recordMLBDiagnostic,
   getMLBDiagnosticSummary,
@@ -2189,7 +2190,7 @@ export async function registerRoutes(
           edge: bestNoRealLine ? null : (bestRawOutput?.edge ?? null),
           probability: bestMarketProb,
           probabilitySemantics: "recommended_side_calibrated" as const,
-          oddsUpdatedAt: bestRawOutput ? new Date(bestRawOutput.oddsUpdatedAt).toISOString() : null,
+          oddsUpdatedAt: bestRawOutput?.oddsUpdatedAt != null ? new Date(bestRawOutput.oddsUpdatedAt).toISOString() : null,
           projectionUpdatedAt: bestRawOutput ? new Date(bestRawOutput.projectionUpdatedAt).toISOString() : null,
         } : null;
 
@@ -2892,12 +2893,29 @@ export async function registerRoutes(
     // richer orchestrator data with the route's leaner payload.
     if (validatedApiSignals.length > 0) {
       const validIds = new Set(validatedApiSignals.map((s) => `${s.playerId}|${s.market}`));
-      for (const qs of (entry?.qualifiedSignals ?? []) as any[]) {
-        const dir = qs.side === "OVER" ? "over" : qs.side === "UNDER" ? "under" : null;
-        if (!dir) continue;
+      for (const qs of (entry?.qualifiedSignals ?? [])) {
         const normalizedMarketKey = (qs.market as string) === "hr" ? "home_runs" : qs.market;
         if (!validIds.has(`${qs.playerId}|${normalizedMarketKey}`)) continue;
-        if (!Number.isFinite(qs.line) || qs.line <= 0) continue;
+
+        // ── MLB Live Edge Trust Recovery (Phase 4/5) — single finalized-
+        // signal gate. Identical to the orchestrator's primary persistence
+        // path (autoPersistMLBSignals) — this route-side safety net can
+        // never diverge from it or reconstruct its own weaker rules. Prefer
+        // the value the orchestrator already stamped on this exact signal
+        // object (stampMlbSignalFinalization ran over the full allSignals
+        // set every cycle) so the two entry points never disagree; fall back
+        // to calling the SAME finalizer function only if this signal somehow
+        // reached here unstamped — never a bespoke re-derivation.
+        const finalized = qs.officialEligibility != null && qs.decisionReasons != null
+          ? { eligibility: qs.officialEligibility, decisionReasons: qs.decisionReasons }
+          : (() => { const f = finalizeMlbSignal(qs); return { eligibility: f.officialEligibility, decisionReasons: f.decisionReasons }; })();
+        const eligibility = finalized.eligibility;
+        if (!eligibility.eligible) {
+          console.log(`[MLB_ROUTE_PERSIST_SAFETY] ineligible player=${qs.playerName} market=${qs.market} reasons=${eligibility.reasons.join(",")}`);
+          continue;
+        }
+
+        const dir = qs.side === "OVER" ? "over" : "under";
         // [MLB Canonical Probability v1] Reject persistence rather than fall back
         // to signalScore. The orchestrator's primary persistence path will retry.
         const validProb = validateMlbEngineProbability(qs);
@@ -2905,7 +2923,7 @@ export async function registerRoutes(
           logMlbPersistReject("missing_engine_probability", qs);
           continue;
         }
-        const sbk = qs.sportsbook && String(qs.sportsbook).trim() !== "" ? qs.sportsbook : "odds_api";
+        const sideOdds = qs.side === "OVER" ? qs.overOdds : qs.underOdds;
         trackPlay({
           gameId,
           playerId: qs.playerId,
@@ -2913,16 +2931,25 @@ export async function registerRoutes(
           team: qs.team ?? null,
           sport: "mlb",
           market: qs.market,
-          direction: dir as "over" | "under",
+          direction: dir,
           line: qs.line,
           projection: qs.projection,
           probability: validProb,
           edge: qs.evPct ?? 0,
-          sportsbook: sbk,
+          sportsbook: qs.sportsbook,
           derivedLine: false,
           createdAt: qs.engineGeneratedAt ?? Date.now(),
           signalScore: qs.signalScore ?? null,
           confidenceTier: qs.confidenceTier ?? null,
+          odds: sideOdds ?? undefined,
+          oddsSourceUpdatedAt: qs.oddsTimestamp ?? null,
+          oddsFetchedAt: qs.oddsFetchedAt ?? null,
+          rawProbability: qs.rawProbability ?? null,
+          officialEligibilityVersion: eligibility.version,
+          officialEligibilityReasons: finalized.decisionReasons?.length ? finalized.decisionReasons : eligibility.reasons,
+          dataQuality: qs.dataQuality ?? null,
+          currentStatKnown: qs.currentStatKnown ?? null,
+          calibrationVersion: qs.calibrationVersion ?? null,
           inning: qs.inning ?? null,
           abNumber: qs.completedAB ?? null,
           opportunityScore: qs.opportunityScore ?? null,

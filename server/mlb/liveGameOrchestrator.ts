@@ -35,6 +35,9 @@ import {
   fetchBatterHandednessSplits,
 } from "./dataPullService";
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
+import { computeBatterCurrentStat, evaluatePitcherCurrentStat, validateBatterPitcherMatchup } from "./liveGameStateContract";
+import { stampMlbSignalFinalization } from "./mlbSignalFinalizer";
+import { applyCarryForwardRevalidation } from "./carryForwardRevalidation";
 import { getMarketParkFactor, isVenueIndoors, mergePitchUsage } from "./dataSources";
 import {
   detectHrEvaluationEpoch,
@@ -73,7 +76,7 @@ import {
 import { evaluateShadowBatterOver } from "./shadowQualification";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
-import { resolveMLBOddsEventIdFromCache, readMLBPlayerOddsFromCache, readMLBApprovedBookPricesFromCache } from "../oddsService";
+import { resolveMLBOddsEventIdFromCache, readMLBPlayerOddsFromCache, readMLBApprovedBookPricesFromCache, MLB_ODDS_LIVE_TTL } from "../oddsService";
 import { normalizeMlbMarketKey } from "./normalizeMarketKey";
 import {
   classifyStateChange,
@@ -1046,7 +1049,25 @@ const PITCHER_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hit
 // Key: "oddsEventId|playerNameNorm|market" — Value: last known real line
 const priorResolvedLines = new Map<string, number>();
 
-type ResolvedLine = { line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean; source: "live" | "prior" | "cache" | "lkg" };
+// MLB Live Edge Trust Recovery (Phase 3, tightened after review) — book and
+// sourceTimestamp carry the ACTUAL selected sportsbook and the ACTUAL
+// sportsbook provider `last_update` (readMLBPlayerOddsFromCache's
+// sourceUpdatedAt), never engine-computation time and never LiveLocks'
+// cache-write time. fetchedAt is that SEPARATE cache-write/receipt time,
+// kept only for cache-health/staleness bookkeeping — never substituted for
+// sourceTimestamp. All three are null on the "prior" fallback path
+// (priorResolvedLines only ever stored a bare line number, never
+// book/timestamp provenance) — that is the correct, honest value: unknown
+// provenance must never be fabricated.
+type ResolvedLine = {
+  line: number; overOdds: number | null; underOdds: number | null; isDegraded: boolean;
+  source: "live" | "prior" | "cache" | "lkg";
+  book: string | null;
+  /** Real sportsbook provider `last_update`. Official freshness reads THIS. */
+  sourceTimestamp: number | null;
+  /** LiveLocks cache-write/receipt time. Cache-health bookkeeping ONLY. */
+  fetchedAt: number | null;
+};
 
 // Phase 2 — most-recent resolved batter_home_runs prices per (gameId, playerId).
 // The per-tick market loop resolves HR odds; the contact-reevaluation path
@@ -1100,6 +1121,7 @@ async function resolveBookLine(
   playerName: string,
   market: MLBMarket,
   refreshPolicy?: ResolveBookLineRefreshPolicy,
+  playerId?: string | null,
 ): Promise<ResolvedLine | null> {
   const normName = playerName.toLowerCase().trim();
   const cacheKey = oddsEventId ? `${oddsEventId}|${normName}|${market}` : `unknown|${normName}|${market}`;
@@ -1117,13 +1139,21 @@ async function resolveBookLine(
     if (refreshPolicy?.allowOddsInterest === false) {
       recordOddsRefreshSkip(oddsEventId, market, "no_material_event", { player: playerName });
     } else {
-      const side = getEvaluatedSide(oddsEventId, market, playerName);
+      // MLB Live Edge Trust Recovery (Phase 3, tightened after review) —
+      // playerName is used ONLY for provider text-matching
+      // (getEvaluatedSide/readMLBApprovedBookPricesFromCache); the refresh
+      // coordinator's consumer identity uses the stable playerId so two
+      // real players who share a name (or a name-formatting difference)
+      // can never collide in dormancy/eligibility tracking.
+      const side = getEvaluatedSide(oddsEventId, market, playerName, playerId ?? undefined);
       const books = readMLBApprovedBookPricesFromCache(oddsEventId, playerName, market);
       const verdict = evaluatePriceFloor(books, side);
       registerMLBMarketInterest({
         eventId: oddsEventId,
         market,
         gameStatus: "live",
+        player: playerId ?? normName,
+        side,
         stale: !cached || cached.isDegraded,
         urgency: refreshPolicy?.urgency ?? null,
         bestPriceForSide: verdict.bestPrice,
@@ -1136,6 +1166,7 @@ async function resolveBookLine(
       priorResolvedLines.set(cacheKey, cached.line);
       pLog(oddsEventId, `odds:bookLine:${cached.isDegraded ? "degraded" : "cache"}`, {
         player: playerName, market, line: cached.line, book: cached.book, ageMs: cached.ageMs,
+        sourceUpdatedAt: cached.sourceUpdatedAt,
       });
       return {
         line: cached.line,
@@ -1143,6 +1174,9 @@ async function resolveBookLine(
         underOdds: cached.underOdds,
         isDegraded: cached.isDegraded,
         source: cached.isDegraded ? "prior" : "cache",
+        book: cached.book,
+        sourceTimestamp: cached.sourceUpdatedAt,
+        fetchedAt: cached.fetchedAt,
       };
     }
   }
@@ -1152,7 +1186,9 @@ async function resolveBookLine(
   if (prior !== undefined) {
     console.warn(`[MLB orchestrator] Using prior known line for ${playerName}/${market}: ${prior}`);
     pLog(oddsEventId ?? "unknown", "odds:bookLine:priorResolved", { player: playerName, market, line: prior });
-    return { line: prior, overOdds: null, underOdds: null, isDegraded: true, source: "prior" };
+    // Only the line survives into this fallback path — book/timestamp were
+    // never captured for it, so they stay null rather than being fabricated.
+    return { line: prior, overOdds: null, underOdds: null, isDegraded: true, source: "prior", book: null, sourceTimestamp: null, fetchedAt: null };
   }
 
   console.log(`[MLB orchestrator] No real line for ${playerName}/${market} — SKIPPED`);
@@ -2767,6 +2803,14 @@ export class LiveGameOrchestrator {
     // preserved on engineProbabilityDominant for diagnostics only — never used
     // for persistence, analytics bucketing, or UI rendering.
     const sidedCalibrated = getCanonicalSidedProbability(output);
+    // MLB Live Edge Trust Recovery (Phase 4) — the pre-calibration side-
+    // selected probability, frozen alongside the final calibrated value at
+    // official-persistence time for calibration-quality reporting (Phase 6).
+    const sidedRawProbability = output.recommendedSide === "OVER"
+      ? output.rawProbabilityOver
+      : output.recommendedSide === "UNDER"
+        ? output.rawProbabilityUnder
+        : null;
     const previousDominantProbability = output.calibratedProbability;
     console.log("[MLB_CANONICAL_PROBABILITY]", {
       player: output.playerName,
@@ -2807,6 +2851,7 @@ export class LiveGameOrchestrator {
       impliedProbability: null,
       engineProbability: sidedCalibrated,
       engineProbabilityDominant: previousDominantProbability,
+      rawProbability: sidedRawProbability,
       calibratedProbabilityOver: output.calibratedProbabilityOver,
       calibratedProbabilityUnder: output.calibratedProbabilityUnder,
       probabilitySemantics: "recommended_side_calibrated",
@@ -2844,7 +2889,7 @@ export class LiveGameOrchestrator {
       },
       timestamps: {
         engineGeneratedAt: new Date(output.engineGeneratedAt).toISOString(),
-        oddsUpdatedAt: new Date(output.oddsUpdatedAt).toISOString(),
+        oddsUpdatedAt: output.oddsUpdatedAt != null ? new Date(output.oddsUpdatedAt).toISOString() : null,
         gameStateUpdatedAt: new Date(output.projectionUpdatedAt).toISOString(),
       },
       ...stateFields,
@@ -3046,6 +3091,7 @@ export class LiveGameOrchestrator {
       overOdds: output.overOdds ?? null,
       underOdds: output.underOdds ?? null,
       oddsTimestamp: output.oddsUpdatedAt ?? null,
+      oddsFetchedAt: output.oddsFetchedAt ?? null,
       pitcherName: pitcher?.playerName ?? null,
       pitcherHand: pitcher?.throws ?? null,
       pitcherPitchCount: pitcherCtx?.pitchCount ?? gameState?.pitchCount ?? null,
@@ -3175,7 +3221,7 @@ export class LiveGameOrchestrator {
       },
       timestamps: {
         engineGeneratedAt: new Date(output.engineGeneratedAt).toISOString(),
-        oddsUpdatedAt: new Date(output.oddsUpdatedAt).toISOString(),
+        oddsUpdatedAt: output.oddsUpdatedAt != null ? new Date(output.oddsUpdatedAt).toISOString() : null,
         gameStateUpdatedAt: new Date(output.projectionUpdatedAt).toISOString(),
       },
       ...stateFields,
@@ -3981,6 +4027,15 @@ export class LiveGameOrchestrator {
     const pitcherCtxCache = mlbGameCache.pitcherContext[gameId];
     const weatherCache = mlbGameCache.weather[gameId];
     const bullpenCache = mlbGameCache.bullpen[gameId];
+    // MLB Live Edge Trust Recovery (Phase 2) — frozen per-cycle snapshot.
+    // Captured ONCE here and read by reference for the rest of this tick, so a
+    // background sync that replaces mlbGameCache.gameBoxScore[gameId] /
+    // gamePitchingBoxScore[gameId] wholesale mid-cycle (across the awaits in
+    // the market loops below) cannot make hits/HRR, pitcher stats, and
+    // inning/pitcher state come from different sequential versions of the
+    // game within the same engine cycle.
+    const gameBoxScoreCache = mlbGameCache.gameBoxScore[gameId];
+    const pitchingBoxScoreCache = mlbGameCache.gamePitchingBoxScore[gameId];
 
     const hourlyWeather = resolveCurrentHourWeather(gameId);
     const resolvedTemp = hourlyWeather?.temperature ?? weatherCache?.temperature ?? null;
@@ -4140,6 +4195,33 @@ export class LiveGameOrchestrator {
           continue;
         }
 
+        // MLB Live Edge Trust Recovery (Phase 2) — opponent-pitcher integrity.
+        // `state.battingOrder` intentionally contains BOTH teams' lineups (see
+        // syncGameState), but `state.pitcherInGame` is the single currently
+        // active pitcher. Without this guard a batter on the PITCHING team
+        // would be evaluated against their own team's pitcher. If no pitcher
+        // is confirmed yet, skip rather than fabricate a matchup from a null
+        // pitcher context.
+        const pitcher = state.pitcherInGame;
+        if (!pitcher || !pitcher.playerId || pitcher.playerId === "unknown") {
+          console.warn(`[MLB_MATCHUP_REJECTED] batter=${batter.playerName} market=${market} reason=no_active_pitcher gameId=${gameId}`);
+          auditRecordRejection(gameId, "missingContext", market, "no_active_pitcher");
+          continue;
+        }
+        const matchupCheck = validateBatterPitcherMatchup({
+          batterTeam: batter.team,
+          pitcherTeam: pitcher.team,
+          pitcherKnown: true,
+          isTopInning: state.isTopInning,
+          homeTeamAbbr: state.homeTeamAbbr,
+          awayTeamAbbr: state.awayTeamAbbr,
+        });
+        if (!matchupCheck.valid) {
+          console.warn(`[MLB_MATCHUP_REJECTED] batter=${batter.playerName} team=${batter.team} pitcher=${pitcher.playerName} market=${market} reason=${matchupCheck.reason} gameId=${gameId}`);
+          auditRecordRejection(gameId, "missingContext", market, matchupCheck.reason ?? "invalid_matchup");
+          continue;
+        }
+
         const { remainingPA, remainingAB } = estimateRemainingPA(
           state.inning,
           state.isTopInning,
@@ -4150,8 +4232,7 @@ export class LiveGameOrchestrator {
         const playerContact = contactCache?.byPlayerId?.[batter.playerId];
 
         // Pitcher context for the active pitcher
-        const pitcher = state.pitcherInGame;
-        const pitcherCtx = pitcher ? pitcherCtxCache?.byPitcherId?.[pitcher.playerId] : undefined;
+        const pitcherCtx = pitcherCtxCache?.byPitcherId?.[pitcher.playerId];
 
         const isPitcherCollapsing = pitcherCtx
           ? (pitcherCtx.velocityDrop !== null && pitcherCtx.velocityDrop > 2)
@@ -4163,7 +4244,7 @@ export class LiveGameOrchestrator {
 
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${batter.playerName}", playerId: "${batter.playerId}", inning: ${state.inning} }`);
 
-        const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market, refreshPolicyFor(batter.playerName, market));
+        const resolvedLine = await resolveBookLine(oddsEventId, batter.playerName, market, refreshPolicyFor(batter.playerName, market), batter.playerId);
         let hrRadarOnly = false;
         if (resolvedLine === null) {
           if (market === "home_runs") {
@@ -4202,7 +4283,7 @@ export class LiveGameOrchestrator {
         }
         auditRecordNormalized(gameId, market);
 
-        const boxScorePlayer = mlbGameCache.gameBoxScore[gameId]?.byPlayerId?.[batter.playerId];
+        const boxScorePlayer = gameBoxScoreCache?.byPlayerId?.[batter.playerId];
         const playerAB = boxScorePlayer?.ab ?? 0;
         const isEarlySignalMode = playerAB < 1;
 
@@ -4218,17 +4299,12 @@ export class LiveGameOrchestrator {
         const effectiveSeasonAvg = rateAdj !== 1.0
           ? Math.max(0.01, rawSeasonAvg * rateAdj)
           : rawSeasonAvg;
-        let currentStatForMarket = 0;
-        if (boxScorePlayer) {
-          switch (market) {
-            case "hits": currentStatForMarket = boxScorePlayer.hits; break;
-            case "home_runs": currentStatForMarket = boxScorePlayer.hr; break;
-            case "hrr": currentStatForMarket = (boxScorePlayer.hr ?? 0) + ((boxScorePlayer as any).r ?? 0) + ((boxScorePlayer as any).rbi ?? 0); break;
-            case "total_bases": currentStatForMarket = boxScorePlayer.tb; break;
-            case "pitcher_strikeouts": case "hits_allowed": currentStatForMarket = 0; break;
-            default: currentStatForMarket = boxScorePlayer.hits; break;
-          }
-        }
+        // MLB Live Edge Trust Recovery (Phase 2) — HRR is Hits + Runs + RBI,
+        // per the box-score contract (GameBoxScorePlayer). Delegated to the
+        // pure, unit-tested liveGameStateContract helper (previously an
+        // inline hr+r+rbi read of `.r`, an untyped alias that does not exist
+        // on GameBoxScorePlayer and always evaluated to 0).
+        let currentStatForMarket = computeBatterCurrentStat(market, boxScorePlayer);
 
         // MLB Signals audit P1 — race-proof currentStat for ALL batter markets.
         // The play feed updates priorABResults synchronously inside
@@ -4297,9 +4373,20 @@ export class LiveGameOrchestrator {
           bookLine: hrRadarOnly ? 0.5 : resolvedLine!.line,
           overOdds: hrRadarOnly ? null : resolvedLine!.overOdds,
           underOdds: hrRadarOnly ? null : resolvedLine!.underOdds,
+          // MLB Live Edge Trust Recovery (Phase 3) — real sportsbook + real
+          // source snapshot timestamp, never fabricated. hrRadarOnly (no real
+          // cached line) correctly stays null on both.
+          oddsUpdatedAt: hrRadarOnly ? null : resolvedLine!.sourceTimestamp,
+          oddsFetchedAt: hrRadarOnly ? null : resolvedLine!.fetchedAt,
+          sportsbook: hrRadarOnly ? null : resolvedLine!.book,
           seasonAvg: effectiveSeasonAvg,
-          plateAppearances: state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0,
-          atBats: boxScorePlayer ? boxScorePlayer.ab : Math.max(0, state.pitchCount > 0 ? Math.max(1, state.battingOrder.length) : 0),
+          // MLB Live Edge Trust Recovery (Phase 2) — real box-score-derived
+          // AB/PA, never fabricated from batting-order length (an unrelated
+          // quantity — 9 lineup slots is not "9 plate appearances"). Zero
+          // AB/PA is the honest value before this batter's first box-score
+          // entry exists for the game.
+          plateAppearances: boxScorePlayer ? boxScorePlayer.ab + boxScorePlayer.bb : 0,
+          atBats: boxScorePlayer ? boxScorePlayer.ab : 0,
           currentStatValue: currentStatForMarket,
           remainingPA,
           remainingAB,
@@ -4356,8 +4443,8 @@ export class LiveGameOrchestrator {
           ...(market === "hrr" && boxScorePlayer ? {
             hrrComponents: {
               currentHits: boxScorePlayer.hits ?? 0,
-              currentRuns: (boxScorePlayer as any).r ?? 0,
-              currentRBIs: (boxScorePlayer as any).rbi ?? 0,
+              currentRuns: boxScorePlayer.runs ?? 0,
+              currentRBIs: boxScorePlayer.rbi ?? 0,
               hitsRate: effectiveSeasonAvg,
               runsRate: 0.10,
               rbisRate: 0.12,
@@ -4668,6 +4755,7 @@ export class LiveGameOrchestrator {
                 xBA: input.contactQuality.xBA != null,
                 bvp: !!bvpData,
               }).filter(Boolean).length >= 4 ? "full" : "partial");
+              qResult.currentStatKnown = boxScorePlayer != null;
               qualifiedSignals.push(qResult);
               allSignals.push(qResult);
               signalsQualified++;
@@ -5056,7 +5144,7 @@ export class LiveGameOrchestrator {
                     hrLiveEdge.hasRealSportsbookLine = !hrRadarOnly;
                     // FSM state stamp — read by the autoPersist HR firewall
                     // (only a real-line BET_NOW may become a persisted play).
-                    (hrLiveEdge as any).hrCurrentState = hrDynSnap?.currentState ?? null;
+                    hrLiveEdge.hrCurrentState = hrDynSnap?.currentState ?? null;
                     if (hrRadarOnly) hrLiveEdge.sportsbook = null;
                     // signalTier reflects the unified canonicalStage conviction
                     // (raw axis): watch→watch, building→lean, attack→elite.
@@ -5068,6 +5156,7 @@ export class LiveGameOrchestrator {
                     else if (canonicalStage === "watch" || canonicalStage === "cooling") hrLiveEdge.signalTier = "watch";
                     hrLiveEdge.currentStats = batterStats;
                     hrLiveEdge.lastABContact = lastABContact;
+                    hrLiveEdge.currentStatKnown = boxScorePlayer != null;
                     qualifiedSignals.push(hrLiveEdge);
                     allSignals.push(hrLiveEdge);
                     signalsQualified++;
@@ -5354,6 +5443,18 @@ export class LiveGameOrchestrator {
 
     if (pitcherToEval) {
       const pitcherCtx = pitcherCtxCache?.byPitcherId?.[pitcherToEval.playerId];
+      // MLB Live Edge Trust Recovery (Phase 2) — read the pitcher's ACTUAL
+      // live pitching line (Ks/outs/hits allowed) from the already-fetched
+      // box score instead of hardcoding currentStatValue to 0. A missing
+      // cache entry means the live feed hasn't produced a pitching line for
+      // this pitcher yet (e.g. first tick of the game) — that is "unknown",
+      // never a silent zero, so it is surfaced as a degraded input rather
+      // than a real observed value.
+      const pitcherBoxLine = pitchingBoxScoreCache?.byPitcherId?.[pitcherToEval.playerId];
+      const pitcherLiveStatKnown = pitcherBoxLine != null;
+      if (!pitcherLiveStatKnown) {
+        console.warn(`[MLB_STATE_DEGRADED] no live pitching box-score entry for ${pitcherToEval.playerName} (${gameId}) — pitcher current-stat markets run degraded this tick`);
+      }
 
       for (const market of PITCHER_MARKETS) {
         if (!impactedMarkets.has(market)) continue;
@@ -5368,7 +5469,7 @@ export class LiveGameOrchestrator {
 
         console.log(`[MLB MARKET INPUT][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", playerId: "${pitcherToEval.playerId}", inning: ${state.inning} }`);
 
-        const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market, refreshPolicyFor(pitcherToEval.playerName, market));
+        const resolvedPitcherLine = await resolveBookLine(oddsEventId, pitcherToEval.playerName, market, refreshPolicyFor(pitcherToEval.playerName, market), pitcherToEval.playerId);
         auditRecordRaw(gameId);
         if (resolvedPitcherLine === null) {
           console.log(`[MLB MARKET SKIP][${gameId}][${market}] { playerName: "${pitcherToEval.playerName}", reason: "no_book_line" }`);
@@ -5401,6 +5502,12 @@ export class LiveGameOrchestrator {
           ? (pitcherToEval.team === state.homeTeamAbbr ? state.awayTeamAbbr : state.homeTeamAbbr)
           : "";
 
+        // MLB Live Edge Trust Recovery (Phase 2) — real live pitching line,
+        // never a hardcoded zero. Zero is valid only when the typed live feed
+        // explicitly reports it; a missing box-score entry is surfaced via
+        // pitcherLiveStatKnown/isDegraded below rather than treated as truth.
+        const currentStatForPitcherMarket = evaluatePitcherCurrentStat(market, pitcherBoxLine).value;
+
         const input: MLBPropInput = {
           playerId: pitcherToEval.playerId,
           playerName: pitcherToEval.playerName,
@@ -5411,6 +5518,11 @@ export class LiveGameOrchestrator {
           bookLine: resolvedPitcherLine.line,
           overOdds: resolvedPitcherLine.overOdds,
           underOdds: resolvedPitcherLine.underOdds,
+          // MLB Live Edge Trust Recovery (Phase 3) — real sportsbook + real
+          // source snapshot timestamp, never fabricated.
+          oddsUpdatedAt: resolvedPitcherLine.sourceTimestamp,
+          oddsFetchedAt: resolvedPitcherLine.fetchedAt,
+          sportsbook: resolvedPitcherLine.book,
           seasonAvg: pitcherSeasonAvg,
           plateAppearances: pitcherCtx?.pitchCount
             ? Math.floor(pitcherCtx.pitchCount / 4)
@@ -5418,7 +5530,7 @@ export class LiveGameOrchestrator {
           atBats: pitcherCtx?.pitchCount
             ? Math.floor(pitcherCtx.pitchCount / 4)
             : 0,
-          currentStatValue: 0,
+          currentStatValue: currentStatForPitcherMarket,
           remainingPA,
           remainingAB,
           completedAB: Math.max(0, 4 - remainingAB),
@@ -5493,9 +5605,15 @@ export class LiveGameOrchestrator {
           bullpen: bullpenCache?.bullpenEra != null,
         };
         const pitcherRealCount = Object.values(pitcherQualityLayers).filter(Boolean).length;
-        const pitcherIsDegraded = pitcherRealCount <= 3;
+        // MLB Live Edge Trust Recovery (Phase 2) — a missing live pitching
+        // line (pitcherLiveStatKnown === false) means currentStatValue above
+        // is a placeholder, not an observed fact. Fold that into the same
+        // degraded-input signal official-eligibility already reads, so this
+        // market can still surface as a shadow/watch signal but can never
+        // become an official recommendation while the live stat is unknown.
+        const pitcherIsDegraded = pitcherRealCount <= 3 || !pitcherLiveStatKnown;
         if (pitcherIsDegraded) {
-          console.warn(`[MLB_INPUT_QUALITY] DEGRADED:pitcher game=${gameId} player=${input.playerName} market=${market} real=${pitcherRealCount}/6 layers=${JSON.stringify(pitcherQualityLayers)}`);
+          console.warn(`[MLB_INPUT_QUALITY] DEGRADED:pitcher game=${gameId} player=${input.playerName} market=${market} real=${pitcherRealCount}/6 liveStatKnown=${pitcherLiveStatKnown} layers=${JSON.stringify(pitcherQualityLayers)}`);
         }
         (input as any).isDegraded = pitcherIsDegraded;
 
@@ -5544,6 +5662,7 @@ export class LiveGameOrchestrator {
             qResult.varianceTier = MARKET_VOLATILITY[market] ?? "mid";
             qResult.isDegraded = !!(input as any).isDegraded;
             qResult.dataQuality = !!(input as any).isDegraded ? "degraded" : "partial";
+            qResult.currentStatKnown = pitcherLiveStatKnown;
             qualifiedSignals.push(qResult);
             allSignals.push(qResult);
             signalsQualified++;
@@ -5590,7 +5709,7 @@ export class LiveGameOrchestrator {
     if (oddsEventId) {
       for (const s of allSignals) {
         if (s.side !== "OVER" && s.side !== "UNDER") continue;
-        recordEvaluatedSide(oddsEventId, s.market, s.playerName, s.side);
+        recordEvaluatedSide(oddsEventId, s.market, s.playerName, s.side, s.playerId);
       }
     }
 
@@ -5628,6 +5747,19 @@ export class LiveGameOrchestrator {
       }
     }
     console.log(`[MLB_FAMILY_SUPPRESSION][${gameId}] signals=${allSignals.length} flagships=${flagshipCount}`);
+
+    // ── Single finalization boundary (Phase 5) ───────────────────────────────
+    // Stamps officialEligibility/isBettable/lifecycleClassification/
+    // decisionReasons on EVERY signal in `allSignals` — not just the
+    // persistence-eligible subset — so watch-only signals (which never reach
+    // autoPersistMLBSignals) still carry the same finalized values as
+    // everything else once written to mlbEdgeCache. Runs AFTER all
+    // probability/cap/suppression/family/lifecycle logic above and BEFORE
+    // carry-forward, so carried signals from a prior cycle already carry
+    // their own cycle's stamp by induction — no consumer downstream
+    // (persistence, API serialization, canonical mapper, analytics, UI
+    // grouping) may recompute any of these values independently.
+    stampMlbSignalFinalization(allSignals);
 
     allSignals.sort(compareMLBSignalsForFeed);
 
@@ -5675,6 +5807,47 @@ export class LiveGameOrchestrator {
       merged.allSignals.sort(compareMLBSignalsForFeed);
       console.log(`[MLB_CARRY_FORWARD][${gameId}] carried=${merged.carriedSignals} carriedOutputs=${merged.carriedOutputs} droppedResolved=${merged.droppedResolved} droppedStale=${merged.droppedStale} scopeMarkets=${cycleScope.markets === "all" ? "all" : Array.from(cycleScope.markets).join("|")} scopePlayers=${cycleScope.playerIds === "all" ? "all" : cycleScope.playerIds.size}`);
     }
+
+    // ── Carry-forward revalidation (Phase 5 — wired into production) ────────
+    // Read-time-only visibility check for signals that survived the carry
+    // above. Never mutates a carried signal object — only decides whether it
+    // continues into the arrays this orchestrator writes to mlbEdgeCache,
+    // which is the SOLE read path for every MLB-surface consumer (API
+    // serialization, canonical mapping, analytics, UI grouping all read via
+    // mlbEdgeCache.get()/.entries() — filtering at this single write choke
+    // point is transitively complete for all of them without touching 13+
+    // separate call sites). Freshly computed signals this cycle are never
+    // subject to this check — only IDs edgeCarryForward actually carried.
+    // Fails closed: any signal missing current validation evidence (unknown
+    // pitcher, unknown offense team, etc.) is treated as failing that check,
+    // never assumed still valid. applyCarryForwardRevalidation is the exact
+    // function integration tests exercise (server/mlb/carryForwardRevalidation.ts)
+    // — this call site and the tests share one implementation, not two.
+    const revalidated = applyCarryForwardRevalidation(merged, (sig) => ({
+      nowMs: now,
+      maxCarryAgeMs: PRESERVE_MAX_AGE_MS,
+      oddsFreshnessThresholdMs: MLB_ODDS_LIVE_TTL,
+      currentPitcherId: state.pitcherInGame?.playerId ?? null,
+      currentPitcherName: state.pitcherInGame?.playerName ?? null,
+      currentOffenseTeam: state.isTopInning ? state.awayTeamAbbr : state.homeTeamAbbr,
+      // triggerEngine already returned early above for any
+      // normalizedStatus !== "live" (TS narrows normalizedStatus to "live"
+      // for the remainder of this function), so this cycle is never
+      // terminal by construction. Terminal-game cache retirement is handled
+      // separately and unconditionally by removeGame() / edgeCache.ts's
+      // cleanupExpiredEntries(), which deletes a game's ENTIRE mlbEdgeCache
+      // entry (fresh and carried signals alike) once it leaves the active
+      // game registry.
+      gameIsTerminal: false,
+      isResolved: carryIsResolved(sig.playerId, sig.market),
+    }));
+    merged.allSignals = revalidated.allSignals;
+    merged.qualifiedSignals = revalidated.qualifiedSignals;
+    if (revalidated.demoted > 0) {
+      const reasonStr = Object.entries(revalidated.demotionReasonCounts).map(([k, v]) => `${k}=${v}`).join(" ");
+      console.log(`[MLB_CARRY_FORWARD_REVALIDATION][${gameId}] demoted=${revalidated.demoted} ofCarried=${merged.carriedSignalIds.length} reasons=${reasonStr}`);
+    }
+
     // Entry-level tags are re-derived from the MERGED qualified set so a
     // narrowed cycle can't drop aggregate tags (e.g. HOT BATS needs >= 2 HOT
     // OVER signals). Per-signal tag stamping above stays fresh-only.
@@ -5732,6 +5905,10 @@ export class LiveGameOrchestrator {
         isDegraded: anyDegraded,
         signalLocked,
         carriedForwardCount: merged.carriedSignals,
+        // Read-time expiration guard input — see edgeCache.ts's
+        // applyReadTimeGuards. Only signals still carried AND already
+        // revalidated this write need a per-read time-bound recheck later.
+        carriedSignalIds: revalidated.survivingCarriedIds,
       });
       const avgScore = signalsQualified > 0 ? Math.round(scoreSum / signalsQualified) : 0;
       console.log(`[MLB QUALIFICATION][${gameId}] marketsEvaluated=${marketsEvaluated} qualified=${signalsQualified} rejected=${signalsRejected} allSignals=${allSignals.length} carried=${merged.carriedSignals} avgScore=${avgScore} gameCardTags=[${cacheGameCardTags.join(",")}]`);
@@ -5913,26 +6090,23 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
   let skipReasons: Record<string, number> = {};
 
   for (const sig of qualifiedSignals) {
-    // ── HR persistence firewall: canonical propagation ≠ wager persistence ──
-    // home_runs rides the canonical bus at WATCH/PREPARE and even when
-    // occurrence-only (no real line), but ONLY an official FIRE — a real cached
-    // sportsbook line AND the unified FSM at BET_NOW — may become a persisted
-    // play. Otherwise the substituted "odds_api" book + synthetic 0.5 line would
-    // fabricate a bet. (isBatterOverWatch below intentionally exempts HR from the
-    // watchlist skip, so this explicit guard is required.)
-    if (sig.market === "home_runs") {
-      const hrState = (sig as any).hrCurrentState;
-      if (sig.hasRealSportsbookLine !== true || hrState !== "BET_NOW") {
-        skipped++; skipReasons["hr_not_fire"] = (skipReasons["hr_not_fire"] ?? 0) + 1; continue;
+    // ── MLB Live Edge Trust Recovery (Phase 4/5) — single finalized-signal
+    // gate. stampMlbSignalFinalization() already ran over `allSignals`
+    // (which qualifiedSignals shares object references with) earlier this
+    // cycle — this reads that exact stamp rather than recomputing it, so
+    // this entry point and the route-side safety net (which also reads the
+    // stamp, falling back to the same finalizeMlbSignal() only if somehow
+    // unstamped) can never disagree.
+    const eligibility = sig.officialEligibility ?? { eligible: false, reasons: ["unstamped_signal"], version: "unstamped" };
+    if (!eligibility.eligible) {
+      skipped++;
+      for (const reason of eligibility.reasons) {
+        skipReasons[reason] = (skipReasons[reason] ?? 0) + 1;
       }
+      continue;
     }
-    const isBatterOverWatch = sig.marketFamily === "batter_over" && sig.mode === "watch";
-    if ((sig.watchlist && !isBatterOverWatch) || sig.isEarlySignal) { skipped++; skipReasons["watchlist"] = (skipReasons["watchlist"] ?? 0) + 1; continue; }
-    const sbk = sig.sportsbook && sig.sportsbook.trim() !== "" ? sig.sportsbook : "odds_api";
-    if (!Number.isFinite(sig.line) || sig.line <= 0) { skipped++; skipReasons["bad_line"] = (skipReasons["bad_line"] ?? 0) + 1; continue; }
 
-    const dir = sig.side === "OVER" ? "over" : sig.side === "UNDER" ? "under" : null;
-    if (!dir) { skipped++; skipReasons["no_dir"] = (skipReasons["no_dir"] ?? 0) + 1; continue; }
+    const dir = sig.side === "OVER" ? "over" : "under";
 
     const canonicalKey = `${sig.playerId}|${sig.market}|${dir}|${gameId}|${today}`;
     const prev = mlbPersistGuard.get(canonicalKey);
@@ -5950,6 +6124,8 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
     }
     mlbPersistGuard.set(canonicalKey, { score: curScore, ts: now });
 
+    const sideOdds = sig.side === "OVER" ? sig.overOdds : sig.underOdds;
+
     trackPlay({
       gameId,
       playerId: sig.playerId,
@@ -5962,11 +6138,22 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
       projection: sig.projection,
       probability: sig.engineProbability,
       edge: sig.evPct ?? 0,
-      sportsbook: sbk,
+      sportsbook: sig.sportsbook,
       derivedLine: false,
       createdAt: sig.engineGeneratedAt ?? Date.now(),
       signalScore: sig.signalScore ?? null,
       confidenceTier: sig.confidenceTier ?? null,
+      odds: sideOdds ?? undefined,
+      oddsSourceUpdatedAt: sig.oddsTimestamp ?? null,
+      oddsFetchedAt: sig.oddsFetchedAt ?? null,
+      rawProbability: sig.rawProbability ?? null,
+      officialEligibilityVersion: eligibility.version,
+      // Positive decision reasons (why this signal IS official), never an
+      // empty array on success — see mlbSignalFinalizer.ts's classify().
+      officialEligibilityReasons: sig.decisionReasons?.length ? sig.decisionReasons : eligibility.reasons,
+      dataQuality: sig.dataQuality ?? null,
+      currentStatKnown: sig.currentStatKnown ?? null,
+      calibrationVersion: sig.calibrationVersion ?? null,
       inning: sig.inning ?? null,
       abNumber: sig.completedAB ?? null,
       opportunityScore: sig.opportunityScore ?? null,

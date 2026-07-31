@@ -7,6 +7,7 @@ import { toCanonicalFromMlb } from "../services/canonicalMapper";
 import { registerSignal } from "../services/liveSignalBus";
 import { freezeCanonical } from "../services/signalMutationGuard";
 import { getHrAlertState } from "./hrAlertEngine";
+import { computeMlbIsBettable } from "./mlbOfficialEligibility";
 
 export interface NormalizeContext {
   gameId: string;
@@ -673,14 +674,18 @@ export function applyDisplayContract(
   const displayProbability = displaySide === "OVER" ? overProb : underProb;
   const tier: "watch" | "lean" | "strong" | "elite" = sig.signalTier ?? "watch";
   const displayGrade = deriveDisplayGrade(tier, sig.signalScore ?? 0);
-  // home_runs bettability is the OFFICIAL FIRE condition only: a real cached
-  // sportsbook line, the unified FSM at BET_NOW, and not resolved/suppressed.
-  // Every other market keeps the generic (prob >= 50 AND tier != watch) rule.
   const isHrMarket = sig.market === "home_runs";
-  const hrState = sig.hrAlert?.currentState;
-  const isBettable = isHrMarket
-    ? (sig.hasRealSportsbookLine === true && hrState === "BET_NOW" && sig.alreadyHit !== true)
-    : (displayProbability >= 50 && (tier as string) !== "watch");
+  // ── MLB Live Edge Trust Recovery (Phase 5) — single finalized-signal
+  // contract. isBettable is NEVER independently re-derived here. Prefer the
+  // value server/mlb/mlbSignalFinalizer.ts's stampMlbSignalFinalization()
+  // already stamped onto this exact signal object this cycle (qs.isBettable);
+  // fall back to calling the SAME underlying computeMlbIsBettable() function
+  // (server/mlb/mlbOfficialEligibility.ts) only if this signal somehow
+  // reached here unstamped — never a bespoke second implementation. This is
+  // the identical function official persistence eligibility itself requires
+  // (evaluateMlbOfficialEligibility explicitly checks isBettable===true), so
+  // the display contract and the persistence gate can never disagree.
+  const isBettable = typeof qs.isBettable === "boolean" ? qs.isBettable : computeMlbIsBettable(qs as any);
   const isWatchOnly = !isBettable || (tier as string) === "watch";
   const displayDrivers = buildDisplayDrivers(qs, sig.market);
 
@@ -743,6 +748,10 @@ export function applyDisplayContract(
     displayGrade,
     isBettable,
     isWatchOnly,
+    // Surfaced verbatim from the same finalizer stamp isBettable came from —
+    // never independently recomputed here.
+    lifecycleClassification: typeof qs.lifecycleClassification === "string" ? qs.lifecycleClassification : undefined,
+    decisionReasons: Array.isArray(qs.decisionReasons) ? qs.decisionReasons : undefined,
     displayDrivers,
     canonicalDrivers: explainability.drivers,
     triggerSummary: explainability.triggerSummary,

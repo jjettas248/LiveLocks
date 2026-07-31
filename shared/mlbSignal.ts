@@ -43,13 +43,22 @@ export interface MLBSignal {
   //   displayGrade         = "A+"|"A"|"B+"|"B"|"B-"|"Watch" derived from
   //                          (signalTier × signalScore) per the contract
   //                          spec. NEVER from liveScore or raw probability.
-  //   isBettable           = displayProbability >= 50 AND signalTier != "watch"
-  //                          EXCEPT home_runs (an occurrence market): HR is
-  //                          bettable ONLY on the official FIRE condition —
-  //                          hasRealSportsbookLine AND hrAlert.currentState ===
-  //                          "BET_NOW" AND not resolved/suppressed — never from
-  //                          the >= 50 probability rule (HR sits ~15-30%).
+  //   isBettable           = server-stamped by the single finalized-signal
+  //                          contract (server/mlb/mlbSignalFinalizer.ts) —
+  //                          NEVER independently recomputed by this file's
+  //                          consumers. Non-HR: probability >= 50 AND
+  //                          signalTier != "watch". home_runs (an occurrence
+  //                          market) is bettable ONLY on the official FIRE
+  //                          condition — hasRealSportsbookLine AND
+  //                          hrAlert.currentState === "BET_NOW" AND not
+  //                          resolved — never from the >= 50 probability
+  //                          rule (HR sits ~15-30%).
   //   isWatchOnly          = !isBettable OR signalTier == "watch"
+  //   lifecycleClassification / decisionReasons = the SAME finalizer's
+  //                          structured decision (official/watch/suppressed/
+  //                          stale_price/degraded/resolved/occurrence_only/
+  //                          ineligible_other) and the reasons behind it —
+  //                          non-empty even when the signal IS official.
   //   displayDrivers       = up to 3 short driver labels for the badge row
   displaySide?: "OVER" | "UNDER";
   displayProbability?: number;
@@ -58,6 +67,8 @@ export interface MLBSignal {
   displayGrade?: "A+" | "A" | "B+" | "B" | "B-" | "Watch";
   isBettable?: boolean;
   isWatchOnly?: boolean;
+  lifecycleClassification?: string;
+  decisionReasons?: string[];
   displayDrivers?: string[];
   // Pricing provenance (home_runs / HR-occurrence lane). True only when a REAL
   // cached sportsbook line backed this signal this tick. When false, the HR ran

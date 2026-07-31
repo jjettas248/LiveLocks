@@ -76,6 +76,15 @@ export interface MergeCarryForwardResult extends CacheSlice {
   carriedOutputs: number;
   droppedResolved: number;
   droppedStale: number;
+  /**
+   * IDs (MLBQualifiedSignal.id) of every signal in `allSignals`/
+   * `qualifiedSignals` that was carried forward from a prior cycle rather
+   * than freshly computed this tick. Callers use this to scope read-time
+   * revalidation (server/mlb/carryForwardRevalidation.ts) to ONLY carried
+   * signals — freshly computed signals already reflect current reality and
+   * must never be re-filtered by the same logic.
+   */
+  carriedSignalIds: string[];
 }
 
 function outputKey(playerId: string, market: string): string {
@@ -101,6 +110,7 @@ export function mergeCarryForward(args: MergeCarryForwardArgs): MergeCarryForwar
       carriedOutputs: 0,
       droppedResolved: 0,
       droppedStale: 0,
+      carriedSignalIds: [],
     };
   }
 
@@ -151,6 +161,7 @@ export function mergeCarryForward(args: MergeCarryForwardArgs): MergeCarryForwar
     carriedOutputs: carriedOutputs.length,
     droppedResolved,
     droppedStale,
+    carriedSignalIds: carriedAll.map(s => s.id),
   };
 }
 

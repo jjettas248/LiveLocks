@@ -340,7 +340,12 @@ export function buildSignalViewModel(sig: MLBSignal): SignalViewModel {
     ? normalizePct(sig.displayProbability)
     : (displaySide === "OVER" ? overProbability : underProbability);
   const displayGrade = (sig.displayGrade ?? "Watch") as SignalViewModel["displayGrade"];
-  const isBettable = sig.isBettable ?? (displayProbability >= 50 && (sig.signalTier ?? "watch") !== "watch");
+  // MLB Live Edge Trust Recovery (Phase 5) — isBettable is server-stamped by
+  // the single finalized-signal contract (server/mlb/mlbSignalFinalizer.ts)
+  // and must never be independently re-derived on the client. A missing
+  // value fails closed (never bettable) rather than guessing via a bespoke
+  // probability/tier formula that could disagree with the server.
+  const isBettable = sig.isBettable === true;
   const isWatchOnly = sig.isWatchOnly ?? !isBettable;
   const displayDrivers = sig.displayDrivers ?? [];
   const prob = displayProbability;

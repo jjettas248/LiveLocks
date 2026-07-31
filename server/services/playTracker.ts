@@ -78,6 +78,18 @@ export interface TrackableSignal {
   eventBoost?: number | null;
   signalMode?: string | null;
   marketFamily?: string | null;
+  // ── MLB Live Edge Trust Recovery (Phase 4) — official-episode provenance.
+  // MLB-only; left undefined for NBA/NCAAB, which keep their existing
+  // duplicateGuard-keyed upsert behavior untouched.
+  playerIdForEpisode?: string | null;
+  oddsSourceUpdatedAt?: number | null; // real sportsbook provider last_update
+  oddsFetchedAt?: number | null; // LiveLocks cache/receipt time
+  rawProbability?: number | null;
+  officialEligibilityVersion?: string | null;
+  officialEligibilityReasons?: string[] | null;
+  dataQuality?: string | null;
+  currentStatKnown?: boolean | null;
+  calibrationVersion?: string | null;
 }
 
 export async function trackPlay(
@@ -98,6 +110,18 @@ export async function trackPlay(
         recommendedSide: signal.direction,
         probability: signal.probability,
         signalScore: signal.signalScore ?? null,
+      });
+      return { id: "", isDuplicate: true };
+    }
+    // MLB Live Edge Trust Recovery (Phase 4) — official episode identity
+    // requires a stable playerId. No fallback to playerName: a missing
+    // stable ID means we cannot guarantee episode uniqueness/immutability,
+    // so official creation is rejected outright rather than keyed loosely.
+    if (!signal.playerId) {
+      console.warn("[MLB_PERSIST_REJECT]", {
+        reason: "missing_player_id_for_episode_key",
+        player: signal.playerName,
+        market: signal.market,
       });
       return { id: "", isDuplicate: true };
     }
@@ -170,6 +194,15 @@ export async function trackPlay(
     today,
   ].join("|");
 
+  // MLB Live Edge Trust Recovery (Phase 4) — episode-scoped identity, not
+  // direction-scoped and not date-scoped. A side flip for the same
+  // game+player+market must hit the SAME episode key (storage.recordPlay
+  // treats a conflict here as immutable/no-op, never a second official row).
+  const officialEpisodeKey =
+    signal.sport === "mlb" && signal.playerId
+      ? `mlb:v1:${signal.gameId}:${signal.playerId}:${signal.market}`
+      : undefined;
+
   const d = signal.diagnostics;
 
   const result = await storage.recordPlay({
@@ -192,6 +225,17 @@ export async function trackPlay(
     gameDate: today,
     timestamp: new Date(signal.createdAt),
     duplicateGuard,
+    officialEpisodeKey,
+    oddsSourceUpdatedAt: signal.oddsSourceUpdatedAt ?? undefined,
+    oddsFetchedAt: signal.oddsFetchedAt ?? undefined,
+    rawProbability: signal.rawProbability ?? undefined,
+    officialEligibilityVersion: signal.officialEligibilityVersion ?? undefined,
+    officialEligibilityReasons: signal.officialEligibilityReasons?.length
+      ? signal.officialEligibilityReasons.join(";")
+      : undefined,
+    dataQuality: signal.dataQuality ?? undefined,
+    currentStatKnown: signal.currentStatKnown ?? undefined,
+    calibrationVersion: signal.calibrationVersion ?? undefined,
     archetype: d?.archetype,
     fragilityScore: d?.fragilityScore,
     fragilityPenalty: d?.fragilityPenalty,

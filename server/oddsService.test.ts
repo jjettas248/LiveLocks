@@ -181,6 +181,53 @@ function bookmakerRow(
   check("F10: neither status-classification read issued a new request", fetchCalls.length === 1, `got ${fetchCalls.length}`);
 }
 
+// ── F2: MLB Live Edge Trust Recovery (Phase 3) — two independent timestamps ──
+// oddsFetchedAt (cache-write/receipt time) and sourceUpdatedAt (the real
+// sportsbook provider last_update) must never be collapsed into one value.
+// A quote whose provider last_update is genuinely older than our cache-write
+// time must surface BOTH values distinctly, not silently substitute one for
+// the other.
+{
+  const staleSourceIso = new Date(Date.now() - 5 * 60 * 1000).toISOString(); // 5 min old
+  fetchCalls = [];
+  fetchBookmakers = [{
+    key: "hardrockbet",
+    last_update: staleSourceIso,
+    markets: [{
+      key: "batter_hits",
+      last_update: staleSourceIso,
+      outcomes: [
+        { name: "Over", description: "Provenance Player", point: 0.5, price: -115 },
+        { name: "Under", description: "Provenance Player", point: 0.5, price: -105 },
+      ],
+    }],
+  }];
+  const beforeFetch = Date.now();
+  await getMLBPlayerOdds("evt-provenance", "Provenance Player", "hits", false);
+  const read = readMLBPlayerOddsFromCache("evt-provenance", "Provenance Player", "hits", "live");
+  check("F2.1: read succeeds", read !== null, JSON.stringify(read));
+  check(
+    "F2.2: sourceUpdatedAt reflects the REAL (stale) bookmaker last_update, not fetch time",
+    read !== null && read.sourceUpdatedAt !== null && Math.abs(read.sourceUpdatedAt - new Date(staleSourceIso).getTime()) < 1000,
+    JSON.stringify(read),
+  );
+  check(
+    "F2.3: fetchedAt reflects OUR cache-write time (now), independent of sourceUpdatedAt",
+    read !== null && read.fetchedAt >= beforeFetch,
+    JSON.stringify(read),
+  );
+  check(
+    "F2.4: the two timestamps genuinely differ — proves they are not collapsed into one",
+    read !== null && read.sourceUpdatedAt !== null && read.fetchedAt !== read.sourceUpdatedAt,
+    JSON.stringify(read),
+  );
+  check(
+    "F2.5: isDegraded is computed from cache freshness (fresh here), independent of the older source timestamp",
+    read !== null && read.isDegraded === false,
+    JSON.stringify(read),
+  );
+}
+
 // ── G: NBA bookmaker behavior remains unchanged ────────────────────────────────
 {
   const nbaBooks = getAllPriorityBooks("nba");

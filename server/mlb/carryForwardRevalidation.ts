@@ -1,0 +1,206 @@
+// ── MLB Live Edge Trust Recovery (Phase 5) — carry-forward revalidation ──────
+// Pure, I/O-free, read-time-only. A signal surviving a narrowed engine cycle
+// via edgeCarryForward.ts's scope-not-absence predicate was NOT re-evaluated
+// this tick — its pricing, matchup, and opportunity state are exactly what
+// they were when it was last freshly computed. This module answers "is a
+// carried signal still safe to SHOW" without ever mutating the carried
+// object and without re-entering suppression/persistence/the bus (that
+// invariant belongs to edgeCarryForward.ts and is untouched by this file).
+//
+// This is a visibility check only — callers decide what "not visible" means
+// (e.g. drop from a served feed) but never write back into the signal.
+
+import type { MLBMarket, MLBQualifiedSignal } from "./types";
+import type { MergeCarryForwardResult } from "./edgeCarryForward";
+
+const PITCHER_MARKETS: ReadonlySet<MLBMarket> = new Set<MLBMarket>([
+  "pitcher_strikeouts",
+  "hits_allowed",
+  "walks_allowed",
+  "pitcher_outs",
+  "hr_allowed",
+]);
+
+export type CarryForwardRejectionReason =
+  | "stale_source_price"
+  | "max_age_exceeded"
+  | "cache_degraded"
+  | "opportunity_exhausted"
+  | "current_stat_unknown"
+  | "pitching_changed"
+  | "same_team_mismatch"
+  | "terminal_game_state"
+  | "already_resolved"
+  | "family_suppressed";
+
+export interface CarryForwardRevalidationContext {
+  nowMs: number;
+  /** Same bound edgeCarryForward.ts already enforces at merge time; re-checked here for defense in depth at read time. */
+  maxCarryAgeMs: number;
+  /** isMLBSnapshotFresh's live threshold (ms) for the signal's own oddsTimestamp (real source time, never fetchedAt). */
+  oddsFreshnessThresholdMs: number;
+  /** The ONE pitcher currently in the game for this side, from state.pitcherInGame. Null when unknown. */
+  currentPitcherId: string | null;
+  currentPitcherName: string | null;
+  /** Batting team currently on offense, if known — used for the same-team defense-in-depth check. */
+  currentOffenseTeam: string | null;
+  gameIsTerminal: boolean;
+  isResolved: boolean;
+}
+
+export interface CarryForwardRevalidationResult {
+  visible: boolean;
+  reasons: CarryForwardRejectionReason[];
+}
+
+/**
+ * Re-validates a carried (not freshly re-evaluated this cycle) MLB signal
+ * against the CURRENT tick's live state. Never mutates `sig`.
+ */
+export function revalidateCarriedSignal(
+  sig: MLBQualifiedSignal,
+  ctx: CarryForwardRevalidationContext
+): CarryForwardRevalidationResult {
+  const reasons: CarryForwardRejectionReason[] = [];
+
+  if (ctx.gameIsTerminal) reasons.push("terminal_game_state");
+  if (ctx.isResolved) reasons.push("already_resolved");
+
+  const generatedAt = sig.engineGeneratedAt ?? 0;
+  if (generatedAt > 0 && ctx.nowMs - generatedAt > ctx.maxCarryAgeMs) {
+    reasons.push("max_age_exceeded");
+  }
+
+  if (sig.oddsTimestamp == null) {
+    // No real source-timestamp provenance at all — cannot claim it's fresh.
+    reasons.push("stale_source_price");
+  } else if (ctx.nowMs - sig.oddsTimestamp > ctx.oddsFreshnessThresholdMs) {
+    reasons.push("stale_source_price");
+  }
+
+  if (sig.isDegraded) reasons.push("cache_degraded");
+  if (sig.currentStatKnown === false) reasons.push("current_stat_unknown");
+
+  // Opportunity exhaustion — a batter with all 4 traditional ABs already
+  // completed has no realistic remaining opportunity for an OVER market to
+  // still develop. Conservative heuristic; never applied to pitcher markets
+  // (pitcherPitchCount-based exhaustion is handled by pitching_changed below).
+  if (!PITCHER_MARKETS.has(sig.market) && sig.completedAB >= 4) {
+    reasons.push("opportunity_exhausted");
+  }
+
+  // Pitching change since this signal was last computed.
+  if (PITCHER_MARKETS.has(sig.market)) {
+    if (ctx.currentPitcherId != null && sig.playerId !== ctx.currentPitcherId) {
+      reasons.push("pitching_changed");
+    }
+  } else if (sig.pitcherName != null && ctx.currentPitcherName != null && sig.pitcherName !== ctx.currentPitcherName) {
+    reasons.push("pitching_changed");
+  }
+
+  // Same-team mismatch defense-in-depth — Phase 2 already prevents this at
+  // signal-generation time; this re-checks that the batter's team still
+  // matches the side actually on offense, in case the half-inning flipped
+  // while this signal sat carried.
+  if (!PITCHER_MARKETS.has(sig.market) && ctx.currentOffenseTeam != null && sig.team && sig.team !== ctx.currentOffenseTeam) {
+    reasons.push("same_team_mismatch");
+  }
+
+  if (sig.familyPenaltyFactor != null && sig.familyPenaltyFactor < 1 && sig.isFlagship === false) {
+    reasons.push("family_suppressed");
+  }
+
+  return { visible: reasons.length === 0, reasons };
+}
+
+export interface CarryForwardFilterOutcome {
+  allSignals: MLBQualifiedSignal[];
+  qualifiedSignals: MLBQualifiedSignal[];
+  demoted: number;
+  demotionReasonCounts: Record<CarryForwardRejectionReason, number> | Record<string, number>;
+  /**
+   * IDs of carried signals that survived THIS write-time revalidation pass.
+   * The read-time guard (server/mlb/edgeCache.ts) uses this list to know
+   * which cached signals still need a lightweight time-bound recheck on
+   * every future read — a freshly computed signal never needs one, and a
+   * signal already demoted here never reaches the cache at all.
+   */
+  survivingCarriedIds: string[];
+}
+
+/**
+ * Applies revalidateCarriedSignal to every signal edgeCarryForward.ts's
+ * mergeCarryForward() actually carried forward (identified by
+ * merged.carriedSignalIds — freshly computed signals are NEVER subject to
+ * this check) and filters both `allSignals` and `qualifiedSignals` down to
+ * the surviving set. Never mutates any signal object; only decides which
+ * objects continue into the returned arrays.
+ *
+ * This is the SAME function the live orchestrator calls at its cache-write
+ * boundary (server/mlb/liveGameOrchestrator.ts) — extracted here so
+ * integration tests exercise the identical production code path rather than
+ * a re-implementation of it.
+ */
+export function applyCarryForwardRevalidation(
+  merged: MergeCarryForwardResult,
+  buildContext: (sig: MLBQualifiedSignal) => CarryForwardRevalidationContext
+): CarryForwardFilterOutcome {
+  if (merged.carriedSignalIds.length === 0) {
+    return { allSignals: merged.allSignals, qualifiedSignals: merged.qualifiedSignals, demoted: 0, demotionReasonCounts: {}, survivingCarriedIds: [] };
+  }
+
+  const carriedIdSet = new Set(merged.carriedSignalIds);
+  const survivingIds = new Set<string>();
+  const survivingCarriedIds: string[] = [];
+  let demoted = 0;
+  const demotionReasonCounts: Record<string, number> = {};
+
+  const allSignals = merged.allSignals.filter((sig) => {
+    if (!carriedIdSet.has(sig.id)) { survivingIds.add(sig.id); return true; }
+    const result = revalidateCarriedSignal(sig, buildContext(sig));
+    if (!result.visible) {
+      demoted++;
+      for (const reason of result.reasons) {
+        demotionReasonCounts[reason] = (demotionReasonCounts[reason] ?? 0) + 1;
+      }
+      return false;
+    }
+    survivingIds.add(sig.id);
+    survivingCarriedIds.push(sig.id);
+    return true;
+  });
+
+  const qualifiedSignals = merged.qualifiedSignals.filter((sig) => survivingIds.has(sig.id));
+
+  return { allSignals, qualifiedSignals, demoted, demotionReasonCounts, survivingCarriedIds };
+}
+
+// ── Read-time expiration guard (fail-closed, time-only) ──────────────────
+// Deliberately narrow: this is NOT a second copy of revalidateCarriedSignal.
+// It exists because MLB Live Edge is event-driven (see CLAUDE.md §3.2a-1) —
+// applyCarryForwardRevalidation above only re-runs when a real baseball
+// event triggers triggerEngine and a fresh mlbEdgeCache write happens. State
+// changes (pitching changes, matchup flips, family suppression) are always
+// accompanied by a triggering event, so the next write-time pass catches
+// them. Pure TIME passing is NOT accompanied by any event — a quiet 90s gap
+// with no state change never re-enters triggerEngine, so a carried signal's
+// frozen oddsTimestamp/engineGeneratedAt can silently age past their
+// validity window while it sits untouched in the cache, served to every
+// reader in the meantime. This function is the read-boundary fix for
+// exactly that gap: it re-checks ONLY the two time-based bounds
+// (stale_source_price, max_age_exceeded) against the CURRENT clock, every
+// read — never pitching/matchup/family/degraded state, which stays
+// write-time-only by design (re-deriving those here would require live
+// game/pitcher state this module does not have, and would duplicate
+// complete signal finalization).
+export function isCarriedSignalWithinReadTimeBounds(
+  sig: MLBQualifiedSignal,
+  nowMs: number,
+  bounds: { maxCarryAgeMs: number; oddsFreshnessThresholdMs: number }
+): boolean {
+  const generatedAt = sig.engineGeneratedAt ?? 0;
+  if (generatedAt > 0 && nowMs - generatedAt > bounds.maxCarryAgeMs) return false;
+  if (sig.oddsTimestamp == null) return false; // no provenance — fails closed, never assumed fresh
+  if (nowMs - sig.oddsTimestamp > bounds.oddsFreshnessThresholdMs) return false;
+  return true;
+}

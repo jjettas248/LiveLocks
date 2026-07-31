@@ -312,7 +312,18 @@ export interface MLBPropInput {
   weatherPark: WeatherParkContext;
   bullpen: BullpenContext;
 
+  // MLB Live Edge Trust Recovery (Phase 3, tightened after review) — TWO
+  // independent timestamps, never collapsed into one and never fabricated:
+  //   oddsUpdatedAt = the ACTUAL selected sportsbook's provider last_update
+  //     ("oddsSourceUpdatedAt" in the persisted-row/eligibility contract).
+  //     Official freshness reads THIS field.
+  //   oddsFetchedAt  = when LiveLocks received/cached that response. Cache-
+  //     health/staleness bookkeeping ONLY — never substituted for
+  //     oddsUpdatedAt, and never Date.now() (that's engineGeneratedAt's job).
+  // null means unknown provenance for that specific timestamp.
   oddsUpdatedAt?: number | null;
+  oddsFetchedAt?: number | null;
+  sportsbook?: string | null;
   bvpHistory?: BatterVsPitcherHistory;
   hrrComponents?: HRRComponents;
 
@@ -461,7 +472,16 @@ export interface MLBPropOutput {
   explanationBullets: string[];
   warnings: string[];
   engineGeneratedAt: number;
-  oddsUpdatedAt: number;
+  // MLB Live Edge Trust Recovery (Phase 3, tightened after review) — the
+  // ACTUAL sportsbook provider last_update, forwarded from
+  // input.oddsUpdatedAt. Null when the resolved line carried no provenance
+  // (e.g. the stale "prior known line" fallback) — engine-computation time
+  // (engineGeneratedAt) must never be substituted here.
+  oddsUpdatedAt: number | null;
+  // The SEPARATE LiveLocks cache-write/receipt time, forwarded from
+  // input.oddsFetchedAt. Cache-health bookkeeping only — never substituted
+  // for oddsUpdatedAt.
+  oddsFetchedAt: number | null;
   projectionUpdatedAt: number;
   sportsbook: string | null;
   isDerivedLine: boolean;
@@ -609,6 +629,10 @@ export interface MLBQualifiedSignal {
   impliedProbability: number | null;
   engineProbability: number;
   engineProbabilityDominant?: number;
+  // Pre-calibration side-selected probability (Phase 4) — frozen alongside
+  // engineProbability at official-persistence time for calibration
+  // reporting. Null when the recommended side has no raw counterpart.
+  rawProbability?: number | null;
   calibratedProbabilityOver?: number;
   calibratedProbabilityUnder?: number;
   probabilitySemantics?: "recommended_side_calibrated";
@@ -645,7 +669,9 @@ export interface MLBQualifiedSignal {
   drivers: Record<string, number>;
   timestamps: {
     engineGeneratedAt: string;
-    oddsUpdatedAt: string;
+    // MLB Live Edge Trust Recovery (Phase 3) — null when the resolved odds
+    // line carried no real source-timestamp provenance.
+    oddsUpdatedAt: string | null;
     gameStateUpdatedAt: string;
   };
 
@@ -666,7 +692,12 @@ export interface MLBQualifiedSignal {
 
   overOdds: number | null;
   underOdds: number | null;
+  // Real sportsbook provider last_update. Official freshness/eligibility
+  // reads THIS field only — never oddsFetchedAt, never engineGeneratedAt.
   oddsTimestamp: number | null;
+  // LiveLocks cache/receipt time for the same quote. Cache-health/staleness
+  // bookkeeping only — never substituted for oddsTimestamp.
+  oddsFetchedAt?: number | null;
 
   pitcherName: string | null;
   pitcherHand: string | null;
@@ -728,6 +759,40 @@ export interface MLBQualifiedSignal {
   directionalBiasAdjusted?: boolean | null;
   isDegraded?: boolean | null;
   dataQuality?: "full" | "partial" | "degraded" | null;
+  // MLB Live Edge Trust Recovery (Phase 4) — true only when the player's
+  // current-tick live stat came from a real box-score/pitching-box-score
+  // entry (batter: box score row present; pitcher: pitching box score row
+  // present). False/null means the value is a fallback/degraded read and
+  // the signal must never become an official persisted play off it.
+  currentStatKnown?: boolean | null;
+  // FSM state stamp for the unified HR lane (home_runs market only). Read by
+  // the official-eligibility gate — only a real-line BET_NOW may become an
+  // official persisted play. Null/undefined for every non-HR signal.
+  hrCurrentState?: import("./hrAlertEngine").DynamicHRState | null;
+  // MLB Live Edge Trust Recovery (Phase 5) — the single finalized signal
+  // contract (server/mlb/mlbSignalFinalizer.ts), stamped once on every
+  // signal in `allSignals` (not just the persistence-eligible subset) so
+  // every downstream consumer — orchestrator persistence, route safety net,
+  // API serialization (normalizeSignal.ts), canonical mapper, analytics, UI
+  // grouping — reads the SAME computed values rather than independently
+  // re-deriving side/probability/projection/tier/isBettable/official
+  // eligibility/sportsbook provenance/lifecycle classification/reasons.
+  // `isBettable` and `officialEligibility` remain separate fields (official
+  // eligibility additionally requires isBettable===true — see
+  // mlbOfficialEligibility.ts's computeMlbIsBettable), but both are produced
+  // by finalizeMlbSignal(), never independently.
+  officialEligibility?: { eligible: boolean; reasons: string[]; version: string } | null;
+  // Single source of truth for "is this signal bettable" — normalizeSignal.ts's
+  // applyDisplayContract MUST read this stamped value instead of recomputing.
+  isBettable?: boolean | null;
+  // Structured lifecycle classification from the finalizer: exactly one of
+  // official/watch/suppressed/stale_price/degraded/resolved/occurrence_only/
+  // ineligible_other.
+  lifecycleClassification?: import("./mlbSignalFinalizer").MlbLifecycleClassification | null;
+  // Human-readable reasons for `lifecycleClassification` — non-empty even
+  // when the signal IS official (positive confirmation tags), never an
+  // empty array on success.
+  decisionReasons?: string[] | null;
   pitcherAnalysis?: {
     stuff: number;
     command: number;

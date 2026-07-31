@@ -24,6 +24,7 @@ const {
   reconsiderDormantMarkets,
   _getInterestForTests,
   _getInterestCountForTests,
+  _getConsumerForTests,
   _resetMlbOddsRefreshCoordinatorForTests,
 } = coordinator;
 
@@ -197,6 +198,104 @@ check(
   _getInterestForTests("evtE", "hits") === undefined && _getInterestForTests("evtE", "home_runs") === undefined,
 );
 check("removeGameInterests: unrelated evtF interest is untouched", _getInterestForTests("evtF", "hits") !== undefined);
+
+// ── MLB Live Edge Trust Recovery (Phase 3): consumer (player+side) tracking ──
+// A single provider fetch counter, separate from the harmless global mock
+// above, so "one provider refresh" can be asserted precisely. Every prior
+// test block above issued fire-and-forget refreshes against the ORIGINAL
+// mock; drain those before swapping fetch so they can't tick this counter
+// once they finally resolve.
+await new Promise((r) => setTimeout(r, 50));
+let fetchCallCount = 0;
+const originalFetch = (globalThis as any).fetch;
+(globalThis as any).fetch = async (...args: any[]) => {
+  fetchCallCount++;
+  return originalFetch(...args);
+};
+
+// Two players on the SAME market with different evaluated sides: one bad
+// price must dormant-park ONLY that consumer, never the other.
+{
+  _resetMlbOddsRefreshCoordinatorForTests();
+  registerMarketInterest({
+    eventId: "evtCons1", market: "hits", gameStatus: "live", urgency: "build",
+    player: "Aaron Judge", side: "OVER", bestPriceForSide: -235, priceEligible: false,
+  });
+  registerMarketInterest({
+    eventId: "evtCons1", market: "hits", gameStatus: "live", urgency: "build",
+    player: "Juan Soto", side: "UNDER", bestPriceForSide: -110, priceEligible: true,
+  });
+  const judgeConsumer = _getConsumerForTests("evtCons1", "hits", "Aaron Judge", "OVER");
+  const sotoConsumer = _getConsumerForTests("evtCons1", "hits", "Juan Soto", "UNDER");
+  check("consumer: bad-price player is dormant", judgeConsumer?.dormant === true, JSON.stringify(judgeConsumer));
+  check("consumer: healthy-price player on the same market is NOT dormant", sotoConsumer?.dormant === false, JSON.stringify(sotoConsumer));
+
+  // The same player, opposite side, with a healthy price — must not inherit
+  // the OVER consumer's dormancy either (distinct consumer key).
+  registerMarketInterest({
+    eventId: "evtCons1", market: "hits", gameStatus: "live", urgency: "build",
+    player: "Aaron Judge", side: "UNDER", bestPriceForSide: 150, priceEligible: true,
+  });
+  const judgeUnder = _getConsumerForTests("evtCons1", "hits", "Aaron Judge", "UNDER");
+  check("consumer: same player's OTHER side is a distinct, non-dormant consumer",
+    judgeUnder?.dormant === false, JSON.stringify(judgeUnder));
+  check("consumer: the original dormant (player,side) entry is unaffected",
+    _getConsumerForTests("evtCons1", "hits", "Aaron Judge", "OVER")?.dormant === true);
+}
+
+// Ten player interests for one event/market -> at most one provider refresh.
+{
+  _resetMlbOddsRefreshCoordinatorForTests();
+  fetchCallCount = 0;
+  for (let i = 0; i < 10; i++) {
+    registerMarketInterest({
+      eventId: "evtCons2", market: "hits", gameStatus: "live", urgency: "strong",
+      player: `Player${i}`, side: "OVER", bestPriceForSide: -110, priceEligible: true,
+    });
+  }
+  // Let any fire-and-forget refreshes settle.
+  await new Promise((r) => setTimeout(r, 20));
+  check("consumer: 10 new consumers on a freshly-discovered market -> exactly one provider fetch",
+    fetchCallCount <= 1, `fetchCallCount=${fetchCallCount}`);
+  check("consumer: all 10 consumers are tracked independently",
+    Array.from({ length: 10 }, (_, i) => _getConsumerForTests("evtCons2", "hits", `Player${i}`, "OVER")).every(c => c !== undefined),
+  );
+}
+
+// Final status clears every consumer interest for that market, not just the
+// legacy top-level fields.
+{
+  _resetMlbOddsRefreshCoordinatorForTests();
+  registerMarketInterest({
+    eventId: "evtCons3", market: "hits", gameStatus: "live", urgency: "build",
+    player: "Aaron Judge", side: "OVER", bestPriceForSide: -110, priceEligible: true,
+  });
+  check("consumer: tracked before final", _getConsumerForTests("evtCons3", "hits", "Aaron Judge", "OVER") !== undefined);
+  registerMarketInterest({ eventId: "evtCons3", market: "hits", gameStatus: "final" });
+  check("consumer: gone after final (whole market interest, including all consumers, removed)",
+    _getConsumerForTests("evtCons3", "hits", "Aaron Judge", "OVER") === undefined);
+}
+
+// Material event grants rediscovery to a dormant CONSUMER without touching a
+// healthy consumer on the same market.
+{
+  _resetMlbOddsRefreshCoordinatorForTests();
+  registerMarketInterest({
+    eventId: "evtCons4", market: "home_runs", gameStatus: "live", urgency: "build",
+    player: "Aaron Judge", side: "OVER", bestPriceForSide: -300, priceEligible: false,
+  });
+  registerMarketInterest({
+    eventId: "evtCons4", market: "home_runs", gameStatus: "live", urgency: "build",
+    player: "Juan Soto", side: "OVER", bestPriceForSide: -120, priceEligible: true,
+  });
+  reconsiderDormantMarkets("evtCons4", "inning_change");
+  check("consumer: dormant consumer gets a rediscovery grant",
+    _getConsumerForTests("evtCons4", "home_runs", "Aaron Judge", "OVER")?.rediscoveryPending === true);
+  check("consumer: healthy consumer is untouched by reconsideration",
+    _getConsumerForTests("evtCons4", "home_runs", "Juan Soto", "OVER")?.rediscoveryPending === false);
+}
+
+(globalThis as any).fetch = originalFetch;
 
 console.log(`[MLB_ODDS_REFRESH_COORDINATOR_TEST] passed=${pass} failed=${fail}`);
 if (fail > 0) process.exit(1);
