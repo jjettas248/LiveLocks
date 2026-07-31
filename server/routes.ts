@@ -45,7 +45,7 @@ import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
 import { getMarketParkFactor } from "./mlb/dataSources";
 import { isBarrel as isCanonicalBarrel } from "./mlb/statcastXBA";
 import { validateMlbEngineProbability, logMlbPersistReject, MLB_PROB_BUCKETS, bucketPlaysByCanonicalProb } from "./mlb/probabilityEngine";
-import { evaluateMlbOfficialEligibility } from "./mlb/mlbOfficialEligibility";
+import { finalizeMlbSignal } from "./mlb/mlbSignalFinalizer";
 import {
   recordMLBDiagnostic,
   getMLBDiagnosticSummary,
@@ -2898,14 +2898,18 @@ export async function registerRoutes(
         if (!validIds.has(`${qs.playerId}|${normalizedMarketKey}`)) continue;
 
         // ── MLB Live Edge Trust Recovery (Phase 4/5) — single finalized-
-        // eligibility gate. Identical to the orchestrator's primary
-        // persistence path (autoPersistMLBSignals) — this route-side safety
-        // net can never diverge from it or reconstruct its own weaker rules.
-        // Prefer the value the orchestrator already stamped on this exact
-        // signal object (officialEligibility) so the two entry points never
-        // disagree even under a rare recompute-drift; fall back to computing
-        // it fresh only if this signal somehow reached here unstamped.
-        const eligibility = qs.officialEligibility ?? evaluateMlbOfficialEligibility(qs);
+        // signal gate. Identical to the orchestrator's primary persistence
+        // path (autoPersistMLBSignals) — this route-side safety net can
+        // never diverge from it or reconstruct its own weaker rules. Prefer
+        // the value the orchestrator already stamped on this exact signal
+        // object (stampMlbSignalFinalization ran over the full allSignals
+        // set every cycle) so the two entry points never disagree; fall back
+        // to calling the SAME finalizer function only if this signal somehow
+        // reached here unstamped — never a bespoke re-derivation.
+        const finalized = qs.officialEligibility != null && qs.decisionReasons != null
+          ? { eligibility: qs.officialEligibility, decisionReasons: qs.decisionReasons }
+          : (() => { const f = finalizeMlbSignal(qs); return { eligibility: f.officialEligibility, decisionReasons: f.decisionReasons }; })();
+        const eligibility = finalized.eligibility;
         if (!eligibility.eligible) {
           console.log(`[MLB_ROUTE_PERSIST_SAFETY] ineligible player=${qs.playerName} market=${qs.market} reasons=${eligibility.reasons.join(",")}`);
           continue;
@@ -2942,7 +2946,7 @@ export async function registerRoutes(
           oddsFetchedAt: qs.oddsFetchedAt ?? null,
           rawProbability: qs.rawProbability ?? null,
           officialEligibilityVersion: eligibility.version,
-          officialEligibilityReasons: null,
+          officialEligibilityReasons: finalized.decisionReasons?.length ? finalized.decisionReasons : eligibility.reasons,
           dataQuality: qs.dataQuality ?? null,
           currentStatKnown: qs.currentStatKnown ?? null,
           calibrationVersion: qs.calibrationVersion ?? null,

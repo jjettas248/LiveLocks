@@ -181,23 +181,64 @@ function basePlay(overrides: Partial<PersistedPlay> = {}): PersistedPlay {
   check("H2 unavailability includes a concrete reason", typeof SHADOW_CALIBRATION_UNAVAILABLE.reason === "string" && SHADOW_CALIBRATION_UNAVAILABLE.reason.length > 20);
 }
 
-// ── Group I: end-to-end gatherer with a mock storage ─────────────────────
+// ── Group I: end-to-end gatherer with a mock storage (realistic DB filter) ──
+// The mock filters by `opts.sport`/date range the same way a real
+// storage.getPlaysInRange() SQL WHERE clause would — a non-MLB row is never
+// returned to the gatherer in the first place.
 async function runAsync() {
+  let lastCallArgs: any = null;
+  const allRows = [
+    basePlay({ id: "a", result: "hit", prob: "70" }),
+    basePlay({ id: "b", result: "miss", prob: "40" }),
+    basePlay({ id: "c", officialEpisodeKey: null }), // legacy, excluded
+    basePlay({ id: "e", oddsSourceUpdatedAt: null }), // missing provenance, excluded
+    basePlay({ id: "f", result: "push" }), // push, excluded
+    basePlay({ id: "g", result: null }), // unresolved
+    basePlay({ id: "nba1", sport: "nba" }), // non-MLB — filtered by the DB query itself
+  ];
   const mockStorage = {
-    getPlays: async () => ({
-      plays: [
-        basePlay({ id: "a", result: "hit", prob: "70" }),
-        basePlay({ id: "b", result: "miss", prob: "40" }),
-        basePlay({ id: "c", officialEpisodeKey: null }), // legacy, excluded
-        basePlay({ id: "d", sport: "nba" }), // non-MLB, excluded
-      ],
-      total: 4,
-    }),
+    getPlaysInRange: async (opts: { sport?: string; startDate?: string; endDate?: string }) => {
+      lastCallArgs = opts;
+      return allRows.filter((p) => (opts.sport ? p.sport === opts.sport : true));
+    },
   };
-  const report = await gatherMlbLiveEdgeCalibrationReport(mockStorage as any);
-  check("I1 gatherer includes only clean official rows", report.official.overall.sampleCount === 2, report.official.overall.sampleCount);
-  check("I2 gatherer counts excluded legacy/unprovenanced rows", report.officialRowsExcludedLegacyOrUnprovenanced === 2, report.officialRowsExcludedLegacyOrUnprovenanced);
-  check("I3 gatherer reports shadow as unavailable, never blended with official", report.shadow.available === false);
+  const report = await gatherMlbLiveEdgeCalibrationReport(mockStorage as any, { fromDate: "2026-07-01", toDate: "2026-07-31" });
+
+  check("I1 gatherer passes sport=mlb through to the unbounded query", lastCallArgs?.sport === "mlb", lastCallArgs);
+  check("I2 gatherer passes the requested date range through", lastCallArgs?.startDate === "2026-07-01" && lastCallArgs?.endDate === "2026-07-31", lastCallArgs);
+  check("I3 gatherer includes only clean official rows (a, b)", report.official.overall.sampleCount === 2, report.official.overall.sampleCount);
+  check("I4 gatherer counts excluded legacy row (c)", report.coverage.excludedLegacyRows === 1, report.coverage);
+  check("I5 gatherer counts excluded missing-provenance row (e)", report.coverage.excludedMissingProvenanceRows === 1, report.coverage);
+  check("I6 gatherer counts excluded push/void row (f)", report.coverage.excludedPushOrVoidRows === 1, report.coverage);
+  check("I7 gatherer counts unresolved row (g) separately, not silently dropped", report.coverage.unresolvedRows === 1, report.coverage);
+  check("I8 rowsScanned equals the sum of every bucket (nothing silently lost)",
+    report.coverage.rowsScanned === report.coverage.eligibleRows + report.coverage.excludedLegacyRows + report.coverage.excludedMissingProvenanceRows + report.coverage.excludedPushOrVoidRows + report.coverage.unresolvedRows,
+    report.coverage);
+  check("I9 requested date range echoed back in coverage metadata", report.coverage.requestedFromDate === "2026-07-01" && report.coverage.requestedToDate === "2026-07-31");
+  check("I10 coverage reports complete:true (unbounded query, no cap)", report.coverage.complete === true);
+  check("I11 shadow is reported as unavailable, never blended with official", report.shadow.available === false);
+
+  // ── Pagination-cap regression: MORE than 500 qualifying rows all count ───
+  // exactly once. This is the exact scenario storage.getPlays()'s 500-row
+  // cap used to silently truncate; getPlaysInRange() has no such limit.
+  const LARGE_N = 750;
+  const manyRows = Array.from({ length: LARGE_N }, (_, i) =>
+    basePlay({
+      id: `bulk-${i}`,
+      result: i % 2 === 0 ? "hit" : "miss",
+      prob: String(50 + (i % 40)),
+      market: i % 3 === 0 ? "home_runs" : "hits",
+      officialEpisodeKey: `mlb:v1:g${i}:p${i}:${i % 3 === 0 ? "home_runs" : "hits"}`,
+    })
+  );
+  const bulkStorage = {
+    getPlaysInRange: async (opts: { sport?: string }) => manyRows.filter((p) => (opts.sport ? p.sport === opts.sport : true)),
+  };
+  const bulkReport = await gatherMlbLiveEdgeCalibrationReport(bulkStorage as any, {});
+  check(`I12 all ${LARGE_N} qualifying rows (> the old 500-row cap) are counted, none dropped`, bulkReport.coverage.eligibleRows === LARGE_N, bulkReport.coverage.eligibleRows);
+  check("I13 overall sampleCount matches the full > 500-row dataset", bulkReport.official.overall.sampleCount === LARGE_N, bulkReport.official.overall.sampleCount);
+  const bucketSum = Object.values(bulkReport.official.byMarket).reduce((s, m) => s + m.sampleCount, 0);
+  check("I14 byMarket breakdown sums back to the full row count — no row contributes more than once", bucketSum === LARGE_N, { bucketSum, LARGE_N });
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);

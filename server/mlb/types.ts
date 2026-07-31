@@ -769,14 +769,30 @@ export interface MLBQualifiedSignal {
   // the official-eligibility gate — only a real-line BET_NOW may become an
   // official persisted play. Null/undefined for every non-HR signal.
   hrCurrentState?: import("./hrAlertEngine").DynamicHRState | null;
-  // MLB Live Edge Trust Recovery (Phase 5) — the single finalized-eligibility
-  // result (server/mlb/mlbOfficialEligibility.ts), stamped once so every
-  // consumer (persistence, analytics, admin diagnostics) reads the SAME
-  // computed value rather than re-deriving it. This is DELIBERATELY separate
-  // from displayContract's isBettable (a distinct, pre-existing "worth
-  // showing in the live UI" concept) — collapsing the two would change live
-  // UI bettability behavior, which this recovery does not touch.
+  // MLB Live Edge Trust Recovery (Phase 5) — the single finalized signal
+  // contract (server/mlb/mlbSignalFinalizer.ts), stamped once on every
+  // signal in `allSignals` (not just the persistence-eligible subset) so
+  // every downstream consumer — orchestrator persistence, route safety net,
+  // API serialization (normalizeSignal.ts), canonical mapper, analytics, UI
+  // grouping — reads the SAME computed values rather than independently
+  // re-deriving side/probability/projection/tier/isBettable/official
+  // eligibility/sportsbook provenance/lifecycle classification/reasons.
+  // `isBettable` and `officialEligibility` remain separate fields (official
+  // eligibility additionally requires isBettable===true — see
+  // mlbOfficialEligibility.ts's computeMlbIsBettable), but both are produced
+  // by finalizeMlbSignal(), never independently.
   officialEligibility?: { eligible: boolean; reasons: string[]; version: string } | null;
+  // Single source of truth for "is this signal bettable" — normalizeSignal.ts's
+  // applyDisplayContract MUST read this stamped value instead of recomputing.
+  isBettable?: boolean | null;
+  // Structured lifecycle classification from the finalizer: exactly one of
+  // official/watch/suppressed/stale_price/degraded/resolved/occurrence_only/
+  // ineligible_other.
+  lifecycleClassification?: import("./mlbSignalFinalizer").MlbLifecycleClassification | null;
+  // Human-readable reasons for `lifecycleClassification` — non-empty even
+  // when the signal IS official (positive confirmation tags), never an
+  // empty array on success.
+  decisionReasons?: string[] | null;
   pitcherAnalysis?: {
     stuff: number;
     command: number;

@@ -36,7 +36,8 @@ import {
 } from "./dataPullService";
 import { estimateRemainingPA, estimatePitcherRemainingBF } from "./paEstimator";
 import { computeBatterCurrentStat, evaluatePitcherCurrentStat, validateBatterPitcherMatchup } from "./liveGameStateContract";
-import { evaluateMlbOfficialEligibility } from "./mlbOfficialEligibility";
+import { stampMlbSignalFinalization } from "./mlbSignalFinalizer";
+import { applyCarryForwardRevalidation } from "./carryForwardRevalidation";
 import { getMarketParkFactor, isVenueIndoors, mergePitchUsage } from "./dataSources";
 import {
   detectHrEvaluationEpoch,
@@ -75,7 +76,7 @@ import {
 import { evaluateShadowBatterOver } from "./shadowQualification";
 import type { MarketFamily } from "./signalScore";
 import { buildSignalDiagnostics } from "./signalDiagnostics";
-import { resolveMLBOddsEventIdFromCache, readMLBPlayerOddsFromCache, readMLBApprovedBookPricesFromCache } from "../oddsService";
+import { resolveMLBOddsEventIdFromCache, readMLBPlayerOddsFromCache, readMLBApprovedBookPricesFromCache, MLB_ODDS_LIVE_TTL } from "../oddsService";
 import { normalizeMlbMarketKey } from "./normalizeMarketKey";
 import {
   classifyStateChange,
@@ -5747,6 +5748,19 @@ export class LiveGameOrchestrator {
     }
     console.log(`[MLB_FAMILY_SUPPRESSION][${gameId}] signals=${allSignals.length} flagships=${flagshipCount}`);
 
+    // ── Single finalization boundary (Phase 5) ───────────────────────────────
+    // Stamps officialEligibility/isBettable/lifecycleClassification/
+    // decisionReasons on EVERY signal in `allSignals` — not just the
+    // persistence-eligible subset — so watch-only signals (which never reach
+    // autoPersistMLBSignals) still carry the same finalized values as
+    // everything else once written to mlbEdgeCache. Runs AFTER all
+    // probability/cap/suppression/family/lifecycle logic above and BEFORE
+    // carry-forward, so carried signals from a prior cycle already carry
+    // their own cycle's stamp by induction — no consumer downstream
+    // (persistence, API serialization, canonical mapper, analytics, UI
+    // grouping) may recompute any of these values independently.
+    stampMlbSignalFinalization(allSignals);
+
     allSignals.sort(compareMLBSignalsForFeed);
 
     const existingCache = mlbEdgeCache.get(gameId);
@@ -5793,6 +5807,47 @@ export class LiveGameOrchestrator {
       merged.allSignals.sort(compareMLBSignalsForFeed);
       console.log(`[MLB_CARRY_FORWARD][${gameId}] carried=${merged.carriedSignals} carriedOutputs=${merged.carriedOutputs} droppedResolved=${merged.droppedResolved} droppedStale=${merged.droppedStale} scopeMarkets=${cycleScope.markets === "all" ? "all" : Array.from(cycleScope.markets).join("|")} scopePlayers=${cycleScope.playerIds === "all" ? "all" : cycleScope.playerIds.size}`);
     }
+
+    // ── Carry-forward revalidation (Phase 5 — wired into production) ────────
+    // Read-time-only visibility check for signals that survived the carry
+    // above. Never mutates a carried signal object — only decides whether it
+    // continues into the arrays this orchestrator writes to mlbEdgeCache,
+    // which is the SOLE read path for every MLB-surface consumer (API
+    // serialization, canonical mapping, analytics, UI grouping all read via
+    // mlbEdgeCache.get()/.entries() — filtering at this single write choke
+    // point is transitively complete for all of them without touching 13+
+    // separate call sites). Freshly computed signals this cycle are never
+    // subject to this check — only IDs edgeCarryForward actually carried.
+    // Fails closed: any signal missing current validation evidence (unknown
+    // pitcher, unknown offense team, etc.) is treated as failing that check,
+    // never assumed still valid. applyCarryForwardRevalidation is the exact
+    // function integration tests exercise (server/mlb/carryForwardRevalidation.ts)
+    // — this call site and the tests share one implementation, not two.
+    const revalidated = applyCarryForwardRevalidation(merged, (sig) => ({
+      nowMs: now,
+      maxCarryAgeMs: PRESERVE_MAX_AGE_MS,
+      oddsFreshnessThresholdMs: MLB_ODDS_LIVE_TTL,
+      currentPitcherId: state.pitcherInGame?.playerId ?? null,
+      currentPitcherName: state.pitcherInGame?.playerName ?? null,
+      currentOffenseTeam: state.isTopInning ? state.awayTeamAbbr : state.homeTeamAbbr,
+      // triggerEngine already returned early above for any
+      // normalizedStatus !== "live" (TS narrows normalizedStatus to "live"
+      // for the remainder of this function), so this cycle is never
+      // terminal by construction. Terminal-game cache retirement is handled
+      // separately and unconditionally by removeGame() / edgeCache.ts's
+      // cleanupExpiredEntries(), which deletes a game's ENTIRE mlbEdgeCache
+      // entry (fresh and carried signals alike) once it leaves the active
+      // game registry.
+      gameIsTerminal: false,
+      isResolved: carryIsResolved(sig.playerId, sig.market),
+    }));
+    merged.allSignals = revalidated.allSignals;
+    merged.qualifiedSignals = revalidated.qualifiedSignals;
+    if (revalidated.demoted > 0) {
+      const reasonStr = Object.entries(revalidated.demotionReasonCounts).map(([k, v]) => `${k}=${v}`).join(" ");
+      console.log(`[MLB_CARRY_FORWARD_REVALIDATION][${gameId}] demoted=${revalidated.demoted} ofCarried=${merged.carriedSignalIds.length} reasons=${reasonStr}`);
+    }
+
     // Entry-level tags are re-derived from the MERGED qualified set so a
     // narrowed cycle can't drop aggregate tags (e.g. HOT BATS needs >= 2 HOT
     // OVER signals). Per-signal tag stamping above stays fresh-only.
@@ -6031,16 +6086,14 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
   let skipReasons: Record<string, number> = {};
 
   for (const sig of qualifiedSignals) {
-    // ── MLB Live Edge Trust Recovery (Phase 4) — single finalized-eligibility
-    // gate. This is the ONLY check deciding whether a signal may become an
-    // official persisted play; the route-side safety net consumes the exact
-    // same function so the two entry points can never disagree.
-    const eligibility = evaluateMlbOfficialEligibility(sig);
-    // Stamped once here so every other consumer (admin diagnostics,
-    // analytics, the API response) reads this exact computed value instead
-    // of re-deriving it — this signal object is the same reference already
-    // written into mlbEdgeCache, so the stamp is visible there too.
-    sig.officialEligibility = eligibility;
+    // ── MLB Live Edge Trust Recovery (Phase 4/5) — single finalized-signal
+    // gate. stampMlbSignalFinalization() already ran over `allSignals`
+    // (which qualifiedSignals shares object references with) earlier this
+    // cycle — this reads that exact stamp rather than recomputing it, so
+    // this entry point and the route-side safety net (which also reads the
+    // stamp, falling back to the same finalizeMlbSignal() only if somehow
+    // unstamped) can never disagree.
+    const eligibility = sig.officialEligibility ?? { eligible: false, reasons: ["unstamped_signal"], version: "unstamped" };
     if (!eligibility.eligible) {
       skipped++;
       for (const reason of eligibility.reasons) {
@@ -6091,7 +6144,9 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
       oddsFetchedAt: sig.oddsFetchedAt ?? null,
       rawProbability: sig.rawProbability ?? null,
       officialEligibilityVersion: eligibility.version,
-      officialEligibilityReasons: eligibility.reasons.length ? eligibility.reasons : null,
+      // Positive decision reasons (why this signal IS official), never an
+      // empty array on success — see mlbSignalFinalizer.ts's classify().
+      officialEligibilityReasons: sig.decisionReasons?.length ? sig.decisionReasons : eligibility.reasons,
       dataQuality: sig.dataQuality ?? null,
       currentStatKnown: sig.currentStatKnown ?? null,
       calibrationVersion: sig.calibrationVersion ?? null,

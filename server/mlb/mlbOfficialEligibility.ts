@@ -11,7 +11,12 @@ import type { MLBQualifiedSignal } from "./types";
 import { DISABLED_MLB_MARKETS } from "./types";
 import { isApprovedMlbBookmaker } from "../oddsService";
 
-export const MLB_OFFICIAL_ELIGIBILITY_VERSION = "mlb_official_eligibility_v1";
+// v2 — adds the isBettable requirement (a signal cannot become official
+// unless the SAME finalized isBettable computation also says yes; see
+// computeMlbIsBettable below and server/mlb/mlbSignalFinalizer.ts, which is
+// the single typed finalizer both this eligibility check and the display
+// contract (normalizeSignal.ts) must consume without independent re-derivation).
+export const MLB_OFFICIAL_ELIGIBILITY_VERSION = "mlb_official_eligibility_v2";
 
 export type MlbOfficialIneligibleReason =
   | "unsupported_market"
@@ -32,7 +37,9 @@ export type MlbOfficialIneligibleReason =
   | "invalid_projection"
   | "current_stat_unknown"
   | "hr_not_current_fire"
-  | "hr_missing_real_line";
+  | "hr_missing_real_line"
+  | "not_bettable"
+  | "family_suppressed";
 
 export interface MlbOfficialEligibilityResult {
   eligible: boolean;
@@ -47,6 +54,23 @@ function isFiniteNumber(v: unknown): v is number {
 function isValidAmericanOdds(v: unknown): v is number {
   if (!isFiniteNumber(v)) return false;
   return v <= -100 || v >= 100;
+}
+
+/**
+ * The SINGLE bettability computation for MLB. Both official eligibility
+ * (below) and the display contract (normalizeSignal.ts's applyDisplayContract,
+ * via server/mlb/mlbSignalFinalizer.ts) call this exact function — neither
+ * is permitted to independently re-derive "is this bettable" with its own
+ * logic. home_runs is occurrence-scored (a legitimate FIRE routinely sits
+ * ~15-30% probability), so it is gated on the official FIRE condition
+ * instead of the generic probability/tier rule every other market uses.
+ */
+export function computeMlbIsBettable(sig: MLBQualifiedSignal): boolean {
+  if (sig.market === "home_runs") {
+    return sig.hasRealSportsbookLine === true && sig.hrCurrentState === "BET_NOW" && sig.alreadyHit !== true;
+  }
+  const tier = (sig.signalTier ?? "watch") as string;
+  return isFiniteNumber(sig.engineProbability) && sig.engineProbability >= 50 && tier !== "watch";
 }
 
 /**
@@ -78,6 +102,15 @@ export function evaluateMlbOfficialEligibility(
   if ((sig as { suppressed?: boolean }).suppressed) reasons.push("suppressed");
   if (sig.alreadyHit) reasons.push("already_hit");
 
+  // Family suppression — a non-flagship signal whose family penalty factor
+  // has been applied (server/mlb/marketFamily.ts's applyFamilySuppression)
+  // may never become official, even though its underlying score/probability
+  // remain otherwise valid. isFlagship===true is never suppressed regardless
+  // of familyPenaltyFactor.
+  if (sig.familyPenaltyFactor != null && sig.familyPenaltyFactor < 1 && sig.isFlagship === false) {
+    reasons.push("family_suppressed");
+  }
+
   if (!sig.sportsbook || sig.sportsbook.trim() === "") {
     reasons.push("missing_sportsbook");
   } else if (!isApprovedMlbBookmaker(sig.sportsbook)) {
@@ -103,6 +136,11 @@ export function evaluateMlbOfficialEligibility(
     if (sig.hasRealSportsbookLine !== true) reasons.push("hr_missing_real_line");
     if (sig.hrCurrentState !== "BET_NOW") reasons.push("hr_not_current_fire");
   }
+
+  // Official eligibility explicitly requires isBettable === true — computed
+  // by the exact same function the display contract reads, never a second
+  // independent derivation.
+  if (!computeMlbIsBettable(sig)) reasons.push("not_bettable");
 
   return {
     eligible: reasons.length === 0,

@@ -36,6 +36,7 @@ function baseSignal(overrides: Partial<MLBQualifiedSignal> = {}): MLBQualifiedSi
     projection: 2.1,
     evPct: 5,
     confidenceTier: "STRONG",
+    signalTier: "strong",
     signalScore: 70,
     reasons: [],
     feedTags: [],
@@ -122,6 +123,18 @@ function baseSignal(overrides: Partial<MLBQualifiedSignal> = {}): MLBQualifiedSi
 
   const r6 = evaluateMlbOfficialEligibility({ ...baseSignal(), suppressed: true } as any);
   check("C6 suppressed rejected", !r6.eligible && r6.reasons.includes("suppressed"), r6.reasons);
+
+  const r7 = evaluateMlbOfficialEligibility(baseSignal({ isFlagship: false, familyPenaltyFactor: 0.5 }));
+  check("C7 non-flagship family-suppressed signal rejected", !r7.eligible && r7.reasons.includes("family_suppressed"), r7.reasons);
+
+  const r8 = evaluateMlbOfficialEligibility(baseSignal({ isFlagship: true, familyPenaltyFactor: 0.5 }));
+  check("C8 flagship signal is never family-suppressed regardless of penalty factor", !r8.reasons.includes("family_suppressed"), r8.reasons);
+
+  const r9 = evaluateMlbOfficialEligibility(baseSignal({ signalTier: "watch" as any }));
+  check("C9 watch-tier signal rejected as not_bettable (isBettable required for eligibility)", !r9.eligible && r9.reasons.includes("not_bettable"), r9.reasons);
+
+  const r10 = evaluateMlbOfficialEligibility(baseSignal({ engineProbability: 49 }));
+  check("C10 sub-50% probability on a non-HR market rejected as not_bettable", !r10.eligible && r10.reasons.includes("not_bettable"), r10.reasons);
 }
 
 // ── Group D: sportsbook / provenance ──────────────────────────────────────

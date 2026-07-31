@@ -187,38 +187,91 @@ export const SHADOW_CALIBRATION_UNAVAILABLE: ShadowAvailability = {
     "outcomes only and are not a substitute for general Live Edge shadow data.",
 };
 
+export interface CalibrationCoverageMetadata {
+  requestedFromDate: string | null;
+  requestedToDate: string | null;
+  rowsScanned: number;
+  eligibleRows: number;
+  excludedLegacyRows: number; // no officialEpisodeKey (pre-recovery row)
+  excludedMissingProvenanceRows: number; // no real oddsSourceUpdatedAt
+  excludedPushOrVoidRows: number;
+  unresolvedRows: number; // result IS NULL — not yet settled
+  complete: boolean; // true when this call retrieved every matching row, no cap applied
+}
+
 export interface MlbLiveEdgeCalibrationReport {
   official: GroupedCalibrationReport;
   officialRowsExcludedLegacyOrUnprovenanced: number;
+  coverage: CalibrationCoverageMetadata;
   shadow: ShadowAvailability;
 }
 
+function classifyExclusion(play: PersistedPlay): "unresolved" | "push_or_void" | "legacy" | "missing_provenance" | "eligible" {
+  if (play.result == null) return "unresolved";
+  if (play.result !== "hit" && play.result !== "miss") return "push_or_void";
+  if (!play.officialEpisodeKey) return "legacy";
+  if (!play.oddsSourceUpdatedAt) return "missing_provenance";
+  return "eligible";
+}
+
 /**
- * Gathers settled MLB plays via the existing storage.getPlays() surface and
- * builds the official calibration report. Known limitation: storage.getPlays
- * hard-caps at 500 rows per call (see server/storage.ts), so a backlog larger
- * than that is not fully represented here — flagged explicitly rather than
- * silently under-sampled. A dedicated unbounded settled-plays reader (mirroring
- * getPendingPlaysForGrading's fix for the same 500-row cap on the grading
- * path) is the natural follow-up if deeper history is needed.
+ * Gathers MLB plays for a date range via storage.getPlaysInRange() — an
+ * UNBOUNDED query (no row cap, unlike storage.getPlays()'s 500-row limit)
+ * that already exists in this codebase for exactly this purpose (see
+ * getGradedPlaysForCalibration's identical pattern for other calibration
+ * surfaces). `coverage.complete` is always true here because this call
+ * retrieves every row matching the date range in a single unbounded query —
+ * there is no page/cursor to exhaust. If the caller narrows the range (or
+ * omits it, defaulting to "all time"), that choice is echoed back in
+ * `requestedFromDate`/`requestedToDate` rather than hidden.
  */
 export async function gatherMlbLiveEdgeCalibrationReport(
-  storage: Pick<IStorage, "getPlays">,
-  opts: { limit?: number } = {}
+  storage: Pick<IStorage, "getPlaysInRange">,
+  opts: { fromDate?: string; toDate?: string } = {}
 ): Promise<MlbLiveEdgeCalibrationReport> {
-  const { plays } = await storage.getPlays({ sport: "mlb", settled: "settled", limit: opts.limit ?? 500 });
+  const plays = await storage.getPlaysInRange({
+    sport: "mlb",
+    startDate: opts.fromDate,
+    endDate: opts.toDate,
+  });
 
   const cleanRows: CalibrationRow[] = [];
-  let excluded = 0;
+  let excludedLegacyRows = 0;
+  let excludedMissingProvenanceRows = 0;
+  let excludedPushOrVoidRows = 0;
+  let unresolvedRows = 0;
+
   for (const play of plays) {
-    const row = toCleanCalibrationRow(play);
-    if (row) cleanRows.push(row);
-    else excluded++;
+    const kind = classifyExclusion(play);
+    switch (kind) {
+      case "unresolved": unresolvedRows++; continue;
+      case "push_or_void": excludedPushOrVoidRows++; continue;
+      case "legacy": excludedLegacyRows++; continue;
+      case "missing_provenance": excludedMissingProvenanceRows++; continue;
+      case "eligible": {
+        const row = toCleanCalibrationRow(play);
+        if (row) cleanRows.push(row);
+        continue;
+      }
+    }
   }
+
+  const coverage: CalibrationCoverageMetadata = {
+    requestedFromDate: opts.fromDate ?? null,
+    requestedToDate: opts.toDate ?? null,
+    rowsScanned: plays.length,
+    eligibleRows: cleanRows.length,
+    excludedLegacyRows,
+    excludedMissingProvenanceRows,
+    excludedPushOrVoidRows,
+    unresolvedRows,
+    complete: true,
+  };
 
   return {
     official: buildGroupedCalibrationReport(cleanRows),
-    officialRowsExcludedLegacyOrUnprovenanced: excluded,
+    officialRowsExcludedLegacyOrUnprovenanced: excludedLegacyRows + excludedMissingProvenanceRows,
+    coverage,
     shadow: SHADOW_CALIBRATION_UNAVAILABLE,
   };
 }

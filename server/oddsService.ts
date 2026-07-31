@@ -164,7 +164,7 @@ const EVENTS_TTL = 3 * 60 * 1000;       // 3 min (shorter so fresh games appear 
 const NBA_ODDS_TTL = 2 * 60 * 1000;     // 2 min — pre-game line raw cache (NBA)
 const NBA_ODDS_LIVE_TTL = 30 * 1000;    // 30 sec — in-play line raw cache for halftime freshness (NBA)
 const MLB_ODDS_TTL = 2 * 60 * 1000;     // 2 min — pre-game line raw cache (MLB, matched to NBA)
-const MLB_ODDS_LIVE_TTL = 30 * 1000;    // 30 sec — in-play line raw cache (MLB, matched to NBA)
+export const MLB_ODDS_LIVE_TTL = 30 * 1000;    // 30 sec — in-play line raw cache (MLB, matched to NBA)
 
 function isFresh(entry: CacheEntry | undefined, ttl: number): boolean {
   return !!entry && Date.now() - entry.timestamp < ttl;

@@ -11,6 +11,7 @@
 // (e.g. drop from a served feed) but never write back into the signal.
 
 import type { MLBMarket, MLBQualifiedSignal } from "./types";
+import type { MergeCarryForwardResult } from "./edgeCarryForward";
 
 const PITCHER_MARKETS: ReadonlySet<MLBMarket> = new Set<MLBMarket>([
   "pitcher_strikeouts",
@@ -110,4 +111,56 @@ export function revalidateCarriedSignal(
   }
 
   return { visible: reasons.length === 0, reasons };
+}
+
+export interface CarryForwardFilterOutcome {
+  allSignals: MLBQualifiedSignal[];
+  qualifiedSignals: MLBQualifiedSignal[];
+  demoted: number;
+  demotionReasonCounts: Record<CarryForwardRejectionReason, number> | Record<string, number>;
+}
+
+/**
+ * Applies revalidateCarriedSignal to every signal edgeCarryForward.ts's
+ * mergeCarryForward() actually carried forward (identified by
+ * merged.carriedSignalIds — freshly computed signals are NEVER subject to
+ * this check) and filters both `allSignals` and `qualifiedSignals` down to
+ * the surviving set. Never mutates any signal object; only decides which
+ * objects continue into the returned arrays.
+ *
+ * This is the SAME function the live orchestrator calls at its cache-write
+ * boundary (server/mlb/liveGameOrchestrator.ts) — extracted here so
+ * integration tests exercise the identical production code path rather than
+ * a re-implementation of it.
+ */
+export function applyCarryForwardRevalidation(
+  merged: MergeCarryForwardResult,
+  buildContext: (sig: MLBQualifiedSignal) => CarryForwardRevalidationContext
+): CarryForwardFilterOutcome {
+  if (merged.carriedSignalIds.length === 0) {
+    return { allSignals: merged.allSignals, qualifiedSignals: merged.qualifiedSignals, demoted: 0, demotionReasonCounts: {} };
+  }
+
+  const carriedIdSet = new Set(merged.carriedSignalIds);
+  const survivingIds = new Set<string>();
+  let demoted = 0;
+  const demotionReasonCounts: Record<string, number> = {};
+
+  const allSignals = merged.allSignals.filter((sig) => {
+    if (!carriedIdSet.has(sig.id)) { survivingIds.add(sig.id); return true; }
+    const result = revalidateCarriedSignal(sig, buildContext(sig));
+    if (!result.visible) {
+      demoted++;
+      for (const reason of result.reasons) {
+        demotionReasonCounts[reason] = (demotionReasonCounts[reason] ?? 0) + 1;
+      }
+      return false;
+    }
+    survivingIds.add(sig.id);
+    return true;
+  });
+
+  const qualifiedSignals = merged.qualifiedSignals.filter((sig) => survivingIds.has(sig.id));
+
+  return { allSignals, qualifiedSignals, demoted, demotionReasonCounts };
 }
