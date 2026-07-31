@@ -2598,6 +2598,12 @@ export class DatabaseStorage implements IStorage {
       pitchCount: play.pitchCount ?? null,
       contactQualityScore: play.contactQualityScore != null ? String(play.contactQualityScore) : null,
       officialEpisodeKey: play.officialEpisodeKey,
+      // Database's own clock, captured at the instant this INSERT actually
+      // executes — never the application server's clock, never
+      // engineGeneratedAt (which stays on `timestamp`, untouched). On a lost
+      // race this INSERT never commits, so firstPublicAt is only ever set by
+      // whichever writer's row actually wins.
+      firstPublicAt: sql`now()`,
       oddsSourceUpdatedAt: play.oddsSourceUpdatedAt != null ? new Date(play.oddsSourceUpdatedAt) : null,
       oddsFetchedAt: play.oddsFetchedAt != null ? new Date(play.oddsFetchedAt) : null,
       rawProbability: play.rawProbability != null ? String(play.rawProbability) : null,

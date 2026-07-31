@@ -478,17 +478,22 @@ export const persistedPlays = pgTable("persisted_plays", {
   // that supplies them (currently MLB); left null for every existing row and
   // for sports that don't populate them. No backfill, no fabrication.
   // Existing columns reused where their semantics are exactly identical:
-  //   - `timestamp` already serves as firstPublicAt (row creation time, and
-  //     — once this row is immutable post-insert — the frozen first-public
-  //     moment).
   //   - `prob` already serves as finalProbability (the final recommended-
   //     side calibrated probability MLB has always written here).
   //   - `odds` already serves as sideOdds (the recommended-side American
   //     odds) — MLB simply did not populate it before this recovery.
   //   - `engineVersion`/`calibrationTrack` already exist as generic columns;
   //     MLB now populates them too.
+  // `timestamp` is NOT reused for firstPublicAt — it is populated from
+  // signal.createdAt (engineGeneratedAt, i.e. engine-computation time), not
+  // the instant the row actually won insertion into persisted_plays. Those
+  // are frequently the same tick but are not proven identical, so
+  // firstPublicAt gets its own column below, set via the database's own
+  // clock (`now()`) inside the atomic INSERT, and is never touched again —
+  // engineGeneratedAt (`timestamp`) is preserved unchanged alongside it.
   // Genuinely new concepts get their own column below.
   officialEpisodeKey: text("official_episode_key").unique(),
+  firstPublicAt: timestamp("first_public_at"),
   oddsSourceUpdatedAt: timestamp("odds_source_updated_at"),
   oddsFetchedAt: timestamp("odds_fetched_at"),
   rawProbability: numeric("raw_probability"),
