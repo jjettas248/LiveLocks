@@ -445,6 +445,46 @@ app.use((req, res, next) => {
     console.warn("[startup] Schema migration warning (hr-radar-phase0):", err.message);
   }
 
+  // Schema migration: MLB Live Edge Trust Recovery — official-episode
+  // provenance columns (2026-07). Mirrors migrations/0008_mlb_live_edge_
+  // official_episode_provenance.sql. These columns were added to
+  // shared/schema.ts's persistedPlays table and are SELECTed by every plain
+  // `db.select().from(persistedPlays)` call (ROI report, calibration
+  // endpoints, settlement). Same failure mode as the HR Radar Phase 0 note
+  // above: if this ALTER TABLE never runs, every one of those queries throws
+  // "column does not exist" and the ROI/calibration surfaces go dark. All
+  // columns additive/nullable; safe no-op once applied.
+  try {
+    await pool.query(`
+      ALTER TABLE persisted_plays
+        ADD COLUMN IF NOT EXISTS official_episode_key text,
+        ADD COLUMN IF NOT EXISTS first_public_at timestamp,
+        ADD COLUMN IF NOT EXISTS odds_source_updated_at timestamp,
+        ADD COLUMN IF NOT EXISTS odds_fetched_at timestamp,
+        ADD COLUMN IF NOT EXISTS raw_probability numeric,
+        ADD COLUMN IF NOT EXISTS calibration_version text,
+        ADD COLUMN IF NOT EXISTS input_snapshot_hash text,
+        ADD COLUMN IF NOT EXISTS official_eligibility_version text,
+        ADD COLUMN IF NOT EXISTS official_eligibility_reasons text,
+        ADD COLUMN IF NOT EXISTS data_quality text,
+        ADD COLUMN IF NOT EXISTS current_stat_known boolean;
+    `);
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'persisted_plays_official_episode_key_unique'
+        ) THEN
+          ALTER TABLE "persisted_plays"
+            ADD CONSTRAINT "persisted_plays_official_episode_key_unique" UNIQUE ("official_episode_key");
+        END IF;
+      END $$;
+    `);
+    console.log("[startup] Schema migration: persisted_plays official-episode provenance columns ensured");
+  } catch (err: any) {
+    console.warn("[startup] Schema migration warning (mlb-official-episode-provenance):", err.message);
+  }
+
   // Schema migration: attribution / conversion tracking (Task #143).
   // Two strictly additive tables — does NOT modify the users table.
   // Idempotent CREATE IF NOT EXISTS; safe to re-run on every boot.
