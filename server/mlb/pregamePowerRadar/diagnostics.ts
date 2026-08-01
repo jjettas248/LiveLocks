@@ -1,6 +1,7 @@
 // Pre-Game Power Radar — diagnostics rollups + public visibility predicate.
 
 import type { PregamePowerSignal, PregamePowerRadarResponse } from "./types";
+import { isDisplaySuppressedDriverKey } from "@shared/plateDisplaySuppression";
 import { countPositivePregameEvidenceFamilies } from "./evidenceFamilies";
 import { PLATE_CHAMPION_POLICY } from "./modelVersions/plateChampionJul20";
 import { countPositiveDrivers, driverKeysForUniverse } from "./modelVersions/plateDriverUniverse";
@@ -131,6 +132,16 @@ export interface CoverageCounters {
   pitcherCoverage: number;
 }
 
+/**
+ * Return a shallow copy of the signal with display-suppressed driver keys removed
+ * from its `drivers` array (display-only; never mutates the input). Returns the
+ * same reference when nothing is suppressed so untouched signals are not cloned.
+ */
+function stripSuppressedDisplayDrivers(signal: PregamePowerSignal): PregamePowerSignal {
+  if (!signal.drivers.some((d) => isDisplaySuppressedDriverKey(d.key))) return signal;
+  return { ...signal, drivers: signal.drivers.filter((d) => !isDisplaySuppressedDriverKey(d.key)) };
+}
+
 export function buildResponse(
   date: string,
   buildId: string,
@@ -162,7 +173,15 @@ export function buildResponse(
     generatedAt,
     source,
     gamesScanned: counters.gamesScanned,
-    signals: out.slice().sort((a, b) => b.score10 - a.score10),
+    // Display-layer suppression only. Publication (isPublicPregameSignal, above)
+    // and every qualification decision run on the ORIGINAL `signals` — which still
+    // carry `power_iso` — so score/tier/positiveDriverCount/publication are
+    // unchanged. Here we strip display-suppressed driver keys from the OUTGOING
+    // copy so the surfaced card/tags exclude them (see shared/plateDisplaySuppression.ts).
+    signals: out
+      .slice()
+      .sort((a, b) => b.score10 - a.score10)
+      .map(stripSuppressedDisplayDrivers),
     diagnostics: {
       lineupCoverage: counters.lineupCoverage,
       weatherCoverage: counters.weatherCoverage,

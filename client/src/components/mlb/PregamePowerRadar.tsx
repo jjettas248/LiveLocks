@@ -23,6 +23,7 @@ import {
   getPlateDriverDisplayPriority,
   type PlateTagTone,
 } from "@/lib/mlb/plateTagPresentation";
+import { isDisplaySuppressedDriverKey } from "@shared/plateDisplaySuppression";
 
 type Tier = "track" | "watch" | "power_watch" | "strong" | "elite" | "nuclear";
 type Market = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
@@ -462,14 +463,20 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   // keeps a qualifying pull metric from being crowded off by the cap WITHOUT
   // reordering or dropping any other driver. The remaining chips keep their
   // existing order and 4-cap; overflow is surfaced as "+N more".
-  const positiveDriversAll = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
+  // Display-layer suppression (shared/plateDisplaySuppression.ts): explicitly
+  // filter suppressed keys (e.g. power_iso) here as defense-in-depth, independent
+  // of the server also stripping them. This never affects score/tier/qualification
+  // (all server-stamped); it only removes the chip from the card.
+  const positiveDriversAll = s.drivers.filter(
+    (d) => d.direction === "positive" && d.key !== "power_pullair" && !isDisplaySuppressedDriverKey(d.key),
+  );
   const positives = positiveDriversAll
     .slice()
     .sort((a, b) => priority(a) - priority(b))
     .slice(0, 4);
   const hiddenPositiveCount = Math.max(0, positiveDriversAll.length - positives.length);
   const negatives = s.drivers
-    .filter((d) => d.direction === "negative")
+    .filter((d) => d.direction === "negative" && !isDisplaySuppressedDriverKey(d.key))
     .slice()
     .sort((a, b) => priority(a) - priority(b))
     .slice(0, 4);
@@ -955,7 +962,9 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
   // Exclude power_pullair — raw pull rate is shown truthfully as "Pull Rate" in
   // the compact value + the Core Power Profile below; it must never render via
   // its server driver label "Pull-Side Power" (not a true pulled-air metric).
-  const allPositives = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
+  const allPositives = s.drivers.filter(
+    (d) => d.direction === "positive" && d.key !== "power_pullair" && !isDisplaySuppressedDriverKey(d.key),
+  );
   const coverage = coverageLabel(diag.dataCoverageScore);
   const components = COMPONENT_LABELS
     .map(({ key, label }) => ({ label, value: diag[key] as number | null | undefined }))

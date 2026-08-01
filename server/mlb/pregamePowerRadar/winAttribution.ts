@@ -23,6 +23,7 @@ import {
   FIRST_AB_PREGAME_WIN_COPY,
 } from "../../../shared/pregameRadarWin";
 import { formatPlainDateLabel } from "../../../shared/dateLabel";
+import { isDisplaySuppressedDriverKey } from "../../../shared/plateDisplaySuppression";
 import { toEtDateKey, toEtTimeLabel } from "../../utils/dateUtils";
 
 /** Minimal AB shape (subset of dataPullService priorABResults). */
@@ -148,8 +149,12 @@ function parkWeatherBoostLabel(signal: PregamePowerSignal): string | null {
 }
 
 function pregameDriverDigest(drivers: PowerDriver[]): PregameRadarWinItem["pregameDrivers"] {
+  // Display-only suppression (shared/plateDisplaySuppression.ts): the win card is
+  // a presentation surface, so display-suppressed keys (e.g. power_iso) are hidden
+  // here too. This never affects attribution — outcome/userVisible are decided
+  // upstream from the full, unfiltered signal.
   return drivers
-    .filter((d) => d.direction === "positive")
+    .filter((d) => d.direction === "positive" && !isDisplaySuppressedDriverKey(d.key))
     .slice(0, 5)
     .map((d) => ({ key: d.key, label: d.label, direction: d.direction }));
 }
