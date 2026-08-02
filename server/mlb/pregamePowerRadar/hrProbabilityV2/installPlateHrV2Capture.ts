@@ -19,6 +19,7 @@ import {
   setPlateHrV2SufficientStatsSink,
 } from "./plateHrV2ForwardCapture";
 import { toInsertFeatureSnapshot, toInsertSufficientStats } from "./plateHrV2CaptureRowMapper";
+import { persistPlateHrV2SnapshotWrites } from "./plateHrV2SnapshotCapture";
 
 /** Registers both capture sinks. Idempotent — safe to call once at boot. */
 export function installPlateHrV2CapturePersistence(): void {
@@ -26,6 +27,13 @@ export function installPlateHrV2CapturePersistence(): void {
     for (const row of rows) {
       await storage.upsertPlateHrV2FeatureSnapshot(toInsertFeatureSnapshot(row));
     }
+    // PR3: also append the two-layer point-in-time snapshot (source evidence +
+    // prediction). persistPlateHrV2SnapshotWrites NEVER throws — a snapshot
+    // failure can never break the feature-snapshot capture above or the build.
+    await persistPlateHrV2SnapshotWrites(rows, {
+      insertSources: (s) => storage.insertPlateHrV2SourceEvidence(s),
+      insertPrediction: (p) => storage.insertPlateHrV2PredictionSnapshot(p),
+    });
   });
   setPlateHrV2SufficientStatsSink(async (rows) => {
     for (const row of rows) {
