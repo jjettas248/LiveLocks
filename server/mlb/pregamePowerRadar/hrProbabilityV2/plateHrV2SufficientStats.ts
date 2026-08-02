@@ -36,6 +36,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getPitchFamily } from "../../pitchTypeNormalizer";
+import { computeExactPitchStats, type PlateHrV2ExactPitchStats, type ExactPitchEntityType } from "./exactPitchStats";
 
 type PitchFamily = "fastball" | "breaking" | "offspeed";
 
@@ -87,6 +88,10 @@ export interface PlateHrV2SufficientStatsRaw {
   walks: number;
   battedBallEvents: number;
   pitchFamilyStats: Record<PitchFamily, PlateHrV2PitchFamilyStat>;
+  // §5a (PR4): exact-pitch-type grain-typed counts × opponent hand, keyed
+  // `${hand}:${code}`. Additive — the 3-family block above is retained for
+  // fallback/back-compat.
+  pitchTypeExactStats: PlateHrV2ExactPitchStats;
   evPercentiles: PlateHrV2Percentiles;
   laPercentiles: PlateHrV2Percentiles;
   pulledBip: number;
@@ -137,6 +142,7 @@ function emptyFamilyStat(): PlateHrV2PitchFamilyStat {
  */
 export function computePlateHrV2SufficientStats(
   rows: Array<Record<string, string>> | null | undefined,
+  entityType: ExactPitchEntityType = "batter",
 ): PlateHrV2SufficientStatsRaw {
   const pitchFamilyStats: Record<PitchFamily, PlateHrV2PitchFamilyStat> = {
     fastball: emptyFamilyStat(),
@@ -161,6 +167,7 @@ export function computePlateHrV2SufficientStats(
       walks: 0,
       battedBallEvents: 0,
       pitchFamilyStats,
+      pitchTypeExactStats: {},
       evPercentiles: computePercentiles([]),
       laPercentiles: computePercentiles([]),
       pulledBip: 0,
@@ -284,6 +291,7 @@ export function computePlateHrV2SufficientStats(
     walks,
     battedBallEvents,
     pitchFamilyStats,
+    pitchTypeExactStats: computeExactPitchStats(rows, entityType),
     evPercentiles: computePercentiles(evValues),
     laPercentiles: computePercentiles(laValues),
     pulledBip,

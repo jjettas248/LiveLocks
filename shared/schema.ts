@@ -1612,6 +1612,9 @@ export const plateHrV2SufficientStats = pgTable("plate_hr_v2_sufficient_stats", 
   walks: integer("walks").notNull().default(0),
   battedBallEvents: integer("batted_ball_events").notNull().default(0),
   pitchFamilyStats: jsonb("pitch_family_stats").notNull().default({}),
+  // §5a (PR4): exact-pitch grain-typed counts × opponent hand, keyed
+  // `${hand}:${code}`. Additive — retained 3-family block above for fallback.
+  pitchTypeStats: jsonb("pitch_type_stats").notNull().default({}),
   evPercentiles: jsonb("ev_percentiles").notNull().default({}),
   laPercentiles: jsonb("la_percentiles").notNull().default({}),
   pulledBip: integer("pulled_bip").notNull().default(0),

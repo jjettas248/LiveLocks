@@ -75,6 +75,7 @@ export function toInsertSufficientStats(row: PlateHrV2SufficientStatsCaptureRow)
     walks: row.raw.walks,
     battedBallEvents: row.raw.battedBallEvents,
     pitchFamilyStats: row.raw.pitchFamilyStats,
+    pitchTypeStats: row.raw.pitchTypeExactStats,
     evPercentiles: row.raw.evPercentiles,
     laPercentiles: row.raw.laPercentiles,
     pulledBip: row.raw.pulledBip,

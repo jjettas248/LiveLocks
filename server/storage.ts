@@ -3824,6 +3824,7 @@ export class DatabaseStorage implements IStorage {
           walks: row.walks,
           battedBallEvents: row.battedBallEvents,
           pitchFamilyStats: row.pitchFamilyStats,
+          pitchTypeStats: row.pitchTypeStats ?? {},
           evPercentiles: row.evPercentiles,
           laPercentiles: row.laPercentiles,
           pulledBip: row.pulledBip,

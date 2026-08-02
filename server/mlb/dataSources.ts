@@ -265,6 +265,9 @@ export function aggregateBatterPitchAndContact(
       pitchType: f,
       xSLG: fam[f].xslgN > 0 ? parseFloat((fam[f].xslgSum / fam[f].xslgN).toFixed(3)) : null,
       whiffPct: fam[f].swings >= 10 ? parseFloat(((fam[f].whiffs / fam[f].swings) * 100).toFixed(1)) : null,
+      // PR4: preserve the BBE denominator backing xSLG (previously discarded), so
+      // downstream shrinkage has a real sample size instead of a null fallback.
+      bbeSample: fam[f].xslgN,
     }))
     .filter((s) => s.xSLG != null || s.whiffPct != null);
 
@@ -735,7 +738,7 @@ export async function fetchBaseballSavantData(
 
         // Plate HR Probability V2 (PR 1, correction 2) — durable sufficient
         // statistics from the same rows, before they go out of scope below.
-        plateHrV2BatterSufficientStats = computePlateHrV2SufficientStats(rows);
+        plateHrV2BatterSufficientStats = computePlateHrV2SufficientStats(rows, "batter");
 
         // Real per-pitch CSV parsed successfully — every batter-power field
         // above had a chance to populate (an empty in-season sample still
@@ -814,7 +817,7 @@ export async function fetchBaseballSavantData(
 
         // Plate HR Probability V2 (PR 1, correction 2) — durable sufficient
         // statistics from the same rows, before they go out of scope below.
-        plateHrV2PitcherSufficientStats = computePlateHrV2SufficientStats(rows);
+        plateHrV2PitcherSufficientStats = computePlateHrV2SufficientStats(rows, "pitcher");
       }
     } else {
       console.warn("[Savant] Pitcher CSV fetch failed");

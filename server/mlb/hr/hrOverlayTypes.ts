@@ -22,6 +22,9 @@ export interface PitchTypeBatterSplit {
   usagePct?: number | null;    // pitcher's usage % for this pitch type
   xSLG?: number | null;        // batter xSLG vs this pitch type
   whiffPct?: number | null;    // batter whiff% vs this pitch type
+  // PR4: BBE sample backing xSLG (the denominator to shrink the split by).
+  // Optional — older producers/consumers are unaffected when absent.
+  bbeSample?: number | null;
 }
 
 /** All inputs to the consolidated HR overlay. Every field is optional — no-op when absent. */
