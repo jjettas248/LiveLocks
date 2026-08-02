@@ -30,10 +30,13 @@ export function installPlateHrV2CapturePersistence(): void {
     // PR3: also append the two-layer point-in-time snapshot (source evidence +
     // prediction). persistPlateHrV2SnapshotWrites NEVER throws — a snapshot
     // failure can never break the feature-snapshot capture above or the build.
-    await persistPlateHrV2SnapshotWrites(rows, {
+    const result = await persistPlateHrV2SnapshotWrites(rows, {
       insertSources: (s) => storage.insertPlateHrV2SourceEvidence(s),
       insertPrediction: (p) => storage.insertPlateHrV2PredictionSnapshot(p),
     });
+    if (result.failed > 0) {
+      console.warn(`[PLATE_HR_V2_SNAPSHOT_PERSIST] written=${result.written} failed=${result.failed}`);
+    }
   });
   setPlateHrV2SufficientStatsSink(async (rows) => {
     for (const row of rows) {

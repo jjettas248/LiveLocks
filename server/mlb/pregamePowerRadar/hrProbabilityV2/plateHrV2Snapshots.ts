@@ -55,6 +55,29 @@ export const sourceEvidenceSnapshotSchema = z.object({
 });
 export type SourceEvidenceSnapshot = z.infer<typeof sourceEvidenceSnapshotSchema>;
 
+// An explicit, real provider/entity evidence descriptor assembled at the fetch
+// site (PR3.1). One descriptor == one real source payload (a Savant CSV for an
+// entity, an Open-Meteo forecast for a game, a confirmed lineup, park geometry).
+// Every field is real — nothing is synthesized. The builder maps a descriptor to
+// a SourceEvidenceSnapshot verbatim; it never invents provenance.
+export const plateHrV2EvidenceDescriptorSchema = z.object({
+  provider: z.string().min(1),
+  entityType: z.enum(["batter", "pitcher", "game", "venue"]),
+  entityId: z.string().min(1),
+  evidenceKind: z.enum(EVIDENCE_KINDS),
+  fetchedAt: isoTimestamp,
+  availableAt: isoTimestamp,
+  dataThroughAt: isoTimestamp.nullable(),
+  validForAt: isoTimestamp.nullable(),
+  schemaVersion: z.string().min(1),
+  // Canonical hash of THIS source's authorized payload — not the whole frozen
+  // batter-game input. Shared game/venue evidence hashes identically across
+  // batters, so it dedupes to a single append-only row.
+  contentHash: z.string().min(1),
+  payloadRef: z.string().nullable(),
+});
+export type PlateHrV2EvidenceDescriptor = z.infer<typeof plateHrV2EvidenceDescriptorSchema>;
+
 export const predictionSnapshotSchema = z.object({
   predictionSnapshotId: z.string().min(1),
   gamePk: z.string().min(1),
@@ -178,12 +201,15 @@ export function isPredictionSnapshotEligible(
     string,
     Pick<SourceEvidenceSnapshot, "evidenceKind" | "dataThroughAt" | "availableAt" | "validForAt" | "reconstructed">
   >,
-  opts: { verifiedAsOfRetrieval?: boolean } = {},
+  opts: { verifiedAsOfRetrieval?: boolean; requireKnownFirstPitch?: boolean } = {},
 ): PredictionEligibilityResult {
   const reasons: string[] = [];
   const pAsOf = ms(prediction.predictionAsOf);
   const fp = ms(prediction.firstPitchTime);
   if (pAsOf == null) return { eligible: false, reasons: ["unparseable_prediction_as_of"] };
+  // Rev. 4.1: training eligibility requires a KNOWN first-pitch boundary so the
+  // predictionAsOf ≤ firstPitch invariant is verifiable, not assumed.
+  if (opts.requireKnownFirstPitch && fp == null) reasons.push("unknown_first_pitch");
   if (fp != null && pAsOf > fp) reasons.push("prediction_after_first_pitch");
 
   if (prediction.sourceSnapshotIds.length === 0) {

@@ -1,16 +1,15 @@
-// Plate HR V2 — derive the append-only two-layer snapshot write from a capture
-// row, and persist it safely (plan §7.1, PR3).
+// Plate HR V2 — assemble real provider/entity evidence descriptors, derive the
+// append-only two-layer snapshot write, and persist it safely (plan §7.1, PR3.1).
 //
-// PURE builder + a never-throws persister. The builder reuses the provenance the
-// existing forward capture already assembled (predictionAsOf, firstPitchTime,
-// per-family featureFreshness.sourceAt, inputHash) — it fabricates NO timestamps:
-// a family without a real source timestamp produces no source-evidence row.
-//
-// AUTHORIZED-FIELDS-ONLY (per docs/plate/plateHrV2DataFeasibility.md): the zone /
-// location group is UNAUTHORIZED (its Savant columns are unverified), so it is
-// stripped from the captured derived-feature vector and no zone source-evidence
-// row is emitted. Odds/market is never a model input, so it is not evidence.
+// PR3.1 rewrite: source evidence now comes from EXPLICIT per-provider/entity
+// descriptors carrying real provenance (fetchedAt/availableAt/dataThroughAt/
+// validForAt/contentHash/payloadRef), assembled at the fetch site from the data
+// the build actually has. No family heuristics, no synthesized timestamps, no
+// batter-wide input hash standing in for a source hash. Absent provenance →
+// fail-closed (no descriptor). Odds/market and unverified zone are excluded by a
+// CLOSED allowlist. The prediction stores the real MLB gamePk (not ESPN gameId).
 
+import { createHash } from "node:crypto";
 import type {
   InsertPlateHrV2SourceEvidence,
   InsertPlateHrV2PredictionSnapshot,
@@ -19,6 +18,7 @@ import type { PlateHrV2CaptureRow } from "./plateHrV2ForwardCapture";
 import {
   isPredictionSnapshotEligible,
   type EvidenceKind,
+  type PlateHrV2EvidenceDescriptor,
   type SourceEvidenceSnapshot,
 } from "./plateHrV2Snapshots";
 
@@ -27,38 +27,124 @@ export interface PlateHrV2SnapshotWrite {
   prediction: InsertPlateHrV2PredictionSnapshot;
 }
 
-// Derived-feature groups stripped from the captured vector because their inputs
-// are UNAUTHORIZED (PR2 go/no-go). Keep in sync with the feasibility artifact.
-export const UNAUTHORIZED_DERIVED_FEATURE_GROUPS: ReadonlySet<string> = new Set(["zoneLocation"]);
+// CLOSED allowlist of derived-feature groups permitted into a captured snapshot.
+// A group not listed here is dropped — a newly added group stays out until it is
+// deliberately added. zoneLocation (unverified, PR2) and market/odds (never a
+// model input) are intentionally absent.
+export const AUTHORIZED_DERIVED_FEATURE_GROUPS: ReadonlySet<string> = new Set([
+  "featureVersion",
+  "batterPower",
+  "batTracking",
+  "pitcherVulnerability",
+  "pitchType",
+  "parkWeatherSpray",
+  "lineupOpportunity",
+  "starterBullpen",
+  "availability",
+  "contactOpportunity",
+  "dataQuality",
+  "slateBaselineGameHrProbability",
+]);
 
-// featureFreshness family → (evidenceKind, entity resolver). Only families the
-// capture actually timestamps appear here; market/availability/starterBullpen
-// carry no source timestamp and so never become fabricated evidence.
-interface FamilySpec {
-  evidenceKind: EvidenceKind;
-  entity: (row: PlateHrV2CaptureRow) => { entityType: "batter" | "pitcher" | "game" | "venue"; entityId: string } | null;
-}
-const FAMILY_SPECS: Record<string, FamilySpec> = {
-  batterPower: { evidenceKind: "historical_stat", entity: (r) => ({ entityType: "batter", entityId: r.batterId }) },
-  batTracking: { evidenceKind: "historical_stat", entity: (r) => ({ entityType: "batter", entityId: r.batterId }) },
-  pitchType: { evidenceKind: "historical_stat", entity: (r) => ({ entityType: "batter", entityId: r.batterId }) },
-  pitcherVulnerability: {
-    evidenceKind: "historical_stat",
-    entity: (r) => (r.pitcherId ? { entityType: "pitcher", entityId: r.pitcherId } : null),
-  },
-  parkWeatherSpray: { evidenceKind: "weather_forecast", entity: (r) => ({ entityType: "game", entityId: r.gameId }) },
-  lineupOpportunity: { evidenceKind: "lineup", entity: (r) => ({ entityType: "game", entityId: r.gameId }) },
-};
-
-/** Season-to-date pregame stats cover only games BEFORE the slate day (the
- * Savant query excludes the game day), so `dataThroughAt` is the start of the
- * session date. Documented derivation from the query semantics — not fabricated. */
-function historicalDataThroughAt(sessionDate: string): string {
-  return `${sessionDate}T00:00:00.000Z`;
+/** Stable, sorted-key JSON → sha256. Deterministic content hash for a payload. */
+export function canonicalHash(payload: unknown): string {
+  return createHash("sha256").update(stableStringify(payload)).digest("hex").slice(0, 40);
 }
 
-function sourceId(entityType: string, entityId: string, kind: string, availableAtIso: string, contentHash: string): string {
-  return `plate-hr-v2-src:${entityType}:${entityId}:${kind}:${availableAtIso}:${contentHash}`;
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(v as Record<string, unknown>).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((v as Record<string, unknown>)[k])}`).join(",")}}`;
+}
+
+/** Exclusive upper bound of a season-to-date Savant query = start of the fetch's
+ * UTC day (the query used game_date_lt = fetch date, so it covers through the
+ * prior day). Derived from the REAL fetch timestamp, not a synthesized string. */
+export function startOfUtcDay(iso: string): string {
+  const d = new Date(iso);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
+}
+
+// ── Descriptor assembly (pure) ────────────────────────────────────────────────
+
+export interface PlateHrV2EvidenceAssemblyInput {
+  gamePk: string;
+  batterId: string;
+  pitcherId: string | null;
+  capturedAtIso: string;
+  firstPitchIso: string | null;
+  schemaVersion: string;
+  /** Real season-to-date Savant payloads (authorized counts) + their stable refs. */
+  batterSufficientStats: unknown | null;
+  batterStatsRef: string | null;
+  pitcherSufficientStats: unknown | null;
+  pitcherStatsRef: string | null;
+  /** Game-level forecast used this cycle (shared across batters). */
+  weather: { available: boolean; temperatureF: number | null; windSpeedMph: number | null; windDirection: string | null; isIndoors: boolean } | null;
+  /** Whether the confirmed lineup was posted (game-level evidence, shared). */
+  lineupPosted: boolean;
+  /** Static park/venue evidence (shared across batters). */
+  park: { venueResolved: boolean; payload: unknown } | null;
+}
+
+/**
+ * Build the real evidence descriptors for one candidate. Emits a descriptor ONLY
+ * when the underlying source genuinely exists — a missing source yields no
+ * descriptor (fail-closed). Game/venue-level evidence (pitcher, weather, park,
+ * lineup) carries batter-independent content so it dedupes across batters.
+ */
+export function assemblePlateHrV2EvidenceDescriptors(inp: PlateHrV2EvidenceAssemblyInput): PlateHrV2EvidenceDescriptor[] {
+  const out: PlateHrV2EvidenceDescriptor[] = [];
+  const fetched = inp.capturedAtIso;
+  const histThrough = startOfUtcDay(fetched);
+
+  if (inp.batterSufficientStats != null) {
+    out.push({
+      provider: "baseball_savant", entityType: "batter", entityId: inp.batterId, evidenceKind: "historical_stat",
+      fetchedAt: fetched, availableAt: fetched, dataThroughAt: histThrough, validForAt: null,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(inp.batterSufficientStats), payloadRef: inp.batterStatsRef,
+    });
+  }
+  if (inp.pitcherId && inp.pitcherSufficientStats != null) {
+    out.push({
+      provider: "baseball_savant", entityType: "pitcher", entityId: inp.pitcherId, evidenceKind: "historical_stat",
+      fetchedAt: fetched, availableAt: fetched, dataThroughAt: histThrough, validForAt: null,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(inp.pitcherSufficientStats), payloadRef: inp.pitcherStatsRef,
+    });
+  }
+  if (inp.weather?.available) {
+    const payload = { temperatureF: inp.weather.temperatureF, windSpeedMph: inp.weather.windSpeedMph, windDirection: inp.weather.windDirection, isIndoors: inp.weather.isIndoors };
+    out.push({
+      provider: "open_meteo", entityType: "game", entityId: inp.gamePk, evidenceKind: "weather_forecast",
+      fetchedAt: fetched, availableAt: fetched, dataThroughAt: null, validForAt: inp.firstPitchIso,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: null,
+    });
+  }
+  if (inp.park?.venueResolved) {
+    out.push({
+      provider: "livelocks_park", entityType: "venue", entityId: inp.gamePk, evidenceKind: "park",
+      fetchedAt: fetched, availableAt: fetched, dataThroughAt: null, validForAt: null,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(inp.park.payload), payloadRef: null,
+    });
+  }
+  if (inp.lineupPosted) {
+    // Game-level "lineup confirmed" evidence — the batter's slot is a FEATURE,
+    // not part of evidence identity, so this dedupes across the game's batters.
+    out.push({
+      provider: "mlb_stats_api", entityType: "game", entityId: inp.gamePk, evidenceKind: "lineup",
+      fetchedAt: fetched, availableAt: fetched, dataThroughAt: null, validForAt: null,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash({ lineupConfirmed: true }), payloadRef: null,
+    });
+  }
+  return out;
+}
+
+function sourceId(d: PlateHrV2EvidenceDescriptor): string {
+  // Content + entity + kind — shared game/venue evidence with identical content
+  // yields an identical id (append-only dedup); a batter change never alters a
+  // game-level source id.
+  return `plate-hr-v2-src:${d.entityType}:${d.entityId}:${d.evidenceKind}:${d.contentHash}`;
 }
 
 function predictionId(gamePk: string, batterId: string, featureVersion: string, predictionAsOfIso: string): string {
@@ -66,85 +152,76 @@ function predictionId(gamePk: string, batterId: string, featureVersion: string, 
 }
 
 /**
- * Build the append-only source-evidence rows + one prediction snapshot for a
- * capture row. Pure. Returns Date-typed insert objects; ids are deterministic so
- * re-capturing the SAME (gamePk, batterId, featureVersion, predictionAsOf) is
- * idempotent, while a later cycle (new predictionAsOf) appends a new revision.
+ * Build the append-only source-evidence rows + one prediction snapshot from a
+ * capture row's REAL descriptors. Pure. Throws when the real MLB gamePk is
+ * missing (a snapshot without a valid gamePk must not be written) — the persister
+ * counts the failure rather than propagating it.
  */
 export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2SnapshotWrite {
+  if (!row.gamePk) throw new Error("missing_gamePk");
+  const gamePk = row.gamePk;
   const predictionAsOfIso = row.predictionAsOfIso;
   const predictionAsOfMs = Date.parse(predictionAsOfIso);
 
   const sources: InsertPlateHrV2SourceEvidence[] = [];
   const sourceIds: string[] = [];
-  // For eligibility annotation (PR1 predicate) — mirror shape keyed by id.
   const resolved = new Map<string, Pick<SourceEvidenceSnapshot, "evidenceKind" | "dataThroughAt" | "availableAt" | "validForAt" | "reconstructed">>();
 
-  for (const [family, spec] of Object.entries(FAMILY_SPECS)) {
-    const fresh = row.featureFreshness[family];
-    const availableAtIso = fresh?.sourceAt ?? null;
-    if (!availableAtIso) continue; // no real source timestamp → no fabricated evidence
-    const ent = spec.entity(row);
-    if (!ent) continue;
-
-    const dataThroughAtIso = spec.evidenceKind === "historical_stat" ? historicalDataThroughAt(row.sessionDate) : null;
-    const validForAtIso = spec.evidenceKind === "weather_forecast" ? row.firstPitchTimeIso : null;
-    const availableAtMs = Date.parse(availableAtIso);
-    // Forward capture: availableAt should be <= predictionAsOf. If a fetch time
-    // is somehow after the prediction, mark it reconstructed rather than hide it.
+  for (const d of row.evidence) {
+    const availableAtMs = Date.parse(d.availableAt);
     const reconstructed = Number.isFinite(availableAtMs) && Number.isFinite(predictionAsOfMs) && availableAtMs > predictionAsOfMs;
-    const contentHash = `${row.inputHash}:${family}`;
-    const id = sourceId(ent.entityType, ent.entityId, spec.evidenceKind, availableAtIso, contentHash);
-
+    const id = sourceId(d);
     sources.push({
       sourceSnapshotId: id,
-      provider: family === "parkWeatherSpray" ? "open_meteo" : family === "lineupOpportunity" ? "mlb_stats_api" : "baseball_savant",
-      entityId: ent.entityId,
-      entityType: ent.entityType,
-      evidenceKind: spec.evidenceKind,
-      dataThroughAt: dataThroughAtIso ? new Date(dataThroughAtIso) : null,
-      availableAt: new Date(availableAtIso),
+      provider: d.provider,
+      entityId: d.entityId,
+      entityType: d.entityType,
+      evidenceKind: d.evidenceKind,
+      dataThroughAt: d.dataThroughAt ? new Date(d.dataThroughAt) : null,
+      availableAt: new Date(d.availableAt),
       availabilitySource: "fetched_at",
-      validForAt: validForAtIso ? new Date(validForAtIso) : null,
+      validForAt: d.validForAt ? new Date(d.validForAt) : null,
       reconstructed,
-      fetchedAt: new Date(availableAtIso),
-      schemaVersion: row.inputContractVersion,
-      contentHash,
-      payloadRef: row.sufficientStatsRef ?? null,
+      fetchedAt: new Date(d.fetchedAt),
+      schemaVersion: d.schemaVersion,
+      contentHash: d.contentHash,
+      payloadRef: d.payloadRef,
     });
-    sourceIds.push(id);
+    if (!sourceIds.includes(id)) sourceIds.push(id);
     resolved.set(id, {
-      evidenceKind: spec.evidenceKind,
-      dataThroughAt: dataThroughAtIso,
-      availableAt: availableAtIso,
-      validForAt: validForAtIso,
+      evidenceKind: d.evidenceKind as EvidenceKind,
+      dataThroughAt: d.dataThroughAt,
+      availableAt: d.availableAt,
+      validForAt: d.validForAt,
       reconstructed,
     });
   }
 
-  // AUTHORIZED-fields-only: strip unauthorized derived-feature groups.
+  // CLOSED allowlist — keep only authorized derived-feature groups.
   const authorizedDerived: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(row.derivedFeatures as unknown as Record<string, unknown>)) {
-    if (!UNAUTHORIZED_DERIVED_FEATURE_GROUPS.has(k)) authorizedDerived[k] = v;
+    if (AUTHORIZED_DERIVED_FEATURE_GROUPS.has(k)) authorizedDerived[k] = v;
   }
 
   const eligibility = isPredictionSnapshotEligible(
     { predictionAsOf: predictionAsOfIso, firstPitchTime: row.firstPitchTimeIso, sourceSnapshotIds: sourceIds },
     resolved,
+    { requireKnownFirstPitch: true },
   );
 
+  const sortedIds = [...sourceIds].sort();
   const prediction: InsertPlateHrV2PredictionSnapshot = {
-    predictionSnapshotId: predictionId(row.gameId, row.batterId, row.featureVersion, predictionAsOfIso),
-    gamePk: row.gameId,
+    predictionSnapshotId: predictionId(gamePk, row.batterId, row.featureVersion, predictionAsOfIso),
+    gamePk,
     batterId: row.batterId,
     featureVersion: row.featureVersion,
     predictionAsOf: new Date(predictionAsOfIso),
     firstPitchTime: row.firstPitchTimeIso ? new Date(row.firstPitchTimeIso) : null,
-    sourceSnapshotIds: sourceIds,
+    sourceSnapshotIds: sortedIds,
     derivedFeatures: authorizedDerived,
-    contentHash: row.inputHash,
-    // Selection of the single authoritative <= first-pitch snapshot happens later
-    // (across revisions); a capture write is never authoritative on its own.
+    // Prediction identity hash: the STORED authorized vector + its source ids —
+    // never the raw frozen input (which includes unauthorized zone/market).
+    contentHash: canonicalHash({ derivedFeatures: authorizedDerived, sourceSnapshotIds: sortedIds }),
     authoritative: false,
     trainingEligible: eligibility.eligible,
   };
@@ -166,7 +243,8 @@ export interface SnapshotPersistResult {
  * Persist the two-layer snapshot for each capture row. NEVER throws — a failure
  * on any row is counted and swallowed so it can never break the build loop or the
  * sibling feature-snapshot capture. Inserts are append-only + idempotent at the
- * storage layer (ON CONFLICT DO NOTHING).
+ * storage layer (ON CONFLICT DO NOTHING). The caller should log a non-zero
+ * `failed` count (see installPlateHrV2Capture.ts).
  */
 export async function persistPlateHrV2SnapshotWrites(
   rows: readonly PlateHrV2CaptureRow[],

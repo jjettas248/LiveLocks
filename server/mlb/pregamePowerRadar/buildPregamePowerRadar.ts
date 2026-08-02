@@ -100,6 +100,8 @@ import {
   type PlateHrV2CaptureRow,
   type PlateHrV2SufficientStatsCaptureRow,
 } from "./hrProbabilityV2/plateHrV2ForwardCapture";
+import { assemblePlateHrV2EvidenceDescriptors } from "./hrProbabilityV2/plateHrV2SnapshotCapture";
+import { PLATE_HR_V2_FEATURES_V1 } from "./hrProbabilityV2/plateHrV2FeatureContract";
 
 let isPregamePowerRadarBuildRunning = false;
 
@@ -1209,9 +1211,43 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               ? plateHrV2SufficientStatsId("batter", player.playerId, sessionDate)
               : null;
 
+            // PR3.1: assemble REAL per-provider/entity evidence descriptors from
+            // the data this cycle actually fetched. A source with no real payload
+            // is simply omitted (fail-closed) — nothing is synthesized. Game-level
+            // evidence (pitcher/weather/park/lineup) carries batter-independent
+            // content so it dedupes across the game's batters.
+            const plateHrV2Evidence = assemblePlateHrV2EvidenceDescriptors({
+              gamePk: String(gamePk),
+              batterId: player.playerId,
+              pitcherId: opposingPitcher?.pitcherId ?? null,
+              capturedAtIso: new Date(capturedAtMs).toISOString(),
+              firstPitchIso: startsAt ?? null,
+              schemaVersion: PLATE_HR_V2_FEATURES_V1,
+              batterSufficientStats: savant?.plateHrV2BatterSufficientStats ?? null,
+              batterStatsRef: sufficientStatsRef,
+              pitcherSufficientStats: pitcherSavantForMatchup?.plateHrV2PitcherSufficientStats ?? null,
+              pitcherStatsRef: opposingPitcher?.pitcherId
+                ? plateHrV2SufficientStatsId("pitcher", opposingPitcher.pitcherId, sessionDate)
+                : null,
+              weather: {
+                available: weatherAvailable,
+                temperatureF: weather?.temperature ?? null,
+                windSpeedMph: weather?.windSpeed ?? null,
+                windDirection: weather?.windDirection ?? null,
+                isIndoors,
+              },
+              lineupPosted: lineupStatus === "posted",
+              park: {
+                venueResolved: isVenueResolved(venueName),
+                payload: { parkHrFactorGeneric, parkHrFactorHand: parkHrFactor, isIndoors, venueName },
+              },
+            });
+
             const capturedRow = capturePlateHrV2Candidate({
               sessionDate,
               gameId: game.gameId,
+              gamePk: String(gamePk),
+              evidence: plateHrV2Evidence,
               buildId,
               batterId: player.playerId,
               batterName: player.playerName,

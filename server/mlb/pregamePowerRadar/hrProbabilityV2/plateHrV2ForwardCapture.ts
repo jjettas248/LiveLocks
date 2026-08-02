@@ -38,6 +38,7 @@ import {
   type PlateHrV2SourceMeta,
 } from "./plateHrV2FeatureBuilder";
 import { PLATE_HR_V2_FEATURES_V1 } from "./plateHrV2FeatureContract";
+import type { PlateHrV2EvidenceDescriptor } from "./plateHrV2Snapshots";
 import { isPlateHrV2ForwardCaptureEnabled } from "./plateHrV2CaptureFlags";
 import type { PlateHrV2DerivedFeatureVectorV1, PlateHrV2FeatureAvailabilityVectorV1, PlateHrV2FeatureFreshnessVectorV1, PlateHrV2RawInputEnvelope } from "./plateHrV2FeatureContract";
 import type { PlateHrV2SufficientStatsRaw } from "./plateHrV2SufficientStats";
@@ -46,6 +47,11 @@ export interface PlateHrV2CaptureRow {
   snapshotId: string;
   sessionDate: string;
   gameId: string;
+  /** Real MLB Stats gamePk (distinct from the ESPN `gameId`), used as the
+   * append-only prediction snapshot key so MLB outcome/status joins line up. */
+  gamePk: string | null;
+  /** Real per-provider/entity evidence descriptors assembled at the fetch site. */
+  evidence: PlateHrV2EvidenceDescriptor[];
   batterId: string;
   batterName: string;
   team: string;
@@ -102,6 +108,8 @@ export async function flushPlateHrV2Captures(
 export interface CapturePlateHrV2CandidateArgs {
   sessionDate: string;
   gameId: string;
+  gamePk: string | null;
+  evidence: PlateHrV2EvidenceDescriptor[];
   buildId: string;
   batterId: string;
   batterName: string;
@@ -234,6 +242,8 @@ export function capturePlateHrV2Candidate(args: CapturePlateHrV2CandidateArgs): 
     snapshotId,
     sessionDate: args.sessionDate,
     gameId: args.gameId,
+    gamePk: args.gamePk,
+    evidence: args.evidence,
     batterId: args.batterId,
     batterName: args.batterName,
     team: args.team,
