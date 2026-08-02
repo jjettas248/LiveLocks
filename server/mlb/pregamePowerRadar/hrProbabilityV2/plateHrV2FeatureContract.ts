@@ -99,7 +99,13 @@ const pitchFamilyLeafSchema = z.object({
   usageShare: numericLeaf,
   batterXslg: numericLeaf,
   batterWhiffPct: numericLeaf,
+  // PR4.1: grain-typed denominators. `batterDamageBbeSample` (BBE) shrinks the
+  // xSLG damage split; `batterWhiffSwingSample` (swings) shrinks whiff%. Kept
+  // separate so a BBE count is never used as a swing count. `batterSampleSwings`
+  // is retained (deprecated) and now carries the swing sample to match its name.
   batterSampleSwings: numericLeaf,
+  batterDamageBbeSample: numericLeaf,
+  batterWhiffSwingSample: numericLeaf,
 });
 export const plateHrV2PitchTypeFeaturesSchema = z.object({
   fastball: pitchFamilyLeafSchema,

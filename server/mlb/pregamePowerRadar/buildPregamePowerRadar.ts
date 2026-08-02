@@ -1225,10 +1225,14 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               schemaVersion: PLATE_HR_V2_FEATURES_V1,
               batterSufficientStats: savant?.plateHrV2BatterSufficientStats ?? null,
               batterStatsRef: sufficientStatsRef,
+              batterFetchedAtMs: savant?.savantFetchedAtMs ?? null,
+              batterDataThroughDate: savant?.savantDataThroughDate ?? null,
               pitcherSufficientStats: pitcherSavantForMatchup?.plateHrV2PitcherSufficientStats ?? null,
               pitcherStatsRef: opposingPitcher?.pitcherId
                 ? plateHrV2SufficientStatsId("pitcher", opposingPitcher.pitcherId, sessionDate)
                 : null,
+              pitcherFetchedAtMs: pitcherSavantForMatchup?.savantFetchedAtMs ?? null,
+              pitcherDataThroughDate: pitcherSavantForMatchup?.savantDataThroughDate ?? null,
               weather: {
                 available: weatherAvailable,
                 temperatureF: weather?.temperature ?? null,

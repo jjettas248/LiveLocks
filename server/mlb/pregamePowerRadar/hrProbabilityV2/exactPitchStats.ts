@@ -11,7 +11,8 @@
 //   paEndedCount    per terminal PA    hrCount        per terminal PA
 //   barrelCount     per qualityBBE (EV/LA PROXY — launch_speed_angle unauthorized, PR2)
 //   xslgContactSum/N  Σ estimated_slg over qualityBBE (its own denominator N)
-//   xHrQualitySum/N   Σ estimated_woba over qualityBBE (xwOBAcon proxy; own N)
+//   xwobaContactSum/N Σ estimated_woba over qualityBBE (xwOBA-on-contact — NOT
+//                     P(HR|BBE); named so PR8 can never treat it as an HR prob)
 //
 // ISO is NEVER summed across pitch rows. Damage-on-contact sums use
 // qualityBbeCount-scoped denominators, never contactCount (which includes fouls).
@@ -35,8 +36,8 @@ export interface PlateHrV2ExactPitchStat {
   hrCount: number;
   xslgContactSum: number;
   xslgContactN: number;
-  xHrQualitySum: number;
-  xHrQualityN: number;
+  xwobaContactSum: number;
+  xwobaContactN: number;
 }
 
 /** Flat map keyed `${hand}:${code}` (e.g. "R:FF") for easy jsonb storage/query. */
@@ -50,6 +51,14 @@ const WHIFF_DESC = new Set(["swinging_strike", "swinging_strike_blocked", "misse
 
 function safeNum(v: unknown): number | null {
   if (v == null) return null;
+  // CSV missing cells are "" — Number("") is 0, which would corrupt denominators
+  // (a blank LA/xSLG must NOT count). Treat empty/whitespace/"null" as absent.
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (t === "" || t.toLowerCase() === "null") return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  }
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -63,7 +72,7 @@ function emptyStat(): PlateHrV2ExactPitchStat {
   return {
     pitchCount: 0, swingCount: 0, whiffCount: 0, contactCount: 0, bbeCount: 0,
     qualityBbeCount: 0, paEndedCount: 0, barrelCount: 0, hrCount: 0,
-    xslgContactSum: 0, xslgContactN: 0, xHrQualitySum: 0, xHrQualityN: 0,
+    xslgContactSum: 0, xslgContactN: 0, xwobaContactSum: 0, xwobaContactN: 0,
   };
 }
 
@@ -135,8 +144,8 @@ export function computeExactPitchStats(
     }
     const xwoba = safeNum(row["estimated_woba_using_speedangle"]);
     if (xwoba != null && xwoba >= 0 && xwoba <= 3.0) {
-      stat.xHrQualitySum += xwoba;
-      stat.xHrQualityN++;
+      stat.xwobaContactSum += xwoba;
+      stat.xwobaContactN++;
     }
   }
 

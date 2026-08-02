@@ -77,7 +77,9 @@ These are frozen HERE (before any Test set) and copied into `plateHrV2GateSpec` 
 - Handedness: `stand, p_throws`
 - Pitch type: `pitch_type` (exact code)
 - Contact quality: `launch_speed, launch_angle, estimated_ba_using_speedangle,
-  estimated_slg_using_speedangle, bb_type, hc_x, hc_y`
+  estimated_slg_using_speedangle, estimated_woba_using_speedangle, bb_type, hc_x, hc_y`
+  (PR4.1: `estimated_woba_using_speedangle` authorized here — production already
+  reads it as `xwOBASeason`; used as an xwOBA-on-contact statistic, never as P(HR|BBE))
 
 **AUTHORIZED-CONDITIONAL** (present in prod but coverage-limited — capture allowed, use gated):
 

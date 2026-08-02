@@ -37,8 +37,14 @@ const PLATE_HR_V2_SOURCE_EVIDENCE = `
     schema_version TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     payload_ref TEXT,
+    authorized_payload JSONB NOT NULL DEFAULT '{}',
     created_at TIMESTAMP DEFAULT NOW()
   );
+`;
+// PR4.1: self-heal for any source-evidence table created before authorized_payload.
+const PLATE_HR_V2_SOURCE_EVIDENCE_SELF_HEAL = `
+  ALTER TABLE plate_hr_v2_source_evidence
+    ADD COLUMN IF NOT EXISTS authorized_payload JSONB NOT NULL DEFAULT '{}';
 `;
 const PLATE_HR_V2_SOURCE_EVIDENCE_ENTITY_IDX = `
   CREATE INDEX IF NOT EXISTS plate_hr_v2_source_evidence_entity_idx
@@ -89,6 +95,7 @@ const PLATE_HR_V2_PREDICTION_SNAPSHOTS_PREDICTION_AS_OF_IDX = `
 
 export const PLATE_HR_V2_SNAPSHOT_PERSISTENCE_STATEMENTS: readonly string[] = [
   PLATE_HR_V2_SOURCE_EVIDENCE,
+  PLATE_HR_V2_SOURCE_EVIDENCE_SELF_HEAL,
   PLATE_HR_V2_SOURCE_EVIDENCE_ENTITY_IDX,
   PLATE_HR_V2_SOURCE_EVIDENCE_KIND_IDX,
   PLATE_HR_V2_SOURCE_EVIDENCE_AVAILABLE_AT_IDX,

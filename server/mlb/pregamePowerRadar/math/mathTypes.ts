@@ -91,8 +91,13 @@ export interface PitchFamilyDatum {
   batterXslg: number | null;
   /** Batter whiff% vs this family (informational suppressor). */
   batterWhiffPct: number | null;
-  /** Sample (BBE or pitches) backing the batter split — for shrinkage. */
+  /** BBE sample backing the DAMAGE (xSLG) split — the denominator to shrink
+   * batterXslg by. Grain: balls-in-play with a measurable xSLG. */
   batterSample: number | null;
+  /** Swing sample backing the WHIFF% split — the denominator to shrink
+   * batterWhiffPct by. Grain: swings. Kept SEPARATE from batterSample (BBE) so
+   * a BBE denominator is never used as a swing denominator (PR4.1 #2). */
+  batterWhiffSample?: number | null;
 }
 export interface PitchTypeInteractionInputs {
   families: PitchFamilyDatum[];

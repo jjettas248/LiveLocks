@@ -110,6 +110,13 @@ const CHASE_ZONE_CODES = new Set([11, 12, 13, 14]);
 
 function safeNum(v: unknown): number | null {
   if (v == null) return null;
+  // CSV missing cells are "" — Number("") is 0, which would corrupt denominators.
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (t === "" || t.toLowerCase() === "null") return null;
+    const n = Number(t);
+    return Number.isFinite(n) ? n : null;
+  }
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }

@@ -114,6 +114,8 @@ type PitchFamilyLeaves = {
   batterXslg: number | null;
   batterWhiffPct: number | null;
   batterSampleSwings: number | null;
+  batterDamageBbeSample: number | null;
+  batterWhiffSwingSample: number | null;
 };
 
 /**
@@ -159,25 +161,24 @@ export function assemblePlateHrV2FeatureSnapshot(
   const asOfIso = new Date(input.asOfMs).toISOString();
   const firstPitchIso = input.firstPitchAtMs != null ? new Date(input.firstPitchAtMs).toISOString() : null;
 
+  const pitchFamilyLeaves = (family: "fastball" | "breaking" | "offspeed"): PitchFamilyLeaves => {
+    const f = input.pitchType.families.find((x) => x.family === family);
+    const damageBbe = f?.batterSample ?? null;       // BBE denominator (xSLG)
+    const whiffSwings = f?.batterWhiffSample ?? null; // swing denominator (whiff%)
+    return {
+      usageShare: f?.usageShare ?? null,
+      batterXslg: f?.batterXslg ?? null,
+      batterWhiffPct: f?.batterWhiffPct ?? null,
+      // Deprecated field, now honest to its name (= swings), for back-compat.
+      batterSampleSwings: whiffSwings,
+      batterDamageBbeSample: damageBbe,
+      batterWhiffSwingSample: whiffSwings,
+    };
+  };
   const batterPitchType = {
-    fastball: {
-      usageShare: input.pitchType.families.find((f) => f.family === "fastball")?.usageShare ?? null,
-      batterXslg: input.pitchType.families.find((f) => f.family === "fastball")?.batterXslg ?? null,
-      batterWhiffPct: input.pitchType.families.find((f) => f.family === "fastball")?.batterWhiffPct ?? null,
-      batterSampleSwings: input.pitchType.families.find((f) => f.family === "fastball")?.batterSample ?? null,
-    },
-    breaking: {
-      usageShare: input.pitchType.families.find((f) => f.family === "breaking")?.usageShare ?? null,
-      batterXslg: input.pitchType.families.find((f) => f.family === "breaking")?.batterXslg ?? null,
-      batterWhiffPct: input.pitchType.families.find((f) => f.family === "breaking")?.batterWhiffPct ?? null,
-      batterSampleSwings: input.pitchType.families.find((f) => f.family === "breaking")?.batterSample ?? null,
-    },
-    offspeed: {
-      usageShare: input.pitchType.families.find((f) => f.family === "offspeed")?.usageShare ?? null,
-      batterXslg: input.pitchType.families.find((f) => f.family === "offspeed")?.batterXslg ?? null,
-      batterWhiffPct: input.pitchType.families.find((f) => f.family === "offspeed")?.batterWhiffPct ?? null,
-      batterSampleSwings: input.pitchType.families.find((f) => f.family === "offspeed")?.batterSample ?? null,
-    },
+    fastball: pitchFamilyLeaves("fastball"),
+    breaking: pitchFamilyLeaves("breaking"),
+    offspeed: pitchFamilyLeaves("offspeed"),
     extra: {},
   };
 

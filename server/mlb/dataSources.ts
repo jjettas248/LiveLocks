@@ -81,6 +81,12 @@ export interface BaseballSavantData {
   // real rows for any given real player.
   plateHrV2BatterSufficientStats: PlateHrV2SufficientStatsRaw | null;
   plateHrV2PitcherSufficientStats: PlateHrV2SufficientStatsRaw | null;
+  // PR4.1: real fetch provenance, preserved through the cache so a cached
+  // response reports its ORIGINAL fetch time + query cutoff (never the later
+  // build-time capture moment). `savantDataThroughDate` is the query's
+  // game_date_lt (exclusive) — the verified season-to-date cutoff.
+  savantFetchedAtMs: number | null;
+  savantDataThroughDate: string | null;
 }
 
 // ── Pitcher contact-quality CSV projection (Mound Radar PR 2) ────────────────
@@ -268,6 +274,9 @@ export function aggregateBatterPitchAndContact(
       // PR4: preserve the BBE denominator backing xSLG (previously discarded), so
       // downstream shrinkage has a real sample size instead of a null fallback.
       bbeSample: fam[f].xslgN,
+      // PR4.1: the swing denominator backing whiff% — separately typed so a BBE
+      // count is never used as a swing count.
+      whiffSwings: fam[f].swings,
     }))
     .filter((s) => s.xSLG != null || s.whiffPct != null);
 
@@ -548,6 +557,8 @@ export async function fetchBaseballSavantData(
     batterDataQuality: "unavailable",
     plateHrV2BatterSufficientStats: null,
     plateHrV2PitcherSufficientStats: null,
+    savantFetchedAtMs: null,
+    savantDataThroughDate: null,
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -854,6 +865,8 @@ export async function fetchBaseballSavantData(
       batterDataQuality,
       plateHrV2BatterSufficientStats,
       plateHrV2PitcherSufficientStats,
+      savantFetchedAtMs: Date.now(),
+      savantDataThroughDate: today, // query game_date_lt (exclusive cutoff)
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });

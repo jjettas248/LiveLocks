@@ -84,6 +84,38 @@ function captureRow(over: Partial<PlateHrV2CaptureRow> = {}, evidence?: PlateHrV
   ok(d.every((x) => x.provider !== "" && x.contentHash.length > 0), "every descriptor has provider + real content hash");
 }
 
+// ── PR4.1: zone stripped from hashed/stored evidence payload ─────────────────
+{
+  const withZone = { bbe: 40, barrels: 6, zoneSwings: 12, zoneTakes: 3, chaseSwings: 5, chaseTakes: 8, zoneDataAvailable: true };
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: withZone }));
+  const hist = d.find((x) => x.entityType === "batter")!;
+  const payload = hist.authorizedPayload as Record<string, unknown>;
+  ok(!("zoneSwings" in payload) && !("chaseSwings" in payload) && !("zoneDataAvailable" in payload), "zone/chase fields stripped from evidence payload");
+  ok("bbe" in payload && "barrels" in payload, "authorized fields retained in evidence payload");
+  ok(hist.contentHash === canonicalHash(payload), "contentHash is over the AUTHORIZED (zone-stripped) payload");
+}
+
+// ── PR4.1: real Savant fetch provenance used (not the capture moment) ─────────
+{
+  const realFetchMs = Date.parse("2026-07-01T09:00:00.000Z"); // earlier than capture
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({
+    batterFetchedAtMs: realFetchMs, batterDataThroughDate: "2026-07-01",
+  }));
+  const hist = d.find((x) => x.entityType === "batter")!;
+  ok(hist.fetchedAt === "2026-07-01T09:00:00.000Z", "historical fetchedAt uses the real Savant fetch time, not capture moment");
+  ok(hist.dataThroughAt === "2026-07-01T00:00:00.000Z", "dataThroughAt uses the real query cutoff date");
+}
+
+// ── PR4.1: same content idempotent; changed content → new immutable id ────────
+{
+  const a = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { bbe: 40 } }));
+  const aSame = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { bbe: 40 } }));
+  const aDiff = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { bbe: 41 } }));
+  const w = (d: PlateHrV2EvidenceDescriptor[]) => buildPlateHrV2SnapshotWrite(captureRow({}, d)).sources.find((s) => s.entityType === "batter")!.sourceSnapshotId;
+  ok(w(a) === w(aSame), "same content → same immutable source id (idempotent)");
+  ok(w(a) !== w(aDiff), "changed same-day content → new immutable source id");
+}
+
 // ── absent provenance → fail-closed (no descriptor) ───────────────────────────
 {
   const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({

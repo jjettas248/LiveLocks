@@ -43,6 +43,12 @@ ok(ALL_SQL.includes("VALID_FOR_AT TIMESTAMP"), "source_evidence has valid_for_at
 ok(ALL_SQL.includes("RECONSTRUCTED BOOLEAN NOT NULL"), "source_evidence has reconstructed flag");
 ok(ALL_SQL.includes("PREDICTION_AS_OF TIMESTAMP NOT NULL"), "prediction_snapshots has NOT NULL prediction_as_of");
 ok(ALL_SQL.includes("SOURCE_SNAPSHOT_IDS JSONB NOT NULL"), "prediction_snapshots references source ids (not duplicated)");
+// PR4.1: immutable authorized payload stored inline + self-heal.
+ok(ALL_SQL.includes("AUTHORIZED_PAYLOAD JSONB"), "source_evidence stores the immutable authorized_payload inline");
+ok(
+  ALL_SQL.includes("ALTER TABLE PLATE_HR_V2_SOURCE_EVIDENCE") && ALL_SQL.includes("ADD COLUMN IF NOT EXISTS AUTHORIZED_PAYLOAD JSONB"),
+  "source_evidence has a self-heal ALTER for authorized_payload",
+);
 
 // ── 3. Append-only composite uniqueness index ────────────────────────────────
 ok(

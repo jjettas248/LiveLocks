@@ -29,7 +29,7 @@ function ok(cond: boolean, msg: string) {
 }
 
 const numericGroup = { extra: {} };
-const family = { usageShare: null, batterXslg: null, batterWhiffPct: null, batterSampleSwings: null };
+const family = { usageShare: null, batterXslg: null, batterWhiffPct: null, batterSampleSwings: null, batterDamageBbeSample: null, batterWhiffSwingSample: null };
 
 function fullFeatureVectorFixture() {
   return {

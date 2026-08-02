@@ -68,6 +68,24 @@ export function startOfUtcDay(iso: string): string {
 
 // ── Descriptor assembly (pure) ────────────────────────────────────────────────
 
+// Zone/chase fields are UNAUTHORIZED (PR2) — stripped from any hashed/stored
+// evidence payload so unauthorized zone evidence never influences snapshot
+// identity (PR4.1 #3b).
+const UNAUTHORIZED_SUFFICIENT_STAT_FIELDS: ReadonlySet<string> = new Set([
+  "zoneSwings", "zoneTakes", "chaseSwings", "chaseTakes", "zoneDataAvailable",
+]);
+
+/** Strip unauthorized (zone) fields from a sufficient-stats payload before it is
+ * hashed/stored as evidence. Pure; returns a shallow copy. */
+export function authorizedSufficientStatsPayload(raw: unknown): unknown {
+  if (raw == null || typeof raw !== "object") return raw;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!UNAUTHORIZED_SUFFICIENT_STAT_FIELDS.has(k)) out[k] = v;
+  }
+  return out;
+}
+
 export interface PlateHrV2EvidenceAssemblyInput {
   gamePk: string;
   batterId: string;
@@ -80,6 +98,13 @@ export interface PlateHrV2EvidenceAssemblyInput {
   batterStatsRef: string | null;
   pitcherSufficientStats: unknown | null;
   pitcherStatsRef: string | null;
+  /** Real Savant fetch provenance (preserved through the cache), per entity.
+   * fetchedAt/availableAt use these; dataThroughAt uses the query cutoff date.
+   * Absent → fall back to the capture moment (documented, still ≤ prediction). */
+  batterFetchedAtMs?: number | null;
+  batterDataThroughDate?: string | null;
+  pitcherFetchedAtMs?: number | null;
+  pitcherDataThroughDate?: string | null;
   /** Game-level forecast used this cycle (shared across batters). */
   weather: { available: boolean; temperatureF: number | null; windSpeedMph: number | null; windDirection: string | null; isIndoors: boolean } | null;
   /** Whether the confirmed lineup was posted (game-level evidence, shared). */
@@ -96,45 +121,57 @@ export interface PlateHrV2EvidenceAssemblyInput {
  */
 export function assemblePlateHrV2EvidenceDescriptors(inp: PlateHrV2EvidenceAssemblyInput): PlateHrV2EvidenceDescriptor[] {
   const out: PlateHrV2EvidenceDescriptor[] = [];
-  const fetched = inp.capturedAtIso;
-  const histThrough = startOfUtcDay(fetched);
+  const captured = inp.capturedAtIso;
+  const isoOrNull = (ms: number | null | undefined): string | null =>
+    ms != null && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  // Query cutoff (game_date_lt, a YYYY-MM-DD) → ISO start-of-day (exclusive
+  // season-to-date bound). Falls back to the fetch day when the cutoff is absent.
+  const cutoffIso = (date: string | null | undefined, fetchedIso: string): string =>
+    date ? `${date}T00:00:00.000Z` : startOfUtcDay(fetchedIso);
+
+  const pushHistorical = (
+    entityType: "batter" | "pitcher", entityId: string, rawStats: unknown, statsRef: string | null,
+    fetchedAtMs: number | null | undefined, cutoffDate: string | null | undefined,
+  ) => {
+    const payload = authorizedSufficientStatsPayload(rawStats);
+    const fetchedAt = isoOrNull(fetchedAtMs) ?? captured; // real fetch time, else capture moment
+    out.push({
+      provider: "baseball_savant", entityType, entityId, evidenceKind: "historical_stat",
+      fetchedAt, availableAt: fetchedAt, dataThroughAt: cutoffIso(cutoffDate, fetchedAt), validForAt: null,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: statsRef,
+      authorizedPayload: payload,
+    });
+  };
 
   if (inp.batterSufficientStats != null) {
-    out.push({
-      provider: "baseball_savant", entityType: "batter", entityId: inp.batterId, evidenceKind: "historical_stat",
-      fetchedAt: fetched, availableAt: fetched, dataThroughAt: histThrough, validForAt: null,
-      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(inp.batterSufficientStats), payloadRef: inp.batterStatsRef,
-    });
+    pushHistorical("batter", inp.batterId, inp.batterSufficientStats, inp.batterStatsRef, inp.batterFetchedAtMs, inp.batterDataThroughDate);
   }
   if (inp.pitcherId && inp.pitcherSufficientStats != null) {
-    out.push({
-      provider: "baseball_savant", entityType: "pitcher", entityId: inp.pitcherId, evidenceKind: "historical_stat",
-      fetchedAt: fetched, availableAt: fetched, dataThroughAt: histThrough, validForAt: null,
-      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(inp.pitcherSufficientStats), payloadRef: inp.pitcherStatsRef,
-    });
+    pushHistorical("pitcher", inp.pitcherId, inp.pitcherSufficientStats, inp.pitcherStatsRef, inp.pitcherFetchedAtMs, inp.pitcherDataThroughDate);
   }
   if (inp.weather?.available) {
     const payload = { temperatureF: inp.weather.temperatureF, windSpeedMph: inp.weather.windSpeedMph, windDirection: inp.weather.windDirection, isIndoors: inp.weather.isIndoors };
     out.push({
       provider: "open_meteo", entityType: "game", entityId: inp.gamePk, evidenceKind: "weather_forecast",
-      fetchedAt: fetched, availableAt: fetched, dataThroughAt: null, validForAt: inp.firstPitchIso,
-      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: null,
+      fetchedAt: captured, availableAt: captured, dataThroughAt: null, validForAt: inp.firstPitchIso,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: null, authorizedPayload: payload,
     });
   }
   if (inp.park?.venueResolved) {
     out.push({
       provider: "livelocks_park", entityType: "venue", entityId: inp.gamePk, evidenceKind: "park",
-      fetchedAt: fetched, availableAt: fetched, dataThroughAt: null, validForAt: null,
-      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(inp.park.payload), payloadRef: null,
+      fetchedAt: captured, availableAt: captured, dataThroughAt: null, validForAt: null,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(inp.park.payload), payloadRef: null, authorizedPayload: inp.park.payload,
     });
   }
   if (inp.lineupPosted) {
     // Game-level "lineup confirmed" evidence — the batter's slot is a FEATURE,
     // not part of evidence identity, so this dedupes across the game's batters.
+    const payload = { lineupConfirmed: true };
     out.push({
       provider: "mlb_stats_api", entityType: "game", entityId: inp.gamePk, evidenceKind: "lineup",
-      fetchedAt: fetched, availableAt: fetched, dataThroughAt: null, validForAt: null,
-      schemaVersion: inp.schemaVersion, contentHash: canonicalHash({ lineupConfirmed: true }), payloadRef: null,
+      fetchedAt: captured, availableAt: captured, dataThroughAt: null, validForAt: null,
+      schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: null, authorizedPayload: payload,
     });
   }
   return out;
@@ -186,6 +223,7 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
       schemaVersion: d.schemaVersion,
       contentHash: d.contentHash,
       payloadRef: d.payloadRef,
+      authorizedPayload: (d.authorizedPayload ?? {}) as Record<string, unknown>,
     });
     if (!sourceIds.includes(id)) sourceIds.push(id);
     resolved.set(id, {

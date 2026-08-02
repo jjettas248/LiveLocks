@@ -75,6 +75,11 @@ export const plateHrV2EvidenceDescriptorSchema = z.object({
   // batters, so it dedupes to a single append-only row.
   contentHash: z.string().min(1),
   payloadRef: z.string().nullable(),
+  // The immutable authorized payload this source hashes over (zone fields
+  // stripped). Stored inline in the append-only source-evidence row so the
+  // evidence is self-contained and content-addressed — it never depends on a
+  // mutable sufficient-stats row that could be replaced same-day (PR4.1 #5).
+  authorizedPayload: z.unknown(),
 });
 export type PlateHrV2EvidenceDescriptor = z.infer<typeof plateHrV2EvidenceDescriptorSchema>;
 

@@ -1670,6 +1670,9 @@ export const plateHrV2SourceEvidence = pgTable("plate_hr_v2_source_evidence", {
   schemaVersion: text("schema_version").notNull(),
   contentHash: text("content_hash").notNull(),
   payloadRef: text("payload_ref"),
+  // Immutable authorized payload this row hashes over (zone fields stripped).
+  // Self-contained, content-addressed — never a pointer to a mutable row (PR4.1).
+  authorizedPayload: jsonb("authorized_payload").notNull().default({}),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
   entityIdx: index("plate_hr_v2_source_evidence_entity_idx").on(table.entityType, table.entityId),
