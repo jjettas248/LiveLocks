@@ -32,6 +32,7 @@ import {
   computePredictionEnvelopeHash,
   authorizedSufficientStatsPayload,
   validateSourcePayload,
+  isValidIsoTimestamp,
   canonicalHash,
   canonicalJson,
   type AvailabilitySource,
@@ -189,6 +190,9 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
   if (!row.gamePk) throw new Error("missing_gamePk");
   const gamePk = row.gamePk;
   const predictionAsOfIso = row.predictionAsOfIso;
+  // PR4.3.3: the prediction moment + first pitch must be strict ISO/RFC3339.
+  if (!isValidIsoTimestamp(predictionAsOfIso)) throw new Error("invalid_predictionAsOf");
+  if (row.firstPitchTimeIso != null && !isValidIsoTimestamp(row.firstPitchTimeIso)) throw new Error("invalid_firstPitchTime");
   const predictionAsOfMs = Date.parse(predictionAsOfIso);
 
   const sources: InsertPlateHrV2SourceEvidence[] = [];
@@ -203,6 +207,18 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
     const pv = validateSourcePayload(d.evidenceKind as EvidenceKind, payload);
     if (!pv.ok) {
       blockReasons.push(`source_payload_invalid:${d.provider}:${d.entityType}:${d.entityId}:${d.evidenceKind}:${pv.reasons.join("|")}`);
+      continue;
+    }
+
+    // PR4.3.3: every non-null descriptor timestamp must be strict ISO/RFC3339 —
+    // reject before hashing / reconstruction / new Date(...). A bad timestamp
+    // skips the source (block reason), never a manufactured or coerced value.
+    const badTs = ([
+      ["fetchedAt", d.fetchedAt], ["availableAt", d.availableAt],
+      ["dataThroughAt", d.dataThroughAt], ["validForAt", d.validForAt],
+    ] as const).find(([, v]) => v != null && !isValidIsoTimestamp(v));
+    if (badTs) {
+      blockReasons.push(`source_timestamp_invalid:${d.provider}:${d.entityType}:${d.entityId}:${d.evidenceKind}:${badTs[0]}`);
       continue;
     }
 

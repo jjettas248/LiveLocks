@@ -20,6 +20,8 @@ import {
   evaluateTrainingReadIntegrity,
   validateAuthorizedPayload,
   validateSourcePayload,
+  normalizeTimestamp,
+  isValidIsoTimestamp,
   PlateHrV2NonCanonicalValueError,
   type SourceEvidenceSnapshot,
   type PredictionSnapshot,
@@ -479,6 +481,36 @@ function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[
     validateAuthorizedPayload({ pitchTypeExactStats: { FF: { pitchCount: 10, swingCount: 6, whiffCount: 2, contactCount: 4, bbeCount: 3, qualityBbeCount: 3, barrelCount: 1, paEndedCount: 3, hrCount: 1, xslgContactSum: 2.4, xslgContactN: 3, xwobaContactSum: 1.2, xwobaContactN: 3 } } }).ok,
     "a coherent exact-pitch entry is valid",
   );
+}
+
+// ── PR4.3.3: strict ISO/RFC3339 timestamps (write + read + normalize) ─────────
+{
+  // normalizeTimestamp: null is genuine absence; valid ISO/Date normalize;
+  // a non-null malformed value THROWS (never conflated with null).
+  ok(normalizeTimestamp(null) === null, "null timestamp is genuine absence");
+  ok(normalizeTimestamp(undefined) === null, "undefined timestamp is genuine absence");
+  ok(normalizeTimestamp("2026-07-01T18:00:00Z") === "2026-07-01T18:00:00.000Z", "ISO Z normalizes");
+  ok(normalizeTimestamp("2026-07-01T20:00:00+02:00") === "2026-07-01T18:00:00.000Z", "ISO offset normalizes");
+  ok(normalizeTimestamp(new Date("2026-07-01T18:00:00Z")) === "2026-07-01T18:00:00.000Z", "valid Date normalizes");
+  const NON_ISO = ["07/01/2026", "2026-07-01 09:00:00", "July 1, 2026", "not-a-date"];
+  for (const bad of NON_ISO) {
+    let threw = false;
+    try { normalizeTimestamp(bad); } catch (e) { threw = e instanceof PlateHrV2NonCanonicalValueError; }
+    ok(threw, `normalizeTimestamp rejects non-ISO "${bad}" (malformed != null)`);
+  }
+  ok(isValidIsoTimestamp("2026-07-01T18:00:00Z") && isValidIsoTimestamp("2026-07-01T20:00:00+02:00"), "isValidIsoTimestamp accepts ISO Z + offset");
+  ok(!isValidIsoTimestamp("07/01/2026") && !isValidIsoTimestamp("2026-07-01 09:00:00"), "isValidIsoTimestamp rejects Date.parse-lax strings");
+
+  // Read: a stored source carrying a non-ISO timestamp is shape-invalid (no throw)
+  // — it cannot collide with a genuine null provenance.
+  const s = mkSource();
+  const p = mkPrediction({}, [s.sourceSnapshotId]);
+  for (const bad of NON_ISO) {
+    const m = new Map<string, unknown>([[s.sourceSnapshotId, { ...s, fetchedAt: bad }]]);
+    let threw = false; let reasons: string[] = [];
+    try { reasons = evaluatePredictionRowIntegrity(p, m).reasons; } catch { threw = true; }
+    ok(!threw && reasons.some((r) => r.startsWith("source_shape_invalid")), `read rejects non-ISO stored fetchedAt "${bad}" without throwing`);
+  }
 }
 
 // ── schema round-trip (full PR4.3 shape) ──────────────────────────────────────

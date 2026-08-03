@@ -100,14 +100,28 @@ export function canonicalHash(payload: unknown): string {
   return createHash("sha256").update(canonicalJson(payload)).digest("hex").slice(0, 40);
 }
 
-/** Normalize a timestamp (ISO string OR Date OR null) to a canonical ISO string,
- * so the write side (ISO strings) and the training reader (DB Date objects)
- * content-address identically. Invalid/absent → null. */
+// ── Strict ISO/RFC3339 timestamp contract (PR4.3.3) ───────────────────────────
+// The single timestamp contract shared by write descriptors, source snapshots,
+// predictions, and first-pitch fields. A timestamp is EITHER a strict RFC3339
+// string (Z or explicit offset) OR a valid Date — never a `Date.parse`-lax value
+// like "07/01/2026" / "2026-07-01 09:00:00" / "July 1, 2026".
+const isoTimestampSchema = z.string().datetime({ offset: true });
+
+/** True iff `s` is a strict ISO/RFC3339 timestamp string. */
+export function isValidIsoTimestamp(s: string): boolean {
+  return isoTimestampSchema.safeParse(s).success;
+}
+
+/** Normalize a timestamp (strict ISO string OR valid Date OR null) to a canonical
+ * ISO string, so the write side and the training reader content-address
+ * identically. `null`/`undefined` → null (genuine absence). A NON-NULL malformed
+ * value THROWS (PR4.3.3) — malformed provenance can never be conflated with
+ * genuine absence, nor silently collapse a content hash. */
 export function normalizeTimestamp(x: string | Date | null | undefined): string | null {
   if (x == null) return null;
-  const d = x instanceof Date ? x : new Date(x);
-  const msVal = d.getTime();
-  return Number.isFinite(msVal) ? d.toISOString() : null;
+  const ok = x instanceof Date ? Number.isFinite(x.getTime()) : isValidIsoTimestamp(x);
+  if (!ok) throw new PlateHrV2NonCanonicalValueError(`invalid timestamp: ${String(x)}`);
+  return (x instanceof Date ? x : new Date(x)).toISOString();
 }
 
 // ── Authorized sufficient-stat payload: closed allowlists + typed validation ──
@@ -321,8 +335,9 @@ export function validateSourcePayload(kind: EvidenceKind, payload: unknown): { o
 
 // ── Zod contracts ─────────────────────────────────────────────────────────────
 
-// ISO 8601 timestamp string (matches the DB `timestamp` serialization).
-const isoTimestamp = z.string().min(1);
+// Strict ISO/RFC3339 timestamp string — the SAME contract used at write and read.
+const isoTimestamp = isoTimestampSchema;
+const validDate = z.date().refine((d) => Number.isFinite(d.getTime()), "invalid_timestamp");
 
 export const sourceEvidenceSnapshotSchema = z.object({
   sourceSnapshotId: z.string().min(1),
@@ -378,19 +393,13 @@ export const predictionSnapshotSchema = z.object({
 });
 export type PredictionSnapshot = z.infer<typeof predictionSnapshotSchema>;
 
-// STORED DTO schemas (PR4.3.1 #3) — tolerant of DB Date objects and used to
-// runtime-parse UNTRUSTED persisted rows in the training reader before any array
-// or field is touched, so a malformed JSONB value becomes a rejection, not a throw.
-// A stored timestamp must be null OR a genuinely parseable ISO string / valid
-// Date — a non-null-but-unparseable value ("not-a-date") is rejected (PR4.3.2 #1),
-// not silently treated as present.
-const isParseableTs = (v: string | Date): boolean => {
-  const t = v instanceof Date ? v.getTime() : Date.parse(v);
-  return Number.isFinite(t);
-};
-const storedTimestamp = z.union([z.string(), z.date()]).nullable().refine(
-  (v) => v == null || isParseableTs(v), { message: "invalid_timestamp" },
-);
+// STORED DTO schemas (PR4.3.1 #3) — used to runtime-parse UNTRUSTED persisted rows
+// in the training reader before any array or field is touched, so a malformed JSONB
+// value becomes a rejection, not a throw. A stored timestamp must be null OR a
+// STRICT ISO/RFC3339 string OR a valid Date (PR4.3.3) — a `Date.parse`-lax value
+// like "07/01/2026" / "2026-07-01 09:00:00" / "July 1, 2026" is rejected, and a
+// malformed value can never collide with genuine `null` provenance.
+const storedTimestamp = z.union([isoTimestamp, validDate]).nullable();
 export const storedSourceEvidenceSchema = z.object({
   sourceSnapshotId: z.string(),
   provider: z.string(),
@@ -416,7 +425,7 @@ export const storedPredictionSnapshotSchema = z.object({
   gamePk: z.string(),
   batterId: z.string(),
   featureVersion: z.string(),
-  predictionAsOf: z.union([z.string(), z.date()]),
+  predictionAsOf: z.union([isoTimestamp, validDate]),
   firstPitchTime: storedTimestamp,
   sourceSnapshotIds: z.array(z.string()),
   derivedFeatures: z.record(z.string(), z.unknown()),

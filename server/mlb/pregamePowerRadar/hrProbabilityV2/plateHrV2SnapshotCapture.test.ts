@@ -286,6 +286,24 @@ function captureRow(over: Partial<PlateHrV2CaptureRow> = {}, evidence?: PlateHrV
   ok((w.prediction.trainingBlockReasons as string[]).some((r) => r.startsWith("source_payload_invalid")), "impossible count recorded as a block reason");
 }
 
+// ── PR4.3.3: non-ISO descriptor / prediction timestamps rejected at write ─────
+{
+  // A non-ISO descriptor timestamp skips that source (block reason), no throw.
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput());
+  const batter = d.find((x) => x.entityType === "batter")!;
+  const mutated = d.map((x) => (x === batter ? { ...x, fetchedAt: "07/01/2026" } : x));
+  const w = buildPlateHrV2SnapshotWrite(captureRow({}, mutated));
+  ok(w.sources.every((s) => s.entityType !== "batter"), "non-ISO fetchedAt batter source is NOT written");
+  ok(w.prediction.trainingEligible === false, "non-ISO descriptor timestamp invalidates the prediction");
+  ok((w.prediction.trainingBlockReasons as string[]).some((r) => r.startsWith("source_timestamp_invalid")), "non-ISO timestamp recorded as a block reason");
+
+  // A non-ISO predictionAsOf is counted as failed, never thrown to the caller.
+  const res = await persistPlateHrV2SnapshotWrites([captureRow({ predictionAsOfIso: "07/01/2026" })], {
+    insertSources: async () => {}, insertPrediction: async () => {},
+  });
+  ok(res.failed === 1 && res.written === 0, "non-ISO predictionAsOf is counted as failed, not thrown");
+}
+
 // ── PR4.3.1: reconstructed derived from fetchedAt (not availableAt) ────────────
 {
   // Fetched AFTER the prediction moment → reconstructed must be true.
