@@ -149,6 +149,7 @@ ok(
   rejects(new Map(), "Map (non-plain object)");
   rejects({ a: NaN }, "nested NaN");
   rejects([1, NaN], "NaN in array");
+  rejects([1, , 3], "sparse array hole (would silently collapse on join)");
   ok(canonicalJson({ b: 2, a: 1 }) === canonicalJson({ a: 1, b: 2 }), "canonicalJson is key-order independent");
   ok(canonicalJson({ a: null, b: [1, 2] }) === '{"a":null,"b":[1,2]}', "canonicalJson accepts null + nested arrays");
   ok(canonicalHash({ a: 1 }) !== canonicalHash({ a: 2 }), "canonicalHash changes with content");
@@ -210,13 +211,16 @@ ok(
 // ── PR4.3: strict training-read gateway ───────────────────────────────────────
 // Build genuinely-valid rows via the real compute functions, then corrupt.
 function mkSource(over: Partial<SourceEvidenceSnapshot> = {}): SourceEvidenceSnapshot {
-  const payload = over.authorizedPayload ?? { battedBallEvents: 40 };
+  // Honor explicit null for nullable fields (`??` would swallow it).
+  const pick = <K extends keyof SourceEvidenceSnapshot>(k: K, dflt: SourceEvidenceSnapshot[K]) =>
+    (k in over ? (over[k] as SourceEvidenceSnapshot[K]) : dflt);
+  const payload = "authorizedPayload" in over ? over.authorizedPayload : { battedBallEvents: 40 };
   const contentHash = over.contentHash ?? canonicalHash(payload);
   const fields: SourceIdFields = {
     provider: over.provider ?? "baseball_savant", entityType: over.entityType ?? "batter", entityId: over.entityId ?? "b1",
-    evidenceKind: over.evidenceKind ?? "historical_stat", dataThroughAt: over.dataThroughAt ?? "2026-06-30T23:59:00Z",
-    availableAt: over.availableAt ?? "2026-07-01T09:00:00.000Z", fetchedAt: over.fetchedAt ?? "2026-07-01T09:00:00.000Z",
-    availabilitySource: over.availabilitySource ?? "fetched_at", validForAt: over.validForAt ?? null,
+    evidenceKind: over.evidenceKind ?? "historical_stat", dataThroughAt: pick("dataThroughAt", "2026-06-30T23:59:00Z"),
+    availableAt: pick("availableAt", "2026-07-01T09:00:00.000Z"), fetchedAt: pick("fetchedAt", "2026-07-01T09:00:00.000Z"),
+    availabilitySource: over.availabilitySource ?? "fetched_at", validForAt: pick("validForAt", null),
     reconstructed: over.reconstructed ?? false, provenanceIncomplete: over.provenanceIncomplete ?? false,
     schemaVersion: over.schemaVersion ?? "v1", contentHash,
   };
@@ -331,6 +335,88 @@ function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[
   const other = mkPrediction({ batterId: "b2" }, [src2.sourceSnapshotId]);
   const out3 = evaluateTrainingReadIntegrity([late, other], rows2);
   ok(out3.admitted.length === 2, "distinct batter-games each admit one authoritative row");
+}
+
+// ── PR4.3.1 #1: reconstructed derived from fetchedAt (not availableAt) ─────────
+{
+  const withSource = (over: Partial<SourceEvidenceSnapshot>) => {
+    const s = mkSource(over);
+    const m = new Map<string, SourceEvidenceSnapshot>([[s.sourceSnapshotId, s]]);
+    return evaluatePredictionRowIntegrity(mkPrediction({}, [s.sourceSnapshotId]), m).reasons;
+  };
+  // fetched AFTER prediction but flag says not reconstructed → inconsistent.
+  ok(
+    withSource({ fetchedAt: "2026-07-01T20:00:00.000Z", availableAt: "2026-07-01T09:00:00.000Z", reconstructed: false })
+      .some((r) => r.includes("reconstructed_flag_inconsistent")),
+    "reconstructed=false with fetchedAt>prediction is rejected (flag verified against fetchedAt)",
+  );
+  // Published before but fetched after (honest reconstructed:true) → excluded (no verified as-of).
+  ok(
+    withSource({ fetchedAt: "2026-07-01T20:00:00.000Z", availableAt: "2026-07-01T09:00:00.000Z", reconstructed: true })
+      .some((r) => r.includes("reconstructed_without_verified_as_of")),
+    "fetched-after-prediction (even if published before) is excluded unless verified as-of",
+  );
+  // provenanceIncomplete:false with a missing fetchedAt is rejected.
+  ok(
+    withSource({ fetchedAt: null }).some((r) => r.includes("provenance_missing_fetched_at")),
+    "complete provenance with null fetchedAt is rejected",
+  );
+  // Inconsistent provenance-incomplete combos are rejected.
+  ok(
+    withSource({ provenanceIncomplete: true, availableAt: null, fetchedAt: "2026-07-01T09:00:00.000Z", availabilitySource: "unverified" })
+      .some((r) => r.includes("provenance_incomplete_has_timestamps")),
+    "provenance-incomplete with a non-null timestamp is rejected",
+  );
+}
+
+// ── PR4.3.1 #2: typed, semantically-non-empty payloads (write + read) ─────────
+{
+  const payloadReasons = (payload: unknown) => {
+    const s = mkSource({ authorizedPayload: payload });
+    const m = new Map<string, SourceEvidenceSnapshot>([[s.sourceSnapshotId, s]]);
+    return evaluatePredictionRowIntegrity(mkPrediction({}, [s.sourceSnapshotId]), m).reasons;
+  };
+  ok(payloadReasons({}).some((r) => r.includes("source_payload_invalid")), "empty {} historical payload rejected at read");
+  ok(payloadReasons({ pitchFamilyStats: {} }).some((r) => r.includes("source_payload_invalid")), "nested-empty pitchFamilyStats rejected");
+  ok(payloadReasons({ pitchFamilyStats: { fastball: {} } }).some((r) => r.includes("source_payload_invalid")), "nested-empty family entry rejected");
+  ok(payloadReasons({ evPercentiles: {} }).some((r) => r.includes("source_payload_invalid")), "empty percentiles rejected");
+  ok(payloadReasons({ pitchesSeen: { arbitrary: 1 } }).some((r) => r.includes("source_payload_invalid")), "wrong scalar type (object) rejected");
+  ok(payloadReasons({ pitchesSeen: 42 }).every((r) => !r.startsWith("source_payload")), "a real scalar leaf is a valid payload");
+}
+
+// ── PR4.3.1 #3: gateway never throws on malformed persisted JSON ──────────────
+{
+  const src = mkSource();
+  const rows = new Map<string, SourceEvidenceSnapshot>([[src.sourceSnapshotId, src]]);
+  const good = mkPrediction({}, [src.sourceSnapshotId]);
+
+  const malformed: unknown[] = [
+    { ...good, sourceSnapshotIds: null },          // JSONB could hold null
+    { ...good, trainingBlockReasons: {} },         // JSONB could hold an object
+    { ...good, predictionAsOf: 12345 },            // wrong type
+    null,
+    "not-an-object",
+    { ...good, sourceSnapshotIds: [1, 2] },        // non-string ids
+  ];
+  for (const bad of malformed) {
+    let threw = false;
+    let res: ReturnType<typeof evaluatePredictionRowIntegrity> | null = null;
+    try { res = evaluatePredictionRowIntegrity(bad, rows); } catch { threw = true; }
+    ok(!threw && res != null && !res.readable && res.reasons.some((r) => r.startsWith("prediction_shape_invalid")), `malformed row rejected without throwing: ${JSON.stringify(bad)?.slice(0, 40)}`);
+  }
+  // The batch gateway also never throws and reports the rejects.
+  let batchThrew = false;
+  let out: ReturnType<typeof evaluateTrainingReadIntegrity> | null = null;
+  try { out = evaluateTrainingReadIntegrity([good, ...malformed], rows); } catch { batchThrew = true; }
+  ok(!batchThrew && out != null && out.admitted.length === 1 && out.rejected.length === malformed.length, "batch gateway admits the one valid row and rejects all malformed rows without throwing");
+
+  // Source under a wrong stored id (map key != stored sourceSnapshotId).
+  const wrong = { ...src, sourceSnapshotId: "plate-hr-v2-src:some-other-key" };
+  const m2 = new Map<string, SourceEvidenceSnapshot>([[src.sourceSnapshotId, wrong]]);
+  ok(evaluatePredictionRowIntegrity(mkPrediction({}, [src.sourceSnapshotId]), m2).reasons.some((r) => r.startsWith("source_stored_id_mismatch")), "map key must equal the stored sourceSnapshotId");
+  // Malformed persisted source (not the contract shape) → deterministic rejection.
+  const m3 = new Map<string, unknown>([[src.sourceSnapshotId, { junk: true }]]);
+  ok(evaluatePredictionRowIntegrity(mkPrediction({}, [src.sourceSnapshotId]), m3).reasons.some((r) => r.startsWith("source_shape_invalid")), "malformed persisted source rejected without throwing");
 }
 
 // ── schema round-trip (full PR4.3 shape) ──────────────────────────────────────

@@ -261,6 +261,35 @@ function captureRow(over: Partial<PlateHrV2CaptureRow> = {}, evidence?: PlateHrV
   ok(counters.predictions === 2, "two prediction rows persisted");
 }
 
+// ── PR4.3.1: empty/wrong-shape projected payload rejected at write ────────────
+{
+  // `bbe` is not an allowlisted sufficient-stat key → the batter payload projects
+  // to {} → the source must NOT be written as a manufactured {} and the prediction
+  // is invalidated with a block reason.
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { bbe: 40 } }));
+  const batterDesc = d.find((x) => x.entityType === "batter");
+  ok(batterDesc != null && Object.keys(batterDesc!.authorizedPayload as object).length === 0, "unauthorized-only stats project to an empty payload");
+  const w = buildPlateHrV2SnapshotWrite(captureRow({}, d));
+  ok(w.sources.every((s) => s.entityType !== "batter"), "empty-payload batter source is NOT written (no {} manufacture)");
+  ok(w.prediction.trainingEligible === false, "empty projected payload invalidates the prediction");
+  ok((w.prediction.trainingBlockReasons as string[]).some((r) => r.startsWith("source_payload_invalid")), "empty payload recorded as a training block reason");
+}
+
+// ── PR4.3.1: reconstructed derived from fetchedAt (not availableAt) ────────────
+{
+  // Fetched AFTER the prediction moment → reconstructed must be true.
+  const late = Date.parse("2026-07-01T20:00:00.000Z"); // after CAPTURED/prediction 18:00
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterFetchedAtMs: late, batterDataThroughDate: "2026-07-01" }));
+  const w = buildPlateHrV2SnapshotWrite(captureRow({}, d));
+  const batter = w.sources.find((s) => s.entityType === "batter")!;
+  ok(batter.reconstructed === true, "a source fetched after the prediction is marked reconstructed=true (from fetchedAt)");
+  // Fetched before the prediction → reconstructed false.
+  const early = Date.parse("2026-07-01T09:00:00.000Z");
+  const d2 = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterFetchedAtMs: early, batterDataThroughDate: "2026-07-01" }));
+  const w2 = buildPlateHrV2SnapshotWrite(captureRow({}, d2));
+  ok(w2.sources.find((s) => s.entityType === "batter")!.reconstructed === false, "a source fetched before the prediction is reconstructed=false");
+}
+
 // ── canonicalHash is stable + order-independent ───────────────────────────────
 ok(canonicalHash({ a: 1, b: 2 }) === canonicalHash({ b: 2, a: 1 }), "canonicalHash is key-order independent");
 ok(canonicalHash({ a: 1 }) !== canonicalHash({ a: 2 }), "canonicalHash changes with content");
