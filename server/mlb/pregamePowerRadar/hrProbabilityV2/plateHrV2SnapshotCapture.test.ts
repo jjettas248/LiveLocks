@@ -275,6 +275,17 @@ function captureRow(over: Partial<PlateHrV2CaptureRow> = {}, evidence?: PlateHrV
   ok((w.prediction.trainingBlockReasons as string[]).some((r) => r.startsWith("source_payload_invalid")), "empty payload recorded as a training block reason");
 }
 
+// ── PR4.3.2: impossible historical counts rejected at write ───────────────────
+{
+  // A negative count is not a valid statistic → the batter source is rejected at
+  // write (not silently kept) and the prediction is invalidated with a reason.
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { pitchesSeen: -1, battedBallEvents: 3 } }));
+  const w = buildPlateHrV2SnapshotWrite(captureRow({}, d));
+  ok(w.sources.every((s) => s.entityType !== "batter"), "impossible-count batter payload is NOT written");
+  ok(w.prediction.trainingEligible === false, "impossible-count payload invalidates the prediction");
+  ok((w.prediction.trainingBlockReasons as string[]).some((r) => r.startsWith("source_payload_invalid")), "impossible count recorded as a block reason");
+}
+
 // ── PR4.3.1: reconstructed derived from fetchedAt (not availableAt) ────────────
 {
   // Fetched AFTER the prediction moment → reconstructed must be true.

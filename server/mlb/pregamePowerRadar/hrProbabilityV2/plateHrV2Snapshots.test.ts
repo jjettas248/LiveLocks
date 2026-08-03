@@ -18,6 +18,8 @@ import {
   computePredictionEnvelopeHash,
   evaluatePredictionRowIntegrity,
   evaluateTrainingReadIntegrity,
+  validateAuthorizedPayload,
+  validateSourcePayload,
   PlateHrV2NonCanonicalValueError,
   type SourceEvidenceSnapshot,
   type PredictionSnapshot,
@@ -417,6 +419,66 @@ function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[
   // Malformed persisted source (not the contract shape) → deterministic rejection.
   const m3 = new Map<string, unknown>([[src.sourceSnapshotId, { junk: true }]]);
   ok(evaluatePredictionRowIntegrity(mkPrediction({}, [src.sourceSnapshotId]), m3).reasons.some((r) => r.startsWith("source_shape_invalid")), "malformed persisted source rejected without throwing");
+}
+
+// ── PR4.3.2 #1: full provenance matrix ────────────────────────────────────────
+{
+  const reasonsWith = (over: Partial<SourceEvidenceSnapshot>) => {
+    const s = mkSource(over);
+    const m = new Map<string, SourceEvidenceSnapshot>([[s.sourceSnapshotId, s]]);
+    return evaluatePredictionRowIntegrity(mkPrediction({}, [s.sourceSnapshotId]), m).reasons;
+  };
+  ok(
+    reasonsWith({ availabilitySource: "fetched_at", availableAt: "2026-07-01T08:00:00.000Z", fetchedAt: "2026-07-01T09:00:00.000Z" })
+      .some((r) => r.includes("fetched_at_available_ne_fetched")),
+    "fetched_at requires availableAt === fetchedAt",
+  );
+  ok(
+    reasonsWith({ availabilitySource: "provider_issued_at", availableAt: "2026-07-01T10:00:00.000Z", fetchedAt: "2026-07-01T09:00:00.000Z" })
+      .some((r) => r.includes("available_after_fetched")),
+    "provider-issued requires availableAt <= fetchedAt",
+  );
+  ok(
+    reasonsWith({ availabilitySource: "fetched_at", reconstructed: true, availableAt: "2026-07-01T20:00:00.000Z", fetchedAt: "2026-07-01T20:00:00.000Z" })
+      .some((r) => r.includes("reconstructed_requires_verified_as_of")),
+    "reconstructed is permitted only for the verified_as_of class",
+  );
+  // A reconstructed verified_as_of source (available before, fetched after) IS admissible.
+  {
+    const vao = mkSource({ availabilitySource: "verified_as_of", reconstructed: true, availableAt: "2026-07-01T09:00:00.000Z", fetchedAt: "2026-07-01T20:00:00.000Z", dataThroughAt: "2026-06-30T23:59:00Z" });
+    const m = new Map<string, SourceEvidenceSnapshot>([[vao.sourceSnapshotId, vao]]);
+    ok(evaluatePredictionRowIntegrity(mkPrediction({}, [vao.sourceSnapshotId]), m).readable, "a reconstructed verified_as_of source (published before, fetched after) is admitted");
+  }
+  // Bad availabilitySource enum value + unparseable timestamp → shape-invalid (no throw).
+  {
+    const s = mkSource();
+    const p = mkPrediction({}, [s.sourceSnapshotId]);
+    for (const bad of [{ ...s, availabilitySource: "made_up" }, { ...s, fetchedAt: "not-a-date" }]) {
+      const m = new Map<string, unknown>([[s.sourceSnapshotId, bad]]);
+      let threw = false; let reasons: string[] = [];
+      try { reasons = evaluatePredictionRowIntegrity(p, m).reasons; } catch { threw = true; }
+      ok(!threw && reasons.some((r) => r.startsWith("source_shape_invalid")), "invalid availabilitySource / unparseable timestamp rejected as shape-invalid (no throw)");
+    }
+  }
+}
+
+// ── PR4.3.2 #2: null-as-absence + impossible historical counts ────────────────
+{
+  ok(!validateSourcePayload("park", { parkFactor: null }).ok, "{parkFactor:null} is not genuine evidence (null is absence)");
+  ok(!validateSourcePayload("weather_forecast", { forecast: [null] }).ok, "{forecast:[null]} is not genuine evidence");
+  ok(validateSourcePayload("park", { parkHrFactor: 1.1 }).ok, "a real park factor is genuine evidence");
+  ok(!validateAuthorizedPayload({ pitchesSeen: -1 }).ok, "negative count rejected");
+  ok(!validateAuthorizedPayload({ pitchesSeen: 1.5 }).ok, "non-integer count rejected");
+  ok(!validateAuthorizedPayload({ pitchTypeExactStats: { FF: { pitchCount: 1.5 } } }).ok, "non-integer nested count rejected");
+  ok(!validateAuthorizedPayload({ pitchTypeExactStats: { FF: { swingCount: 1, whiffCount: 8 } } }).ok, "whiffCount>swingCount rejected (monotonic)");
+  ok(!validateAuthorizedPayload({ pitchTypeExactStats: { FF: { qualityBbeCount: 5, bbeCount: 2 } } }).ok, "qualityBbeCount>bbeCount rejected (monotonic)");
+  ok(!validateAuthorizedPayload({ pitchTypeExactStats: { FF: { xslgContactN: 4, qualityBbeCount: 2 } } }).ok, "xslgContactN>qualityBbeCount rejected (monotonic)");
+  ok(!validateAuthorizedPayload({ evPercentiles: { p50: 300 } }).ok, "out-of-domain EV percentile rejected");
+  ok(!validateAuthorizedPayload({ laPercentiles: { p50: -200 } }).ok, "out-of-domain LA percentile rejected");
+  ok(
+    validateAuthorizedPayload({ pitchTypeExactStats: { FF: { pitchCount: 10, swingCount: 6, whiffCount: 2, contactCount: 4, bbeCount: 3, qualityBbeCount: 3, barrelCount: 1, paEndedCount: 3, hrCount: 1, xslgContactSum: 2.4, xslgContactN: 3, xwobaContactSum: 1.2, xwobaContactN: 3 } } }).ok,
+    "a coherent exact-pitch entry is valid",
+  );
 }
 
 // ── schema round-trip (full PR4.3 shape) ──────────────────────────────────────

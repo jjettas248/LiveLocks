@@ -196,10 +196,59 @@ export function authorizedSufficientStatsPayload(raw: unknown): Record<string, u
 
 export interface PayloadValidation { ok: boolean; reasons: string[]; numericLeafCount: number; }
 
-/** Validate a historical sufficient-stats payload against the typed, closed
- * schema; require ≥1 authorized numeric leaf (PR4.3.1 #2). Rejects unauthorized
- * keys, wrong scalar types, non-numeric leaves, and semantically-empty payloads
- * (`{}`, `{pitchFamilyStats:{}}`, `{pitchFamilyStats:{fastball:{}}}`). */
+const isNonNegInt = (n: unknown): boolean => typeof n === "number" && Number.isInteger(n) && n >= 0;
+const isFiniteNonNeg = (n: unknown): boolean => typeof n === "number" && Number.isFinite(n) && n >= 0;
+
+// Field categories for the exact-pitch/family stat leaves (PR4.3.2 #2). Counts
+// must be nonnegative integers; sums must be finite nonnegative reals.
+const EXACT_SUM_KEYS: ReadonlySet<string> = new Set(["xslgContactSum", "xwobaContactSum"]);
+const FAMILY_SUM_KEYS: ReadonlySet<string> = new Set(["xslgSum"]);
+
+/** Validate one exact-pitch stat entry: typed leaves + monotonic count law
+ * (barrel ≤ qualityBBE ≤ BBE ≤ contact ≤ swing ≤ pitch; HR ≤ PA-ended;
+ * xSLG N ≤ qualityBBE; xwOBA N ≤ qualityBBE). Returns the valid-leaf count. */
+function validateExactEntry(prefix: string, entry: Record<string, unknown>, reasons: string[]): number {
+  let leaves = 0;
+  for (const [k, v] of Object.entries(entry)) {
+    if (!AUTHORIZED_PITCH_TYPE_EXACT_STAT_KEYS.has(k)) { reasons.push(`unauthorized_leaf:${prefix}.${k}`); continue; }
+    if (EXACT_SUM_KEYS.has(k)) { if (!isFiniteNonNeg(v)) { reasons.push(`bad_sum:${prefix}.${k}`); continue; } }
+    else if (!isNonNegInt(v)) { reasons.push(`bad_count:${prefix}.${k}`); continue; }
+    leaves++;
+  }
+  const n = (k: string): number => { const x = entry[k]; return typeof x === "number" && Number.isFinite(x) ? x : 0; };
+  const mono = (a: string, b: string) => { if (!(n(a) <= n(b))) reasons.push(`monotonic:${prefix}.${a}_le_${b}`); };
+  mono("barrelCount", "qualityBbeCount");
+  mono("qualityBbeCount", "bbeCount");
+  mono("bbeCount", "contactCount");
+  mono("contactCount", "swingCount");
+  mono("whiffCount", "swingCount");
+  mono("swingCount", "pitchCount");
+  mono("hrCount", "paEndedCount");
+  mono("xslgContactN", "qualityBbeCount");
+  mono("xwobaContactN", "qualityBbeCount");
+  return leaves;
+}
+
+/** Validate one 3-family stat entry: typed leaves + whiffs ≤ swings ≤ pitches. */
+function validateFamilyEntry(prefix: string, entry: Record<string, unknown>, reasons: string[]): number {
+  let leaves = 0;
+  for (const [k, v] of Object.entries(entry)) {
+    if (!AUTHORIZED_PITCH_FAMILY_STAT_KEYS.has(k)) { reasons.push(`unauthorized_leaf:${prefix}.${k}`); continue; }
+    if (FAMILY_SUM_KEYS.has(k)) { if (!isFiniteNonNeg(v)) { reasons.push(`bad_sum:${prefix}.${k}`); continue; } }
+    else if (!isNonNegInt(v)) { reasons.push(`bad_count:${prefix}.${k}`); continue; }
+    leaves++;
+  }
+  const n = (k: string): number => { const x = entry[k]; return typeof x === "number" && Number.isFinite(x) ? x : 0; };
+  if (!(n("whiffs") <= n("swings"))) reasons.push(`monotonic:${prefix}.whiffs_le_swings`);
+  if (!(n("swings") <= n("pitches"))) reasons.push(`monotonic:${prefix}.swings_le_pitches`);
+  return leaves;
+}
+
+/** Validate a historical sufficient-stats payload against the typed, closed schema
+ * with count/sum/domain + monotonic-count laws; require ≥1 authorized numeric leaf
+ * (PR4.3.1 #2 / PR4.3.2 #2). Rejects unauthorized keys, wrong types, negative /
+ * non-integer counts, out-of-domain percentiles, impossible count relationships,
+ * and semantically-empty payloads. */
 export function validateAuthorizedPayload(payload: unknown): PayloadValidation {
   const reasons: string[] = [];
   let leaves = 0;
@@ -207,30 +256,28 @@ export function validateAuthorizedPayload(payload: unknown): PayloadValidation {
   for (const [k, v] of Object.entries(payload)) {
     if (!AUTHORIZED_SUFFICIENT_STAT_KEYS.has(k)) { reasons.push(`unauthorized_key:${k}`); continue; }
     if (k === "pitchFamilyStats" || k === "pitchTypeExactStats") {
-      const allowed = k === "pitchFamilyStats" ? AUTHORIZED_PITCH_FAMILY_STAT_KEYS : AUTHORIZED_PITCH_TYPE_EXACT_STAT_KEYS;
       if (!isPlainObject(v)) { reasons.push(`bad_nested:${k}`); continue; }
       for (const [ek, entry] of Object.entries(v)) {
         if (!isPlainObject(entry)) { reasons.push(`bad_nested_entry:${k}.${ek}`); continue; }
-        let entryLeaves = 0;
-        for (const [lk, lv] of Object.entries(entry)) {
-          if (!allowed.has(lk)) { reasons.push(`unauthorized_leaf:${k}.${ek}.${lk}`); continue; }
-          if (typeof lv !== "number" || !Number.isFinite(lv)) { reasons.push(`non_numeric_leaf:${k}.${ek}.${lk}`); continue; }
-          entryLeaves++; leaves++;
-        }
-        if (entryLeaves === 0) reasons.push(`empty_nested_entry:${k}.${ek}`);
+        const el = k === "pitchFamilyStats"
+          ? validateFamilyEntry(`${k}.${ek}`, entry, reasons)
+          : validateExactEntry(`${k}.${ek}`, entry, reasons);
+        if (el === 0) reasons.push(`empty_nested_entry:${k}.${ek}`);
+        leaves += el;
       }
     } else if (k === "evPercentiles" || k === "laPercentiles") {
       if (!isPlainObject(v)) { reasons.push(`bad_nested:${k}`); continue; }
+      const [lo, hi] = k === "evPercentiles" ? [0, 130] : [-90, 90];
       let present = 0;
       for (const [lk, lv] of Object.entries(v)) {
         if (!AUTHORIZED_PERCENTILE_KEYS.has(lk)) { reasons.push(`unauthorized_leaf:${k}.${lk}`); continue; }
         if (lv === null) { present++; continue; }
-        if (typeof lv !== "number" || !Number.isFinite(lv)) { reasons.push(`non_numeric_leaf:${k}.${lk}`); continue; }
+        if (typeof lv !== "number" || !Number.isFinite(lv) || lv < lo || lv > hi) { reasons.push(`bad_percentile:${k}.${lk}`); continue; }
         present++; leaves++;
       }
       if (present === 0) reasons.push(`empty_nested_entry:${k}`);
-    } else if (typeof v !== "number" || !Number.isFinite(v)) {
-      reasons.push(`non_numeric_scalar:${k}`);
+    } else if (!isNonNegInt(v)) {
+      reasons.push(`bad_count:${k}`);
     } else {
       leaves++;
     }
@@ -239,8 +286,10 @@ export function validateAuthorizedPayload(payload: unknown): PayloadValidation {
   return { ok: reasons.length === 0 && leaves >= 1, reasons, numericLeafCount: leaves };
 }
 
+/** A genuine (present, non-null) leaf. PR4.3.2 #2: `null` is ABSENCE, not a leaf,
+ * so `{parkFactor:null}` / `{forecast:[null]}` are semantically empty. */
 function hasGenuineLeaf(v: unknown): boolean {
-  if (v === null) return true;
+  if (v === null || v === undefined) return false;
   const t = typeof v;
   if (t === "number") return Number.isFinite(v as number);
   if (t === "string" || t === "boolean") return true;
@@ -332,7 +381,16 @@ export type PredictionSnapshot = z.infer<typeof predictionSnapshotSchema>;
 // STORED DTO schemas (PR4.3.1 #3) — tolerant of DB Date objects and used to
 // runtime-parse UNTRUSTED persisted rows in the training reader before any array
 // or field is touched, so a malformed JSONB value becomes a rejection, not a throw.
-const storedTimestamp = z.union([z.string(), z.date()]).nullable();
+// A stored timestamp must be null OR a genuinely parseable ISO string / valid
+// Date — a non-null-but-unparseable value ("not-a-date") is rejected (PR4.3.2 #1),
+// not silently treated as present.
+const isParseableTs = (v: string | Date): boolean => {
+  const t = v instanceof Date ? v.getTime() : Date.parse(v);
+  return Number.isFinite(t);
+};
+const storedTimestamp = z.union([z.string(), z.date()]).nullable().refine(
+  (v) => v == null || isParseableTs(v), { message: "invalid_timestamp" },
+);
 export const storedSourceEvidenceSchema = z.object({
   sourceSnapshotId: z.string(),
   provider: z.string(),
@@ -341,7 +399,7 @@ export const storedSourceEvidenceSchema = z.object({
   evidenceKind: z.enum(EVIDENCE_KINDS),
   dataThroughAt: storedTimestamp,
   availableAt: storedTimestamp,
-  availabilitySource: z.string(),
+  availabilitySource: z.enum(AVAILABILITY_SOURCES),
   validForAt: storedTimestamp,
   reconstructed: z.boolean(),
   provenanceIncomplete: z.boolean(),
@@ -583,19 +641,36 @@ function expectedReconstructed(fetchedAt: string | Date | null, predictionAsOf: 
   return f != null && p != null && f > p;
 }
 
-/** Provenance/timestamp/availabilitySource/reconstructed consistency (PR4.3.1 #1). */
+/** The full provenance matrix (PR4.3.2 #1): incomplete vs complete, per
+ * availabilitySource timestamp law, reconstructed derived from fetchedAt, and
+ * reconstructed permitted only for the verified-as-of source class. */
 function checkProvenanceConsistency(src: StoredSourceEvidence, predictionAsOf: string | Date): string[] {
   const reasons: string[] = [];
   if (src.provenanceIncomplete) {
     if (src.fetchedAt != null || src.availableAt != null) reasons.push("provenance_incomplete_has_timestamps");
     if (src.availabilitySource !== "unverified") reasons.push("provenance_incomplete_source_not_unverified");
     if (src.reconstructed) reasons.push("provenance_incomplete_reconstructed");
-  } else {
-    if (src.fetchedAt == null) reasons.push("provenance_missing_fetched_at");
-    if (src.availableAt == null) reasons.push("provenance_missing_available_at");
-    if (src.availabilitySource === "unverified") reasons.push("provenance_complete_but_unverified_source");
-    if (src.reconstructed !== expectedReconstructed(src.fetchedAt, predictionAsOf)) reasons.push("reconstructed_flag_inconsistent");
+    return reasons;
   }
+  // Complete: real timestamps + a non-"unverified" source.
+  const f = ms(src.fetchedAt);
+  const a = ms(src.availableAt);
+  if (f == null) reasons.push("provenance_missing_fetched_at");
+  if (a == null) reasons.push("provenance_missing_available_at");
+  if (src.availabilitySource === "unverified") reasons.push("provenance_complete_but_unverified_source");
+  if (f != null && a != null) {
+    if (src.availabilitySource === "fetched_at") {
+      // fetched_at means we only knew it when we fetched it: availableAt === fetchedAt.
+      if (a !== f) reasons.push("fetched_at_available_ne_fetched");
+    } else {
+      // provider_published_at | provider_issued_at | verified_as_of: knowable no later than fetch.
+      if (a > f) reasons.push("available_after_fetched");
+    }
+  }
+  if (f != null && src.reconstructed !== expectedReconstructed(src.fetchedAt, predictionAsOf)) reasons.push("reconstructed_flag_inconsistent");
+  // Reconstructed (fetched after the prediction) is permitted ONLY for the
+  // approved verified-as-of source class (PR2 governs which providers qualify).
+  if (src.reconstructed && src.availabilitySource !== "verified_as_of") reasons.push("reconstructed_requires_verified_as_of");
   return reasons;
 }
 
@@ -657,8 +732,11 @@ export function evaluatePredictionRowIntegrity(
     // Provenance/reconstructed consistency (fetchedAt-derived).
     for (const r of checkProvenanceConsistency(src, prediction.predictionAsOf)) reasons.push(`source_provenance:${id}:${r}`);
 
-    // Point-in-time rules (recomputed, strict).
-    const e = isSourceEvidenceEligible(src, prediction.predictionAsOf, prediction.firstPitchTime, {});
+    // Point-in-time rules (recomputed, strict). Reconstructed evidence is admitted
+    // ONLY for the approved verified-as-of source class (PR4.3.2 #1).
+    const e = isSourceEvidenceEligible(src, prediction.predictionAsOf, prediction.firstPitchTime, {
+      verifiedAsOfRetrieval: src.availabilitySource === "verified_as_of",
+    });
     if (!e.eligible) reasons.push(`source_ineligible:${id}:${e.reason}`);
 
     // Typed, semantically-non-empty payload + payload↔hash agreement.
