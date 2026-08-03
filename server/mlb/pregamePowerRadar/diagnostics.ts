@@ -2,6 +2,7 @@
 
 import type { PregamePowerSignal, PregamePowerRadarResponse } from "./types";
 import { countPositivePregameEvidenceFamilies } from "./evidenceFamilies";
+import { buildIsoDistributionReport, recordAndLogIsoDistribution } from "./isoDistributionAudit";
 import { PLATE_CHAMPION_POLICY } from "./modelVersions/plateChampionJul20";
 import { countPositiveDrivers, driverKeysForUniverse } from "./modelVersions/plateDriverUniverse";
 import {
@@ -155,6 +156,15 @@ export function buildResponse(
     .slice(0, 8);
 
   const out = includeSuppressed ? signals : publicSignals;
+
+  // Phase 3 — read-only ISO tier/prevalence guardrail. Wrapped so it can never
+  // affect the response. Runs over the public (displayed) set so tag prevalence
+  // reflects what users actually see.
+  try {
+    recordAndLogIsoDistribution(date, buildIsoDistributionReport(publicSignals));
+  } catch {
+    /* observability only */
+  }
 
   return {
     date,
