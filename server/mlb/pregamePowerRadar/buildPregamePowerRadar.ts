@@ -62,6 +62,9 @@ import {
 } from "./plateModelComparison";
 import { countPositiveDrivers, driverKeysForUniverse } from "./modelVersions/plateDriverUniverse";
 import { computeBatterPowerProfile, type BatterPowerInputs } from "./batterPowerProfile";
+import type { IsoAssessment } from "./isoAssessment";
+import { buildIsoSlateAudit, recordAndLogIsoSlateAudit } from "./isoDistributionAudit";
+import { isPublicPregameSignal } from "./diagnostics";
 import { computePitcherVulnerability } from "./pitcherVulnerability";
 import { computePitcherOrderSplit } from "./pitcherOrderSplit";
 import { computeBatterOrderSplit } from "./batterOrderSplit";
@@ -237,6 +240,10 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   }
 
   const signals = new Map<string, PregamePowerSignal>();
+  // ISO assessment-boundary accumulator — one entry per assessIso() call (i.e.
+  // every hitter for whom the ISO driver was emitted), captured here rather than
+  // inferred from signals downstream.
+  const isoAssessments: IsoAssessment[] = [];
   // Plate HR Probability V2 (PR 1) — research-only accumulators, populated
   // only when PLATE_HR_V2_FORWARD_CAPTURE_ENABLED is set (see
   // capturePlateHrV2Candidate/captureSufficientStatsIfNeeded below). Flushed
@@ -527,15 +534,15 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
         const isoSlg = isoThrows === "L" ? batterSplits?.slgVsLHP ?? null : isoThrows === "R" ? batterSplits?.slgVsRHP ?? null : null;
         const isoAvg = isoThrows === "L" ? batterSplits?.avgVsLHP ?? null : isoThrows === "R" ? batterSplits?.avgVsRHP ?? null : null;
         const isoAb = isoThrows === "L" ? batterSplits?.abVsLHP ?? null : isoThrows === "R" ? batterSplits?.abVsRHP ?? null : null;
-        const trueIsoInputs: Pick<BatterPowerInputs, "trueIso" | "trueIsoSamplePA" | "trueIsoSplit" | "trueIsoSource"> =
+        const trueIsoInputs: Pick<BatterPowerInputs, "trueIso" | "trueIsoSampleAB" | "trueIsoSplit" | "trueIsoSource"> =
           isoSlg != null && isoAvg != null
             ? {
                 trueIso: isoSlg - isoAvg,
-                trueIsoSamplePA: isoAb,
+                trueIsoSampleAB: isoAb,
                 trueIsoSplit: isoThrows === "L" ? "vs_lhp" : "vs_rhp",
                 trueIsoSource: "current_split",
               }
-            : { trueIso: null, trueIsoSamplePA: null, trueIsoSplit: "overall", trueIsoSource: "league_fallback" };
+            : { trueIso: null, trueIsoSampleAB: null, trueIsoSplit: "overall", trueIsoSource: "league_fallback" };
 
         // ── Compute components ────────────────────────────────────────────────
         const powerInputs: BatterPowerInputs = savant
@@ -547,6 +554,8 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               ...trueIsoInputs,
             };
         const batterPower = computeBatterPowerProfile(powerInputs, PLATE_CHAMPION_POLICY.batter);
+        // Capture the assessment at the boundary (non-null iff assessIso ran).
+        if (batterPower.isoAssessment) isoAssessments.push(batterPower.isoAssessment);
         // computeBatterPowerProfile's own hasCore check is satisfied by xSLG
         // alone, so a Savant fetch that degraded to the bare 2-of-11-input
         // MLB-API fallback (batterDataQuality !== "full") still reports
@@ -1447,6 +1456,26 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
     `[PREGAME_POWER_RADAR_BUILD_COMPLETE] buildId=${buildId} games=${gamesScanned} ` +
       `batters=${battersEvaluated} public=${createdPublicEligible} suppressed=${suppressedCount}`,
   );
+
+  // Phase 3 — ISO distribution guardrail at the ASSESSMENT BOUNDARY. Counts the
+  // complete IsoAssessment collection (every assessIso call), not just signals.
+  // Read-only; wrapped so it can never affect the build.
+  try {
+    const allSignals = Array.from(signals.values());
+    const publicSignals = allSignals.filter(isPublicPregameSignal);
+    recordAndLogIsoSlateAudit(
+      sessionDate,
+      buildIsoSlateAudit({
+        battersEntering: battersEvaluated,
+        assessments: isoAssessments,
+        signalsCreated: allSignals.length,
+        suppressedSignals: allSignals.length - publicSignals.length,
+        displayedSignals: publicSignals,
+      }),
+    );
+  } catch {
+    /* observability only — never break the build */
+  }
 
   // ONE aggregate line per build — never one per candidate. Unchanged
   // candidates are never logged at all; only genuine deltas get their own line.

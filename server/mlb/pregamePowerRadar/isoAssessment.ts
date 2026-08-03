@@ -1,6 +1,6 @@
 // The Plate — canonical Isolated Power (ISO) assessment.
 //
-// One server-owned, pure, typed classifier for TRUE per-PA isolated power. It is
+// One server-owned, pure, typed classifier for TRUE per-AB isolated power. It is
 // the single authority for the ISO DISPLAY tier/label — it deliberately does NOT
 // feed score10 (the champion's backtested score still consumes the separate
 // on-contact expected-power proxy; see batterPowerProfile.ts). Modeling and
@@ -19,13 +19,13 @@ import {
   ISO_ASSESSMENT_VERSION,
   ISO_AVERAGE_MIN,
   ISO_ELITE_MIN,
-  ISO_ELITE_MIN_SAMPLE_PA,
+  ISO_ELITE_MIN_SAMPLE_AB,
   ISO_MAX_VALID,
   ISO_MIN_VALID,
   ISO_RELIABILITY_FLOOR,
-  ISO_STABILIZATION_PA,
+  ISO_STABILIZATION_AB,
   ISO_STRONG_MIN,
-  ISO_STRONG_MIN_SAMPLE_PA,
+  ISO_STRONG_MIN_SAMPLE_AB,
   LEAGUE_PRIOR_ISO,
 } from "./isoAssessmentConfig";
 
@@ -41,8 +41,8 @@ export interface IsoAssessment {
   rawIso: number | null;
   adjustedIso: number | null;
   split: "vs_lhp" | "vs_rhp" | "overall";
-  samplePA: number;
-  effectiveSamplePA: number;
+  sampleAB: number;
+  effectiveSampleAB: number;
   source: IsoSource;
   /** Null: no stable same-population percentile source is wired yet. */
   percentile: number | null;
@@ -53,17 +53,17 @@ export interface IsoAssessment {
 }
 
 export interface IsoAssessmentInputs {
-  /** True per-PA ISO on the decimal scale (SLG − AVG). */
+  /** True per-AB ISO on the decimal scale (SLG − AVG). */
   rawIso: number | null;
-  /** PA/AB backing rawIso. A rate with no valid sample is never elite-eligible. */
-  samplePA: number | null;
+  /** At-bats (AB) backing rawIso — the ISO denominator. A rate with no valid sample is never elite-eligible. */
+  sampleAB: number | null;
   split: "vs_lhp" | "vs_rhp" | "overall";
   source: IsoSource;
 }
 
 export const ISO_VERSION = ISO_ASSESSMENT_VERSION;
 
-/** True ISO from rate stats. Both must share the same PA/AB denominator upstream. */
+/** True ISO from rate stats. Both must share the same AB denominator upstream. */
 export function isoFromRateStats(slg: number, avg: number): number {
   return slg - avg;
 }
@@ -95,15 +95,15 @@ function classifyTier(adjustedIso: number): IsoTier {
 function unavailable(
   split: IsoAssessmentInputs["split"],
   source: IsoSource,
-  samplePA: number,
+  sampleAB: number,
   reason: string,
 ): IsoAssessment {
   return {
     rawIso: null,
     adjustedIso: null,
     split,
-    samplePA: Number.isFinite(samplePA) && samplePA > 0 ? samplePA : 0,
-    effectiveSamplePA: 0,
+    sampleAB: Number.isFinite(sampleAB) && sampleAB > 0 ? sampleAB : 0,
+    effectiveSampleAB: 0,
     source,
     percentile: null,
     reliability: 0,
@@ -119,25 +119,25 @@ function unavailable(
  * valid-but-not-eligible tier), never to a spurious elite claim.
  */
 export function assessIso(inputs: IsoAssessmentInputs): IsoAssessment {
-  const { rawIso, samplePA, split, source } = inputs;
+  const { rawIso, sampleAB, split, source } = inputs;
 
   // ── Validation / fail-closed ──────────────────────────────────────────────
   if (rawIso == null || !Number.isFinite(rawIso)) {
-    return unavailable(split, source, samplePA ?? 0, "iso_missing_or_nonfinite");
+    return unavailable(split, source, sampleAB ?? 0, "iso_missing_or_nonfinite");
   }
   // Out-of-range guards catch percentage-scale (24, 240), negatives, and other
   // malformed values. A blank string coerced to 0 elsewhere would land here as a
   // valid-but-WEAK 0, not as elite — and a genuine 0 ISO is legitimately WEAK.
   if (rawIso < ISO_MIN_VALID || rawIso > ISO_MAX_VALID) {
-    return unavailable(split, source, samplePA ?? 0, "iso_out_of_range");
+    return unavailable(split, source, sampleAB ?? 0, "iso_out_of_range");
   }
-  if (samplePA == null || !Number.isFinite(samplePA) || samplePA <= 0) {
+  if (sampleAB == null || !Number.isFinite(sampleAB) || sampleAB <= 0) {
     return unavailable(split, source, 0, "no_valid_sample");
   }
 
   // ── Shrinkage toward the league prior ─────────────────────────────────────
-  const effectiveSamplePA = samplePA;
-  const reliability = effectiveSamplePA / (effectiveSamplePA + ISO_STABILIZATION_PA);
+  const effectiveSampleAB = sampleAB;
+  const reliability = effectiveSampleAB / (effectiveSampleAB + ISO_STABILIZATION_AB);
   const adjustedIso = reliability * rawIso + (1 - reliability) * LEAGUE_PRIOR_ISO;
 
   const tier = classifyTier(adjustedIso);
@@ -149,20 +149,20 @@ export function assessIso(inputs: IsoAssessmentInputs): IsoAssessment {
     tier === "ELITE" &&
     nonFallbackSource &&
     reliability >= ISO_RELIABILITY_FLOOR &&
-    samplePA >= ISO_ELITE_MIN_SAMPLE_PA;
+    sampleAB >= ISO_ELITE_MIN_SAMPLE_AB;
 
   if (tier === "ELITE" && !eliteEligible) {
     if (!nonFallbackSource) reasons.push("elite_blocked:league_fallback");
     if (reliability < ISO_RELIABILITY_FLOOR) reasons.push("elite_blocked:low_reliability");
-    if (samplePA < ISO_ELITE_MIN_SAMPLE_PA) reasons.push("elite_blocked:thin_sample");
+    if (sampleAB < ISO_ELITE_MIN_SAMPLE_AB) reasons.push("elite_blocked:thin_sample");
   }
 
   return {
     rawIso,
     adjustedIso,
     split,
-    samplePA,
-    effectiveSamplePA,
+    sampleAB,
+    effectiveSampleAB,
     source,
     percentile: null,
     reliability,
@@ -193,7 +193,7 @@ export function resolveIsoTagDisplay(a: IsoAssessment): IsoTagDisplay {
     (a.tier === "ELITE" || a.tier === "STRONG") &&
     a.source !== "league_fallback" &&
     a.reliability >= ISO_RELIABILITY_FLOOR &&
-    a.samplePA >= ISO_STRONG_MIN_SAMPLE_PA;
+    a.sampleAB >= ISO_STRONG_MIN_SAMPLE_AB;
   if (strongDisplayable) {
     return { displayEligible: true, label: "Strong Isolated Power", tier: a.tier };
   }

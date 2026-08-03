@@ -2,7 +2,6 @@
 
 import type { PregamePowerSignal, PregamePowerRadarResponse } from "./types";
 import { countPositivePregameEvidenceFamilies } from "./evidenceFamilies";
-import { buildIsoDistributionReport, recordAndLogIsoDistribution } from "./isoDistributionAudit";
 import { PLATE_CHAMPION_POLICY } from "./modelVersions/plateChampionJul20";
 import { countPositiveDrivers, driverKeysForUniverse } from "./modelVersions/plateDriverUniverse";
 import {
@@ -157,15 +156,11 @@ export function buildResponse(
 
   const out = includeSuppressed ? signals : publicSignals;
 
-  // Phase 3 — read-only ISO tier/prevalence guardrail. Wrapped so it can never
-  // affect the response. The evaluated denominator is the FULL signal set (every
-  // ISO-assessed hitter, public or suppressed) so selectivity is measured
-  // honestly; displayed-card metrics use the public subset.
-  try {
-    recordAndLogIsoDistribution(date, buildIsoDistributionReport(signals, publicSignals));
-  } catch {
-    /* observability only */
-  }
+  // NOTE: the ISO distribution guardrail runs at the ASSESSMENT BOUNDARY in the
+  // build layer (buildPregamePowerRadar → recordAndLogIsoSlateAudit), where the
+  // complete IsoAssessment collection is available. buildResponse only sees
+  // signal objects, so auditing here would undercount hitters whose assessment
+  // ran but whose signal was dropped/suppressed.
 
   return {
     date,

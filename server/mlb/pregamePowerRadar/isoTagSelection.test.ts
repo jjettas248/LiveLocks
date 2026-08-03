@@ -10,9 +10,12 @@
 import { computeBatterPowerProfile, type BatterPowerInputs } from "./batterPowerProfile";
 import type { PowerDriver, PregamePowerSignal } from "./types";
 import { countPositiveDrivers, JUL20_POSITIVE_DRIVER_KEYS } from "./modelVersions/plateDriverUniverse";
+import { assessIso } from "./isoAssessment";
 import {
   buildIsoDistributionReport,
+  buildIsoSlateAudit,
   recordAndLogIsoDistribution,
+  recordAndLogIsoSlateAudit,
   __resetIsoDistributionHistory,
 } from "./isoDistributionAudit";
 
@@ -58,18 +61,18 @@ const isoDriver = (inputs: BatterPowerInputs): PowerDriver | undefined =>
   ok(noTrue?.displayEligible === false, "[regression] no true ISO → chip hidden (displayEligible false)");
 
   // Genuinely elite, reliable, matchup-aware true ISO → the real Elite tag.
-  const elite = isoDriver(powerBase({ trueIso: 0.3, trueIsoSamplePA: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" }));
+  const elite = isoDriver(powerBase({ trueIso: 0.3, trueIsoSampleAB: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" }));
   ok(elite?.label === "Elite Isolated Power", "legit elite true ISO → 'Elite Isolated Power'");
   ok(elite?.displayEligible === true, "legit elite → chip shown");
   ok(elite?.tier === "ELITE", "legit elite → tier stamped ELITE");
 
   // Ordinary true ISO → valid but no promotional chip.
-  const ordinary = isoDriver(powerBase({ trueIso: 0.15, trueIsoSamplePA: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" }));
+  const ordinary = isoDriver(powerBase({ trueIso: 0.15, trueIsoSampleAB: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" }));
   ok(ordinary?.label !== "Elite Isolated Power", "ordinary true ISO → not Elite");
   ok(ordinary?.displayEligible === false, "ordinary true ISO → chip hidden");
 
   // Strong true ISO → Strong label, shown.
-  const strong = isoDriver(powerBase({ trueIso: 0.25, trueIsoSamplePA: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" }));
+  const strong = isoDriver(powerBase({ trueIso: 0.25, trueIsoSampleAB: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" }));
   ok(strong?.label === "Strong Isolated Power", "strong true ISO → 'Strong Isolated Power'");
   ok(strong?.displayEligible === true, "strong true ISO → chip shown");
 }
@@ -81,8 +84,8 @@ const isoDriver = (inputs: BatterPowerInputs): PowerDriver | undefined =>
   // publication cannot move because of this repair.
   const cases: BatterPowerInputs[] = [
     powerBase(),
-    powerBase({ trueIso: 0.3, trueIsoSamplePA: 500, trueIsoSource: "current_split", trueIsoSplit: "vs_rhp" }),
-    powerBase({ trueIso: 0.15, trueIsoSamplePA: 500, trueIsoSource: "current_split", trueIsoSplit: "vs_rhp" }),
+    powerBase({ trueIso: 0.3, trueIsoSampleAB: 500, trueIsoSource: "current_split", trueIsoSplit: "vs_rhp" }),
+    powerBase({ trueIso: 0.15, trueIsoSampleAB: 500, trueIsoSource: "current_split", trueIsoSplit: "vs_rhp" }),
     powerBase({ trueIso: null }),
   ];
   const counts = cases.map((c) => countPositiveDrivers(computeBatterPowerProfile(c).drivers, JUL20_POSITIVE_DRIVER_KEYS));
@@ -90,26 +93,26 @@ const isoDriver = (inputs: BatterPowerInputs): PowerDriver | undefined =>
   ok(counts[0] >= 1, "power_iso counts as a positive JUL20 driver regardless of display gate");
   // score10 also unchanged by the true-ISO value (it is display-only).
   const s1 = computeBatterPowerProfile(powerBase()).score10;
-  const s2 = computeBatterPowerProfile(powerBase({ trueIso: 0.3, trueIsoSamplePA: 500 })).score10;
+  const s2 = computeBatterPowerProfile(powerBase({ trueIso: 0.3, trueIsoSampleAB: 500 })).score10;
   ok(s1 === s2, "score10 independent of true ISO (display-only)");
 }
 
 // ── Identity independence ──────────────────────────────────────────────────
 {
   // The scorer takes NO player identity; identical inputs → identical output.
-  const a = computeBatterPowerProfile(powerBase({ trueIso: 0.3, trueIsoSamplePA: 500 }));
-  const b = computeBatterPowerProfile(powerBase({ trueIso: 0.3, trueIsoSamplePA: 500 }));
+  const a = computeBatterPowerProfile(powerBase({ trueIso: 0.3, trueIsoSampleAB: 500 }));
+  const b = computeBatterPowerProfile(powerBase({ trueIso: 0.3, trueIsoSampleAB: 500 }));
   ok(JSON.stringify(a) === JSON.stringify(b), "deterministic: same inputs → identical drivers/score (no identity input)");
 }
 
 // ── Mixed slate differentiation (§10.5) ────────────────────────────────────
 {
   const slate = {
-    elite: isoDriver(powerBase({ trueIso: 0.3, trueIsoSamplePA: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" })),
-    strong: isoDriver(powerBase({ trueIso: 0.25, trueIsoSamplePA: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" })),
-    ordinary: isoDriver(powerBase({ trueIso: 0.15, trueIsoSamplePA: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" })),
-    smallSampleInflated: isoDriver(powerBase({ trueIso: 0.45, trueIsoSamplePA: 25, trueIsoSplit: "vs_lhp", trueIsoSource: "current_split" })),
-    malformed: isoDriver(powerBase({ trueIso: 24, trueIsoSamplePA: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" })),
+    elite: isoDriver(powerBase({ trueIso: 0.3, trueIsoSampleAB: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" })),
+    strong: isoDriver(powerBase({ trueIso: 0.25, trueIsoSampleAB: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" })),
+    ordinary: isoDriver(powerBase({ trueIso: 0.15, trueIsoSampleAB: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" })),
+    smallSampleInflated: isoDriver(powerBase({ trueIso: 0.45, trueIsoSampleAB: 25, trueIsoSplit: "vs_lhp", trueIsoSource: "current_split" })),
+    malformed: isoDriver(powerBase({ trueIso: 24, trueIsoSampleAB: 500, trueIsoSplit: "vs_rhp", trueIsoSource: "current_split" })),
   };
   const eliteLabels = Object.values(slate).filter((d) => d?.label === "Elite Isolated Power");
   ok(eliteLabels.length === 1, "mixed slate: exactly ONE hitter earns 'Elite Isolated Power'");
@@ -184,6 +187,45 @@ function sig(over: Partial<PowerDriver>[], batterName = "x"): PregamePowerSignal
     threw = true;
   }
   ok(!threw, "recordAndLogIsoDistribution never throws");
+}
+
+// ── Assessment-boundary slate audit (item 2) ───────────────────────────────
+{
+  __resetIsoDistributionHistory();
+  // A complete assessment collection — every assessIso() call, independent of
+  // whether a signal survived. Mix of valid tiers + a failed-closed (pct-scale).
+  const assessments = [
+    assessIso({ rawIso: 0.30, sampleAB: 500, split: "vs_rhp", source: "current_split" }), // ELITE eligible
+    assessIso({ rawIso: 0.25, sampleAB: 500, split: "vs_rhp", source: "current_split" }), // STRONG
+    assessIso({ rawIso: 0.15, sampleAB: 500, split: "vs_rhp", source: "current_split" }), // AVERAGE
+    assessIso({ rawIso: 0.08, sampleAB: 500, split: "vs_rhp", source: "current_split" }), // WEAK
+    assessIso({ rawIso: 24, sampleAB: 500, split: "vs_rhp", source: "current_split" }),   // UNAVAILABLE (pct-scale)
+    assessIso({ rawIso: null, sampleAB: null, split: "overall", source: "league_fallback" }), // UNAVAILABLE
+  ];
+  // Only 2 signals reached the board; the other 4 assessed hitters were suppressed.
+  const displayed: PregamePowerSignal[] = [
+    sig([{ key: "power_iso", label: "Elite Isolated Power", direction: "positive", displayEligible: true, tier: "ELITE" }]),
+    sig([{ key: "power_iso", label: "Strong Isolated Power", direction: "positive", displayEligible: true, tier: "STRONG" }]),
+  ];
+  const audit = buildIsoSlateAudit({
+    battersEntering: 40, // more batters entered than were ISO-assessed
+    assessments,
+    signalsCreated: 6,
+    suppressedSignals: 4,
+    displayedSignals: displayed,
+  });
+  ok(audit.battersEntering === 40, "audit records batters entering Plate evaluation");
+  ok(audit.assessmentsAttempted === 6, "assessmentsAttempted = complete assessment collection (not signals)");
+  ok(audit.valid === 4 && audit.unavailable === 2, "valid/unavailable split from the assessment collection");
+  ok(audit.assessmentsBalanced === true && audit.assessmentsAttempted === audit.valid + audit.unavailable, "assessmentsAttempted === valid + unavailable (enforced)");
+  ok(audit.tierCounts.ELITE === 1 && audit.tierCounts.STRONG === 1 && audit.tierCounts.AVERAGE === 1 && audit.tierCounts.WEAK === 1 && audit.tierCounts.UNAVAILABLE === 2, "tier counts computed from the complete assessment collection");
+  ok(audit.eliteEligibleCount === 1, "elite counted from assessments (eliteEligible), not signal labels");
+  ok(Math.abs(audit.evaluatedElitePrevalence - 1 / 6) < 1e-9, "evaluated-tier prevalence uses the complete assessment denominator");
+  ok(audit.signalsCreated === 6 && audit.suppressedSignals === 4, "signal counters carried through");
+  ok(audit.displayedCards === 2, "displayed cards from the public subset only");
+  let threw = false;
+  try { recordAndLogIsoSlateAudit("2026-08-03", audit); } catch { threw = true; }
+  ok(!threw, "recordAndLogIsoSlateAudit never throws");
 }
 
 console.log(`\nisoTagSelection.test: ${passed} passed, ${failed} failed`);

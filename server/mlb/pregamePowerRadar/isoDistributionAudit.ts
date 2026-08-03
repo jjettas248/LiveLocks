@@ -10,6 +10,7 @@
 // here can never break the Plate build/response.
 
 import type { PregamePowerSignal } from "./types";
+import type { IsoAssessment } from "./isoAssessment";
 import { ISO_ASSESSMENT_VERSION } from "./isoAssessmentConfig";
 
 export const ISO_ELITE_PREVALENCE_WARN = 0.25; // >25% ELITE of eligible → warn
@@ -107,6 +108,79 @@ export function buildIsoDistributionReport(
   };
 }
 
+/**
+ * Assessment-boundary slate audit — the AUTHORITATIVE ISO distribution report.
+ *
+ * Unlike `buildIsoDistributionReport` (which infers the evaluated denominator
+ * from emitted signals), this counts the COMPLETE collection of `IsoAssessment`
+ * objects produced by `assessIso` during the build — i.e. every hitter for whom
+ * an ISO assessment actually ran, before any signal filtering. That is why it is
+ * accumulated in the build layer, not in `buildResponse` (which only sees
+ * signals). Displayed-card metrics still come from the public signal subset.
+ */
+export interface IsoSlateAudit {
+  version: string;
+  battersEntering: number; // batters that entered Plate evaluation
+  assessmentsAttempted: number; // assessIso() calls (== assessments.length)
+  valid: number; // assessments with a usable tier
+  unavailable: number; // assessments that failed closed
+  assessmentsBalanced: boolean; // invariant: assessmentsAttempted === valid + unavailable
+  tierCounts: Record<string, number>; // over the complete assessment collection
+  eliteEligibleCount: number; // assessments with eliteEligible === true
+  evaluatedElitePrevalence: number; // eliteEligibleCount / assessmentsAttempted
+  signalsCreated: number;
+  suppressedSignals: number;
+  displayedCards: number;
+  eliteDisplayed: number;
+  displayedElitePrevalence: number;
+  tagPrevalence: Record<string, number>;
+  elitePrevalenceExceeded: boolean;
+}
+
+export function buildIsoSlateAudit(input: {
+  battersEntering: number;
+  assessments: readonly IsoAssessment[];
+  signalsCreated: number;
+  suppressedSignals: number;
+  displayedSignals: readonly PregamePowerSignal[];
+}): IsoSlateAudit {
+  const { battersEntering, assessments, signalsCreated, suppressedSignals, displayedSignals } = input;
+  const tierCounts: Record<string, number> = { ELITE: 0, STRONG: 0, AVERAGE: 0, WEAK: 0, UNAVAILABLE: 0 };
+  let valid = 0;
+  let unavailable = 0;
+  let eliteEligibleCount = 0;
+  for (const a of assessments) {
+    const t = a.tier;
+    if (tierCounts[t] == null) tierCounts[t] = 0;
+    tierCounts[t]++;
+    if (t === "UNAVAILABLE") unavailable++;
+    else valid++;
+    if (a.eliteEligible) eliteEligibleCount++;
+  }
+  const assessmentsAttempted = assessments.length;
+  // Reuse the displayed-card math (public subset).
+  const disp = buildIsoDistributionReport(displayedSignals, displayedSignals);
+  const evaluatedElitePrevalence = assessmentsAttempted > 0 ? eliteEligibleCount / assessmentsAttempted : 0;
+  return {
+    version: ISO_ASSESSMENT_VERSION,
+    battersEntering,
+    assessmentsAttempted,
+    valid,
+    unavailable,
+    assessmentsBalanced: assessmentsAttempted === valid + unavailable,
+    tierCounts,
+    eliteEligibleCount,
+    evaluatedElitePrevalence,
+    signalsCreated,
+    suppressedSignals,
+    displayedCards: disp.displayedCards,
+    eliteDisplayed: disp.eliteDisplayed,
+    displayedElitePrevalence: disp.displayedElitePrevalence,
+    tagPrevalence: disp.tagPrevalence,
+    elitePrevalenceExceeded: evaluatedElitePrevalence > ISO_ELITE_PREVALENCE_WARN,
+  };
+}
+
 // Small module-level history for the consecutive-slate tag-prevalence check. Keyed
 // by slate date; keeps the newest few dates only. Best-effort observability, not a
 // source of truth — never read by the engine.
@@ -165,6 +239,65 @@ export function recordAndLogIsoDistribution(date: string, report: IsoDistributio
     }
   } catch {
     /* observability only — never break the response */
+  }
+}
+
+/**
+ * Records the assessment-boundary slate audit and emits ONE aggregate structured
+ * log line with the full counter set, plus the same prevalence/consecutive-tag
+ * warnings. Never throws. This is the production logging entry point (called once
+ * per slate build at the assessment boundary).
+ */
+export function recordAndLogIsoSlateAudit(date: string, audit: IsoSlateAudit): void {
+  try {
+    if (audit.assessmentsAttempted === 0) return; // no ISO assessments — not a qualifying slate
+
+    const existingIdx = slateHistory.findIndex((s) => s.date === date);
+    const snapshot: SlateSnapshot = { date, tagPrevalence: audit.tagPrevalence };
+    if (existingIdx >= 0) slateHistory[existingIdx] = snapshot;
+    else slateHistory.push(snapshot);
+    while (slateHistory.length > MAX_SLATE_HISTORY) slateHistory.shift();
+
+    // eslint-disable-next-line no-console
+    console.log(
+      `[PLATE_ISO_DISTRIBUTION] v=${audit.version} date=${date} ` +
+        `battersEntering=${audit.battersEntering} assessmentsAttempted=${audit.assessmentsAttempted} ` +
+        `valid=${audit.valid} unavailable=${audit.unavailable} balanced=${audit.assessmentsBalanced} ` +
+        `tiers=${JSON.stringify(audit.tierCounts)} evalElitePct=${(audit.evaluatedElitePrevalence * 100).toFixed(1)}% ` +
+        `signalsCreated=${audit.signalsCreated} suppressed=${audit.suppressedSignals} ` +
+        `displayed=${audit.displayedCards} dispElitePct=${(audit.displayedElitePrevalence * 100).toFixed(1)}%`,
+    );
+
+    if (!audit.assessmentsBalanced) {
+      console.warn(
+        `[PLATE_ISO_DISTRIBUTION_WARN] assessment-count imbalance: attempted=${audit.assessmentsAttempted} ` +
+          `!= valid+unavailable=${audit.valid + audit.unavailable} (date=${date}).`,
+      );
+    }
+    if (audit.elitePrevalenceExceeded) {
+      console.warn(
+        `[PLATE_ISO_DISTRIBUTION_WARN] ELITE prevalence ${(audit.evaluatedElitePrevalence * 100).toFixed(1)}% ` +
+          `> ${(ISO_ELITE_PREVALENCE_WARN * 100).toFixed(0)}% of ${audit.assessmentsAttempted} assessed hitters ` +
+          `— classification may be regressing toward universality (date=${date}).`,
+      );
+    }
+
+    const distinct = slateHistory.filter((s) => s.date !== date);
+    const prior = distinct.length > 0 ? distinct[distinct.length - 1] : null;
+    if (prior) {
+      for (const [key, pct] of Object.entries(audit.tagPrevalence)) {
+        const priorPct = prior.tagPrevalence[key] ?? 0;
+        if (pct > TAG_PREVALENCE_WARN && priorPct > TAG_PREVALENCE_WARN) {
+          console.warn(
+            `[PLATE_ISO_DISTRIBUTION_WARN] tag "${key}" on ${(pct * 100).toFixed(0)}% of displayed cards ` +
+              `(prior slate ${(priorPct * 100).toFixed(0)}%) — supposedly selective tag is near-universal ` +
+              `on consecutive slates (${prior.date} → ${date}).`,
+          );
+        }
+      }
+    }
+  } catch {
+    /* observability only — never break the build */
   }
 }
 
