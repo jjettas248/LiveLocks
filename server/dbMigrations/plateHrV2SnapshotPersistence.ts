@@ -29,11 +29,14 @@ const PLATE_HR_V2_SOURCE_EVIDENCE = `
     entity_type TEXT NOT NULL,
     evidence_kind TEXT NOT NULL,
     data_through_at TIMESTAMP,
-    available_at TIMESTAMP NOT NULL,
+    -- NULLABLE (PR4.3): a provenance-incomplete source has honestly null
+    -- timestamps and is always training-ineligible (never a substituted moment).
+    available_at TIMESTAMP,
     availability_source TEXT NOT NULL,
     valid_for_at TIMESTAMP,
     reconstructed BOOLEAN NOT NULL DEFAULT false,
-    fetched_at TIMESTAMP NOT NULL,
+    provenance_incomplete BOOLEAN NOT NULL DEFAULT false,
+    fetched_at TIMESTAMP,
     schema_version TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     payload_ref TEXT,
@@ -64,6 +67,22 @@ const PLATE_HR_V2_SOURCE_EVIDENCE_NULL_LEGACY_PAYLOAD = `
     SET authorized_payload = NULL
     WHERE authorized_payload = '{}'::jsonb;
 `;
+// PR4.3 self-heal: honest null provenance. Add the provenance flag, and make the
+// timestamps nullable so a provenance-incomplete source is stored with null
+// available_at/fetched_at rather than a substituted capture moment. Non-destructive
+// (DROP NOT NULL is a column-constraint relaxation, not a DROP COLUMN) + idempotent.
+const PLATE_HR_V2_SOURCE_EVIDENCE_ADD_PROVENANCE = `
+  ALTER TABLE plate_hr_v2_source_evidence
+    ADD COLUMN IF NOT EXISTS provenance_incomplete BOOLEAN NOT NULL DEFAULT false;
+`;
+const PLATE_HR_V2_SOURCE_EVIDENCE_AVAILABLE_AT_NULLABLE = `
+  ALTER TABLE plate_hr_v2_source_evidence
+    ALTER COLUMN available_at DROP NOT NULL;
+`;
+const PLATE_HR_V2_SOURCE_EVIDENCE_FETCHED_AT_NULLABLE = `
+  ALTER TABLE plate_hr_v2_source_evidence
+    ALTER COLUMN fetched_at DROP NOT NULL;
+`;
 const PLATE_HR_V2_SOURCE_EVIDENCE_ENTITY_IDX = `
   CREATE INDEX IF NOT EXISTS plate_hr_v2_source_evidence_entity_idx
     ON plate_hr_v2_source_evidence (entity_type, entity_id);
@@ -93,8 +112,14 @@ const PLATE_HR_V2_PREDICTION_SNAPSHOTS = `
     content_hash TEXT NOT NULL,
     authoritative BOOLEAN NOT NULL DEFAULT false,
     training_eligible BOOLEAN,
+    training_block_reasons JSONB NOT NULL DEFAULT '[]',
     created_at TIMESTAMP DEFAULT NOW()
   );
+`;
+// PR4.3 self-heal: persist write-time block reasons. Non-destructive + idempotent.
+const PLATE_HR_V2_PREDICTION_SNAPSHOTS_ADD_BLOCK_REASONS = `
+  ALTER TABLE plate_hr_v2_prediction_snapshots
+    ADD COLUMN IF NOT EXISTS training_block_reasons JSONB NOT NULL DEFAULT '[]';
 `;
 // Composite uniqueness (game_pk, batter_id, feature_version, prediction_as_of):
 // enforces "append a new revision", not "overwrite".
@@ -117,10 +142,14 @@ export const PLATE_HR_V2_SNAPSHOT_PERSISTENCE_STATEMENTS: readonly string[] = [
   PLATE_HR_V2_SOURCE_EVIDENCE_DROP_PAYLOAD_DEFAULT,
   PLATE_HR_V2_SOURCE_EVIDENCE_DROP_PAYLOAD_NOTNULL,
   PLATE_HR_V2_SOURCE_EVIDENCE_NULL_LEGACY_PAYLOAD,
+  PLATE_HR_V2_SOURCE_EVIDENCE_ADD_PROVENANCE,
+  PLATE_HR_V2_SOURCE_EVIDENCE_AVAILABLE_AT_NULLABLE,
+  PLATE_HR_V2_SOURCE_EVIDENCE_FETCHED_AT_NULLABLE,
   PLATE_HR_V2_SOURCE_EVIDENCE_ENTITY_IDX,
   PLATE_HR_V2_SOURCE_EVIDENCE_KIND_IDX,
   PLATE_HR_V2_SOURCE_EVIDENCE_AVAILABLE_AT_IDX,
   PLATE_HR_V2_PREDICTION_SNAPSHOTS,
+  PLATE_HR_V2_PREDICTION_SNAPSHOTS_ADD_BLOCK_REASONS,
   PLATE_HR_V2_PREDICTION_SNAPSHOTS_IDENTITY_IDX,
   PLATE_HR_V2_PREDICTION_SNAPSHOTS_GAME_BATTER_IDX,
   PLATE_HR_V2_PREDICTION_SNAPSHOTS_PREDICTION_AS_OF_IDX,

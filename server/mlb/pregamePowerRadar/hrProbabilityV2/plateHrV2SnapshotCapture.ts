@@ -1,15 +1,25 @@
 // Plate HR V2 — assemble real provider/entity evidence descriptors, derive the
-// append-only two-layer snapshot write, and persist it safely (plan §7.1, PR3.1).
+// append-only two-layer snapshot write, and persist it safely (plan §7.1, PR3.1
+// / PR4.2 / PR4.3).
 //
-// PR3.1 rewrite: source evidence now comes from EXPLICIT per-provider/entity
-// descriptors carrying real provenance (fetchedAt/availableAt/dataThroughAt/
-// validForAt/contentHash/payloadRef), assembled at the fetch site from the data
-// the build actually has. No family heuristics, no synthesized timestamps, no
-// batter-wide input hash standing in for a source hash. Absent provenance →
-// fail-closed (no descriptor). Odds/market and unverified zone are excluded by a
-// CLOSED allowlist. The prediction stores the real MLB gamePk (not ESPN gameId).
+// Source evidence comes from EXPLICIT per-provider/entity descriptors carrying
+// real provenance (fetchedAt/availableAt/dataThroughAt/validForAt/contentHash/
+// payloadRef), assembled at the fetch site from the data the build actually has.
+// No family heuristics, no synthesized timestamps, no batter-wide input hash
+// standing in for a source hash. PR4.3:
+//   • a provenance-incomplete historical source is written with NULL timestamps +
+//     availabilitySource "unverified" + provenanceIncomplete=true (the capture
+//     moment is NEVER substituted) — it stays training-INELIGIBLE, honestly;
+//   • the single canonical hasher + the full-descriptor source id + the full
+//     immutable prediction envelope hash come from plateHrV2Snapshots.ts, shared
+//     by the write builder and the training reader;
+//   • a missing/empty authorized payload is REJECTED at write (no `{}` manufacture),
+//     recorded as a training block reason;
+//   • authorized nested structures (pitchFamilyStats/pitchTypeExactStats/
+//     percentiles) pass through CLOSED nested projections, not just a top-level key.
+// Odds/market and unverified zone are excluded by a CLOSED allowlist. The
+// prediction stores the real MLB gamePk (not ESPN gameId).
 
-import { createHash } from "node:crypto";
 import type {
   InsertPlateHrV2SourceEvidence,
   InsertPlateHrV2PredictionSnapshot,
@@ -17,10 +27,20 @@ import type {
 import type { PlateHrV2CaptureRow } from "./plateHrV2ForwardCapture";
 import {
   isPredictionSnapshotEligible,
+  computeSourceSnapshotId,
+  computePredictionSnapshotId,
+  computePredictionEnvelopeHash,
+  canonicalHash,
+  canonicalJson,
+  type AvailabilitySource,
   type EvidenceKind,
   type PlateHrV2EvidenceDescriptor,
   type ResolvedEligibilitySource,
 } from "./plateHrV2Snapshots";
+
+// Re-export the canonical hashers so existing importers keep working; the single
+// definitions live in plateHrV2Snapshots.ts (shared write+read).
+export { canonicalHash, canonicalJson } from "./plateHrV2Snapshots";
 
 export interface PlateHrV2SnapshotWrite {
   sources: InsertPlateHrV2SourceEvidence[];
@@ -46,21 +66,12 @@ export const AUTHORIZED_DERIVED_FEATURE_GROUPS: ReadonlySet<string> = new Set([
   "slateBaselineGameHrProbability",
 ]);
 
-/** Stable, sorted-key JSON → sha256. Deterministic content hash for a payload. */
-export function canonicalHash(payload: unknown): string {
-  return createHash("sha256").update(canonicalJson(payload)).digest("hex").slice(0, 40);
-}
-
-/** Stable, sorted-key JSON string. Canonical serialization used for hashing + cloning. */
-export function canonicalJson(v: unknown): string {
-  return stableStringify(v);
-}
-
-function stableStringify(v: unknown): string {
-  if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
-  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
-  const keys = Object.keys(v as Record<string, unknown>).sort();
-  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((v as Record<string, unknown>)[k])}`).join(",")}}`;
+/** Deep-clone through canonical JSON (sorted keys). Throws on any non-canonical
+ * value (NaN/Infinity/undefined/Date/…) — a payload that can't be canonically
+ * serialized must fail closed, never collapse. Breaks all references, so a later
+ * mutation of the original can't change it. */
+export function canonicalClone<T = unknown>(v: unknown): T {
+  return JSON.parse(canonicalJson(v)) as T;
 }
 
 /** Exclusive upper bound of a season-to-date Savant query = start of the fetch's
@@ -71,13 +82,11 @@ export function startOfUtcDay(iso: string): string {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
 }
 
-// ── Descriptor assembly (pure) ────────────────────────────────────────────────
+// ── Authorized payload projection (CLOSED, top-level AND nested) ──────────────
 
 // CLOSED allowlist of authorized sufficient-stat top-level keys. Zone/chase
 // fields are deliberately ABSENT (unauthorized, PR2), and any future/unknown
-// top-level key is dropped rather than captured (PR4.2 #4). The nested values
-// (pitchFamilyStats, pitchTypeExactStats, percentiles) are our own computed
-// numeric structures — deep-cloned below so no live reference survives.
+// top-level key is dropped rather than captured (PR4.2 #4).
 export const AUTHORIZED_SUFFICIENT_STAT_KEYS: ReadonlySet<string> = new Set([
   "pitchesSeen", "swings", "whiffs", "calledStrikes", "balls",
   "paCount", "strikeouts", "walks", "battedBallEvents",
@@ -86,23 +95,72 @@ export const AUTHORIZED_SUFFICIENT_STAT_KEYS: ReadonlySet<string> = new Set([
   "pulledBip", "sprayClassifiedBip", "sourceRowCount",
 ]);
 
-/** Deep-clone through canonical JSON (sorted keys). Drops functions/undefined and
- * breaks all references, so a later mutation of the original can't change it. */
-export function canonicalClone<T = unknown>(v: unknown): T {
-  return JSON.parse(canonicalJson(v)) as T;
+// CLOSED nested allowlists (PR4.3): a nested stat structure is projected key-by-key
+// so an unauthorized nested field can never ride along inside an authorized group.
+const AUTHORIZED_PITCH_FAMILY_STAT_KEYS: ReadonlySet<string> = new Set([
+  "pitches", "swings", "whiffs", "xslgSum", "xslgN",
+]);
+const AUTHORIZED_PITCH_TYPE_EXACT_STAT_KEYS: ReadonlySet<string> = new Set([
+  "pitchCount", "swingCount", "whiffCount", "contactCount", "bbeCount",
+  "qualityBbeCount", "paEndedCount", "barrelCount", "hrCount",
+  "xslgContactSum", "xslgContactN", "xwobaContactSum", "xwobaContactN",
+]);
+const AUTHORIZED_PERCENTILE_KEYS: ReadonlySet<string> = new Set([
+  "p10", "p25", "p50", "p75", "p90",
+]);
+
+/** Project a `Record<key, statObject>` — each entry's fields filtered to a closed
+ * numeric allowlist. Non-finite / non-numeric fields are dropped (fail-closed). */
+function projectRecordOfStats(v: unknown, allowed: ReadonlySet<string>): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  if (v == null || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [k, entry] of Object.entries(v as Record<string, unknown>)) {
+    if (entry == null || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const projected: Record<string, number> = {};
+    for (const [ek, ev] of Object.entries(entry as Record<string, unknown>)) {
+      if (allowed.has(ek) && typeof ev === "number" && Number.isFinite(ev)) projected[ek] = ev;
+    }
+    out[k] = projected;
+  }
+  return out;
 }
 
-/** Project a sufficient-stats payload through the CLOSED allowlist and deep-clone
- * it — the immutable, self-contained authorized payload stored inline as evidence
- * (PR4.2 #4). Unknown/zone top-level keys are excluded. */
+/** Project a single stat object — allowlisted keys, allowing null (percentiles). */
+function projectFlatStat(v: unknown, allowed: ReadonlySet<string>): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  if (v == null || typeof v !== "object" || Array.isArray(v)) return out;
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (!allowed.has(k)) continue;
+    if (val === null) out[k] = null;
+    else if (typeof val === "number" && Number.isFinite(val)) out[k] = val;
+  }
+  return out;
+}
+
+/** Project a sufficient-stats payload through the CLOSED top-level allowlist AND
+ * closed nested projections, then it is already a fresh deep structure (PR4.2 #4 +
+ * PR4.3). Scalars are cloned; unknown/zone keys are excluded. */
 export function authorizedSufficientStatsPayload(raw: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (raw == null || typeof raw !== "object") return out;
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (AUTHORIZED_SUFFICIENT_STAT_KEYS.has(k)) out[k] = canonicalClone(v);
+    if (!AUTHORIZED_SUFFICIENT_STAT_KEYS.has(k)) continue;
+    if (k === "pitchFamilyStats") out[k] = projectRecordOfStats(v, AUTHORIZED_PITCH_FAMILY_STAT_KEYS);
+    else if (k === "pitchTypeExactStats") out[k] = projectRecordOfStats(v, AUTHORIZED_PITCH_TYPE_EXACT_STAT_KEYS);
+    else if (k === "evPercentiles" || k === "laPercentiles") out[k] = projectFlatStat(v, AUTHORIZED_PERCENTILE_KEYS);
+    else out[k] = canonicalClone(v);
   }
   return out;
 }
+
+/** A plain object with no own enumerable keys (an empty authorized payload). */
+function isEmptyPayload(v: unknown): boolean {
+  if (v == null) return true;
+  if (typeof v !== "object" || Array.isArray(v)) return false;
+  return Object.keys(v as Record<string, unknown>).length === 0;
+}
+
+// ── Descriptor assembly (pure) ────────────────────────────────────────────────
 
 export interface PlateHrV2EvidenceAssemblyInput {
   gamePk: string;
@@ -118,7 +176,8 @@ export interface PlateHrV2EvidenceAssemblyInput {
   pitcherStatsRef: string | null;
   /** Real Savant fetch provenance (preserved through the cache), per entity.
    * fetchedAt/availableAt use these; dataThroughAt uses the query cutoff date.
-   * Absent → fall back to the capture moment (documented, still ≤ prediction). */
+   * Absent → the source is provenance-INCOMPLETE (null timestamps), NOT the
+   * capture moment (PR4.3). */
   batterFetchedAtMs?: number | null;
   batterDataThroughDate?: string | null;
   pitcherFetchedAtMs?: number | null;
@@ -140,11 +199,11 @@ export interface PlateHrV2EvidenceAssemblyInput {
 export function assemblePlateHrV2EvidenceDescriptors(inp: PlateHrV2EvidenceAssemblyInput): PlateHrV2EvidenceDescriptor[] {
   const out: PlateHrV2EvidenceDescriptor[] = [];
   const captured = inp.capturedAtIso;
-  const isoOrNull = (ms: number | null | undefined): string | null =>
-    ms != null && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  const isoOrNull = (msVal: number | null | undefined): string | null =>
+    msVal != null && Number.isFinite(msVal) ? new Date(msVal).toISOString() : null;
   // Query cutoff (game_date_lt, a YYYY-MM-DD) → ISO start-of-day (exclusive
-  // season-to-date bound). Falls back to the fetch day when the cutoff is absent.
-  const cutoffIso = (date: string | null | undefined, fetchedIso: string): string =>
+  // season-to-date bound), derived from the REAL fetch day.
+  const cutoffIso = (date: string, fetchedIso: string): string =>
     date ? `${date}T00:00:00.000Z` : startOfUtcDay(fetchedIso);
 
   const pushHistorical = (
@@ -157,19 +216,23 @@ export function assemblePlateHrV2EvidenceDescriptors(inp: PlateHrV2EvidenceAssem
     if (hasProvenance) {
       out.push({
         provider: "baseball_savant", entityType, entityId, evidenceKind: "historical_stat",
-        fetchedAt: realFetchedAt, availableAt: realFetchedAt, dataThroughAt: cutoffIso(cutoffDate, realFetchedAt), validForAt: null,
+        fetchedAt: realFetchedAt, availableAt: realFetchedAt, availabilitySource: "fetched_at",
+        provenanceIncomplete: false,
+        dataThroughAt: cutoffIso(cutoffDate as string, realFetchedAt), validForAt: null,
         schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: statsRef,
         authorizedPayload: payload,
       });
       return;
     }
-    // PR4.2 #1: a historical payload with NO real fetch time / cutoff must
-    // INVALIDATE the prediction, not silently vanish (else weather/lineup/park
-    // could still make it eligible). Emit an explicitly-ineligible source
-    // (reconstructed, no dataThroughAt) — the capture moment is NEVER substituted.
+    // PR4.3: a historical payload with NO real fetch time / cutoff is written with
+    // HONEST null provenance + provenanceIncomplete=true — never the substituted
+    // capture moment. It is emitted (not silently omitted) so it INVALIDATES the
+    // prediction, and it is always training-ineligible.
     out.push({
       provider: "baseball_savant", entityType, entityId, evidenceKind: "historical_stat",
-      fetchedAt: captured, availableAt: captured, dataThroughAt: null, validForAt: null,
+      fetchedAt: null, availableAt: null, availabilitySource: "unverified",
+      provenanceIncomplete: true,
+      dataThroughAt: null, validForAt: null,
       schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: statsRef,
       authorizedPayload: payload,
     });
@@ -185,14 +248,16 @@ export function assemblePlateHrV2EvidenceDescriptors(inp: PlateHrV2EvidenceAssem
     const payload = { temperatureF: inp.weather.temperatureF, windSpeedMph: inp.weather.windSpeedMph, windDirection: inp.weather.windDirection, isIndoors: inp.weather.isIndoors };
     out.push({
       provider: "open_meteo", entityType: "game", entityId: inp.gamePk, evidenceKind: "weather_forecast",
-      fetchedAt: captured, availableAt: captured, dataThroughAt: null, validForAt: inp.firstPitchIso,
+      fetchedAt: captured, availableAt: captured, availabilitySource: "fetched_at", provenanceIncomplete: false,
+      dataThroughAt: null, validForAt: inp.firstPitchIso,
       schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: null, authorizedPayload: payload,
     });
   }
   if (inp.park?.venueResolved) {
     out.push({
       provider: "livelocks_park", entityType: "venue", entityId: inp.gamePk, evidenceKind: "park",
-      fetchedAt: captured, availableAt: captured, dataThroughAt: null, validForAt: null,
+      fetchedAt: captured, availableAt: captured, availabilitySource: "fetched_at", provenanceIncomplete: false,
+      dataThroughAt: null, validForAt: null,
       schemaVersion: inp.schemaVersion, contentHash: canonicalHash(inp.park.payload), payloadRef: null, authorizedPayload: inp.park.payload,
     });
   }
@@ -202,26 +267,12 @@ export function assemblePlateHrV2EvidenceDescriptors(inp: PlateHrV2EvidenceAssem
     const payload = { lineupConfirmed: true };
     out.push({
       provider: "mlb_stats_api", entityType: "game", entityId: inp.gamePk, evidenceKind: "lineup",
-      fetchedAt: captured, availableAt: captured, dataThroughAt: null, validForAt: null,
+      fetchedAt: captured, availableAt: captured, availabilitySource: "fetched_at", provenanceIncomplete: false,
+      dataThroughAt: null, validForAt: null,
       schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: null, authorizedPayload: payload,
     });
   }
   return out;
-}
-
-function sourceId(d: PlateHrV2EvidenceDescriptor, contentHash: string): string {
-  // provider + entity + kind + dataThroughAt + schemaVersion + contentHash
-  // (PR4.2 #3). Identical content across different cutoffs or schema versions
-  // mints DISTINCT immutable rows, so ON CONFLICT DO NOTHING never retains stale
-  // provenance. Shared game/venue evidence (same everything) still dedupes.
-  return [
-    "plate-hr-v2-src", d.provider, d.entityType, d.entityId, d.evidenceKind,
-    d.dataThroughAt ?? "none", d.schemaVersion, contentHash,
-  ].join(":");
-}
-
-function predictionId(gamePk: string, batterId: string, featureVersion: string, predictionAsOfIso: string): string {
-  return `plate-hr-v2-pred:${gamePk}:${batterId}:${featureVersion}:${predictionAsOfIso}`;
 }
 
 /**
@@ -239,15 +290,35 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
   const sources: InsertPlateHrV2SourceEvidence[] = [];
   const sourceIds: string[] = [];
   const resolved = new Map<string, ResolvedEligibilitySource>();
+  const blockReasons: string[] = [];
 
   for (const d of row.evidence) {
-    const availableAtMs = Date.parse(d.availableAt);
+    const payload = d.authorizedPayload;
+    // PR4.3: reject a missing/empty authorized payload at WRITE — never manufacture
+    // `{}`. Record a block reason so the prediction is invalidated with a trace.
+    if (isEmptyPayload(payload)) {
+      blockReasons.push(`source_payload_empty:${d.provider}:${d.entityType}:${d.entityId}:${d.evidenceKind}`);
+      continue;
+    }
+
+    const availableAtMs = d.availableAt ? Date.parse(d.availableAt) : NaN;
     const reconstructed = Number.isFinite(availableAtMs) && Number.isFinite(predictionAsOfMs) && availableAtMs > predictionAsOfMs;
-    const payload = (d.authorizedPayload ?? {}) as Record<string, unknown>;
-    // PR4.2 #2: the builder RECOMPUTES the content hash from the stored payload,
-    // so the persisted contentHash always agrees with the persisted payload.
+    // The builder RECOMPUTES the content hash from the stored payload, so the
+    // persisted contentHash always agrees with the persisted payload.
     const contentHash = canonicalHash(payload);
-    const id = sourceId(d, contentHash);
+    const availabilitySource = d.availabilitySource as AvailabilitySource;
+    const provenanceIncomplete = d.provenanceIncomplete;
+
+    // Full-descriptor content-addressed id (PR4.3): every eligibility-critical
+    // provenance field participates, so provenance can never change without
+    // minting a distinct immutable row.
+    const id = computeSourceSnapshotId({
+      provider: d.provider, entityType: d.entityType, entityId: d.entityId, evidenceKind: d.evidenceKind,
+      dataThroughAt: d.dataThroughAt, availableAt: d.availableAt, fetchedAt: d.fetchedAt,
+      availabilitySource, validForAt: d.validForAt, reconstructed, provenanceIncomplete,
+      schemaVersion: d.schemaVersion, contentHash,
+    });
+
     sources.push({
       sourceSnapshotId: id,
       provider: d.provider,
@@ -255,15 +326,16 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
       entityType: d.entityType,
       evidenceKind: d.evidenceKind,
       dataThroughAt: d.dataThroughAt ? new Date(d.dataThroughAt) : null,
-      availableAt: new Date(d.availableAt),
-      availabilitySource: "fetched_at",
+      availableAt: d.availableAt ? new Date(d.availableAt) : null,
+      availabilitySource,
       validForAt: d.validForAt ? new Date(d.validForAt) : null,
       reconstructed,
-      fetchedAt: new Date(d.fetchedAt),
+      provenanceIncomplete,
+      fetchedAt: d.fetchedAt ? new Date(d.fetchedAt) : null,
       schemaVersion: d.schemaVersion,
       contentHash,
       payloadRef: d.payloadRef,
-      authorizedPayload: payload,
+      authorizedPayload: payload as Record<string, unknown>,
     });
     if (!sourceIds.includes(id)) sourceIds.push(id);
     resolved.set(id, {
@@ -272,6 +344,7 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
       availableAt: d.availableAt,
       validForAt: d.validForAt,
       reconstructed,
+      provenanceIncomplete,
       authorizedPayload: payload,
       contentHash,
     });
@@ -288,10 +361,13 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
     resolved,
     { requireKnownFirstPitch: true, hashPayload: canonicalHash },
   );
+  const trainingBlockReasons = [...blockReasons, ...eligibility.reasons];
 
   const sortedIds = [...sourceIds].sort();
   const prediction: InsertPlateHrV2PredictionSnapshot = {
-    predictionSnapshotId: predictionId(gamePk, row.batterId, row.featureVersion, predictionAsOfIso),
+    predictionSnapshotId: computePredictionSnapshotId({
+      gamePk, batterId: row.batterId, featureVersion: row.featureVersion, predictionAsOf: predictionAsOfIso,
+    }),
     gamePk,
     batterId: row.batterId,
     featureVersion: row.featureVersion,
@@ -299,11 +375,19 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
     firstPitchTime: row.firstPitchTimeIso ? new Date(row.firstPitchTimeIso) : null,
     sourceSnapshotIds: sortedIds,
     derivedFeatures: authorizedDerived,
-    // Prediction identity hash: the STORED authorized vector + its source ids —
-    // never the raw frozen input (which includes unauthorized zone/market).
-    contentHash: canonicalHash({ derivedFeatures: authorizedDerived, sourceSnapshotIds: sortedIds }),
+    // Prediction identity hash: the COMPLETE immutable envelope (PR4.3 #5) —
+    // gamePk/batterId/featureVersion/predictionAsOf/firstPitchTime + authorized
+    // features + sorted source ids. Mutable lifecycle state is excluded.
+    contentHash: computePredictionEnvelopeHash({
+      gamePk, batterId: row.batterId, featureVersion: row.featureVersion,
+      predictionAsOf: predictionAsOfIso, firstPitchTime: row.firstPitchTimeIso,
+      derivedFeatures: authorizedDerived, sourceSnapshotIds: sortedIds,
+    }),
+    // Authority is assigned at TRAINING-READ time (deterministic selection), never
+    // at write — the writer cannot know which revision is last before first pitch.
     authoritative: false,
-    trainingEligible: eligibility.eligible,
+    trainingEligible: trainingBlockReasons.length === 0,
+    trainingBlockReasons,
   };
 
   return { sources, prediction };

@@ -1658,15 +1658,19 @@ export const plateHrV2SourceEvidence = pgTable("plate_hr_v2_source_evidence", {
   evidenceKind: text("evidence_kind").notNull(),
   // Latest game/date the underlying data actually covers (historical_stat only).
   dataThroughAt: timestamp("data_through_at"),
-  // Verified time the evidence could have been known.
-  availableAt: timestamp("available_at").notNull(),
-  // fetched_at | provider_published_at | provider_issued_at | verified_as_of
+  // Verified time the evidence could have been known. NULLABLE (PR4.3): a
+  // provenance-incomplete source has honestly null timestamps — never a
+  // substituted capture moment — and is always training-INELIGIBLE.
+  availableAt: timestamp("available_at"),
+  // fetched_at | provider_published_at | provider_issued_at | verified_as_of | unverified
   availabilitySource: text("availability_source").notNull(),
   // The time the evidence DESCRIBES (weather forecast game time — may be future).
   validForAt: timestamp("valid_for_at"),
   // True when fetched after the prediction moment (excluded unless verified as-of).
   reconstructed: boolean("reconstructed").notNull().default(false),
-  fetchedAt: timestamp("fetched_at").notNull(),
+  // PR4.3: true when the real fetch time / cutoff was unavailable → ineligible.
+  provenanceIncomplete: boolean("provenance_incomplete").notNull().default(false),
+  fetchedAt: timestamp("fetched_at"),
   schemaVersion: text("schema_version").notNull(),
   contentHash: text("content_hash").notNull(),
   payloadRef: text("payload_ref"),
@@ -1697,10 +1701,14 @@ export const plateHrV2PredictionSnapshots = pgTable("plate_hr_v2_prediction_snap
   sourceSnapshotIds: jsonb("source_snapshot_ids").notNull().default([]),
   derivedFeatures: jsonb("derived_features").notNull(),
   contentHash: text("content_hash").notNull(),
-  // The single ≤ first-pitch snapshot chosen for grading (set once, before first pitch).
+  // Authority is assigned at TRAINING-READ time via deterministic latest-≤-first-
+  // pitch selection (PR4.3); the writer always persists false.
   authoritative: boolean("authoritative").notNull().default(false),
-  // Cached result of the evidenceKind-specific eligibility check (nullable until resolved).
+  // Cached result of the write-time eligibility check (the training reader
+  // RECOMPUTES; this is a cross-check, not the authority). Nullable until resolved.
   trainingEligible: boolean("training_eligible"),
+  // PR4.3: write-time block reasons persisted for observability/audit.
+  trainingBlockReasons: jsonb("training_block_reasons").notNull().default([]),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
   // Append-only revisions: a distinct prediction_as_of is a distinct row.

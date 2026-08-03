@@ -205,8 +205,8 @@ function captureRow(over: Partial<PlateHrV2CaptureRow> = {}, evidence?: PlateHrV
 // ── source-specific hashes: game-level id stable across batters; unrelated
 //    batter change never alters a game-level source id ─────────────────────────
 {
-  const evB1 = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterId: "b1", batterStatsRef: "stats:b1", batterSufficientStats: { bbe: 40 } }));
-  const evB2 = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterId: "b2", batterStatsRef: "stats:b2", batterSufficientStats: { bbe: 99 } }));
+  const evB1 = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterId: "b1", batterStatsRef: "stats:b1", batterSufficientStats: { battedBallEvents: 40 } }));
+  const evB2 = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterId: "b2", batterStatsRef: "stats:b2", batterSufficientStats: { battedBallEvents: 99 } }));
   const w1 = buildPlateHrV2SnapshotWrite(captureRow({ batterId: "b1" }, evB1));
   const w2 = buildPlateHrV2SnapshotWrite(captureRow({ batterId: "b2" }, evB2));
   const gameSrc = (w: ReturnType<typeof buildPlateHrV2SnapshotWrite>, kind: string) => w.sources.find((s) => s.evidenceKind === kind)!.sourceSnapshotId;

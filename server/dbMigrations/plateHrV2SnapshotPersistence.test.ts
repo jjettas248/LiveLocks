@@ -36,13 +36,24 @@ ok(ALL_SQL.includes("CREATE TABLE IF NOT EXISTS PLATE_HR_V2_PREDICTION_SNAPSHOTS
 
 // ── 2. Point-in-time + append-only columns present ────────────────────────────
 ok(ALL_SQL.includes("EVIDENCE_KIND TEXT NOT NULL"), "source_evidence has evidence_kind");
-ok(ALL_SQL.includes("AVAILABLE_AT TIMESTAMP NOT NULL"), "source_evidence has NOT NULL available_at");
 ok(ALL_SQL.includes("AVAILABILITY_SOURCE TEXT NOT NULL"), "source_evidence has availability_source");
 ok(ALL_SQL.includes("DATA_THROUGH_AT TIMESTAMP"), "source_evidence has data_through_at");
 ok(ALL_SQL.includes("VALID_FOR_AT TIMESTAMP"), "source_evidence has valid_for_at (forecast game time)");
 ok(ALL_SQL.includes("RECONSTRUCTED BOOLEAN NOT NULL"), "source_evidence has reconstructed flag");
 ok(ALL_SQL.includes("PREDICTION_AS_OF TIMESTAMP NOT NULL"), "prediction_snapshots has NOT NULL prediction_as_of");
 ok(ALL_SQL.includes("SOURCE_SNAPSHOT_IDS JSONB NOT NULL"), "prediction_snapshots references source ids (not duplicated)");
+
+// ── PR4.3: honest null provenance + provenance flag + block reasons ───────────
+// available_at / fetched_at are NULLABLE (a provenance-incomplete source has null
+// timestamps, never a substituted capture moment). The CREATE must NOT re-add NOT NULL.
+ok(!/AVAILABLE_AT TIMESTAMP NOT NULL/.test(ALL_SQL), "available_at is nullable (never NOT NULL)");
+ok(!/FETCHED_AT TIMESTAMP NOT NULL/.test(ALL_SQL), "fetched_at is nullable (never NOT NULL)");
+ok(ALL_SQL.includes("PROVENANCE_INCOMPLETE BOOLEAN NOT NULL DEFAULT FALSE"), "source_evidence has provenance_incomplete flag");
+ok(ALL_SQL.includes("ADD COLUMN IF NOT EXISTS PROVENANCE_INCOMPLETE"), "self-heal ADD COLUMN for provenance_incomplete");
+ok(ALL_SQL.includes("ALTER COLUMN AVAILABLE_AT DROP NOT NULL"), "self-heal: make available_at nullable");
+ok(ALL_SQL.includes("ALTER COLUMN FETCHED_AT DROP NOT NULL"), "self-heal: make fetched_at nullable");
+ok(ALL_SQL.includes("TRAINING_BLOCK_REASONS JSONB NOT NULL DEFAULT '[]'"), "prediction_snapshots has training_block_reasons");
+ok(ALL_SQL.includes("ADD COLUMN IF NOT EXISTS TRAINING_BLOCK_REASONS"), "self-heal ADD COLUMN for training_block_reasons");
 // PR4.1/4.2: immutable authorized payload stored inline; nullable w/ precise
 // legacy correction (drop default, drop NOT NULL, convert legacy {} → NULL).
 ok(ALL_SQL.includes("AUTHORIZED_PAYLOAD JSONB"), "source_evidence stores the immutable authorized_payload inline");
@@ -72,6 +83,8 @@ const IDEMPOTENT_WITHOUT_IF_NOT_EXISTS = [
   "ALTER COLUMN AUTHORIZED_PAYLOAD DROP DEFAULT",
   "ALTER COLUMN AUTHORIZED_PAYLOAD DROP NOT NULL",
   "SET AUTHORIZED_PAYLOAD = NULL",
+  "ALTER COLUMN AVAILABLE_AT DROP NOT NULL",
+  "ALTER COLUMN FETCHED_AT DROP NOT NULL",
 ];
 for (const statement of PLATE_HR_V2_SNAPSHOT_PERSISTENCE_STATEMENTS) {
   const upper = statement.toUpperCase();
