@@ -19,7 +19,7 @@ import {
   isPredictionSnapshotEligible,
   type EvidenceKind,
   type PlateHrV2EvidenceDescriptor,
-  type SourceEvidenceSnapshot,
+  type ResolvedEligibilitySource,
 } from "./plateHrV2Snapshots";
 
 export interface PlateHrV2SnapshotWrite {
@@ -48,7 +48,12 @@ export const AUTHORIZED_DERIVED_FEATURE_GROUPS: ReadonlySet<string> = new Set([
 
 /** Stable, sorted-key JSON → sha256. Deterministic content hash for a payload. */
 export function canonicalHash(payload: unknown): string {
-  return createHash("sha256").update(stableStringify(payload)).digest("hex").slice(0, 40);
+  return createHash("sha256").update(canonicalJson(payload)).digest("hex").slice(0, 40);
+}
+
+/** Stable, sorted-key JSON string. Canonical serialization used for hashing + cloning. */
+export function canonicalJson(v: unknown): string {
+  return stableStringify(v);
 }
 
 function stableStringify(v: unknown): string {
@@ -68,20 +73,33 @@ export function startOfUtcDay(iso: string): string {
 
 // ── Descriptor assembly (pure) ────────────────────────────────────────────────
 
-// Zone/chase fields are UNAUTHORIZED (PR2) — stripped from any hashed/stored
-// evidence payload so unauthorized zone evidence never influences snapshot
-// identity (PR4.1 #3b).
-const UNAUTHORIZED_SUFFICIENT_STAT_FIELDS: ReadonlySet<string> = new Set([
-  "zoneSwings", "zoneTakes", "chaseSwings", "chaseTakes", "zoneDataAvailable",
+// CLOSED allowlist of authorized sufficient-stat top-level keys. Zone/chase
+// fields are deliberately ABSENT (unauthorized, PR2), and any future/unknown
+// top-level key is dropped rather than captured (PR4.2 #4). The nested values
+// (pitchFamilyStats, pitchTypeExactStats, percentiles) are our own computed
+// numeric structures — deep-cloned below so no live reference survives.
+export const AUTHORIZED_SUFFICIENT_STAT_KEYS: ReadonlySet<string> = new Set([
+  "pitchesSeen", "swings", "whiffs", "calledStrikes", "balls",
+  "paCount", "strikeouts", "walks", "battedBallEvents",
+  "pitchFamilyStats", "pitchTypeExactStats",
+  "evPercentiles", "laPercentiles",
+  "pulledBip", "sprayClassifiedBip", "sourceRowCount",
 ]);
 
-/** Strip unauthorized (zone) fields from a sufficient-stats payload before it is
- * hashed/stored as evidence. Pure; returns a shallow copy. */
-export function authorizedSufficientStatsPayload(raw: unknown): unknown {
-  if (raw == null || typeof raw !== "object") return raw;
+/** Deep-clone through canonical JSON (sorted keys). Drops functions/undefined and
+ * breaks all references, so a later mutation of the original can't change it. */
+export function canonicalClone<T = unknown>(v: unknown): T {
+  return JSON.parse(canonicalJson(v)) as T;
+}
+
+/** Project a sufficient-stats payload through the CLOSED allowlist and deep-clone
+ * it — the immutable, self-contained authorized payload stored inline as evidence
+ * (PR4.2 #4). Unknown/zone top-level keys are excluded. */
+export function authorizedSufficientStatsPayload(raw: unknown): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  if (raw == null || typeof raw !== "object") return out;
   for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-    if (!UNAUTHORIZED_SUFFICIENT_STAT_FIELDS.has(k)) out[k] = v;
+    if (AUTHORIZED_SUFFICIENT_STAT_KEYS.has(k)) out[k] = canonicalClone(v);
   }
   return out;
 }
@@ -134,10 +152,24 @@ export function assemblePlateHrV2EvidenceDescriptors(inp: PlateHrV2EvidenceAssem
     fetchedAtMs: number | null | undefined, cutoffDate: string | null | undefined,
   ) => {
     const payload = authorizedSufficientStatsPayload(rawStats);
-    const fetchedAt = isoOrNull(fetchedAtMs) ?? captured; // real fetch time, else capture moment
+    const realFetchedAt = isoOrNull(fetchedAtMs);
+    const hasProvenance = realFetchedAt != null && cutoffDate != null && cutoffDate !== "";
+    if (hasProvenance) {
+      out.push({
+        provider: "baseball_savant", entityType, entityId, evidenceKind: "historical_stat",
+        fetchedAt: realFetchedAt, availableAt: realFetchedAt, dataThroughAt: cutoffIso(cutoffDate, realFetchedAt), validForAt: null,
+        schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: statsRef,
+        authorizedPayload: payload,
+      });
+      return;
+    }
+    // PR4.2 #1: a historical payload with NO real fetch time / cutoff must
+    // INVALIDATE the prediction, not silently vanish (else weather/lineup/park
+    // could still make it eligible). Emit an explicitly-ineligible source
+    // (reconstructed, no dataThroughAt) — the capture moment is NEVER substituted.
     out.push({
       provider: "baseball_savant", entityType, entityId, evidenceKind: "historical_stat",
-      fetchedAt, availableAt: fetchedAt, dataThroughAt: cutoffIso(cutoffDate, fetchedAt), validForAt: null,
+      fetchedAt: captured, availableAt: captured, dataThroughAt: null, validForAt: null,
       schemaVersion: inp.schemaVersion, contentHash: canonicalHash(payload), payloadRef: statsRef,
       authorizedPayload: payload,
     });
@@ -177,11 +209,15 @@ export function assemblePlateHrV2EvidenceDescriptors(inp: PlateHrV2EvidenceAssem
   return out;
 }
 
-function sourceId(d: PlateHrV2EvidenceDescriptor): string {
-  // Content + entity + kind — shared game/venue evidence with identical content
-  // yields an identical id (append-only dedup); a batter change never alters a
-  // game-level source id.
-  return `plate-hr-v2-src:${d.entityType}:${d.entityId}:${d.evidenceKind}:${d.contentHash}`;
+function sourceId(d: PlateHrV2EvidenceDescriptor, contentHash: string): string {
+  // provider + entity + kind + dataThroughAt + schemaVersion + contentHash
+  // (PR4.2 #3). Identical content across different cutoffs or schema versions
+  // mints DISTINCT immutable rows, so ON CONFLICT DO NOTHING never retains stale
+  // provenance. Shared game/venue evidence (same everything) still dedupes.
+  return [
+    "plate-hr-v2-src", d.provider, d.entityType, d.entityId, d.evidenceKind,
+    d.dataThroughAt ?? "none", d.schemaVersion, contentHash,
+  ].join(":");
 }
 
 function predictionId(gamePk: string, batterId: string, featureVersion: string, predictionAsOfIso: string): string {
@@ -202,12 +238,16 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
 
   const sources: InsertPlateHrV2SourceEvidence[] = [];
   const sourceIds: string[] = [];
-  const resolved = new Map<string, Pick<SourceEvidenceSnapshot, "evidenceKind" | "dataThroughAt" | "availableAt" | "validForAt" | "reconstructed">>();
+  const resolved = new Map<string, ResolvedEligibilitySource>();
 
   for (const d of row.evidence) {
     const availableAtMs = Date.parse(d.availableAt);
     const reconstructed = Number.isFinite(availableAtMs) && Number.isFinite(predictionAsOfMs) && availableAtMs > predictionAsOfMs;
-    const id = sourceId(d);
+    const payload = (d.authorizedPayload ?? {}) as Record<string, unknown>;
+    // PR4.2 #2: the builder RECOMPUTES the content hash from the stored payload,
+    // so the persisted contentHash always agrees with the persisted payload.
+    const contentHash = canonicalHash(payload);
+    const id = sourceId(d, contentHash);
     sources.push({
       sourceSnapshotId: id,
       provider: d.provider,
@@ -221,9 +261,9 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
       reconstructed,
       fetchedAt: new Date(d.fetchedAt),
       schemaVersion: d.schemaVersion,
-      contentHash: d.contentHash,
+      contentHash,
       payloadRef: d.payloadRef,
-      authorizedPayload: (d.authorizedPayload ?? {}) as Record<string, unknown>,
+      authorizedPayload: payload,
     });
     if (!sourceIds.includes(id)) sourceIds.push(id);
     resolved.set(id, {
@@ -232,6 +272,8 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
       availableAt: d.availableAt,
       validForAt: d.validForAt,
       reconstructed,
+      authorizedPayload: payload,
+      contentHash,
     });
   }
 
@@ -244,7 +286,7 @@ export function buildPlateHrV2SnapshotWrite(row: PlateHrV2CaptureRow): PlateHrV2
   const eligibility = isPredictionSnapshotEligible(
     { predictionAsOf: predictionAsOfIso, firstPitchTime: row.firstPitchTimeIso, sourceSnapshotIds: sourceIds },
     resolved,
-    { requireKnownFirstPitch: true },
+    { requireKnownFirstPitch: true, hashPayload: canonicalHash },
   );
 
   const sortedIds = [...sourceIds].sort();

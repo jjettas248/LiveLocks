@@ -200,13 +200,26 @@ export interface PredictionEligibilityResult {
  *      missing source is never silently ignored), and
  *   3. every resolved source is itself eligible (per evidenceKind).
  */
+/** A resolved source for eligibility. Carries the stored authorized payload +
+ * contentHash so a training reader can re-verify payload↔hash agreement for
+ * legacy/corrupted rows (PR4.2 #2), not just trust a build-time check. */
+export type ResolvedEligibilitySource = Pick<
+  SourceEvidenceSnapshot,
+  "evidenceKind" | "dataThroughAt" | "availableAt" | "validForAt" | "reconstructed"
+> & { authorizedPayload?: unknown; contentHash?: string };
+
+export type ResolvedSourceMap = ReadonlyMap<string, ResolvedEligibilitySource>;
+
 export function isPredictionSnapshotEligible(
   prediction: Pick<PredictionSnapshot, "predictionAsOf" | "firstPitchTime" | "sourceSnapshotIds">,
-  resolvedSources: ReadonlyMap<
-    string,
-    Pick<SourceEvidenceSnapshot, "evidenceKind" | "dataThroughAt" | "availableAt" | "validForAt" | "reconstructed">
-  >,
-  opts: { verifiedAsOfRetrieval?: boolean; requireKnownFirstPitch?: boolean } = {},
+  resolvedSources: ResolvedSourceMap,
+  opts: {
+    verifiedAsOfRetrieval?: boolean;
+    requireKnownFirstPitch?: boolean;
+    /** When provided, every source must have a non-null authorizedPayload whose
+     * canonical hash equals its contentHash — else the source is ineligible. */
+    hashPayload?: (payload: unknown) => string;
+  } = {},
 ): PredictionEligibilityResult {
   const reasons: string[] = [];
   const pAsOf = ms(prediction.predictionAsOf);
@@ -228,6 +241,16 @@ export function isPredictionSnapshotEligible(
     }
     const r = isSourceEvidenceEligible(src, prediction.predictionAsOf, prediction.firstPitchTime, opts);
     if (!r.eligible) reasons.push(`source_ineligible:${id}:${r.reason}`);
+    // PR4.2 #2: payload↔hash validation (write-time and read-time). A null
+    // payload (e.g. a legacy {}→NULL row) or a hash mismatch (corruption) fails
+    // the source closed.
+    if (opts.hashPayload) {
+      if (src.authorizedPayload == null) {
+        reasons.push(`source_payload_missing:${id}`);
+      } else if (src.contentHash == null || opts.hashPayload(src.authorizedPayload) !== src.contentHash) {
+        reasons.push(`source_payload_hash_mismatch:${id}`);
+      }
+    }
   }
 
   return { eligible: reasons.length === 0, reasons };

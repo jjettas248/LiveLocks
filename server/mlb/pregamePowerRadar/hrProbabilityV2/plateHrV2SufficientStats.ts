@@ -37,6 +37,7 @@
 
 import { getPitchFamily } from "../../pitchTypeNormalizer";
 import { computeExactPitchStats, type PlateHrV2ExactPitchStats, type ExactPitchEntityType } from "./exactPitchStats";
+import { parseOptionalNumber, isRecognizedBbType, isValidExitVelocity, isValidLaunchAngle, isValidXslgOnContact } from "./statParsers";
 
 type PitchFamily = "fastball" | "breaking" | "offspeed";
 
@@ -108,18 +109,7 @@ const WALK_EVENTS = new Set(["walk", "intent_walk"]);
 const IN_ZONE_CODES = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9]);
 const CHASE_ZONE_CODES = new Set([11, 12, 13, 14]);
 
-function safeNum(v: unknown): number | null {
-  if (v == null) return null;
-  // CSV missing cells are "" — Number("") is 0, which would corrupt denominators.
-  if (typeof v === "string") {
-    const t = v.trim();
-    if (t === "" || t.toLowerCase() === "null") return null;
-    const n = Number(t);
-    return Number.isFinite(n) ? n : null;
-  }
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
+const safeNum = parseOptionalNumber;
 
 function percentile(sorted: number[], p: number): number | null {
   if (sorted.length === 0) return null;
@@ -246,14 +236,14 @@ export function computePlateHrV2SufficientStats(
       if (WALK_EVENTS.has(events)) walks++;
     }
 
-    const bbType = (row["bb_type"] ?? "").trim();
-    if (!bbType) continue;
+    // Count a BBE only for a RECOGNIZED bb_type (blank/unknown never counts).
+    if (!isRecognizedBbType(row["bb_type"])) continue;
     battedBallEvents++;
 
     const family = getPitchFamily(row["pitch_type"]) as PitchFamily | "other";
     if (family !== "other") {
       const xslg = safeNum(row["estimated_slg_using_speedangle"]);
-      if (xslg != null && xslg >= 0 && xslg <= 4.0) {
+      if (isValidXslgOnContact(xslg)) {
         pitchFamilyStats[family].xslgSum += xslg;
         pitchFamilyStats[family].xslgN++;
       }
@@ -261,8 +251,8 @@ export function computePlateHrV2SufficientStats(
 
     const ev = safeNum(row["launch_speed"]);
     const la = safeNum(row["launch_angle"]);
-    if (ev != null && ev > 0 && ev <= 130) evValues.push(ev);
-    if (la != null && ev != null && ev > 0 && ev <= 130) laValues.push(la);
+    if (isValidExitVelocity(ev)) evValues.push(ev);
+    if (isValidExitVelocity(ev) && isValidLaunchAngle(la)) laValues.push(la);
 
     const hcx = safeNum(row["hc_x"]);
     const hcy = safeNum(row["hc_y"]);

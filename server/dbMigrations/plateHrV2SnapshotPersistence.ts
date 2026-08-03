@@ -37,14 +37,32 @@ const PLATE_HR_V2_SOURCE_EVIDENCE = `
     schema_version TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     payload_ref TEXT,
-    authorized_payload JSONB NOT NULL DEFAULT '{}',
+    -- NULLABLE (PR4.2 #3): null payload → training-ineligible; never certified {}.
+    authorized_payload JSONB,
     created_at TIMESTAMP DEFAULT NOW()
   );
 `;
-// PR4.1: self-heal for any source-evidence table created before authorized_payload.
-const PLATE_HR_V2_SOURCE_EVIDENCE_SELF_HEAL = `
+// PR4.2 #3: precise legacy correction. Add the column if missing (nullable, no
+// default); then remove any prior NOT NULL / '{}' default and convert legacy '{}'
+// payloads to NULL so they cannot be certified as valid evidence. All statements
+// are non-destructive (no DROP TABLE/COLUMN, TRUNCATE, DELETE, RENAME, or TYPE
+// change) and idempotent (safe to re-run).
+const PLATE_HR_V2_SOURCE_EVIDENCE_ADD_PAYLOAD = `
   ALTER TABLE plate_hr_v2_source_evidence
-    ADD COLUMN IF NOT EXISTS authorized_payload JSONB NOT NULL DEFAULT '{}';
+    ADD COLUMN IF NOT EXISTS authorized_payload JSONB;
+`;
+const PLATE_HR_V2_SOURCE_EVIDENCE_DROP_PAYLOAD_DEFAULT = `
+  ALTER TABLE plate_hr_v2_source_evidence
+    ALTER COLUMN authorized_payload DROP DEFAULT;
+`;
+const PLATE_HR_V2_SOURCE_EVIDENCE_DROP_PAYLOAD_NOTNULL = `
+  ALTER TABLE plate_hr_v2_source_evidence
+    ALTER COLUMN authorized_payload DROP NOT NULL;
+`;
+const PLATE_HR_V2_SOURCE_EVIDENCE_NULL_LEGACY_PAYLOAD = `
+  UPDATE plate_hr_v2_source_evidence
+    SET authorized_payload = NULL
+    WHERE authorized_payload = '{}'::jsonb;
 `;
 const PLATE_HR_V2_SOURCE_EVIDENCE_ENTITY_IDX = `
   CREATE INDEX IF NOT EXISTS plate_hr_v2_source_evidence_entity_idx
@@ -95,7 +113,10 @@ const PLATE_HR_V2_PREDICTION_SNAPSHOTS_PREDICTION_AS_OF_IDX = `
 
 export const PLATE_HR_V2_SNAPSHOT_PERSISTENCE_STATEMENTS: readonly string[] = [
   PLATE_HR_V2_SOURCE_EVIDENCE,
-  PLATE_HR_V2_SOURCE_EVIDENCE_SELF_HEAL,
+  PLATE_HR_V2_SOURCE_EVIDENCE_ADD_PAYLOAD,
+  PLATE_HR_V2_SOURCE_EVIDENCE_DROP_PAYLOAD_DEFAULT,
+  PLATE_HR_V2_SOURCE_EVIDENCE_DROP_PAYLOAD_NOTNULL,
+  PLATE_HR_V2_SOURCE_EVIDENCE_NULL_LEGACY_PAYLOAD,
   PLATE_HR_V2_SOURCE_EVIDENCE_ENTITY_IDX,
   PLATE_HR_V2_SOURCE_EVIDENCE_KIND_IDX,
   PLATE_HR_V2_SOURCE_EVIDENCE_AVAILABLE_AT_IDX,

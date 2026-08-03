@@ -20,6 +20,10 @@
 // never fabricated). Unknown opponent hand → "U" bucket.
 
 import { normalizePitchTypeCode, type CanonicalPitchType } from "../../pitchTypeNormalizer";
+import {
+  parseOptionalNumber, isRecognizedBbType, isValidLaunchAngle, isValidExitVelocity,
+  isValidXslgOnContact, isValidXwobaOnContact,
+} from "./statParsers";
 
 export type OpponentHand = "L" | "R" | "U";
 export type ExactPitchEntityType = "batter" | "pitcher";
@@ -48,20 +52,6 @@ const SWING_DESC = new Set([
   "foul_tip", "foul_bunt", "missed_bunt", "bunt_foul_tip",
 ]);
 const WHIFF_DESC = new Set(["swinging_strike", "swinging_strike_blocked", "missed_bunt"]);
-
-function safeNum(v: unknown): number | null {
-  if (v == null) return null;
-  // CSV missing cells are "" — Number("") is 0, which would corrupt denominators
-  // (a blank LA/xSLG must NOT count). Treat empty/whitespace/"null" as absent.
-  if (typeof v === "string") {
-    const t = v.trim();
-    if (t === "" || t.toLowerCase() === "null") return null;
-    const n = Number(t);
-    return Number.isFinite(n) ? n : null;
-  }
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 function hand(v: unknown): OpponentHand {
   const s = (v == null ? "" : String(v)).trim().toUpperCase();
@@ -122,14 +112,14 @@ export function computeExactPitchStats(
       if (events === "home_run") stat.hrCount++;
     }
 
-    const bbType = (row["bb_type"] ?? "").trim();
-    if (!bbType) continue;
+    // Count a BBE only for a RECOGNIZED bb_type (blank/unknown never counts).
+    if (!isRecognizedBbType(row["bb_type"])) continue;
     stat.bbeCount++;
 
-    const ev = safeNum(row["launch_speed"]);
-    const la = safeNum(row["launch_angle"]);
-    const measurable = ev != null && ev > 0 && ev <= 130 && la != null;
-    if (!measurable) continue;
+    const ev = parseOptionalNumber(row["launch_speed"]);
+    const la = parseOptionalNumber(row["launch_angle"]);
+    // Quality BBE requires a valid EV AND a physically valid launch angle.
+    if (!isValidExitVelocity(ev) || !isValidLaunchAngle(la)) continue;
     stat.qualityBbeCount++;
 
     // Barrel PROXY (EV≥98 & LA∈[20,35]) — the official launch_speed_angle==6
@@ -137,13 +127,13 @@ export function computeExactPitchStats(
     // is qualityBbeCount.
     if (ev >= 98 && la >= 20 && la <= 35) stat.barrelCount++;
 
-    const xslg = safeNum(row["estimated_slg_using_speedangle"]);
-    if (xslg != null && xslg >= 0 && xslg <= 4.0) {
+    const xslg = parseOptionalNumber(row["estimated_slg_using_speedangle"]);
+    if (isValidXslgOnContact(xslg)) {
       stat.xslgContactSum += xslg;
       stat.xslgContactN++;
     }
-    const xwoba = safeNum(row["estimated_woba_using_speedangle"]);
-    if (xwoba != null && xwoba >= 0 && xwoba <= 3.0) {
+    const xwoba = parseOptionalNumber(row["estimated_woba_using_speedangle"]);
+    if (isValidXwobaOnContact(xwoba)) {
       stat.xwobaContactSum += xwoba;
       stat.xwobaContactN++;
     }

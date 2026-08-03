@@ -9,6 +9,7 @@ import {
   computePlateHrV2SufficientStats,
   type PlateHrV2SufficientStatsRaw,
 } from "./pregamePowerRadar/hrProbabilityV2/plateHrV2SufficientStats";
+import { parseOptionalNumber, isRecognizedBbType } from "./pregamePowerRadar/hrProbabilityV2/statParsers";
 
 export interface BaseballSavantData {
   exitVelocity: number | null;
@@ -116,11 +117,10 @@ const savantCache = new Map<string, { data: BaseballSavantData; fetchedAt: numbe
 let savantColumnsLogged = false;
 const SAVANT_TTL = 4 * 60 * 60 * 1000; // 4 hours — season-level stats change slowly
 
-function safeNum(v: unknown): number | null {
-  if (v == null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
+// PR4.2: delegate to the shared blank-safe parser so "" / whitespace / "null"
+// never become numeric 0 (which corrupted denominators — e.g. blank xSLG counted
+// as 0 and inflated xslgN/bbeSample). One parser across all Savant aggregators.
+const safeNum = parseOptionalNumber;
 
 // Phase 2 overlay aggregates derived from the per-pitch Statcast CSV
 // (`type=details`). Pure over already-fetched rows (no I/O) — unit-testable.
@@ -246,8 +246,9 @@ export function aggregateBatterPitchAndContact(
     const ev = safeNum(row["launch_speed"]);
     if (ev != null && ev > 0 && ev <= 130 && (maxEV == null || ev > maxEV)) maxEV = ev;
 
-    const bbType = (row["bb_type"] ?? "").trim();
-    if (!bbType) continue; // BBE-only aggregates below
+    // PR4.2: count a BBE only for a RECOGNIZED bb_type (blank/unknown never
+    // inflates xslgN → bbeSample). BBE-only aggregates below.
+    if (!isRecognizedBbType(row["bb_type"])) continue;
 
     if (family !== "other") {
       const xslg = safeNum(row["estimated_slg_using_speedangle"]);

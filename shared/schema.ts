@@ -1671,8 +1671,10 @@ export const plateHrV2SourceEvidence = pgTable("plate_hr_v2_source_evidence", {
   contentHash: text("content_hash").notNull(),
   payloadRef: text("payload_ref"),
   // Immutable authorized payload this row hashes over (zone fields stripped).
-  // Self-contained, content-addressed — never a pointer to a mutable row (PR4.1).
-  authorizedPayload: jsonb("authorized_payload").notNull().default({}),
+  // Self-contained, content-addressed — never a pointer to a mutable row.
+  // NULLABLE (PR4.2 #3): a null payload (e.g. a legacy row) is training-INELIGIBLE
+  // and never certified as `{}`; every new write supplies a verified non-null payload.
+  authorizedPayload: jsonb("authorized_payload"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
   entityIdx: index("plate_hr_v2_source_evidence_entity_idx").on(table.entityType, table.entityId),

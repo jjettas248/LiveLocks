@@ -36,8 +36,11 @@ function assemblyInput(over: Partial<Parameters<typeof assemblePlateHrV2Evidence
   return {
     gamePk: GAME_PK, batterId: "b1", pitcherId: "p1",
     capturedAtIso: CAPTURED, firstPitchIso: FIRST_PITCH, schemaVersion: "v1",
-    batterSufficientStats: { bbe: 40, barrels: 6 }, batterStatsRef: "stats:b1",
-    pitcherSufficientStats: { bf: 300 }, pitcherStatsRef: "stats:p1",
+    batterSufficientStats: { battedBallEvents: 40, sourceRowCount: 200 }, batterStatsRef: "stats:b1",
+    // Real Savant provenance (required for historical evidence to be eligible).
+    batterFetchedAtMs: Date.parse(CAPTURED), batterDataThroughDate: "2026-07-01",
+    pitcherSufficientStats: { battedBallEvents: 120, sourceRowCount: 500 }, pitcherStatsRef: "stats:p1",
+    pitcherFetchedAtMs: Date.parse(CAPTURED), pitcherDataThroughDate: "2026-07-01",
     weather: { available: true, temperatureF: 78, windSpeedMph: 8, windDirection: "out", isIndoors: false },
     lineupPosted: true,
     park: { venueResolved: true, payload: { parkHrFactorGeneric: 1.1 } },
@@ -86,12 +89,12 @@ function captureRow(over: Partial<PlateHrV2CaptureRow> = {}, evidence?: PlateHrV
 
 // ── PR4.1: zone stripped from hashed/stored evidence payload ─────────────────
 {
-  const withZone = { bbe: 40, barrels: 6, zoneSwings: 12, zoneTakes: 3, chaseSwings: 5, chaseTakes: 8, zoneDataAvailable: true };
+  const withZone = { battedBallEvents: 40, sourceRowCount: 200, zoneSwings: 12, zoneTakes: 3, chaseSwings: 5, chaseTakes: 8, zoneDataAvailable: true };
   const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: withZone }));
   const hist = d.find((x) => x.entityType === "batter")!;
   const payload = hist.authorizedPayload as Record<string, unknown>;
   ok(!("zoneSwings" in payload) && !("chaseSwings" in payload) && !("zoneDataAvailable" in payload), "zone/chase fields stripped from evidence payload");
-  ok("bbe" in payload && "barrels" in payload, "authorized fields retained in evidence payload");
+  ok("battedBallEvents" in payload && "sourceRowCount" in payload, "authorized fields retained in evidence payload");
   ok(hist.contentHash === canonicalHash(payload), "contentHash is over the AUTHORIZED (zone-stripped) payload");
 }
 
@@ -106,11 +109,64 @@ function captureRow(over: Partial<PlateHrV2CaptureRow> = {}, evidence?: PlateHrV
   ok(hist.dataThroughAt === "2026-07-01T00:00:00.000Z", "dataThroughAt uses the real query cutoff date");
 }
 
+// ── PR4.2: payload present but provenance MISSING → prediction ineligible ─────
+{
+  // Batter historical payload exists, but no real fetchedAt / cutoff.
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({
+    batterFetchedAtMs: null, batterDataThroughDate: null,
+  }));
+  const hist = d.find((x) => x.entityType === "batter");
+  ok(hist != null, "historical source is still emitted (not silently omitted)");
+  ok(hist!.dataThroughAt == null, "provenance-less historical source has no dataThroughAt (marked ineligible)");
+  const w = buildPlateHrV2SnapshotWrite(captureRow({}, d));
+  ok(w.prediction.trainingEligible === false, "a historical payload without real provenance INVALIDATES the prediction");
+}
+
+// ── PR4.2: source id is cutoff- and schema-sensitive ─────────────────────────
+{
+  const base = assemblyInput();
+  const idFor = (over: Partial<typeof base>) => {
+    const d = assemblePlateHrV2EvidenceDescriptors({ ...base, ...over });
+    return buildPlateHrV2SnapshotWrite(captureRow({}, d)).sources.find((s) => s.entityType === "batter")!.sourceSnapshotId;
+  };
+  const idA = idFor({});
+  const idSame = idFor({});
+  const idCutoff = idFor({ batterDataThroughDate: "2026-06-30" });
+  const idSchema = idFor({ schemaVersion: "v2" });
+  ok(idA === idSame, "same descriptor → same source id (idempotent)");
+  ok(idA !== idCutoff, "same payload, different cutoff → different source id");
+  ok(idA !== idSchema, "same payload, different schema version → different source id");
+}
+
+// ── PR4.2: authorized payload is closed (unknown fields excluded) + deep-cloned ─
+{
+  const raw: Record<string, unknown> = { bbe: 40, barrels: 6, zoneSwings: 9, someFutureField: 1, pitchFamilyStats: { fastball: { pitches: 10 } } };
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: raw }));
+  const payload = d.find((x) => x.entityType === "batter")!.authorizedPayload as Record<string, unknown>;
+  ok(!("zoneSwings" in payload), "zone field excluded (closed allowlist)");
+  ok(!("someFutureField" in payload), "unknown/future top-level field excluded (closed, not deny)");
+  ok(!("bbe" in payload) && !("barrels" in payload), "non-allowlisted scalar keys excluded (bbe/barrels are not sufficient-stat keys)");
+  ok("pitchFamilyStats" in payload, "allowlisted nested structure retained");
+  // Deep-clone immutability: mutating the original nested input cannot change the payload.
+  (raw.pitchFamilyStats as any).fastball.pitches = 999;
+  ok(((payload.pitchFamilyStats as any).fastball.pitches) === 10, "mutating original nested input after assembly cannot change the authorized payload");
+}
+
+// ── PR4.2: builder recomputes hash; a mismatched supplied hash is overridden ──
+{
+  const d = assemblePlateHrV2EvidenceDescriptors(assemblyInput());
+  const tampered = d.map((x) => ({ ...x, contentHash: "WRONGHASH" }));
+  const w = buildPlateHrV2SnapshotWrite(captureRow({}, tampered));
+  const src = w.sources.find((s) => s.entityType === "batter")!;
+  ok(src.contentHash === canonicalHash(src.authorizedPayload), "builder recomputes contentHash from the stored payload (ignores a wrong supplied hash)");
+  ok(w.prediction.trainingEligible === true, "recomputed-hash sources remain eligible");
+}
+
 // ── PR4.1: same content idempotent; changed content → new immutable id ────────
 {
-  const a = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { bbe: 40 } }));
-  const aSame = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { bbe: 40 } }));
-  const aDiff = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { bbe: 41 } }));
+  const a = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { battedBallEvents: 40 } }));
+  const aSame = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { battedBallEvents: 40 } }));
+  const aDiff = assemblePlateHrV2EvidenceDescriptors(assemblyInput({ batterSufficientStats: { battedBallEvents: 41 } }));
   const w = (d: PlateHrV2EvidenceDescriptor[]) => buildPlateHrV2SnapshotWrite(captureRow({}, d)).sources.find((s) => s.entityType === "batter")!.sourceSnapshotId;
   ok(w(a) === w(aSame), "same content → same immutable source id (idempotent)");
   ok(w(a) !== w(aDiff), "changed same-day content → new immutable source id");

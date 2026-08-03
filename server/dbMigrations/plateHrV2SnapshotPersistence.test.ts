@@ -43,12 +43,16 @@ ok(ALL_SQL.includes("VALID_FOR_AT TIMESTAMP"), "source_evidence has valid_for_at
 ok(ALL_SQL.includes("RECONSTRUCTED BOOLEAN NOT NULL"), "source_evidence has reconstructed flag");
 ok(ALL_SQL.includes("PREDICTION_AS_OF TIMESTAMP NOT NULL"), "prediction_snapshots has NOT NULL prediction_as_of");
 ok(ALL_SQL.includes("SOURCE_SNAPSHOT_IDS JSONB NOT NULL"), "prediction_snapshots references source ids (not duplicated)");
-// PR4.1: immutable authorized payload stored inline + self-heal.
+// PR4.1/4.2: immutable authorized payload stored inline; nullable w/ precise
+// legacy correction (drop default, drop NOT NULL, convert legacy {} → NULL).
 ok(ALL_SQL.includes("AUTHORIZED_PAYLOAD JSONB"), "source_evidence stores the immutable authorized_payload inline");
-ok(
-  ALL_SQL.includes("ALTER TABLE PLATE_HR_V2_SOURCE_EVIDENCE") && ALL_SQL.includes("ADD COLUMN IF NOT EXISTS AUTHORIZED_PAYLOAD JSONB"),
-  "source_evidence has a self-heal ALTER for authorized_payload",
-);
+ok(ALL_SQL.includes("ADD COLUMN IF NOT EXISTS AUTHORIZED_PAYLOAD JSONB"), "self-heal ADD COLUMN for authorized_payload");
+ok(ALL_SQL.includes("ALTER COLUMN AUTHORIZED_PAYLOAD DROP DEFAULT"), "legacy correction: drop the {} default");
+ok(ALL_SQL.includes("ALTER COLUMN AUTHORIZED_PAYLOAD DROP NOT NULL"), "legacy correction: drop NOT NULL (nullable)");
+ok(/UPDATE PLATE_HR_V2_SOURCE_EVIDENCE\s+SET AUTHORIZED_PAYLOAD = NULL\s+WHERE AUTHORIZED_PAYLOAD = '\{\}'/.test(ALL_SQL), "legacy correction: convert {} → NULL");
+// The CREATE must NOT re-introduce a NOT NULL / DEFAULT '{}' on authorized_payload.
+ok(!/AUTHORIZED_PAYLOAD JSONB NOT NULL/.test(ALL_SQL), "authorized_payload is nullable (never NOT NULL)");
+ok(!/AUTHORIZED_PAYLOAD JSONB[^,\n]*DEFAULT/.test(ALL_SQL), "authorized_payload column def has no {} default");
 
 // ── 3. Append-only composite uniqueness index ────────────────────────────────
 ok(
@@ -59,18 +63,34 @@ ok(
 ok(ALL_SQL.includes("PLATE_HR_V2_SOURCE_EVIDENCE_ENTITY_IDX"), "source_evidence entity index exists");
 ok(ALL_SQL.includes("PLATE_HR_V2_PREDICTION_SNAPSHOTS_PREDICTION_AS_OF_IDX"), "prediction_snapshots prediction_as_of index exists");
 
-// ── 4. Every statement is idempotent (IF NOT EXISTS) ─────────────────────────
+// ── 4. Every statement is idempotent / safely re-runnable ────────────────────
+// CREATE TABLE/INDEX + ADD COLUMN are IF NOT EXISTS-guarded. The three PR4.2
+// corrective statements are inherently idempotent: ALTER COLUMN DROP DEFAULT /
+// DROP NOT NULL are no-ops once applied, and the {}→NULL UPDATE matches nothing
+// after its first run.
+const IDEMPOTENT_WITHOUT_IF_NOT_EXISTS = [
+  "ALTER COLUMN AUTHORIZED_PAYLOAD DROP DEFAULT",
+  "ALTER COLUMN AUTHORIZED_PAYLOAD DROP NOT NULL",
+  "SET AUTHORIZED_PAYLOAD = NULL",
+];
 for (const statement of PLATE_HR_V2_SNAPSHOT_PERSISTENCE_STATEMENTS) {
-  ok(statement.toUpperCase().includes("IF NOT EXISTS"), `IF NOT EXISTS-guarded: ${statement.trim().slice(0, 60)}...`);
+  const upper = statement.toUpperCase();
+  const guarded = upper.includes("IF NOT EXISTS") || IDEMPOTENT_WITHOUT_IF_NOT_EXISTS.some((s) => upper.includes(s));
+  ok(guarded, `idempotent / re-runnable: ${statement.trim().slice(0, 60)}...`);
 }
 
-// ── 5. No destructive statements ─────────────────────────────────────────────
-ok(!/\bDROP\b/.test(ALL_SQL), "no DROP");
+// ── 5. No destructive statements (constraint corrections are allowed) ────────
+// DROP DEFAULT / DROP NOT NULL are non-destructive column-constraint changes.
+// Truly destructive forms remain banned.
+ok(!/DROP\s+TABLE/.test(ALL_SQL), "no DROP TABLE");
+ok(!/DROP\s+COLUMN/.test(ALL_SQL), "no DROP COLUMN");
+ok(!/DROP\s+INDEX/.test(ALL_SQL), "no DROP INDEX");
 ok(!/\bTRUNCATE\b/.test(ALL_SQL), "no TRUNCATE");
 ok(!/\bDELETE\s+FROM\b/.test(ALL_SQL), "no DELETE FROM");
 ok(!/\bRENAME\b/.test(ALL_SQL), "no RENAME");
 ok(!/ALTER\s+COLUMN[\s\S]*?\bTYPE\b/.test(ALL_SQL), "no destructive ALTER COLUMN ... TYPE");
-ok(!/DROP\s+COLUMN/.test(ALL_SQL), "no DROP COLUMN");
+// The only UPDATE permitted is the targeted legacy {}→NULL correction.
+ok(!/UPDATE\s+(?!PLATE_HR_V2_SOURCE_EVIDENCE\s+SET AUTHORIZED_PAYLOAD = NULL)/.test(ALL_SQL), "no UPDATE other than the {}→NULL legacy correction");
 
 // ── 6. Running twice is byte-identical (idempotent) ──────────────────────────
 {
