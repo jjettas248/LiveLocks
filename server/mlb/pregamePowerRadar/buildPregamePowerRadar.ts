@@ -519,13 +519,32 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           /* lineup-slot split is optional context — ignore failures */
         }
 
+        // Canonical TRUE per-PA ISO (SLG − AVG) for the DISPLAY tag only — the
+        // matchup split matching the opposing pitcher's hand, from real season
+        // split rate stats sharing one AB denominator. Never fed to the score.
+        // Absent split / unknown pitcher hand → fails closed (no elite chip).
+        const isoThrows = opposingPitcher?.throws;
+        const isoSlg = isoThrows === "L" ? batterSplits?.slgVsLHP ?? null : isoThrows === "R" ? batterSplits?.slgVsRHP ?? null : null;
+        const isoAvg = isoThrows === "L" ? batterSplits?.avgVsLHP ?? null : isoThrows === "R" ? batterSplits?.avgVsRHP ?? null : null;
+        const isoAb = isoThrows === "L" ? batterSplits?.abVsLHP ?? null : isoThrows === "R" ? batterSplits?.abVsRHP ?? null : null;
+        const trueIsoInputs: Pick<BatterPowerInputs, "trueIso" | "trueIsoSamplePA" | "trueIsoSplit" | "trueIsoSource"> =
+          isoSlg != null && isoAvg != null
+            ? {
+                trueIso: isoSlg - isoAvg,
+                trueIsoSamplePA: isoAb,
+                trueIsoSplit: isoThrows === "L" ? "vs_lhp" : "vs_rhp",
+                trueIsoSource: "current_split",
+              }
+            : { trueIso: null, trueIsoSamplePA: null, trueIsoSplit: "overall", trueIsoSource: "league_fallback" };
+
         // ── Compute components ────────────────────────────────────────────────
         const powerInputs: BatterPowerInputs = savant
-          ? savantToPowerInputs(savant)
+          ? { ...savantToPowerInputs(savant), ...trueIsoInputs }
           : {
               xISO: null, xSLG: null, barrelRatePct: null, hardHitRatePct: null,
               exitVelocity: null, maxEV: null, flyBallPct: null, hrFBRatioPct: null,
               pullRatePct: null, sweetSpotPct: null, xwOBA: null, battedBallEvents: null,
+              ...trueIsoInputs,
             };
         const batterPower = computeBatterPowerProfile(powerInputs, PLATE_CHAMPION_POLICY.batter);
         // computeBatterPowerProfile's own hasCore check is satisfied by xSLG

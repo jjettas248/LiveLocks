@@ -6,10 +6,15 @@
 
 import type { ComponentScore, PowerDriver } from "./types";
 import { lin, weightedAvg, round1, clamp10 } from "./scoreUtils";
+import { assessIso, resolveIsoTagDisplay, type IsoSource } from "./isoAssessment";
 
 /** Minimal power inputs (mapped from BaseballSavantData by the build layer). */
 export interface BatterPowerInputs {
-  xISO: number | null; // xSLG − xBA
+  // On-contact expected-power PROXY (xSLGcon − xBAcon, ≈0.20–0.30) — the season
+  // Statcast estimate accumulated over batted balls only. It FEEDS THE SCORE (the
+  // champion's backtested composite), but it is NOT true isolated power. The
+  // display ISO tag uses `trueIso` below instead. Do not conflate the two.
+  xISO: number | null;
   xSLG: number | null;
   barrelRatePct: number | null; // barrel% proxy
   hardHitRatePct: number | null;
@@ -24,6 +29,15 @@ export interface BatterPowerInputs {
   // Null when genuinely unknown (e.g. the degraded xBA/xSLG-only fallback,
   // which isn't BIP-rate-based at all) — treated as thin, not full-sample.
   battedBallEvents: number | null;
+  // ── Canonical TRUE per-PA ISO (SLG − AVG) — DISPLAY TAG ONLY, never scored ──
+  // Additive and no-op when absent: an absent/invalid trueIso makes the ISO chip
+  // fail closed (never elite), and leaves score10 and the driver EMISSION (still
+  // governed by `xISO` above) completely unchanged. Sourced from real season/
+  // handedness-split rate stats by the build layer.
+  trueIso?: number | null;
+  trueIsoSamplePA?: number | null;
+  trueIsoSplit?: "vs_lhp" | "vs_rhp" | "overall";
+  trueIsoSource?: IsoSource;
 }
 
 /**
@@ -114,8 +128,34 @@ export function computeBatterPowerProfile(
   const score = clamp10(5 + (rawScore - 5) * shrink);
 
   // Drivers from the strongest present components.
+  //
+  // ISO driver — EMISSION is deliberately unchanged (`sIso >= 6.5`, from the
+  // on-contact proxy that feeds the score), so `positiveDriverCount` and thus the
+  // champion's suppression/publication stay byte-for-byte identical. What the
+  // canonical TRUE-ISO assessment governs is ONLY the label and the display gate:
+  // "Elite Isolated Power" now requires a reliable, matchup-aware true ISO at the
+  // elite boundary; ordinary/thin/missing/fallback power shows no promotional
+  // chip (`displayEligible:false`) while still counting as evidence.
   if (sIso != null && sIso >= 6.5) {
-    drivers.push({ key: "power_iso", label: "Elite Isolated Power", direction: "positive", weight: Math.round(sIso * 10), evidence: `xISO ${inputs.xISO?.toFixed(3)}` });
+    const isoAssessment = assessIso({
+      rawIso: inputs.trueIso ?? null,
+      samplePA: inputs.trueIsoSamplePA ?? null,
+      split: inputs.trueIsoSplit ?? "overall",
+      source: inputs.trueIsoSource ?? (inputs.trueIso != null ? "current_overall" : "league_fallback"),
+    });
+    const isoDisplay = resolveIsoTagDisplay(isoAssessment);
+    drivers.push({
+      key: "power_iso",
+      label: isoDisplay.label,
+      direction: "positive",
+      weight: Math.round(sIso * 10),
+      evidence:
+        isoAssessment.rawIso != null
+          ? `ISO ${isoAssessment.rawIso.toFixed(3)} (${isoAssessment.split}, ${isoAssessment.samplePA} PA)`
+          : `xISO ${inputs.xISO?.toFixed(3)} (on-contact proxy)`,
+      displayEligible: isoDisplay.displayEligible,
+      tier: isoDisplay.tier,
+    });
   }
   if (sBarrel != null && sBarrel >= 6.5) {
     drivers.push({ key: "power_barrel", label: "High Barrel Rate", direction: "positive", weight: Math.round(sBarrel * 10), evidence: `barrel% ${round1(inputs.barrelRatePct ?? 0)}` });

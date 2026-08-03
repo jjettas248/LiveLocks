@@ -1405,7 +1405,10 @@ export async function fetchPitcherHandednessSplits(pitcherId: string): Promise<P
 }
 
 export async function fetchBatterHandednessSplits(batterId: string): Promise<BatterHandednessSplits | null> {
-  const empty: BatterHandednessSplits = { hrRateVsLHP: null, hrRateVsRHP: null, opsVsLHP: null, opsVsRHP: null };
+  const empty: BatterHandednessSplits = {
+    hrRateVsLHP: null, hrRateVsRHP: null, opsVsLHP: null, opsVsRHP: null,
+    slgVsLHP: null, slgVsRHP: null, avgVsLHP: null, avgVsRHP: null, abVsLHP: null, abVsRHP: null,
+  };
   if (!batterId) return null;
   const cached = batterSplitsCache.get(batterId);
   if (cached && Date.now() - cached.fetchedAt < SPLITS_TTL) return cached.data;
@@ -1423,10 +1426,19 @@ export async function fetchBatterHandednessSplits(batterId: string): Promise<Bat
       const hr = safeNum(stat.homeRuns) ?? 0;
       const hrRate = ab >= 30 ? parseFloat((hr / ab).toFixed(4)) : null;
       const ops = safeNum(stat.ops);
+      // True-ISO components from the SAME split row (same AB denominator).
+      const slg = safeNum(stat.slg);
+      const avg = safeNum(stat.avg);
+      const abOrNull = ab > 0 ? ab : null;
       const isLeft = code === "vl" || desc.includes("left");
       const isRight = code === "vr" || desc.includes("right");
-      if (isLeft) { result.hrRateVsLHP = hrRate; result.opsVsLHP = ops; }
-      else if (isRight) { result.hrRateVsRHP = hrRate; result.opsVsRHP = ops; }
+      if (isLeft) {
+        result.hrRateVsLHP = hrRate; result.opsVsLHP = ops;
+        result.slgVsLHP = slg; result.avgVsLHP = avg; result.abVsLHP = abOrNull;
+      } else if (isRight) {
+        result.hrRateVsRHP = hrRate; result.opsVsRHP = ops;
+        result.slgVsRHP = slg; result.avgVsRHP = avg; result.abVsRHP = abOrNull;
+      }
     }
     batterSplitsCache.set(batterId, { data: result, fetchedAt: Date.now() });
     return result;
