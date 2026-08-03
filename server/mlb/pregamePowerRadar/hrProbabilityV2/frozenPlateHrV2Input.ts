@@ -32,6 +32,7 @@ import type {
   Handedness,
   PregameMathInputs,
 } from "../math/mathTypes";
+import type { RecentContactFormInputs } from "./recentContactForm";
 
 /**
  * PR1 contract slot only — no math/ scorer reads this yet (PR3 wires one).
@@ -59,6 +60,10 @@ export interface FrozenPlateHrV2Body {
   market: MarketConfirmationInputs;
   availability: AvailabilitySuppressorInputs;
   contactOpportunity: ContactOpportunityInputs;
+  // PR5 additive shadow slot — no math/ scorer reads this yet (PR6 wires one).
+  // Optional so existing construction sites are unaffected; omitted → the feature
+  // builder emits a neutral all-null group. Never entered into toPregameMathInputs.
+  recentContactForm?: RecentContactFormInputs;
   slateBaselineGameHrProbability: number | null;
 }
 

@@ -201,6 +201,26 @@ export const plateHrV2ContactOpportunityFeaturesSchema = z.object({
 });
 export type PlateHrV2ContactOpportunityFeatures = z.infer<typeof plateHrV2ContactOpportunityFeaturesSchema>;
 
+// ── NEW group (PR5 addition) — stabilized recent-contact form. Additive/shadow:
+// no scorer reads it yet (PR6 wires one). Computed from the real `contact_events`
+// per-BBE stream (EV EWMA, EV90, air%, barrel%) reliability-blended with a season
+// baseline; recentFormPulledAirShare is season-only and recentFormXHrPerContact is
+// always null (no per-event spray/xSLG stream exists). Recent HR count can never
+// contribute. All-null when absent. ──────────────────────────────────────────────
+export const plateHrV2RecentContactFormFeaturesSchema = z.object({
+  recentFormEv: numericLeaf,
+  recentFormEv90: numericLeaf,
+  recentFormAirBallPct: numericLeaf,
+  recentFormBarrelPct: numericLeaf,
+  recentFormPulledAirShare: numericLeaf,
+  recentFormXHrPerContact: numericLeaf,
+  effectiveBbe: numericLeaf,
+  last15Bbe: numericLeaf,
+  reliabilityWeight: numericLeaf,
+  extra: extraLeaves,
+});
+export type PlateHrV2RecentContactFormFeatures = z.infer<typeof plateHrV2RecentContactFormFeaturesSchema>;
+
 // ── Data quality (feature-vector-level summary) — no `extra`, this block IS
 // the escape hatch's own accounting. ────────────────────────────────────────
 export const plateHrV2DataQualityFeaturesSchema = z.object({
@@ -228,6 +248,7 @@ export const plateHrV2DerivedFeatureVectorV1Schema = z.object({
   market: plateHrV2MarketFeaturesSchema,
   availability: plateHrV2AvailabilityFeaturesSchema,
   contactOpportunity: plateHrV2ContactOpportunityFeaturesSchema,
+  recentContactForm: plateHrV2RecentContactFormFeaturesSchema,
   dataQuality: plateHrV2DataQualityFeaturesSchema,
   slateBaselineGameHrProbability: numericLeaf,
 });
@@ -254,6 +275,7 @@ export const plateHrV2FeatureAvailabilityVectorV1Schema = z.object({
   market: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
   availability: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
   contactOpportunity: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
+  recentContactForm: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
 });
 export type PlateHrV2FeatureAvailabilityVectorV1 = z.infer<typeof plateHrV2FeatureAvailabilityVectorV1Schema>;
 

@@ -31,6 +31,7 @@ import type {
 } from "../math/mathTypes";
 import { isPredictionBeforeFirstPitch, buildLeakageWarnings } from "../math/leakageGuard";
 import type { ContactOpportunityInputs } from "./frozenPlateHrV2Input";
+import { neutralRecentContactForm, type RecentContactFormInputs } from "./recentContactForm";
 import {
   PLATE_HR_V2_FEATURES_V1,
   PLATE_HR_V2_RAW_INPUTS_V1,
@@ -74,6 +75,8 @@ export interface PlateHrV2FeatureBuilderInput {
   market: MarketConfirmationInputs;
   availability: AvailabilitySuppressorInputs;
   contactOpportunity: ContactOpportunityInputs;
+  // PR5 additive shadow slot — optional; omitted → a neutral all-null group.
+  recentContactForm?: RecentContactFormInputs;
   slateBaselineGameHrProbability: number | null;
   // ── per-family source freshness ───────────────────────────────────────
   batterPowerMeta?: PlateHrV2SourceMeta;
@@ -160,6 +163,8 @@ export function assemblePlateHrV2FeatureSnapshot(
 ): PlateHrV2FeatureBuilderResult {
   const asOfIso = new Date(input.asOfMs).toISOString();
   const firstPitchIso = input.firstPitchAtMs != null ? new Date(input.firstPitchAtMs).toISOString() : null;
+  // PR5: neutral all-null group when no recent-contact-form input is supplied.
+  const recentContactForm = input.recentContactForm ?? neutralRecentContactForm();
 
   const pitchFamilyLeaves = (family: "fastball" | "breaking" | "offspeed"): PitchFamilyLeaves => {
     const f = input.pitchType.families.find((x) => x.family === family);
@@ -240,6 +245,7 @@ export function assemblePlateHrV2FeatureSnapshot(
     market: { ...input.market, extra: {} },
     availability: { ...input.availability, extra: {} },
     contactOpportunity: { ...input.contactOpportunity, extra: {} },
+    recentContactForm: { ...recentContactForm, extra: {} },
     dataQuality: {
       savantQuality: input.savantQuality,
       venueResolved: input.venueResolved,
@@ -264,6 +270,7 @@ export function assemblePlateHrV2FeatureSnapshot(
     market: leafAvailability(input.market as unknown as Record<string, unknown>),
     availability: leafAvailability(input.availability as unknown as Record<string, unknown>),
     contactOpportunity: leafAvailability(input.contactOpportunity as unknown as Record<string, unknown>),
+    recentContactForm: leafAvailability(recentContactForm as unknown as Record<string, unknown>),
   };
 
   const featureFreshness: PlateHrV2FeatureFreshnessVectorV1 = {
@@ -290,6 +297,7 @@ export function assemblePlateHrV2FeatureSnapshot(
       market: input.market,
       availability: input.availability,
       contactOpportunity: input.contactOpportunity,
+      recentContactForm,
       sufficientStatsRef: input.sufficientStatsRef,
     },
   };
@@ -305,6 +313,7 @@ export function assemblePlateHrV2FeatureSnapshot(
     ...toProvenance("market", input.market as unknown as Record<string, unknown>, "pregame", asOfIso),
     ...toProvenance("availability", input.availability as unknown as Record<string, unknown>, "pregame", asOfIso),
     ...toProvenance("contactOpportunity", input.contactOpportunity as unknown as Record<string, unknown>, "pregame", asOfIso),
+    ...toProvenance("recentContactForm", recentContactForm as unknown as Record<string, unknown>, "season", asOfIso),
   ];
 
   const boundaryOk = isPredictionBeforeFirstPitch(asOfIso, firstPitchIso);

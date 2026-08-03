@@ -63,6 +63,7 @@ export const AUTHORIZED_DERIVED_FEATURE_GROUPS: ReadonlySet<string> = new Set([
   "starterBullpen",
   "availability",
   "contactOpportunity",
+  "recentContactForm",
   "dataQuality",
   "slateBaselineGameHrProbability",
 ]);

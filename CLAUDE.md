@@ -68,6 +68,7 @@ npx tsx client/src/components/mlb/MoundWinCard.test.ts # Mound Radar daily-strip
 npx tsx server/mlb/pregamePowerRadar/diagnostics.test.ts            # Pregame Radar public-visibility predicate (final-but-ungraded stays visible, graded miss hides, postponed hides)
 npx tsx server/mlb/pregamePowerRadar/slateDateRepair.test.ts # Pregame Radar slate-date repair planner (startsAt/gameDate correction, collision detection, no blanket day-shift)
 npx tsx server/mlb/pregamePowerRadar/nearHrRecentForm.test.ts # Pregame Radar near-HR recent-form component (retroactive nearHrContact reuse, recency weighting, consecutive-day bonus, leakage guard)
+npx tsx server/mlb/pregamePowerRadar/hrProbabilityV2/recentContactForm.test.ts # Plate HR V2 (shadow) stabilized recent-contact form — EWMA/EV90/air%/barrel% from the real contact_events stream, reliability-blended with a season baseline (15-BBE regressed, 25–50 > spike), leakage boundary, no HR-count leakage, pulled-air season-only, xHR-per-contact null
 npx tsx server/utils/dateUtils.test.ts               # slateDateET() 6am-ET rollover + toEtDateKey() ET calendar-date conversion invariants
 npx tsx server/dbMigrations/hrRadarResearchPersistence.test.ts       # HR Radar research schema bootstrap idempotence + constraint + no-destructive-SQL guard
 npx tsx server/mlb/hrRadarResearch/hrRadarResearchContracts.test.ts  # HR Radar research Zod contracts (feature/trigger/eligibility/label/artifact/policy) + fail-closed flag parsing

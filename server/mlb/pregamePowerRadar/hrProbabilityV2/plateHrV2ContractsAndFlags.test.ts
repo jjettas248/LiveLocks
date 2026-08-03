@@ -71,6 +71,11 @@ function fullFeatureVectorFixture() {
       kRatePct: null, bbRatePct: null, whiffRatePct: null, contactRatePct: null,
       zoneContactRatePct: null, chaseRatePct: null, ...numericGroup,
     },
+    recentContactForm: {
+      recentFormEv: null, recentFormEv90: null, recentFormAirBallPct: null, recentFormBarrelPct: null,
+      recentFormPulledAirShare: null, recentFormXHrPerContact: null, effectiveBbe: null, last15Bbe: null,
+      reliabilityWeight: null, ...numericGroup,
+    },
     dataQuality: {
       savantQuality: "full", venueResolved: true, pitcherHandResolved: true,
       batterPowerFullyAvailable: true, missingInputs: [], overallQuality: "full",
@@ -108,7 +113,7 @@ function fullFeatureVectorFixture() {
     batterPower: { xISO: { present: true, quality: "full" } },
     batTracking: {}, pitcherVulnerability: {}, pitchType: {}, zoneLocation: {},
     parkWeatherSpray: {}, lineupOpportunity: {}, starterBullpen: {}, market: {},
-    availability: {}, contactOpportunity: {},
+    availability: {}, contactOpportunity: {}, recentContactForm: {},
   };
   ok(plateHrV2FeatureAvailabilityVectorV1Schema.safeParse(availability).success, "availability vector parses");
 
