@@ -10,7 +10,7 @@ Power"** tag, making it useless for comparing targets. Root cause was two layers
 1. **On-contact inflation.** `server/mlb/dataSources.ts` computes `xISOSeason =
    xSLG − xBA` from Statcast `estimated_ba/slg_using_speedangle` accumulated over
    **batted balls only** (non-contact PAs skipped). That yields *on-contact*
-   xBA/xSLG, so `xISO ≈ .20–.30` — ~50% above true per-PA isolated power
+   xBA/xSLG, so `xISO ≈ .20–.30` — ~50% above true per-AB isolated power
    (league ISO ≈ .14).
 2. **Hardcoded label at a low threshold.** `batterPowerProfile.ts` emitted
    `{key:"power_iso", label:"Elite Isolated Power"}` whenever
@@ -24,7 +24,7 @@ The on-contact `xISO` still feeds `score10` unchanged (the champion
 display label + a display gate**, driven by a new canonical assessment.
 
 - **`isoAssessment.ts` (`assessIso`)** — one pure, typed classifier for TRUE
-  per-PA ISO. It never feeds the score.
+  per-AB ISO. It never feeds the score.
 - **ISO formula & units.** Canonical decimal scale (`SLG − AVG`), or from counting
   stats on ONE denominator `(2B + 2·3B + 3·HR) / AB`. Stats from different
   samples/denominators are never combined.
@@ -32,8 +32,13 @@ display label + a display gate**, driven by a new canonical assessment.
   opposing pitcher's hand (`current_split`) from real season split rate stats. No
   usable split → the tag fails closed; a `league_fallback` source can never be
   elite-eligible. An overall/prior source never masquerades as a hand split.
-- **Shrinkage / reliability.** `weight = samplePA / (samplePA +
-  ISO_STABILIZATION_PA)`; `adjustedIso = weight·rawIso + (1−weight)·LEAGUE_PRIOR_ISO`.
+- **Sample denominator.** The sample is **at-bats (AB)** from the matchup
+  handedness split (Stats API `stat.atBats`) — never manufactured plate
+  appearances. AB is the correct denominator for ISO (SLG and AVG are both
+  per-AB) and is also used as the reliability/shrinkage denominator (no distinct
+  reliability denominator). Genuine PA exists on the same row but is not used.
+- **Shrinkage / reliability.** `weight = sampleAB / (sampleAB +
+  ISO_STABILIZATION_AB)`; `adjustedIso = weight·rawIso + (1−weight)·LEAGUE_PRIOR_ISO`.
   `reliability = weight`.
 - **Tiers (on the adjusted ISO; absolute thresholds).** ELITE ≥ .240, STRONG ≥
   .200, AVERAGE ≥ .130, else WEAK; invalid/insufficient → UNAVAILABLE. No stable
@@ -82,7 +87,30 @@ restore the single `power_iso` push in `batterPowerProfile.ts` to the prior
 unconditional `"Elite Isolated Power"` label — the score path was never touched, so
 no score/goldmaster rebaseline is involved.
 
+## Pre-deployment population gate (real-data validation)
+
+Synthetic fixtures cannot prove selectivity on the real hitter distribution.
+`scripts/plateIsoPopulationAudit.ts` is a read-only gate that runs the canonical
+`assessIso` classifier over a **real** hitter export and fails (non-zero exit)
+when Elite prevalence exceeds the cap:
+
+```
+npx tsx scripts/plateIsoPopulationAudit.ts <export.json> [--max-elite-pct 25] [--json]
+```
+
+The export is a JSON array of `{ ab, slg, avg | iso, split?, source? }` rows (AB is
+the ISO denominator). Wire this into CI or run it in an authorized environment
+with a real Stats API / DB export before deploying an ISO-classifier change. It
+imports only the pure classifier — no engine, bus, or storage access.
+
+**Status: real-population validation remains UNEXECUTED in the build sandbox** —
+the live Stats API is blocked by the proxy and no `DATABASE_URL` is configured, so
+only an MLB-calibrated deterministic population (matching the 2024 qualified-hitter
+ISO percentile curve) has been run here. It must be executed against a real export
+as a pre-deployment gate.
+
 ## Tests
 
 - `server/mlb/pregamePowerRadar/isoAssessment.test.ts`
 - `server/mlb/pregamePowerRadar/isoTagSelection.test.ts`
+- `server/mlb/pregamePowerRadar/plateChampionSlateInvariance.test.ts`
