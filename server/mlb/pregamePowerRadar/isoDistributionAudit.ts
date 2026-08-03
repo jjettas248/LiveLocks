@@ -17,68 +17,93 @@ export const TAG_PREVALENCE_WARN = 0.5; // >50% of displayed cards on consecutiv
 
 export interface IsoDistributionReport {
   version: string;
-  eligibleEvaluated: number; // hitters with an ISO tag candidate (emission fired)
-  tierCounts: Record<string, number>; // ELITE/STRONG/AVERAGE/WEAK/UNAVAILABLE
-  elitePrevalence: number; // eliteDisplayed / eligibleEvaluated
+  // Denominator #1 — EVERY ISO-assessed hitter across the full evaluated set
+  // (public AND suppressed). A hitter is ISO-assessed iff the `power_iso` driver
+  // was emitted for them (that is exactly when assessIso runs).
+  eligibleEvaluated: number;
+  tierCounts: Record<string, number>; // ELITE/STRONG/AVERAGE/WEAK/UNAVAILABLE over eligibleEvaluated
+  eliteClassified: number; // Elite-labeled + displayEligible among eligibleEvaluated
+  evaluatedElitePrevalence: number; // eliteClassified / eligibleEvaluated  ← the selectivity metric
   excluded: {
-    invalidScaleOrMissing: number; // UNAVAILABLE ISO among candidates
+    invalidScaleOrMissing: number; // UNAVAILABLE ISO among evaluated candidates
     fallbackOrLowReliability: number; // valid but not display-eligible
   };
+  // Denominator #2 — DISPLAYED Plate cards (the public set with ≥1 visible chip).
   displayedCards: number;
+  eliteDisplayed: number; // Elite ISO chips actually rendered
+  displayedElitePrevalence: number; // eliteDisplayed / displayedCards
   tagPrevalence: Record<string, number>; // displayed positive tag key → share of displayed cards
-  elitePrevalenceExceeded: boolean;
+  elitePrevalenceExceeded: boolean; // evaluatedElitePrevalence > 25%
 }
 
-/** Pure aggregator. Returns a structured report; performs no I/O. */
-export function buildIsoDistributionReport(signals: readonly PregamePowerSignal[]): IsoDistributionReport {
+/**
+ * Pure aggregator. Returns a structured report; performs no I/O.
+ * @param evaluatedSignals EVERY evaluated signal (public + suppressed) — the ISO
+ *   selectivity denominator. Every ISO-assessed hitter is counted here.
+ * @param displayedSignals The public/displayed subset (defaults to evaluated) —
+ *   the denominator for what users actually see on Plate cards.
+ */
+export function buildIsoDistributionReport(
+  evaluatedSignals: readonly PregamePowerSignal[],
+  displayedSignals: readonly PregamePowerSignal[] = evaluatedSignals,
+): IsoDistributionReport {
   const tierCounts: Record<string, number> = {
     ELITE: 0, STRONG: 0, AVERAGE: 0, WEAK: 0, UNAVAILABLE: 0,
   };
   let eligibleEvaluated = 0;
-  let eliteDisplayed = 0;
+  let eliteClassified = 0;
   let invalidScaleOrMissing = 0;
   let fallbackOrLowReliability = 0;
 
-  for (const s of signals) {
+  // Denominator #1 — every ISO-assessed hitter in the full evaluated set.
+  for (const s of evaluatedSignals) {
     const iso = s.drivers.find((d) => d.key === "power_iso");
-    if (!iso) continue; // no ISO candidate emitted for this hitter
+    if (!iso) continue; // no ISO assessment ran for this hitter
     eligibleEvaluated++;
     const tier = (iso.tier ?? "UNAVAILABLE").toUpperCase();
     if (tierCounts[tier] == null) tierCounts[tier] = 0;
     tierCounts[tier]++;
     const displayEligible = iso.displayEligible !== false;
-    if (displayEligible && iso.label === "Elite Isolated Power") eliteDisplayed++;
+    if (displayEligible && iso.label === "Elite Isolated Power") eliteClassified++;
     if (tier === "UNAVAILABLE") invalidScaleOrMissing++;
     else if (!displayEligible) fallbackOrLowReliability++;
   }
 
-  // Displayed-tag prevalence over the cards that actually surface a chip.
+  // Denominator #2 — displayed cards (public set with a visible chip).
   let displayedCards = 0;
+  let eliteDisplayed = 0;
   const tagCounts: Record<string, number> = {};
-  for (const s of signals) {
+  for (const s of displayedSignals) {
     const displayedPositives = s.drivers.filter(
       (d) => d.direction === "positive" && d.displayEligible !== false && d.key !== "power_pullair",
     );
     if (displayedPositives.length === 0) continue;
     displayedCards++;
-    for (const d of displayedPositives) tagCounts[d.key] = (tagCounts[d.key] ?? 0) + 1;
+    for (const d of displayedPositives) {
+      tagCounts[d.key] = (tagCounts[d.key] ?? 0) + 1;
+      if (d.key === "power_iso" && d.label === "Elite Isolated Power") eliteDisplayed++;
+    }
   }
   const tagPrevalence: Record<string, number> = {};
   for (const [k, c] of Object.entries(tagCounts)) {
     tagPrevalence[k] = displayedCards > 0 ? c / displayedCards : 0;
   }
 
-  const elitePrevalence = eligibleEvaluated > 0 ? eliteDisplayed / eligibleEvaluated : 0;
+  const evaluatedElitePrevalence = eligibleEvaluated > 0 ? eliteClassified / eligibleEvaluated : 0;
+  const displayedElitePrevalence = displayedCards > 0 ? eliteDisplayed / displayedCards : 0;
 
   return {
     version: ISO_ASSESSMENT_VERSION,
     eligibleEvaluated,
     tierCounts,
-    elitePrevalence,
+    eliteClassified,
+    evaluatedElitePrevalence,
     excluded: { invalidScaleOrMissing, fallbackOrLowReliability },
     displayedCards,
+    eliteDisplayed,
+    displayedElitePrevalence,
     tagPrevalence,
-    elitePrevalenceExceeded: elitePrevalence > ISO_ELITE_PREVALENCE_WARN,
+    elitePrevalenceExceeded: evaluatedElitePrevalence > ISO_ELITE_PREVALENCE_WARN,
   };
 }
 
@@ -107,15 +132,17 @@ export function recordAndLogIsoDistribution(date: string, report: IsoDistributio
 
     // eslint-disable-next-line no-console
     console.log(
-      `[PLATE_ISO_DISTRIBUTION] v=${report.version} date=${date} eligible=${report.eligibleEvaluated} ` +
-        `tiers=${JSON.stringify(report.tierCounts)} elitePct=${(report.elitePrevalence * 100).toFixed(1)}% ` +
-        `displayed=${report.displayedCards} excluded=${JSON.stringify(report.excluded)}`,
+      `[PLATE_ISO_DISTRIBUTION] v=${report.version} date=${date} evaluated=${report.eligibleEvaluated} ` +
+        `tiers=${JSON.stringify(report.tierCounts)} ` +
+        `evalElitePct=${(report.evaluatedElitePrevalence * 100).toFixed(1)}% ` +
+        `displayed=${report.displayedCards} dispElitePct=${(report.displayedElitePrevalence * 100).toFixed(1)}% ` +
+        `excluded=${JSON.stringify(report.excluded)}`,
     );
 
     if (report.elitePrevalenceExceeded) {
       console.warn(
-        `[PLATE_ISO_DISTRIBUTION_WARN] ELITE prevalence ${(report.elitePrevalence * 100).toFixed(1)}% ` +
-          `> ${(ISO_ELITE_PREVALENCE_WARN * 100).toFixed(0)}% of ${report.eligibleEvaluated} eligible hitters ` +
+        `[PLATE_ISO_DISTRIBUTION_WARN] ELITE prevalence ${(report.evaluatedElitePrevalence * 100).toFixed(1)}% ` +
+          `> ${(ISO_ELITE_PREVALENCE_WARN * 100).toFixed(0)}% of ${report.eligibleEvaluated} evaluated hitters ` +
           `— classification may be regressing toward universality (date=${date}).`,
       );
     }

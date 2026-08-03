@@ -141,9 +141,9 @@ function sig(over: Partial<PowerDriver>[], batterName = "x"): PregamePowerSignal
     );
   }
   const report = buildIsoDistributionReport(corrupt);
-  ok(report.eligibleEvaluated === 8, "audit counts all ISO candidates");
+  ok(report.eligibleEvaluated === 8, "audit counts all ISO candidates (evaluated denominator)");
   ok(report.tierCounts.ELITE === 6, "audit tallies ELITE tier count");
-  ok(Math.abs(report.elitePrevalence - 0.75) < 1e-9, "audit computes 75% elite prevalence");
+  ok(Math.abs(report.evaluatedElitePrevalence - 0.75) < 1e-9, "audit computes 75% evaluated elite prevalence");
   ok(report.elitePrevalenceExceeded === true, ">25% elite prevalence flagged");
 
   // Healthy, selective distribution does not trip the flag.
@@ -160,6 +160,20 @@ function sig(over: Partial<PowerDriver>[], batterName = "x"): PregamePowerSignal
   const healthyReport = buildIsoDistributionReport(healthy);
   ok(healthyReport.elitePrevalenceExceeded === false, "selective (10%) distribution does not flag");
   ok(!Number.isNaN(healthyReport.tagPrevalence["power_barrel"]), "tag prevalence computed for displayed tags");
+
+  // Denominator proof (§ item 3): evaluated includes EVERY ISO-assessed hitter,
+  // including suppressed ones absent from the displayed set.
+  const evaluated: PregamePowerSignal[] = [
+    sig([{ key: "power_iso", label: "Elite Isolated Power", direction: "positive", displayEligible: true, tier: "ELITE" }]),
+    sig([{ key: "power_iso", label: "Isolated Power", direction: "positive", displayEligible: false, tier: "AVERAGE" }]),
+    sig([{ key: "power_iso", label: "Elite Isolated Power", direction: "positive", displayEligible: true, tier: "ELITE" }]), // suppressed hitter
+  ];
+  const displayed = evaluated.slice(0, 2); // the 3rd is suppressed / not public
+  const split = buildIsoDistributionReport(evaluated, displayed);
+  ok(split.eligibleEvaluated === 3, "evaluated denominator counts ALL ISO-assessed hitters (incl. suppressed)");
+  ok(split.displayedCards === 1, "displayed denominator counts only public cards with a visible chip");
+  ok(Math.abs(split.evaluatedElitePrevalence - 2 / 3) < 1e-9, "evaluated elite prevalence uses the full denominator");
+  ok(Math.abs(split.displayedElitePrevalence - 1) < 1e-9, "displayed elite prevalence uses the displayed denominator");
 
   // Logging path never throws.
   let threw = false;

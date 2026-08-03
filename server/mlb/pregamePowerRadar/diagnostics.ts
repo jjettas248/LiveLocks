@@ -158,10 +158,11 @@ export function buildResponse(
   const out = includeSuppressed ? signals : publicSignals;
 
   // Phase 3 — read-only ISO tier/prevalence guardrail. Wrapped so it can never
-  // affect the response. Runs over the public (displayed) set so tag prevalence
-  // reflects what users actually see.
+  // affect the response. The evaluated denominator is the FULL signal set (every
+  // ISO-assessed hitter, public or suppressed) so selectivity is measured
+  // honestly; displayed-card metrics use the public subset.
   try {
-    recordAndLogIsoDistribution(date, buildIsoDistributionReport(publicSignals));
+    recordAndLogIsoDistribution(date, buildIsoDistributionReport(signals, publicSignals));
   } catch {
     /* observability only */
   }
