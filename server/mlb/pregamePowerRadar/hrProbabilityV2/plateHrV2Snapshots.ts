@@ -340,6 +340,8 @@ function validateGenericPayload(payload: unknown): { ok: boolean; reasons: strin
   return { ok: true, reasons: [] };
 }
 
+/** Authorized providers for contact_events evidence (PR5.3 gap 1). */
+export const CONTACT_EVENTS_PROVIDERS: ReadonlySet<string> = new Set(["mlb_stats_live"]);
 const CONTACT_EVENTS_TOP_KEYS: ReadonlySet<string> = new Set(["events", "seasonBaseline", "asOfExclusiveMs", "windowMax"]);
 const CONTACT_EVENT_KEYS: ReadonlySet<string> = new Set(["exitVelocity", "launchAngle", "isBarrel", "timestamp"]);
 const CONTACT_BASELINE_KEYS: ReadonlySet<string> = new Set(["avgEv", "ev90", "airBallPct", "barrelPct"]);
@@ -855,6 +857,12 @@ export function evaluatePredictionRowIntegrity(
     } else {
       const src = contactEventsSources[0];
       const payload = src.authorizedPayload as RecentContactFormEvidencePayload | undefined;
+      // PR5.3 gap 1: the evidence must belong to THIS batter, be a batter source,
+      // and come from an authorized provider — a coherently-rehashed source for a
+      // different batter/entity/provider can never attach here.
+      if (src.entityType !== "batter") reasons.push("contact_events_entity_type_mismatch");
+      if (src.entityId !== prediction.batterId) reasons.push("contact_events_batter_mismatch");
+      if (!CONTACT_EVENTS_PROVIDERS.has(src.provider)) reasons.push("contact_events_provider_unauthorized");
       if (src.schemaVersion !== prediction.featureVersion) reasons.push("contact_events_schema_version_mismatch");
       if (!isPlainObject(payload)) {
         reasons.push("contact_events_payload_missing");

@@ -622,6 +622,52 @@ function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[
   // A neutral V2 leaf must NOT carry contact_events evidence.
   const neutralDf = buildProjection(); // recentContactForm neutral
   ok(evaluatePredictionRowIntegrity(mkPrediction({ featureVersion: PLATE_HR_V2_FEATURES_V2, derivedFeatures: neutralDf }, [contactSrc.sourceSnapshotId]), rows).reasons.includes("neutral_leaf_with_contact_evidence"), "a neutral V2 leaf with contact_events evidence is rejected");
+
+  // PR5.3 gap 1: evidence must be bound to THIS batter/entity/provider — a
+  // coherently-rehashed source for a different batter/entity/provider is rejected.
+  // Helper: build a stored source from the descriptor with field overrides, id recomputed.
+  const srcWith = (over: Partial<SourceEvidenceSnapshot>): SourceEvidenceSnapshot => {
+    const merged = { ...contactSrc, ...over };
+    merged.sourceSnapshotId = computeSourceSnapshotId({ ...merged, reconstructed: false });
+    return merged;
+  };
+  // Wrong batter: evidence built for b2 (leaf re-derives cleanly), attached to b1.
+  {
+    const forB2 = buildRecentContactFormEvidence({ events: recentEvents, asOfExclusiveMs: PREDICTION_MS, retrievalAtMs: PREDICTION_MS, batterId: "b2", schemaVersion: PLATE_HR_V2_FEATURES_V2, seasonBaseline: baseline });
+    const d2b = forB2.evidence!;
+    const s2: SourceEvidenceSnapshot = {
+      sourceSnapshotId: computeSourceSnapshotId({ ...d2b, reconstructed: false }),
+      provider: d2b.provider, entityId: d2b.entityId, entityType: "batter", evidenceKind: d2b.evidenceKind,
+      dataThroughAt: d2b.dataThroughAt, availableAt: d2b.availableAt, availabilitySource: d2b.availabilitySource,
+      validForAt: d2b.validForAt, reconstructed: false, provenanceIncomplete: d2b.provenanceIncomplete,
+      fetchedAt: d2b.fetchedAt, schemaVersion: d2b.schemaVersion, contentHash: d2b.contentHash, payloadRef: d2b.payloadRef, authorizedPayload: d2b.authorizedPayload,
+    };
+    const df = { ...buildProjection(), recentContactForm: { ...forB2.inputs, extra: {} } };
+    const pred = mkPrediction({ batterId: "b1", featureVersion: PLATE_HR_V2_FEATURES_V2, derivedFeatures: df }, [s2.sourceSnapshotId]);
+    ok(evaluatePredictionRowIntegrity(pred, new Map([[s2.sourceSnapshotId, s2]])).reasons.includes("contact_events_batter_mismatch"), "a coherently-rehashed source for a DIFFERENT batter is rejected");
+  }
+  // Wrong entity type (coherently rehashed).
+  {
+    const s = srcWith({ entityType: "game" });
+    ok(evaluatePredictionRowIntegrity(mkV2({}, [s.sourceSnapshotId]), new Map([[s.sourceSnapshotId, s]])).reasons.includes("contact_events_entity_type_mismatch"), "a coherently-rehashed non-batter entity type is rejected");
+  }
+  // Unauthorized provider (coherently rehashed).
+  {
+    const s = srcWith({ provider: "evil_provider" });
+    ok(evaluatePredictionRowIntegrity(mkV2({}, [s.sourceSnapshotId]), new Map([[s.sourceSnapshotId, s]])).reasons.includes("contact_events_provider_unauthorized"), "a coherently-rehashed unauthorized provider is rejected");
+  }
+}
+
+// ── PR5.3 gap 2: nested unauthorized fields rejected (strict nested schemas) ───
+{
+  // V2: an extra nested field inside an authorized group must be rejected.
+  const v2Bad = { ...buildProjection(), batterPower: { ...(buildProjection().batterPower as Record<string, unknown>), unversionedFeature: 123 } };
+  const pred = mkPrediction({ featureVersion: PLATE_HR_V2_FEATURES_V2, derivedFeatures: v2Bad }, []);
+  ok(evaluatePredictionRowIntegrity(pred, new Map()).reasons.some((r) => r.startsWith("derived_projection")), "an unauthorized NESTED field in a V2 projection is rejected");
+  // V1 likewise.
+  const v1Bad = { ...buildV1Projection(), pitcherVulnerability: { ...(buildV1Projection().pitcherVulnerability as Record<string, unknown>), secretEdge: 1 } };
+  const pred1 = mkPrediction({ featureVersion: PLATE_HR_V2_FEATURES_V1, derivedFeatures: v1Bad }, []);
+  ok(evaluatePredictionRowIntegrity(pred1, new Map()).reasons.some((r) => r.startsWith("derived_projection")), "an unauthorized NESTED field in a V1 projection is rejected");
 }
 
 // ── schema round-trip (full PR4.3 shape) ──────────────────────────────────────

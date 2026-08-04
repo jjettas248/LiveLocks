@@ -57,7 +57,7 @@ export const plateHrV2BatterPowerFeaturesSchema = z.object({
   hrPerPaSeason: numericLeaf,
   paSample: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2BatterPowerFeatures = z.infer<typeof plateHrV2BatterPowerFeaturesSchema>;
 
 // ── B. Bat-tracking / swing-quality skill ───────────────────────────────────
@@ -73,7 +73,7 @@ export const plateHrV2BatTrackingFeaturesSchema = z.object({
   blastPerSwingPct: numericLeaf,
   swingSample: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2BatTrackingFeatures = z.infer<typeof plateHrV2BatTrackingFeaturesSchema>;
 
 // ── E. Pitcher HR vulnerability ──────────────────────────────────────────────
@@ -88,7 +88,7 @@ export const plateHrV2PitcherVulnerabilityFeaturesSchema = z.object({
   flyBallAllowedPct: numericLeaf,
   bfSample: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2PitcherVulnerabilityFeatures = z.infer<typeof plateHrV2PitcherVulnerabilityFeaturesSchema>;
 
 // ── C/F. Pitch-type interaction ──────────────────────────────────────────────
@@ -111,13 +111,13 @@ const pitchFamilyLeafSchema = z.object({
   batterSampleSwings: numericLeaf,
   batterDamageBbeSample: numericLeaf,
   batterWhiffSwingSample: numericLeaf,
-});
+}).strict();
 export const plateHrV2PitchTypeFeaturesSchema = z.object({
   fastball: pitchFamilyLeafSchema,
   breaking: pitchFamilyLeafSchema,
   offspeed: pitchFamilyLeafSchema,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2PitchTypeFeatures = z.infer<typeof plateHrV2PitchTypeFeaturesSchema>;
 
 // ── D. Zone / location interaction ──────────────────────────────────────────
@@ -129,7 +129,7 @@ export const plateHrV2ZoneLocationFeaturesSchema = z.object({
   pitcherMiddleMiddleRate: numericLeaf,
   pitcherHangerRate: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2ZoneLocationFeatures = z.infer<typeof plateHrV2ZoneLocationFeaturesSchema>;
 
 // ── I/J. Park + weather + spray + fence geometry ────────────────────────────
@@ -158,7 +158,7 @@ export const plateHrV2LineupOpportunityFeaturesSchema = z.object({
   obpAhead: numericLeaf,
   lineupConfirmed: z.boolean(),
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2LineupOpportunityFeatures = z.infer<typeof plateHrV2LineupOpportunityFeaturesSchema>;
 
 // ── L/M. Starter exposure + bullpen path ────────────────────────────────────
@@ -169,7 +169,7 @@ export const plateHrV2StarterBullpenFeaturesSchema = z.object({
   bullpenHrPer9: numericLeaf,
   bullpenBarrelAllowedPct: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2StarterBullpenFeatures = z.infer<typeof plateHrV2StarterBullpenFeaturesSchema>;
 
 // ── O. Market confirmation — confirm/rank only, never creates a candidate ───
@@ -178,7 +178,7 @@ export const plateHrV2MarketFeaturesSchema = z.object({
   impliedHrProbability: numericLeaf,
   noVigImpliedHrProbability: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2MarketFeatures = z.infer<typeof plateHrV2MarketFeaturesSchema>;
 
 // ── P. Availability suppressors ──────────────────────────────────────────────
@@ -188,7 +188,7 @@ export const plateHrV2AvailabilityFeaturesSchema = z.object({
   restDayRisk: z.boolean().nullable(),
   platoonSubRisk: z.boolean().nullable(),
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2AvailabilityFeatures = z.infer<typeof plateHrV2AvailabilityFeaturesSchema>;
 
 // ── NEW group (PR1 addition, absent from math/'s PregameMathInputs today) ──
@@ -203,7 +203,7 @@ export const plateHrV2ContactOpportunityFeaturesSchema = z.object({
   zoneContactRatePct: numericLeaf,
   chaseRatePct: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2ContactOpportunityFeatures = z.infer<typeof plateHrV2ContactOpportunityFeaturesSchema>;
 
 // ── NEW group (PR5 addition) — stabilized recent-contact form. Additive/shadow:
@@ -223,7 +223,7 @@ export const plateHrV2RecentContactFormFeaturesSchema = z.object({
   last15Bbe: numericLeaf,
   reliabilityWeight: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2RecentContactFormFeatures = z.infer<typeof plateHrV2RecentContactFormFeaturesSchema>;
 
 // ── Data quality (feature-vector-level summary) — no `extra`, this block IS
@@ -235,7 +235,7 @@ export const plateHrV2DataQualityFeaturesSchema = z.object({
   batterPowerFullyAvailable: z.boolean(),
   missingInputs: z.array(z.string()),
   overallQuality: z.enum(["full", "degraded", "missing"]),
-});
+}).strict();
 export type PlateHrV2DataQualityFeatures = z.infer<typeof plateHrV2DataQualityFeaturesSchema>;
 
 // ── Derived feature vector (validated against the `derived_features` jsonb
