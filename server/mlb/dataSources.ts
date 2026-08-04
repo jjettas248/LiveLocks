@@ -9,6 +9,7 @@ import {
   computePlateHrV2SufficientStats,
   type PlateHrV2SufficientStatsRaw,
 } from "./pregamePowerRadar/hrProbabilityV2/plateHrV2SufficientStats";
+import { parseOptionalNumber, isRecognizedBbType } from "./pregamePowerRadar/hrProbabilityV2/statParsers";
 
 export interface BaseballSavantData {
   exitVelocity: number | null;
@@ -31,7 +32,13 @@ export interface BaseballSavantData {
   flyBallPercent: number | null;    // % BIP that are fly balls (bb_type="fly_ball")
   hrFBRatio: number | null;         // home runs / fly balls (%)
   xwOBASeason: number | null;       // avg expected wOBA across all BIP this season
-  xISOSeason: number | null;        // expected isolated power (xSLG − xBA)
+  // ON-CONTACT expected-power PROXY: xSLGcon − xBAcon, where xSLGcon/xBAcon are
+  // means of estimated_slg/ba_using_speedangle over BATTED BALLS ONLY (non-contact
+  // PAs skipped). ≈0.20–0.30 — systematically ~50% above TRUE per-PA isolated
+  // power (SLG − AVG, league ≈0.14). Kept as a score input (the champion's
+  // backtested composite consumes it) but it is NOT isolated power; the Plate ISO
+  // display tag uses true split ISO instead. Do not treat this as measured ISO.
+  xISOSeason: number | null;
   sweetSpotPercent: number | null;  // % BIP with launch angle 8–32°
   // Batter pull rate — % of BIP hit to the pull side (spray angle from hc_x/hc_y,
   // sign-adjusted for batter stand). Null when hit-coordinate data is unavailable.
@@ -81,6 +88,12 @@ export interface BaseballSavantData {
   // real rows for any given real player.
   plateHrV2BatterSufficientStats: PlateHrV2SufficientStatsRaw | null;
   plateHrV2PitcherSufficientStats: PlateHrV2SufficientStatsRaw | null;
+  // PR4.1: real fetch provenance, preserved through the cache so a cached
+  // response reports its ORIGINAL fetch time + query cutoff (never the later
+  // build-time capture moment). `savantDataThroughDate` is the query's
+  // game_date_lt (exclusive) — the verified season-to-date cutoff.
+  savantFetchedAtMs: number | null;
+  savantDataThroughDate: string | null;
 }
 
 // ── Pitcher contact-quality CSV projection (Mound Radar PR 2) ────────────────
@@ -110,11 +123,10 @@ const savantCache = new Map<string, { data: BaseballSavantData; fetchedAt: numbe
 let savantColumnsLogged = false;
 const SAVANT_TTL = 4 * 60 * 60 * 1000; // 4 hours — season-level stats change slowly
 
-function safeNum(v: unknown): number | null {
-  if (v == null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
+// PR4.2: delegate to the shared blank-safe parser so "" / whitespace / "null"
+// never become numeric 0 (which corrupted denominators — e.g. blank xSLG counted
+// as 0 and inflated xslgN/bbeSample). One parser across all Savant aggregators.
+const safeNum = parseOptionalNumber;
 
 // Phase 2 overlay aggregates derived from the per-pitch Statcast CSV
 // (`type=details`). Pure over already-fetched rows (no I/O) — unit-testable.
@@ -240,8 +252,9 @@ export function aggregateBatterPitchAndContact(
     const ev = safeNum(row["launch_speed"]);
     if (ev != null && ev > 0 && ev <= 130 && (maxEV == null || ev > maxEV)) maxEV = ev;
 
-    const bbType = (row["bb_type"] ?? "").trim();
-    if (!bbType) continue; // BBE-only aggregates below
+    // PR4.2: count a BBE only for a RECOGNIZED bb_type (blank/unknown never
+    // inflates xslgN → bbeSample). BBE-only aggregates below.
+    if (!isRecognizedBbType(row["bb_type"])) continue;
 
     if (family !== "other") {
       const xslg = safeNum(row["estimated_slg_using_speedangle"]);
@@ -265,6 +278,12 @@ export function aggregateBatterPitchAndContact(
       pitchType: f,
       xSLG: fam[f].xslgN > 0 ? parseFloat((fam[f].xslgSum / fam[f].xslgN).toFixed(3)) : null,
       whiffPct: fam[f].swings >= 10 ? parseFloat(((fam[f].whiffs / fam[f].swings) * 100).toFixed(1)) : null,
+      // PR4: preserve the BBE denominator backing xSLG (previously discarded), so
+      // downstream shrinkage has a real sample size instead of a null fallback.
+      bbeSample: fam[f].xslgN,
+      // PR4.1: the swing denominator backing whiff% — separately typed so a BBE
+      // count is never used as a swing count.
+      whiffSwings: fam[f].swings,
     }))
     .filter((s) => s.xSLG != null || s.whiffPct != null);
 
@@ -545,6 +564,8 @@ export async function fetchBaseballSavantData(
     batterDataQuality: "unavailable",
     plateHrV2BatterSufficientStats: null,
     plateHrV2PitcherSufficientStats: null,
+    savantFetchedAtMs: null,
+    savantDataThroughDate: null,
   };
 
   if (!mlbPlayerId || mlbPlayerId === "undefined") return nullResult;
@@ -735,7 +756,7 @@ export async function fetchBaseballSavantData(
 
         // Plate HR Probability V2 (PR 1, correction 2) — durable sufficient
         // statistics from the same rows, before they go out of scope below.
-        plateHrV2BatterSufficientStats = computePlateHrV2SufficientStats(rows);
+        plateHrV2BatterSufficientStats = computePlateHrV2SufficientStats(rows, "batter");
 
         // Real per-pitch CSV parsed successfully — every batter-power field
         // above had a chance to populate (an empty in-season sample still
@@ -814,7 +835,7 @@ export async function fetchBaseballSavantData(
 
         // Plate HR Probability V2 (PR 1, correction 2) — durable sufficient
         // statistics from the same rows, before they go out of scope below.
-        plateHrV2PitcherSufficientStats = computePlateHrV2SufficientStats(rows);
+        plateHrV2PitcherSufficientStats = computePlateHrV2SufficientStats(rows, "pitcher");
       }
     } else {
       console.warn("[Savant] Pitcher CSV fetch failed");
@@ -851,6 +872,8 @@ export async function fetchBaseballSavantData(
       batterDataQuality,
       plateHrV2BatterSufficientStats,
       plateHrV2PitcherSufficientStats,
+      savantFetchedAtMs: Date.now(),
+      savantDataThroughDate: today, // query game_date_lt (exclusive cutoff)
     };
 
     savantCache.set(cacheKey, { data: result, fetchedAt: Date.now() });

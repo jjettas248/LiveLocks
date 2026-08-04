@@ -31,11 +31,12 @@ import type {
 } from "../math/mathTypes";
 import { isPredictionBeforeFirstPitch, buildLeakageWarnings } from "../math/leakageGuard";
 import type { ContactOpportunityInputs } from "./frozenPlateHrV2Input";
+import { neutralRecentContactForm, type RecentContactFormInputs } from "./recentContactForm";
 import {
-  PLATE_HR_V2_FEATURES_V1,
+  PLATE_HR_V2_FEATURES_CURRENT,
   PLATE_HR_V2_RAW_INPUTS_V1,
-  type PlateHrV2DerivedFeatureVectorV1,
-  type PlateHrV2FeatureAvailabilityVectorV1,
+  type PlateHrV2DerivedFeatureVectorV2,
+  type PlateHrV2FeatureAvailabilityVectorV2,
   type PlateHrV2FeatureFreshnessVectorV1,
   type PlateHrV2RawInputEnvelope,
 } from "./plateHrV2FeatureContract";
@@ -74,6 +75,8 @@ export interface PlateHrV2FeatureBuilderInput {
   market: MarketConfirmationInputs;
   availability: AvailabilitySuppressorInputs;
   contactOpportunity: ContactOpportunityInputs;
+  // PR5 additive shadow slot — optional; omitted → a neutral all-null group.
+  recentContactForm?: RecentContactFormInputs;
   slateBaselineGameHrProbability: number | null;
   // ── per-family source freshness ───────────────────────────────────────
   batterPowerMeta?: PlateHrV2SourceMeta;
@@ -90,8 +93,8 @@ export interface PlateHrV2FeatureBuilderInput {
 }
 
 export interface PlateHrV2FeatureBuilderResult {
-  derivedFeatures: PlateHrV2DerivedFeatureVectorV1;
-  availability: PlateHrV2FeatureAvailabilityVectorV1;
+  derivedFeatures: PlateHrV2DerivedFeatureVectorV2;
+  availability: PlateHrV2FeatureAvailabilityVectorV2;
   featureFreshness: PlateHrV2FeatureFreshnessVectorV1;
   rawInputs: PlateHrV2RawInputEnvelope;
   boundaryOk: boolean;
@@ -114,6 +117,8 @@ type PitchFamilyLeaves = {
   batterXslg: number | null;
   batterWhiffPct: number | null;
   batterSampleSwings: number | null;
+  batterDamageBbeSample: number | null;
+  batterWhiffSwingSample: number | null;
 };
 
 /**
@@ -158,26 +163,27 @@ export function assemblePlateHrV2FeatureSnapshot(
 ): PlateHrV2FeatureBuilderResult {
   const asOfIso = new Date(input.asOfMs).toISOString();
   const firstPitchIso = input.firstPitchAtMs != null ? new Date(input.firstPitchAtMs).toISOString() : null;
+  // PR5: neutral all-null group when no recent-contact-form input is supplied.
+  const recentContactForm = input.recentContactForm ?? neutralRecentContactForm();
 
+  const pitchFamilyLeaves = (family: "fastball" | "breaking" | "offspeed"): PitchFamilyLeaves => {
+    const f = input.pitchType.families.find((x) => x.family === family);
+    const damageBbe = f?.batterSample ?? null;       // BBE denominator (xSLG)
+    const whiffSwings = f?.batterWhiffSample ?? null; // swing denominator (whiff%)
+    return {
+      usageShare: f?.usageShare ?? null,
+      batterXslg: f?.batterXslg ?? null,
+      batterWhiffPct: f?.batterWhiffPct ?? null,
+      // Deprecated field, now honest to its name (= swings), for back-compat.
+      batterSampleSwings: whiffSwings,
+      batterDamageBbeSample: damageBbe,
+      batterWhiffSwingSample: whiffSwings,
+    };
+  };
   const batterPitchType = {
-    fastball: {
-      usageShare: input.pitchType.families.find((f) => f.family === "fastball")?.usageShare ?? null,
-      batterXslg: input.pitchType.families.find((f) => f.family === "fastball")?.batterXslg ?? null,
-      batterWhiffPct: input.pitchType.families.find((f) => f.family === "fastball")?.batterWhiffPct ?? null,
-      batterSampleSwings: input.pitchType.families.find((f) => f.family === "fastball")?.batterSample ?? null,
-    },
-    breaking: {
-      usageShare: input.pitchType.families.find((f) => f.family === "breaking")?.usageShare ?? null,
-      batterXslg: input.pitchType.families.find((f) => f.family === "breaking")?.batterXslg ?? null,
-      batterWhiffPct: input.pitchType.families.find((f) => f.family === "breaking")?.batterWhiffPct ?? null,
-      batterSampleSwings: input.pitchType.families.find((f) => f.family === "breaking")?.batterSample ?? null,
-    },
-    offspeed: {
-      usageShare: input.pitchType.families.find((f) => f.family === "offspeed")?.usageShare ?? null,
-      batterXslg: input.pitchType.families.find((f) => f.family === "offspeed")?.batterXslg ?? null,
-      batterWhiffPct: input.pitchType.families.find((f) => f.family === "offspeed")?.batterWhiffPct ?? null,
-      batterSampleSwings: input.pitchType.families.find((f) => f.family === "offspeed")?.batterSample ?? null,
-    },
+    fastball: pitchFamilyLeaves("fastball"),
+    breaking: pitchFamilyLeaves("breaking"),
+    offspeed: pitchFamilyLeaves("offspeed"),
     extra: {},
   };
 
@@ -193,8 +199,8 @@ export function assemblePlateHrV2FeatureSnapshot(
   if (!input.venueResolved) missingInputs.push("parkWeatherSpray.venue");
   if (!input.pitcherHandResolved) missingInputs.push("pitcherVulnerability.hand");
 
-  const derivedFeatures: PlateHrV2DerivedFeatureVectorV1 = {
-    featureVersion: PLATE_HR_V2_FEATURES_V1,
+  const derivedFeatures: PlateHrV2DerivedFeatureVectorV2 = {
+    featureVersion: PLATE_HR_V2_FEATURES_CURRENT,
     batterPower: { ...input.batterPower, extra: {} },
     // math/'s BatTrackingInputs marks 4 leaves optional (`avgAttackAngle?`
     // etc.) rather than nullable-required, so a plain spread would leak
@@ -239,6 +245,7 @@ export function assemblePlateHrV2FeatureSnapshot(
     market: { ...input.market, extra: {} },
     availability: { ...input.availability, extra: {} },
     contactOpportunity: { ...input.contactOpportunity, extra: {} },
+    recentContactForm: { ...recentContactForm, extra: {} },
     dataQuality: {
       savantQuality: input.savantQuality,
       venueResolved: input.venueResolved,
@@ -250,8 +257,8 @@ export function assemblePlateHrV2FeatureSnapshot(
     slateBaselineGameHrProbability: input.slateBaselineGameHrProbability,
   };
 
-  const availability: PlateHrV2FeatureAvailabilityVectorV1 = {
-    featureVersion: PLATE_HR_V2_FEATURES_V1,
+  const availability: PlateHrV2FeatureAvailabilityVectorV2 = {
+    featureVersion: PLATE_HR_V2_FEATURES_CURRENT,
     batterPower: leafAvailability(input.batterPower as unknown as Record<string, unknown>),
     batTracking: leafAvailability(input.batTracking as unknown as Record<string, unknown>),
     pitcherVulnerability: leafAvailability(input.pitcherVulnerability as unknown as Record<string, unknown>),
@@ -263,6 +270,7 @@ export function assemblePlateHrV2FeatureSnapshot(
     market: leafAvailability(input.market as unknown as Record<string, unknown>),
     availability: leafAvailability(input.availability as unknown as Record<string, unknown>),
     contactOpportunity: leafAvailability(input.contactOpportunity as unknown as Record<string, unknown>),
+    recentContactForm: leafAvailability(recentContactForm as unknown as Record<string, unknown>),
   };
 
   const featureFreshness: PlateHrV2FeatureFreshnessVectorV1 = {
@@ -289,6 +297,7 @@ export function assemblePlateHrV2FeatureSnapshot(
       market: input.market,
       availability: input.availability,
       contactOpportunity: input.contactOpportunity,
+      recentContactForm,
       sufficientStatsRef: input.sufficientStatsRef,
     },
   };
@@ -304,6 +313,7 @@ export function assemblePlateHrV2FeatureSnapshot(
     ...toProvenance("market", input.market as unknown as Record<string, unknown>, "pregame", asOfIso),
     ...toProvenance("availability", input.availability as unknown as Record<string, unknown>, "pregame", asOfIso),
     ...toProvenance("contactOpportunity", input.contactOpportunity as unknown as Record<string, unknown>, "pregame", asOfIso),
+    ...toProvenance("recentContactForm", recentContactForm as unknown as Record<string, unknown>, "season", asOfIso),
   ];
 
   const boundaryOk = isPredictionBeforeFirstPitch(asOfIso, firstPitchIso);

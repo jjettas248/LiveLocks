@@ -98,6 +98,12 @@ function isSelfHealOnlyAlter(statement: string): boolean {
   );
   ok(ALL_SQL.includes("PLATE_HR_V2_SUFFICIENT_STATS_AS_OF_DATE_IDX"), "sufficient_stats as_of_date index exists");
   ok(ALL_SQL.includes("ZONE_DATA_AVAILABLE BOOLEAN"), "sufficient_stats has a zone_data_available flag (honest, not fabricated)");
+  // PR4 — exact-pitch stats column + self-heal for pre-PR4 tables.
+  ok(ALL_SQL.includes("PITCH_TYPE_STATS JSONB"), "sufficient_stats has a pitch_type_stats jsonb column (PR4 exact-pitch)");
+  ok(
+    ALL_SQL.includes("ALTER TABLE PLATE_HR_V2_SUFFICIENT_STATS") && ALL_SQL.includes("ADD COLUMN IF NOT EXISTS PITCH_TYPE_STATS JSONB"),
+    "sufficient_stats has a self-heal ALTER TABLE for pitch_type_stats (pre-PR4 tables missing the column)",
+  );
 }
 
 // ── 4. No destructive statement anywhere in the migration ──────────────────

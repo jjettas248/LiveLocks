@@ -62,6 +62,9 @@ import {
 } from "./plateModelComparison";
 import { countPositiveDrivers, driverKeysForUniverse } from "./modelVersions/plateDriverUniverse";
 import { computeBatterPowerProfile, type BatterPowerInputs } from "./batterPowerProfile";
+import type { IsoAssessment } from "./isoAssessment";
+import { buildIsoSlateAudit, recordAndLogIsoSlateAudit } from "./isoDistributionAudit";
+import { isPublicPregameSignal } from "./diagnostics";
 import { computePitcherVulnerability } from "./pitcherVulnerability";
 import { computePitcherOrderSplit } from "./pitcherOrderSplit";
 import { computeBatterOrderSplit } from "./batterOrderSplit";
@@ -100,6 +103,11 @@ import {
   type PlateHrV2CaptureRow,
   type PlateHrV2SufficientStatsCaptureRow,
 } from "./hrProbabilityV2/plateHrV2ForwardCapture";
+import { assemblePlateHrV2EvidenceDescriptors } from "./hrProbabilityV2/plateHrV2SnapshotCapture";
+import { PLATE_HR_V2_FEATURES_CURRENT } from "./hrProbabilityV2/plateHrV2FeatureContract";
+import { buildRecentContactFormEvidence } from "./hrProbabilityV2/recentContactFormEvidence";
+import { buildStarterBullpenPaPathEvidence } from "./hrProbabilityV2/starterBullpenPaPathEvidence";
+import type { StarterBullpenPaPathSources } from "./hrProbabilityV2/starterBullpenPaPath";
 
 let isPregamePowerRadarBuildRunning = false;
 
@@ -237,6 +245,10 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
   }
 
   const signals = new Map<string, PregamePowerSignal>();
+  // ISO assessment-boundary accumulator — one entry per assessIso() call (i.e.
+  // every hitter for whom the ISO driver was emitted), captured here rather than
+  // inferred from signals downstream.
+  const isoAssessments: IsoAssessment[] = [];
   // Plate HR Probability V2 (PR 1) — research-only accumulators, populated
   // only when PLATE_HR_V2_FORWARD_CAPTURE_ENABLED is set (see
   // capturePlateHrV2Candidate/captureSufficientStatsIfNeeded below). Flushed
@@ -519,15 +531,36 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
           /* lineup-slot split is optional context — ignore failures */
         }
 
+        // Canonical TRUE per-PA ISO (SLG − AVG) for the DISPLAY tag only — the
+        // matchup split matching the opposing pitcher's hand, from real season
+        // split rate stats sharing one AB denominator. Never fed to the score.
+        // Absent split / unknown pitcher hand → fails closed (no elite chip).
+        const isoThrows = opposingPitcher?.throws;
+        const isoSlg = isoThrows === "L" ? batterSplits?.slgVsLHP ?? null : isoThrows === "R" ? batterSplits?.slgVsRHP ?? null : null;
+        const isoAvg = isoThrows === "L" ? batterSplits?.avgVsLHP ?? null : isoThrows === "R" ? batterSplits?.avgVsRHP ?? null : null;
+        const isoAb = isoThrows === "L" ? batterSplits?.abVsLHP ?? null : isoThrows === "R" ? batterSplits?.abVsRHP ?? null : null;
+        const trueIsoInputs: Pick<BatterPowerInputs, "trueIso" | "trueIsoSampleAB" | "trueIsoSplit" | "trueIsoSource"> =
+          isoSlg != null && isoAvg != null
+            ? {
+                trueIso: isoSlg - isoAvg,
+                trueIsoSampleAB: isoAb,
+                trueIsoSplit: isoThrows === "L" ? "vs_lhp" : "vs_rhp",
+                trueIsoSource: "current_split",
+              }
+            : { trueIso: null, trueIsoSampleAB: null, trueIsoSplit: "overall", trueIsoSource: "league_fallback" };
+
         // ── Compute components ────────────────────────────────────────────────
         const powerInputs: BatterPowerInputs = savant
-          ? savantToPowerInputs(savant)
+          ? { ...savantToPowerInputs(savant), ...trueIsoInputs }
           : {
               xISO: null, xSLG: null, barrelRatePct: null, hardHitRatePct: null,
               exitVelocity: null, maxEV: null, flyBallPct: null, hrFBRatioPct: null,
               pullRatePct: null, sweetSpotPct: null, xwOBA: null, battedBallEvents: null,
+              ...trueIsoInputs,
             };
         const batterPower = computeBatterPowerProfile(powerInputs, PLATE_CHAMPION_POLICY.batter);
+        // Capture the assessment at the boundary (non-null iff assessIso ran).
+        if (batterPower.isoAssessment) isoAssessments.push(batterPower.isoAssessment);
         // computeBatterPowerProfile's own hasCore check is satisfied by xSLG
         // alone, so a Savant fetch that degraded to the bare 2-of-11-input
         // MLB-API fallback (batterDataQuality !== "full") still reports
@@ -1209,9 +1242,99 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               ? plateHrV2SufficientStatsId("batter", player.playerId, sessionDate)
               : null;
 
+            // PR3.1: assemble REAL per-provider/entity evidence descriptors from
+            // the data this cycle actually fetched. A source with no real payload
+            // is simply omitted (fail-closed) — nothing is synthesized. Game-level
+            // evidence (pitcher/weather/park/lineup) carries batter-independent
+            // content so it dedupes across the game's batters.
+            const plateHrV2Evidence = assemblePlateHrV2EvidenceDescriptors({
+              gamePk: String(gamePk),
+              batterId: player.playerId,
+              pitcherId: opposingPitcher?.pitcherId ?? null,
+              capturedAtIso: new Date(capturedAtMs).toISOString(),
+              firstPitchIso: startsAt ?? null,
+              schemaVersion: PLATE_HR_V2_FEATURES_CURRENT,
+              batterSufficientStats: savant?.plateHrV2BatterSufficientStats ?? null,
+              batterStatsRef: sufficientStatsRef,
+              batterFetchedAtMs: savant?.savantFetchedAtMs ?? null,
+              batterDataThroughDate: savant?.savantDataThroughDate ?? null,
+              pitcherSufficientStats: pitcherSavantForMatchup?.plateHrV2PitcherSufficientStats ?? null,
+              pitcherStatsRef: opposingPitcher?.pitcherId
+                ? plateHrV2SufficientStatsId("pitcher", opposingPitcher.pitcherId, sessionDate)
+                : null,
+              pitcherFetchedAtMs: pitcherSavantForMatchup?.savantFetchedAtMs ?? null,
+              pitcherDataThroughDate: pitcherSavantForMatchup?.savantDataThroughDate ?? null,
+              weather: {
+                available: weatherAvailable,
+                temperatureF: weather?.temperature ?? null,
+                windSpeedMph: weather?.windSpeed ?? null,
+                windDirection: weather?.windDirection ?? null,
+                isIndoors,
+              },
+              lineupPosted: lineupStatus === "posted",
+              park: {
+                venueResolved: isVenueResolved(venueName),
+                payload: { parkHrFactorGeneric, parkHrFactorHand: parkHrFactor, isIndoors, venueName },
+              },
+            });
+
+            // PR5: stabilized recent-contact-form shadow feature from the batched
+            // contact_events window + a season baseline, with a content-addressed
+            // contact_events evidence descriptor for EXACT re-derivation. Shadow-only:
+            // no scorer reads it; the boundary is the prediction moment (capture).
+            const recentFormBuilt = buildRecentContactFormEvidence({
+              events: nearHrContactByPlayer.get(player.playerId) ?? [],
+              asOfExclusiveMs: capturedAtMs,
+              retrievalAtMs: capturedAtMs,
+              batterId: player.playerId,
+              schemaVersion: PLATE_HR_V2_FEATURES_CURRENT,
+              seasonBaseline: {
+                avgEv: powerInputs.exitVelocity,
+                ev90: savant?.plateHrV2BatterSufficientStats?.evPercentiles?.p90 ?? null,
+                barrelPct: powerInputs.barrelRatePct,
+                // No clean season air%(LA≥10) source — flyBall% is a stricter, different
+                // definition, so it is deliberately left null (recent air% stays null).
+                airBallPct: null,
+                // pulled-air is intentionally NOT sourced: season pull-rate is a
+                // mislabeled proxy (not air-specific), so recentFormPulledAirShare
+                // stays null until a genuine pulled-air aggregate exists (PR5.2 gap 4).
+              },
+            });
+            if (recentFormBuilt.evidence) plateHrV2Evidence.push(recentFormBuilt.evidence);
+
+            // PR6.2: as-of starter/bullpen PA-path evidence + derived projection.
+            // FAIL-CLOSED and NO-BACKFILL: we assemble only the sources genuinely
+            // available at build time. Starter workload/removal, opener class, a
+            // NON-market projected-PA basis, and bullpen composition/vulnerability
+            // are NOT fetched by the pregame radar yet, so they are honestly null —
+            // the derivation then yields no exposure, no evidence is content-addressed,
+            // and the starterBullpen projection stays null → missing_pa_path downstream.
+            // No generic defaults, no odds inputs. When the live workload/bullpen
+            // fetchers land, they flow through this same contract unchanged.
+            const starterBullpenSources: StarterBullpenPaPathSources = {
+              starterWorkload: opposingPitcher?.pitcherId
+                ? { starterId: String(opposingPitcher.pitcherId), avgBattersFacedPerStart: null, avgInningsPerStart: null }
+                : null,
+              opener: null,
+              projectedPaBasis: { battingOrderSlot: slot.battingOrderSlot, expectedTotalPa: null },
+              bullpenComposition: null,
+              bullpenVulnerability: null,
+            };
+            const starterBullpenBuilt = buildStarterBullpenPaPathEvidence({
+              batterId: player.playerId,
+              sources: starterBullpenSources,
+              retrievalAtMs: capturedAtMs,
+              schemaVersion: PLATE_HR_V2_FEATURES_CURRENT,
+            });
+            if (starterBullpenBuilt.evidence) plateHrV2Evidence.push(starterBullpenBuilt.evidence);
+            const sbProjection = starterBullpenBuilt.projection;
+
             const capturedRow = capturePlateHrV2Candidate({
               sessionDate,
               gameId: game.gameId,
+              gamePk: String(gamePk),
+              evidence: plateHrV2Evidence,
+              recentContactForm: recentFormBuilt.inputs,
               buildId,
               batterId: player.playerId,
               batterName: player.playerName,
@@ -1297,11 +1420,17 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
                 lineupConfirmed: lineupStatus === "posted",
               },
               starterBullpen: {
+                // PR6.2: derived from the as-of source bundle above (fail-closed —
+                // all-null today until the workload/bullpen fetchers land, so the
+                // PA-path stays unavailable → missing_pa_path, never fabricated).
+                // The opener signal is captured in the content-addressed evidence
+                // payload (projection.isOpenerLikely), not this frozen-group field —
+                // the derived group schema is strict and has no isOpenerLikely key.
                 starterConfirmed: !!opposingPitcher,
-                projectedPaVsStarter: null,
-                projectedPaVsBullpen: null,
-                bullpenHrPer9: null,
-                bullpenBarrelAllowedPct: null,
+                projectedPaVsStarter: sbProjection.projectedPaVsStarter,
+                projectedPaVsBullpen: sbProjection.projectedPaVsBullpen,
+                bullpenHrPer9: sbProjection.bullpenHrPer9,
+                bullpenBarrelAllowedPct: sbProjection.bullpenBarrelAllowedPct,
               },
               market: {
                 hrOddsAvailable: false,
@@ -1428,6 +1557,26 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
     `[PREGAME_POWER_RADAR_BUILD_COMPLETE] buildId=${buildId} games=${gamesScanned} ` +
       `batters=${battersEvaluated} public=${createdPublicEligible} suppressed=${suppressedCount}`,
   );
+
+  // Phase 3 — ISO distribution guardrail at the ASSESSMENT BOUNDARY. Counts the
+  // complete IsoAssessment collection (every assessIso call), not just signals.
+  // Read-only; wrapped so it can never affect the build.
+  try {
+    const allSignals = Array.from(signals.values());
+    const publicSignals = allSignals.filter(isPublicPregameSignal);
+    recordAndLogIsoSlateAudit(
+      sessionDate,
+      buildIsoSlateAudit({
+        battersEntering: battersEvaluated,
+        assessments: isoAssessments,
+        signalsCreated: allSignals.length,
+        suppressedSignals: allSignals.length - publicSignals.length,
+        displayedSignals: publicSignals,
+      }),
+    );
+  } catch {
+    /* observability only — never break the build */
+  }
 
   // ONE aggregate line per build — never one per candidate. Unchanged
   // candidates are never logged at all; only genuine deltas get their own line.

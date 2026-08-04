@@ -32,6 +32,10 @@ interface PowerDriver {
   label: string;
   direction: "positive" | "negative" | "neutral";
   evidence?: string;
+  // Server-stamped display gate. `false` = do not render this chip (it may still
+  // count as evidence server-side). Read verbatim — never recompute.
+  displayEligible?: boolean;
+  tier?: string;
 }
 
 type SetupLabel = "Elite" | "Strong" | "Solid" | "Watch";
@@ -462,7 +466,7 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   // keeps a qualifying pull metric from being crowded off by the cap WITHOUT
   // reordering or dropping any other driver. The remaining chips keep their
   // existing order and 4-cap; overflow is surfaced as "+N more".
-  const positiveDriversAll = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
+  const positiveDriversAll = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair" && d.displayEligible !== false);
   const positives = positiveDriversAll
     .slice()
     .sort((a, b) => priority(a) - priority(b))
@@ -492,12 +496,17 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const showPullRate = pullDriver != null && pullRateValue != null;
 
   // Market-aware final state — server-stamped outcomes only; the card never
-  // derives win/loss. A cashed-HR celebration shows ONLY when HR is the primary
-  // angle. A Total-Bases-primary card shows its final TB count instead (TB has
-  // no stored line → never a cash/miss). HR-primary misses show a plain factual
-  // "No HR" — shown, not erased.
+  // derives win/loss. A home run is a cash on ANY card: the green HOMERED
+  // celebration fires whenever the server confirms outcomes.hitHr, regardless
+  // of whether Home Runs or Total Bases was the primary angle. A power target
+  // who goes deep has hit, and the card must settle green — the server already
+  // grades every such HR as a pregame_win (see deriveWinAttribution), so gating
+  // the celebration on isHrPrimary was silently dropping real HRs off the
+  // Total-Bases-primary cards. HR-primary misses still show a plain factual
+  // "No HR" — shown, not erased. A Total-Bases-primary card still surfaces its
+  // final TB count for the extra-base context beyond the HR.
   const isHrPrimary = s.primaryMarket === "home_runs";
-  const hitHr = isHrPrimary && s.outcomes?.hitHr === true;
+  const hitHr = s.outcomes?.hitHr === true;
   const noHr = isHrPrimary && s.outcomes != null && s.outcomes.hitHr === false;
   const finalTotalBases = !isHrPrimary && s.outcomes != null ? (s.outcomes.totalBases ?? null) : null;
   const cashedColor = "#10b981";
@@ -551,8 +560,16 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
                 data-testid={`pregame-cashed-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}
               >
                 <PartyPopper className="w-3 h-3" /> HOMERED
+                {/* Only render Top/Bot when the half is actually known. The
+                    inning and half are resolved from independent fallback
+                    sources server-side, so a known inning can arrive with a
+                    null half — treating every non-"top" value as "Bot" would
+                    fabricate a bottom-half location. Fall back to a plain
+                    "Inning N" when the half is unknown. */}
                 {s.outcomes?.hrInning != null
-                  ? ` · ${s.outcomes.hrHalf === "top" ? "Top" : "Bot"} ${s.outcomes.hrInning}`
+                  ? s.outcomes.hrHalf === "top" || s.outcomes.hrHalf === "bottom"
+                    ? ` · ${s.outcomes.hrHalf === "top" ? "Top" : "Bot"} ${s.outcomes.hrInning}`
+                    : ` · Inning ${s.outcomes.hrInning}`
                   : ""}
               </span>
             )}
@@ -955,7 +972,7 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
   // Exclude power_pullair — raw pull rate is shown truthfully as "Pull Rate" in
   // the compact value + the Core Power Profile below; it must never render via
   // its server driver label "Pull-Side Power" (not a true pulled-air metric).
-  const allPositives = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
+  const allPositives = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair" && d.displayEligible !== false);
   const coverage = coverageLabel(diag.dataCoverageScore);
   const components = COMPONENT_LABELS
     .map(({ key, label }) => ({ label, value: diag[key] as number | null | undefined }))

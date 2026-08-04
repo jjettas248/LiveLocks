@@ -21,10 +21,12 @@ import { db, pool } from "./db";
 import { ensurePregameRadarPersistenceSchema } from "./dbMigrations/pregameRadarPersistence";
 import { ensureHrRadarResearchPersistenceSchema } from "./dbMigrations/hrRadarResearchPersistence";
 import { ensurePlateHrV2PersistenceSchema } from "./dbMigrations/plateHrV2Persistence";
+import { ensurePlateHrV2SnapshotSchema } from "./dbMigrations/plateHrV2SnapshotPersistence";
 import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/mlbRecommendationEpisodePersistence";
 import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2ShadowPersistence";
 import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
 import { ensurePersistedPlaysSafetyCoreColumns } from "./dbMigrations/persistedPlaysSafetyCoreColumns";
+import { ensurePregameTargetsFoundationSchema } from "./dbMigrations/pregameTargetsFoundationPersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
@@ -248,6 +250,10 @@ app.use((req, res, next) => {
   // creates schema and registers a sink, never rows, until that flag is set.
   await ensurePlateHrV2PersistenceSchema(pool);
   console.log("[startup] Plate HR V2 persistence schema ensured");
+  // Two-layer append-only point-in-time snapshots (plan §7.1, PR1). Schema-only
+  // here; forward capture wiring is a later PR. Same fail-hard reasoning.
+  await ensurePlateHrV2SnapshotSchema(pool);
+  console.log("[startup] Plate HR V2 append-only snapshot schema ensured");
   installPlateHrV2CapturePersistence();
 
   // Durable persistence bootstrap: MLB Recommendation Episode contract
@@ -273,6 +279,13 @@ app.use((req, res, next) => {
   // comment. Same MOUND_V2_SHADOW_ENABLED gate; schema-only until then.
   await ensureMoundV2ShadowJobsPersistenceSchema(pool);
   console.log("[startup] Mound V2 shadow evaluation outbox schema ensured");
+
+  // Durable persistence bootstrap: Pregame Targets temporal data foundation (PR1).
+  // Three additive tables (raw source snapshots, as-of feature snapshots,
+  // posterior states). No product writes to these yet — this call only ever
+  // creates schema, never rows. See docs/pregame-targets/ + server/pregameTargets/.
+  await ensurePregameTargetsFoundationSchema(pool);
+  console.log("[startup] Pregame Targets temporal-foundation persistence schema ensured");
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.

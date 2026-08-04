@@ -47,6 +47,10 @@ npx tsx server/growth/hrBoardStudio.test.ts          # HR Board Studio: no-link 
 npx tsx server/mlb/pregamePowerRadar/plateChampionJul20Regression.test.ts # Plate champion (plate_jul20_restored_v1) policy lock — research inputs/BBE/Attack Environment cannot move champion score/tier/suppression; driver universes; publication is explicit
 npx tsx server/mlb/pregamePowerRadar/plateModelShadowIsolation.test.ts   # Plate champion-vs-challenger isolation — identical frozen input hash, shadow cannot mutate or block production, sticky challenger exposure, fail-closed shadow flag
 npx tsx server/mlb/pregamePowerRadar/plateModelComparisonStats.test.ts   # Plate model comparison analytics — sticky-to-sticky exposure, HR vs TB never blended, missing comparisons reported not inferred
+npx tsx server/mlb/pregamePowerRadar/isoAssessment.test.ts               # Canonical true-ISO assessment (iso_assessment_v1): fail-closed validation (pct-scale/NaN/neg/no-sample), SLG−AVG↔counting-stats parity, shrinkage-to-prior, all 5 tiers reachable, fallback never elite
+npx tsx server/mlb/pregamePowerRadar/isoTagSelection.test.ts             # ISO tag selectivity + CHAMPION-SAFETY: former universal "Elite Isolated Power" now true-ISO gated; power_iso emission/positiveDriverCount/score10 invariant; assessment-boundary audit (attempted=valid+unavailable) + distribution >25% guardrail
+npx tsx server/mlb/pregamePowerRadar/plateChampionSlateInvariance.test.ts # Slate-level champion-invariance lock (golden ranked identities/score/tier/suppression/publication) + all-five ISO display tiers reachable, only one Elite chip
+npx tsx server/mlb/pregamePowerRadar/isoPopulationAuditGate.test.ts       # Pre-deployment population-audit gate: empty/all-unavailable/too-small exports FAIL (no false certification); healthy passes; over-cap fails
 npx tsx server/mlb/pregamePowerRadar/winAttribution.test.ts  # Pregame Radar Win Attribution (pregame_win public vs calibration_miss internal; first-AB label; daily-log grouping)
 npx tsx server/mlb/pregamePowerRadar/calibrationStats.test.ts # Pregame Radar public stats (wins-only) vs admin calibration (full denominator: byTier/byScoreBand/byDriver + conversion rates)
 npx tsx server/mlb/pregamePowerRadar/gradedStatePreservation.test.ts # Pregame Radar graded-state carry across snapshot rebuilds + wrong-slate snapshot refusal + lineup-dropout carry-forward
@@ -68,6 +72,7 @@ npx tsx client/src/components/mlb/MoundWinCard.test.ts # Mound Radar daily-strip
 npx tsx server/mlb/pregamePowerRadar/diagnostics.test.ts            # Pregame Radar public-visibility predicate (final-but-ungraded stays visible, graded miss hides, postponed hides)
 npx tsx server/mlb/pregamePowerRadar/slateDateRepair.test.ts # Pregame Radar slate-date repair planner (startsAt/gameDate correction, collision detection, no blanket day-shift)
 npx tsx server/mlb/pregamePowerRadar/nearHrRecentForm.test.ts # Pregame Radar near-HR recent-form component (retroactive nearHrContact reuse, recency weighting, consecutive-day bonus, leakage guard)
+npx tsx server/mlb/pregamePowerRadar/hrProbabilityV2/recentContactForm.test.ts # Plate HR V2 (shadow) stabilized recent-contact form — EWMA/EV90/air%/barrel% from the real contact_events stream, reliability-blended with a season baseline (15-BBE regressed, 25–50 > spike), leakage boundary, no HR-count leakage, pulled-air season-only, xHR-per-contact null
 npx tsx server/utils/dateUtils.test.ts               # slateDateET() 6am-ET rollover + toEtDateKey() ET calendar-date conversion invariants
 npx tsx server/dbMigrations/hrRadarResearchPersistence.test.ts       # HR Radar research schema bootstrap idempotence + constraint + no-destructive-SQL guard
 npx tsx server/mlb/hrRadarResearch/hrRadarResearchContracts.test.ts  # HR Radar research Zod contracts (feature/trigger/eligibility/label/artifact/policy) + fail-closed flag parsing
@@ -101,6 +106,13 @@ npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliationSweep.integration
 npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliationWiring.test.ts # Mound V2 reconciliation structural proof: zero reachability from buildMlbMoundRadar.ts, syncGameBoxScore called from exactly one file, zero sportsbook/odds imports
 npx tsx server/utils/mlbPreviewAccess.test.ts          # MLB free-preview consume-key resolution: gameId always wins, gameId-less routes/resources key independently (never a shared flat key), denylist for raw odds/calculation routes
 npx tsx server/mlbAccessControlGate.integration.test.ts # MLB access-control gate against a REAL app+DB: no cross-route budget sharing, denylisted raw-odds/calc routes always require paid access, per-resource (player) keying, real concurrent-request atomicity, admin/paid bypass unaffected
+npx tsx shared/pregameTargets/featureStore.test.ts        # Pregame Targets PR1 — AsOfFeatureRow contract: 7-state enum, value-bearing vs null states, missing != observed_zero, structural validity
+npx tsx shared/pregameTargets/canonicalEntities.test.ts   # Pregame Targets PR1 — canonical id build/parse + fail-closed resolution (unknown/malformed/ambiguous), half-open trade-window handoff
+npx tsx server/pregameTargets/featureStore/leakageFirewall.test.ts # Pregame Targets PR1 — leakage firewall: future knownAt, knownAt<validAt, same-game self-update, outcome-in-input, structural/malformed; partition; missing vs observed_zero preserved
+npx tsx server/pregameTargets/posteriorState/recencyWeights.test.ts # Pregame Targets PR1 — §5B weight product: season decay (current>prior-1>prior-2, rollover→0), role decays faster than skill, continuity floor, fail-safe clamping
+npx tsx server/pregameTargets/posteriorState/posteriorState.test.ts # Pregame Targets PR1 — posterior sufficient stats: ESS=(Σw)²/Σw², weighted mean/variance, idempotent lineage, no-self-update, rolling-window rollover, ESS-boundary prior shrinkage
+npx tsx server/pregameTargets/replay/liveReplayParity.test.ts # Pregame Targets PR1 — live vs replay byte-identical reconstruction via the shared as-of read path; monotonic corrections; deterministic tie-break
+npx tsx server/dbMigrations/pregameTargetsFoundationPersistence.test.ts # Pregame Targets PR1 — foundation schema bootstrap: idempotence, IF-NOT-EXISTS-only, required indexes by name, no destructive SQL, failure propagates
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.

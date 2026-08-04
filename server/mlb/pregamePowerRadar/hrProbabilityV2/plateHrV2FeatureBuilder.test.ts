@@ -79,7 +79,8 @@ function baseInput(overrides: Partial<PlateHrV2FeatureBuilderInput> = {}): Plate
     threw = true;
   }
   ok(!threw, "assemblePlateHrV2FeatureSnapshot never throws on an all-null/all-false/empty-array input");
-  ok(result != null && result.derivedFeatures.featureVersion === "plate_hr_v2_features_v1", "still produces a valid-shaped result on empty input");
+  ok(result != null && result.derivedFeatures.featureVersion === "plate_hr_v2_features_v2", "still produces a valid-shaped V2 result on empty input");
+  ok(result != null && result.derivedFeatures.recentContactForm != null, "V2 output carries the recentContactForm group (neutral when no input)");
 }
 
 // ── 2. Builder boundary: asOf before first pitch ────────────────────────────

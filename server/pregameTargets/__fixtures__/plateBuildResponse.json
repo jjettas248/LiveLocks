@@ -1,0 +1,469 @@
+{
+  "include_suppressed": {
+    "buildId": "build_fixed_1",
+    "date": "2026-08-03",
+    "diagnostics": {
+      "batterCoverage": 1,
+      "lineupCoverage": 1,
+      "pitcherCoverage": 1,
+      "publicSignals": 1,
+      "suppressedSignals": 1,
+      "topSuppressionReasons": [
+        {
+          "count": 1,
+          "reason": "batter_power_missing"
+        }
+      ],
+      "totalBattersEvaluated": 12,
+      "weatherCoverage": 1
+    },
+    "gamesScanned": 3,
+    "generatedAt": "2026-08-03T18:30:00.000Z",
+    "signals": [
+      {
+        "attackEnvironmentSuppressedScore10": null,
+        "batterId": "BATTER1",
+        "batterName": "Fixture Batter",
+        "battingOrderSlot": 3,
+        "becameLiveFire": false,
+        "becameLiveReady": false,
+        "buildId": "build_fixed_1",
+        "convertedLiveAt": null,
+        "diagnostics": {
+          "batterCurrentOrderSlot": 3,
+          "batterOrderSplitAvailable": true,
+          "batterOrderSplitDirection": "strong",
+          "batterOrderSplitScore": 6.2,
+          "batterPowerScore": 7.6,
+          "bvpAvailable": true,
+          "bvpDirection": "positive",
+          "bvpSampleSize": 18,
+          "bvpScore": 6,
+          "dataCoverageScore": 0.95,
+          "downgradeReasons": [],
+          "finalScoreAfterCaps": 7.5,
+          "finalScoreBeforeCaps": 7.5,
+          "lineupOpportunityScore": 6,
+          "marketFitScore": 6.5,
+          "matchupFitScore": 6,
+          "matchupPenalty": 0,
+          "nearHrRecentFormScore": 5.4,
+          "parkWeatherScore": 6.1,
+          "pitcherHandednessScore": 6.2,
+          "pitcherOrderSplitAvailable": true,
+          "pitcherOrderSplitDirection": "vulnerable",
+          "pitcherOrderSplitScore": 6,
+          "pitcherVulnerabilityScore": 6.4,
+          "publicTier": "elite",
+          "rawInputsAvailable": {
+            "batterPower": true,
+            "bvp": true,
+            "lineup": true,
+            "nearHrRecentForm": true,
+            "park": true,
+            "pitcherProfile": true,
+            "weather": true
+          },
+          "sourceFreshness": {
+            "batterStatsUpdatedAt": "2026-08-03T06:00:00.000Z",
+            "lineupUpdatedAt": "2026-08-03T18:00:00.000Z",
+            "pitcherStatsUpdatedAt": "2026-08-03T06:00:00.000Z",
+            "weatherUpdatedAt": "2026-08-03T18:00:00.000Z"
+          },
+          "suppressed": false,
+          "suppressedReasons": [],
+          "warningTags": [],
+          "zeroProductionBvpFlags": []
+        },
+        "drivers": [
+          {
+            "direction": "positive",
+            "key": "power_iso",
+            "label": "Elite ISO",
+            "tier": "ELITE",
+            "weight": 80
+          },
+          {
+            "direction": "positive",
+            "key": "pitcher_vuln",
+            "label": "Vulnerable Arm",
+            "weight": 60
+          },
+          {
+            "direction": "positive",
+            "displayEligible": false,
+            "key": "power_iso_gated",
+            "label": "ISO (gated)",
+            "tier": "AVERAGE",
+            "weight": 20
+          }
+        ],
+        "engine": "pregame_power_radar",
+        "everAttackEnvironmentSuppressed": false,
+        "everPubliclyFlagged": true,
+        "firstPitchLockEligible": true,
+        "gameDate": "2026-08-03",
+        "gameId": "GAME1",
+        "gameStatus": "final",
+        "generatedAt": "2026-08-03T18:30:00.000Z",
+        "handednessMatchup": null,
+        "hasMarketLine": false,
+        "isOfficialPlay": false,
+        "isPregameTarget": true,
+        "lineupStatus": "posted",
+        "lockedAt": "2026-08-03T22:05:00.000Z",
+        "marketScores": {
+          "home_runs": 7.5,
+          "total_bases": 6.8
+        },
+        "marketSetups": [
+          {
+            "isPrimary": true,
+            "market": "home_runs",
+            "setupLabel": "Strong",
+            "setupScore": 7.5
+          },
+          {
+            "isPrimary": false,
+            "market": "total_bases",
+            "setupLabel": "Solid",
+            "setupScore": 6.8
+          }
+        ],
+        "marketTags": [
+          "home_runs",
+          "total_bases"
+        ],
+        "opponent": "BBB",
+        "outcomes": {
+          "hitHr": true,
+          "outcome": "pregame_win",
+          "totalBases": 4,
+          "userVisible": true
+        },
+        "parkContext": null,
+        "pitcherId": "PITCHER1",
+        "pitcherName": "Fixture Pitcher",
+        "primaryMarket": "home_runs",
+        "score10": 7.5,
+        "sessionDate": "2026-08-03",
+        "signalId": "mlb-pregame:2026-08-03:GAME1:BATTER1",
+        "sport": "mlb",
+        "startsAt": "2026-08-03T23:10:00.000Z",
+        "status": "graded",
+        "suppressed": false,
+        "suppressedReasons": [],
+        "tags": [],
+        "team": "AAA",
+        "tier": "elite",
+        "warnings": [],
+        "weatherStatus": "confirmed"
+      },
+      {
+        "attackEnvironmentSuppressedScore10": null,
+        "batterId": "BATTER2",
+        "batterName": "Suppressed Batter",
+        "battingOrderSlot": 3,
+        "becameLiveFire": false,
+        "becameLiveReady": false,
+        "buildId": "build_fixed_1",
+        "convertedLiveAt": null,
+        "diagnostics": {
+          "batterCurrentOrderSlot": 3,
+          "batterOrderSplitAvailable": true,
+          "batterOrderSplitDirection": "strong",
+          "batterOrderSplitScore": 6.2,
+          "batterPowerScore": 7.6,
+          "bvpAvailable": true,
+          "bvpDirection": "positive",
+          "bvpSampleSize": 18,
+          "bvpScore": 6,
+          "dataCoverageScore": 0.95,
+          "downgradeReasons": [],
+          "finalScoreAfterCaps": 7.5,
+          "finalScoreBeforeCaps": 7.5,
+          "lineupOpportunityScore": 6,
+          "marketFitScore": 6.5,
+          "matchupFitScore": 6,
+          "matchupPenalty": 0,
+          "nearHrRecentFormScore": 5.4,
+          "parkWeatherScore": 6.1,
+          "pitcherHandednessScore": 6.2,
+          "pitcherOrderSplitAvailable": true,
+          "pitcherOrderSplitDirection": "vulnerable",
+          "pitcherOrderSplitScore": 6,
+          "pitcherVulnerabilityScore": 6.4,
+          "publicTier": "elite",
+          "rawInputsAvailable": {
+            "batterPower": true,
+            "bvp": true,
+            "lineup": true,
+            "nearHrRecentForm": true,
+            "park": true,
+            "pitcherProfile": true,
+            "weather": true
+          },
+          "sourceFreshness": {
+            "batterStatsUpdatedAt": "2026-08-03T06:00:00.000Z",
+            "lineupUpdatedAt": "2026-08-03T18:00:00.000Z",
+            "pitcherStatsUpdatedAt": "2026-08-03T06:00:00.000Z",
+            "weatherUpdatedAt": "2026-08-03T18:00:00.000Z"
+          },
+          "suppressed": false,
+          "suppressedReasons": [],
+          "warningTags": [],
+          "zeroProductionBvpFlags": []
+        },
+        "drivers": [
+          {
+            "direction": "positive",
+            "key": "power_iso",
+            "label": "Elite ISO",
+            "tier": "ELITE",
+            "weight": 80
+          },
+          {
+            "direction": "positive",
+            "key": "pitcher_vuln",
+            "label": "Vulnerable Arm",
+            "weight": 60
+          },
+          {
+            "direction": "positive",
+            "displayEligible": false,
+            "key": "power_iso_gated",
+            "label": "ISO (gated)",
+            "tier": "AVERAGE",
+            "weight": 20
+          }
+        ],
+        "engine": "pregame_power_radar",
+        "everAttackEnvironmentSuppressed": false,
+        "everPubliclyFlagged": false,
+        "firstPitchLockEligible": true,
+        "gameDate": "2026-08-03",
+        "gameId": "GAME1",
+        "gameStatus": "scheduled",
+        "generatedAt": "2026-08-03T18:30:00.000Z",
+        "handednessMatchup": null,
+        "hasMarketLine": false,
+        "isOfficialPlay": false,
+        "isPregameTarget": true,
+        "lineupStatus": "posted",
+        "lockedAt": "2026-08-03T22:05:00.000Z",
+        "marketScores": {
+          "home_runs": 7.5,
+          "total_bases": 6.8
+        },
+        "marketSetups": [
+          {
+            "isPrimary": true,
+            "market": "home_runs",
+            "setupLabel": "Strong",
+            "setupScore": 7.5
+          },
+          {
+            "isPrimary": false,
+            "market": "total_bases",
+            "setupLabel": "Solid",
+            "setupScore": 6.8
+          }
+        ],
+        "marketTags": [
+          "home_runs",
+          "total_bases"
+        ],
+        "opponent": "BBB",
+        "outcomes": {
+          "hitHr": true,
+          "outcome": "pregame_win",
+          "totalBases": 4,
+          "userVisible": true
+        },
+        "parkContext": null,
+        "pitcherId": "PITCHER1",
+        "pitcherName": "Fixture Pitcher",
+        "primaryMarket": "home_runs",
+        "score10": 3,
+        "sessionDate": "2026-08-03",
+        "signalId": "mlb-pregame:2026-08-03:GAME1:BATTER2",
+        "sport": "mlb",
+        "startsAt": "2026-08-03T23:10:00.000Z",
+        "status": "active",
+        "suppressed": true,
+        "suppressedReasons": [
+          "batter_power_missing"
+        ],
+        "tags": [],
+        "team": "AAA",
+        "tier": "track",
+        "warnings": [],
+        "weatherStatus": "confirmed"
+      }
+    ],
+    "source": "rebuilt"
+  },
+  "public_only": {
+    "buildId": "build_fixed_1",
+    "date": "2026-08-03",
+    "diagnostics": {
+      "batterCoverage": 1,
+      "lineupCoverage": 1,
+      "pitcherCoverage": 1,
+      "publicSignals": 1,
+      "suppressedSignals": 1,
+      "topSuppressionReasons": [
+        {
+          "count": 1,
+          "reason": "batter_power_missing"
+        }
+      ],
+      "totalBattersEvaluated": 12,
+      "weatherCoverage": 1
+    },
+    "gamesScanned": 3,
+    "generatedAt": "2026-08-03T18:30:00.000Z",
+    "signals": [
+      {
+        "attackEnvironmentSuppressedScore10": null,
+        "batterId": "BATTER1",
+        "batterName": "Fixture Batter",
+        "battingOrderSlot": 3,
+        "becameLiveFire": false,
+        "becameLiveReady": false,
+        "buildId": "build_fixed_1",
+        "convertedLiveAt": null,
+        "diagnostics": {
+          "batterCurrentOrderSlot": 3,
+          "batterOrderSplitAvailable": true,
+          "batterOrderSplitDirection": "strong",
+          "batterOrderSplitScore": 6.2,
+          "batterPowerScore": 7.6,
+          "bvpAvailable": true,
+          "bvpDirection": "positive",
+          "bvpSampleSize": 18,
+          "bvpScore": 6,
+          "dataCoverageScore": 0.95,
+          "downgradeReasons": [],
+          "finalScoreAfterCaps": 7.5,
+          "finalScoreBeforeCaps": 7.5,
+          "lineupOpportunityScore": 6,
+          "marketFitScore": 6.5,
+          "matchupFitScore": 6,
+          "matchupPenalty": 0,
+          "nearHrRecentFormScore": 5.4,
+          "parkWeatherScore": 6.1,
+          "pitcherHandednessScore": 6.2,
+          "pitcherOrderSplitAvailable": true,
+          "pitcherOrderSplitDirection": "vulnerable",
+          "pitcherOrderSplitScore": 6,
+          "pitcherVulnerabilityScore": 6.4,
+          "publicTier": "elite",
+          "rawInputsAvailable": {
+            "batterPower": true,
+            "bvp": true,
+            "lineup": true,
+            "nearHrRecentForm": true,
+            "park": true,
+            "pitcherProfile": true,
+            "weather": true
+          },
+          "sourceFreshness": {
+            "batterStatsUpdatedAt": "2026-08-03T06:00:00.000Z",
+            "lineupUpdatedAt": "2026-08-03T18:00:00.000Z",
+            "pitcherStatsUpdatedAt": "2026-08-03T06:00:00.000Z",
+            "weatherUpdatedAt": "2026-08-03T18:00:00.000Z"
+          },
+          "suppressed": false,
+          "suppressedReasons": [],
+          "warningTags": [],
+          "zeroProductionBvpFlags": []
+        },
+        "drivers": [
+          {
+            "direction": "positive",
+            "key": "power_iso",
+            "label": "Elite ISO",
+            "tier": "ELITE",
+            "weight": 80
+          },
+          {
+            "direction": "positive",
+            "key": "pitcher_vuln",
+            "label": "Vulnerable Arm",
+            "weight": 60
+          },
+          {
+            "direction": "positive",
+            "displayEligible": false,
+            "key": "power_iso_gated",
+            "label": "ISO (gated)",
+            "tier": "AVERAGE",
+            "weight": 20
+          }
+        ],
+        "engine": "pregame_power_radar",
+        "everAttackEnvironmentSuppressed": false,
+        "everPubliclyFlagged": true,
+        "firstPitchLockEligible": true,
+        "gameDate": "2026-08-03",
+        "gameId": "GAME1",
+        "gameStatus": "final",
+        "generatedAt": "2026-08-03T18:30:00.000Z",
+        "handednessMatchup": null,
+        "hasMarketLine": false,
+        "isOfficialPlay": false,
+        "isPregameTarget": true,
+        "lineupStatus": "posted",
+        "lockedAt": "2026-08-03T22:05:00.000Z",
+        "marketScores": {
+          "home_runs": 7.5,
+          "total_bases": 6.8
+        },
+        "marketSetups": [
+          {
+            "isPrimary": true,
+            "market": "home_runs",
+            "setupLabel": "Strong",
+            "setupScore": 7.5
+          },
+          {
+            "isPrimary": false,
+            "market": "total_bases",
+            "setupLabel": "Solid",
+            "setupScore": 6.8
+          }
+        ],
+        "marketTags": [
+          "home_runs",
+          "total_bases"
+        ],
+        "opponent": "BBB",
+        "outcomes": {
+          "hitHr": true,
+          "outcome": "pregame_win",
+          "totalBases": 4,
+          "userVisible": true
+        },
+        "parkContext": null,
+        "pitcherId": "PITCHER1",
+        "pitcherName": "Fixture Pitcher",
+        "primaryMarket": "home_runs",
+        "score10": 7.5,
+        "sessionDate": "2026-08-03",
+        "signalId": "mlb-pregame:2026-08-03:GAME1:BATTER1",
+        "sport": "mlb",
+        "startsAt": "2026-08-03T23:10:00.000Z",
+        "status": "graded",
+        "suppressed": false,
+        "suppressedReasons": [],
+        "tags": [],
+        "team": "AAA",
+        "tier": "elite",
+        "warnings": [],
+        "weatherStatus": "confirmed"
+      }
+    ],
+    "source": "rebuilt"
+  }
+}

@@ -22,6 +22,11 @@ export interface PitchTypeBatterSplit {
   usagePct?: number | null;    // pitcher's usage % for this pitch type
   xSLG?: number | null;        // batter xSLG vs this pitch type
   whiffPct?: number | null;    // batter whiff% vs this pitch type
+  // PR4: BBE sample backing xSLG (the damage denominator).
+  // PR4.1: whiffSwings backs whiff% (the swing denominator) — kept SEPARATE so a
+  // BBE count is never used as a swing count. Optional; back-compat when absent.
+  bbeSample?: number | null;
+  whiffSwings?: number | null;
 }
 
 /** All inputs to the consolidated HR overlay. Every field is optional — no-op when absent. */

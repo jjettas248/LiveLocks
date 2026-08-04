@@ -1,0 +1,79 @@
+{
+  "classifyTier_gated": "elite",
+  "elite_setup": {
+    "attackEnvironmentSuppressionApplied": false,
+    "baseScore": 6.5,
+    "dataCoverageScore": 1,
+    "downgradeReasons": [],
+    "evidenceFamilyCount": 4,
+    "finalScoreBeforeCaps": 6.5,
+    "matchupPenalty": 0,
+    "score10": 6.5,
+    "suppressed": false,
+    "suppressedReasons": [],
+    "tier": "strong",
+    "warningTags": []
+  },
+  "low_coverage": {
+    "attackEnvironmentSuppressionApplied": false,
+    "baseScore": 6.5,
+    "dataCoverageScore": 0.6,
+    "downgradeReasons": [],
+    "evidenceFamilyCount": 3,
+    "finalScoreBeforeCaps": 6.5,
+    "matchupPenalty": 0,
+    "score10": 6.5,
+    "suppressed": true,
+    "suppressedReasons": [
+      "lineup_not_confirmed"
+    ],
+    "tier": "strong",
+    "warningTags": []
+  },
+  "missing_batter_power": {
+    "attackEnvironmentSuppressionApplied": false,
+    "baseScore": 6.5,
+    "dataCoverageScore": 0.65,
+    "downgradeReasons": [],
+    "evidenceFamilyCount": 3,
+    "finalScoreBeforeCaps": 6.5,
+    "finalScoreCap": 3.9,
+    "matchupPenalty": 0,
+    "score10": 3.9,
+    "suppressed": true,
+    "suppressedReasons": [
+      "batter_power_missing",
+      "capped_by_data_quality"
+    ],
+    "tier": "track",
+    "warningTags": []
+  },
+  "power_watch": {
+    "attackEnvironmentSuppressionApplied": false,
+    "baseScore": 5.9,
+    "dataCoverageScore": 1,
+    "downgradeReasons": [
+      "weak_pitcher_vulnerability"
+    ],
+    "evidenceFamilyCount": 3,
+    "finalScoreBeforeCaps": 5.9,
+    "matchupPenalty": 0.2,
+    "score10": 5.7,
+    "suppressed": true,
+    "suppressedReasons": [
+      "below_threshold_after_full_data"
+    ],
+    "tier": "power_watch",
+    "warningTags": [
+      "Matchup Downgrade",
+      "Batter Power Only"
+    ]
+  },
+  "tierFromScore_ladder": {
+    "elite": "elite",
+    "nuclear": "nuclear",
+    "strong": "strong",
+    "track": "track",
+    "watch": "watch"
+  }
+}

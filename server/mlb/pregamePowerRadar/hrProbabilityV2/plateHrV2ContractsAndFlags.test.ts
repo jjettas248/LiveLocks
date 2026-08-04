@@ -4,9 +4,15 @@
 
 import {
   PLATE_HR_V2_FEATURES_V1,
+  PLATE_HR_V2_FEATURES_V2,
+  PLATE_HR_V2_FEATURES_CURRENT,
   plateHrV2DerivedFeatureVectorV1Schema,
+  plateHrV2DerivedFeatureVectorV2Schema,
+  plateHrV2DerivedFeatureVectorAnySchema,
   plateHrV2FeatureAvailabilityVectorV1Schema,
+  plateHrV2FeatureAvailabilityVectorV2Schema,
   plateHrV2RawInputEnvelopeSchema,
+  resolveSingleFeatureVersion,
 } from "./plateHrV2FeatureContract";
 import {
   plateHrV2LabelDispositionSchema,
@@ -29,7 +35,7 @@ function ok(cond: boolean, msg: string) {
 }
 
 const numericGroup = { extra: {} };
-const family = { usageShare: null, batterXslg: null, batterWhiffPct: null, batterSampleSwings: null };
+const family = { usageShare: null, batterXslg: null, batterWhiffPct: null, batterSampleSwings: null, batterDamageBbeSample: null, batterWhiffSwingSample: null };
 
 function fullFeatureVectorFixture() {
   return {
@@ -91,6 +97,43 @@ function fullFeatureVectorFixture() {
   delete fixture.batterPower.xISO;
   const result = plateHrV2DerivedFeatureVectorV1Schema.safeParse(fixture);
   ok(!result.success, "a dropped (not merely null) leaf key fails validation — every leaf must be present, explicit null or a value");
+}
+
+// ── PR5.1 gap 1: V1 preserved; V2 = V1 + recentContactForm; no shape collision ─
+{
+  const RECENT_FORM = {
+    recentFormEv: null, recentFormEv90: null, recentFormAirBallPct: null, recentFormBarrelPct: null,
+    recentFormPulledAirShare: null, recentFormXHrPerContact: null, effectiveBbe: null, last15Bbe: null,
+    reliabilityWeight: null, ...numericGroup,
+  };
+  // Historical V1 rows (no recentContactForm) still parse against V1.
+  const v1 = fullFeatureVectorFixture();
+  ok(plateHrV2DerivedFeatureVectorV1Schema.safeParse(v1).success, "a historical V1 row (no recentContactForm) still parses as V1");
+  // A V2 row = V1 body + recentContactForm + featureVersion V2.
+  const v2 = { ...fullFeatureVectorFixture(), featureVersion: PLATE_HR_V2_FEATURES_V2, recentContactForm: RECENT_FORM };
+  ok(plateHrV2DerivedFeatureVectorV2Schema.safeParse(v2).success, "a V2 row (with recentContactForm) parses as V2");
+  // V2 REQUIRES the new group.
+  const v2Missing: any = { ...v2 }; delete v2Missing.recentContactForm;
+  ok(!plateHrV2DerivedFeatureVectorV2Schema.safeParse(v2Missing).success, "V2 rejects a row missing recentContactForm");
+  // A V1-versioned row must NOT validate as V2 (version discipline).
+  ok(!plateHrV2DerivedFeatureVectorV2Schema.safeParse(v1).success, "a V1-versioned row does not validate as V2");
+  // The discriminated-union reader accepts BOTH shapes.
+  ok(plateHrV2DerivedFeatureVectorAnySchema.safeParse(v1).success && plateHrV2DerivedFeatureVectorAnySchema.safeParse(v2).success, "the any-version reader parses both V1 and V2");
+  ok(PLATE_HR_V2_FEATURES_CURRENT === PLATE_HR_V2_FEATURES_V2, "new snapshots are written as V2 (CURRENT === V2)");
+  // Availability V2 requires recentContactForm too.
+  const availV2 = {
+    featureVersion: PLATE_HR_V2_FEATURES_V2,
+    batterPower: {}, batTracking: {}, pitcherVulnerability: {}, pitchType: {}, zoneLocation: {},
+    parkWeatherSpray: {}, lineupOpportunity: {}, starterBullpen: {}, market: {}, availability: {},
+    contactOpportunity: {}, recentContactForm: {},
+  };
+  ok(plateHrV2FeatureAvailabilityVectorV2Schema.safeParse(availV2).success, "availability V2 parses");
+  const availV2Missing: any = { ...availV2 }; delete availV2Missing.recentContactForm;
+  ok(!plateHrV2FeatureAvailabilityVectorV2Schema.safeParse(availV2Missing).success, "availability V2 requires recentContactForm");
+  // Mixed feature versions must never enter one training artifact.
+  ok(resolveSingleFeatureVersion([PLATE_HR_V2_FEATURES_V2, PLATE_HR_V2_FEATURES_V2]).ok, "a single-version set resolves");
+  const mixed = resolveSingleFeatureVersion([PLATE_HR_V2_FEATURES_V1, PLATE_HR_V2_FEATURES_V2]);
+  ok(!mixed.ok, "a mixed-version set is rejected (no mixed versions in one training artifact)");
 }
 
 // ── 3. featureVersion is a locked literal ───────────────────────────────────

@@ -1,0 +1,177 @@
+{
+  "clamp_high_99pp": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": true,
+    "capReason": "hard_ceiling_82",
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 82,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": true,
+    "initialProbabilityPct": 98,
+    "marketRiskTier": "normal",
+    "modifierStack": [],
+    "pSideFinal": 0.82
+  },
+  "clamp_low_1pp": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": false,
+    "capReason": null,
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 2,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": false,
+    "initialProbabilityPct": 2,
+    "marketRiskTier": "normal",
+    "modifierStack": [],
+    "pSideFinal": 0.02
+  },
+  "combo_cap_76": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": true,
+    "capReason": "combo_cap_76",
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 76,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": false,
+    "initialProbabilityPct": 85,
+    "marketRiskTier": "combo",
+    "modifierStack": [
+      {
+        "appliedDeltaPp": 9,
+        "name": "combo_cap_76",
+        "rawDeltaPp": 9,
+        "weight": 1
+      }
+    ],
+    "pSideFinal": 0.76
+  },
+  "conflict_survivor_68": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": true,
+    "capReason": "conflict_survivor_cap_68",
+    "conflictSuppressionApplied": true,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 68,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": false,
+    "initialProbabilityPct": 75,
+    "marketRiskTier": "normal",
+    "modifierStack": [],
+    "pSideFinal": 0.68
+  },
+  "elite_pass_80": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": false,
+    "capReason": null,
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 80,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": false,
+    "initialProbabilityPct": 80,
+    "marketRiskTier": "normal",
+    "modifierStack": [],
+    "pSideFinal": 0.8
+  },
+  "hard_ceiling_82": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": true,
+    "capReason": "hard_ceiling_82",
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 82,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": true,
+    "initialProbabilityPct": 95,
+    "marketRiskTier": "normal",
+    "modifierStack": [],
+    "pSideFinal": 0.82
+  },
+  "low_volume_cap_72": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": true,
+    "capReason": "low_volume_cap_72",
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 72,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": false,
+    "initialProbabilityPct": 85,
+    "marketRiskTier": "low_volume",
+    "modifierStack": [
+      {
+        "appliedDeltaPp": 13,
+        "name": "low_volume_cap_72",
+        "rawDeltaPp": 13,
+        "weight": 1
+      }
+    ],
+    "pSideFinal": 0.72
+  },
+  "role_uncertain_cap": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": true,
+    "capReason": "volatile_cap_70",
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 70,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": false,
+    "initialProbabilityPct": 80,
+    "marketRiskTier": "volatile",
+    "modifierStack": [
+      {
+        "appliedDeltaPp": 10,
+        "name": "volatile_cap_70",
+        "rawDeltaPp": 10,
+        "weight": 1
+      }
+    ],
+    "pSideFinal": 0.7
+  },
+  "stale_odds_gate": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": true,
+    "capReason": "elite_gate_cap_74:stale_or_unknown_odds",
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": true,
+    "finalProbabilityPct": 74,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": false,
+    "initialProbabilityPct": 85,
+    "marketRiskTier": "normal",
+    "modifierStack": [
+      {
+        "appliedDeltaPp": 11,
+        "name": "elite_gate_cap_74:stale_or_unknown_odds",
+        "rawDeltaPp": 11,
+        "weight": 1
+      }
+    ],
+    "pSideFinal": 0.74
+  },
+  "volatile_cap_70": {
+    "calibrationVersion": "nba-calibration-v2",
+    "capApplied": true,
+    "capReason": "volatile_cap_70",
+    "conflictSuppressionApplied": false,
+    "eliteGateApplied": false,
+    "finalProbabilityPct": 70,
+    "fragilityDeltaPp": 0,
+    "highBucketCapped": false,
+    "initialProbabilityPct": 80,
+    "marketRiskTier": "volatile",
+    "modifierStack": [
+      {
+        "appliedDeltaPp": 10,
+        "name": "volatile_cap_70",
+        "rawDeltaPp": 10,
+        "weight": 1
+      }
+    ],
+    "pSideFinal": 0.7
+  }
+}

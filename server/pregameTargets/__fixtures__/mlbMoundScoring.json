@@ -1,0 +1,53 @@
+{
+  "classifyMoundTier_ladder": {
+    "elite": "elite",
+    "nuclear": "nuclear",
+    "strong": "strong",
+    "track": "track",
+    "watch": "watch"
+  },
+  "elite_setup": {
+    "baseScore": 6.5,
+    "dataCoverageScore": 1,
+    "finalScoreBeforeCaps": 6.5,
+    "score10": 6.5,
+    "suppressed": false,
+    "suppressedReasons": [],
+    "tier": "strong"
+  },
+  "missing_skill": {
+    "baseScore": 6.5,
+    "dataCoverageScore": 0.65,
+    "finalScoreBeforeCaps": 6.5,
+    "finalScoreCap": 3.9,
+    "score10": 3.9,
+    "suppressed": true,
+    "suppressedReasons": [
+      "pitcher_skill_missing",
+      "capped_by_data_quality"
+    ],
+    "tier": "track"
+  },
+  "strong_setup": {
+    "baseScore": 6.2,
+    "dataCoverageScore": 1,
+    "finalScoreBeforeCaps": 6.2,
+    "score10": 6.2,
+    "suppressed": false,
+    "suppressedReasons": [],
+    "tier": "strong"
+  },
+  "unconfirmed_starter": {
+    "baseScore": 6.5,
+    "dataCoverageScore": 0.8,
+    "finalScoreBeforeCaps": 6.5,
+    "finalScoreCap": 3.9,
+    "score10": 3.9,
+    "suppressed": true,
+    "suppressedReasons": [
+      "starter_not_confirmed",
+      "capped_by_data_quality"
+    ],
+    "tier": "track"
+  }
+}

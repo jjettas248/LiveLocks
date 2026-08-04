@@ -140,7 +140,7 @@ export interface ContactQualityMetrics {
   flyBallPercent?: number | null;    // % BIP that are fly balls
   hrFBRatio?: number | null;         // home runs per fly ball (%)
   xwOBASeason?: number | null;       // season avg expected wOBA
-  xISOSeason?: number | null;        // expected isolated power (xSLG − xBA)
+  xISOSeason?: number | null;        // ON-CONTACT expected-power proxy (xSLGcon − xBAcon), NOT true ISO — see dataSources.ts
   sweetSpotPercent?: number | null;  // % BIP with launch angle 8–32°
   pullRatePercent?: number | null;   // % BIP hit to the pull side (spray angle)
 }
@@ -168,6 +168,16 @@ export interface BatterHandednessSplits {
   hrRateVsRHP: number | null;
   opsVsLHP: number | null;
   opsVsRHP: number | null;
+  // Per-hand rate components backing a TRUE per-PA ISO (SLG − AVG) for the Plate
+  // display tag. Additive/optional so existing consumers are unaffected; null
+  // when the split or sample is unavailable. `abVs*` is the sample size used for
+  // ISO shrinkage/reliability (AB is the ISO denominator).
+  slgVsLHP?: number | null;
+  slgVsRHP?: number | null;
+  avgVsLHP?: number | null;
+  avgVsRHP?: number | null;
+  abVsLHP?: number | null;
+  abVsRHP?: number | null;
 }
 
 export interface PitcherContext {
