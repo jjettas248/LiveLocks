@@ -1,0 +1,50 @@
+{
+  "hit_first_ab": {
+    "firstAbPregameWin": true,
+    "hrHalf": "top",
+    "hrInning": 1,
+    "outcome": "pregame_win",
+    "plateAppearanceNumber": 1,
+    "userVisible": true
+  },
+  "hit_not_public": {
+    "firstAbPregameWin": "unknown",
+    "hrHalf": null,
+    "hrInning": null,
+    "outcome": "pregame_win",
+    "plateAppearanceNumber": null,
+    "userVisible": false
+  },
+  "hit_public_win": {
+    "firstAbPregameWin": "unknown",
+    "hrHalf": null,
+    "hrInning": null,
+    "outcome": "pregame_win",
+    "plateAppearanceNumber": null,
+    "userVisible": true
+  },
+  "hit_third_ab": {
+    "firstAbPregameWin": false,
+    "hrHalf": "top",
+    "hrInning": 6,
+    "outcome": "pregame_win",
+    "plateAppearanceNumber": 3,
+    "userVisible": true
+  },
+  "hit_unknown_first_ab": {
+    "firstAbPregameWin": "unknown",
+    "hrHalf": "bottom",
+    "hrInning": 5,
+    "outcome": "pregame_win",
+    "plateAppearanceNumber": null,
+    "userVisible": true
+  },
+  "miss_calibration": {
+    "firstAbPregameWin": false,
+    "hrHalf": null,
+    "hrInning": null,
+    "outcome": "calibration_miss",
+    "plateAppearanceNumber": null,
+    "userVisible": false
+  }
+}
