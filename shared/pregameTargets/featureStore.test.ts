@@ -3,6 +3,7 @@ import {
   type AsOfFeatureRow,
   FEATURE_STATES,
   VALUE_BEARING_STATES,
+  asOfRowFromPersisted,
   instantMs,
   isFeatureState,
   isStructurallyValidFeatureRow,
@@ -115,6 +116,41 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(!Number.isFinite(instantMs("2026-01-10T05:00:00.000")), "offsetless datetime with millis → NaN");
   ok(!isStructurallyValidFeatureRow(row({ validAt: "2026-01-10T02:30:00" })), "offsetless validAt is structurally invalid");
   ok(!isStructurallyValidFeatureRow(row({ knownAt: "2026-01-10T05:00:00" })), "offsetless knownAt is structurally invalid");
+}
+
+// ── DB-persisted row normalization (Date instants + numeric-as-string value) ─
+{
+  // The exact shapes Drizzle returns: timestamptz → Date, numeric → string.
+  const mapped = asOfRowFromPersisted({
+    sport: "nba",
+    entityCanonicalId: "nba:player:1",
+    entityKind: "player",
+    featureKey: "nba.player.reb_per_min",
+    featureVersion: "v1",
+    season: 2026,
+    validAt: new Date("2026-01-10T02:30:00.000Z"),
+    knownAt: new Date("2026-01-10T05:00:00.000Z"),
+    state: "observed",
+    value: "0.18",
+    sourceId: "snap-1",
+    derivedFromGameIds: null,
+  });
+  ok(typeof mapped.validAt === "string" && mapped.validAt === "2026-01-10T02:30:00.000Z", "Date instant → offset-bearing ISO string");
+  ok(typeof mapped.knownAt === "string", "knownAt Date → ISO string");
+  ok(mapped.value === 0.18, "numeric-as-string value → number");
+  ok(mapped.derivedFromGameIds === undefined, "null provenance → undefined (absent)");
+  ok(isStructurallyValidFeatureRow(mapped), "a normalized persisted row passes the shared contract");
+  ok(Number.isFinite(instantMs(mapped.validAt)), "normalized validAt parses via instantMs (not malformed_instants)");
+  // A measured-zero persisted as numeric "0" normalizes to 0 and stays valid.
+  const zero = asOfRowFromPersisted({
+    sport: "nba", entityCanonicalId: "nba:player:1", entityKind: "player",
+    featureKey: "f", featureVersion: "v1", season: 2026,
+    validAt: "2026-01-10T02:30:00.000Z", knownAt: "2026-01-10T05:00:00.000Z",
+    state: "observed_zero", value: "0", sourceId: "s",
+  });
+  ok(zero.value === 0 && isStructurallyValidFeatureRow(zero), "observed_zero numeric \"0\" → 0, still valid");
+  // Already-string instants pass through untouched.
+  ok(asOfRowFromPersisted({ sport: "nba", entityCanonicalId: "nba:player:1", entityKind: "player", featureKey: "f", featureVersion: "v1", season: 2026, validAt: "2026-01-10T02:30:00.000Z", knownAt: "2026-01-10T05:00:00.000Z", state: "missing", value: null, sourceId: "s" }).knownAt === "2026-01-10T05:00:00.000Z", "string instants pass through unchanged");
 }
 
 console.log(`\nfeatureStore.test: ${passed} passed, ${failed} failed`);

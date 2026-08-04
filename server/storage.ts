@@ -4254,6 +4254,9 @@ export class DatabaseStorage implements IStorage {
     return inserted;
   }
 
+  // NOTE: the returned row is the raw Drizzle shape (Date instants, numeric-as-string).
+  // Callers feeding it into the shared feature-store contract / leakage firewall MUST
+  // normalize it first via asOfRowFromPersisted() in shared/pregameTargets/featureStore.ts.
   async getPregameFeatureAsOf(query: {
     sport: string;
     entityCanonicalId: string;

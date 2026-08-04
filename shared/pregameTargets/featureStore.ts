@@ -157,3 +157,57 @@ export function readableValue(row: AsOfFeatureRow): number | null {
     ? row.value
     : null;
 }
+
+/**
+ * The subset of a persisted `pregame_feature_snapshots` row as the DB layer
+ * hands it back: Drizzle maps `timestamp` columns to `Date` and `numeric` to a
+ * STRING (`"0.18"`), neither of which the shared contract accepts. This is the
+ * bridge shape between storage and `AsOfFeatureRow`.
+ */
+export interface PersistedFeatureSnapshotFields {
+  sport: string;
+  entityCanonicalId: string;
+  entityKind: string;
+  featureKey: string;
+  featureVersion: string;
+  season: number;
+  validAt: Date | string;
+  knownAt: Date | string;
+  state: string;
+  value: number | string | null;
+  sourceId: string;
+  derivedFromGameIds?: readonly string[] | null;
+}
+
+/**
+ * Normalize a DB-read feature snapshot into the shared `AsOfFeatureRow` contract:
+ *  • `Date` instants → offset-bearing ISO strings (so `instantMs` accepts them and
+ *    the `knownAt <= predictionAt` cutoff stays timezone-correct), and
+ *  • a `numeric` value returned as a string → a number.
+ *
+ * A persisted row MUST pass through this mapper before it is fed to the store /
+ * firewall / replay — otherwise the raw `Date`/`string` shapes would be rejected
+ * as `malformed_instants` / `structural_invalid` even though the row is valid.
+ */
+export function asOfRowFromPersisted(row: PersistedFeatureSnapshotFields): AsOfFeatureRow {
+  return {
+    sport: row.sport as PregameSport,
+    entityCanonicalId: row.entityCanonicalId,
+    entityKind: row.entityKind as PregameEntityKind,
+    featureKey: row.featureKey,
+    featureVersion: row.featureVersion,
+    season: row.season,
+    validAt: row.validAt instanceof Date ? row.validAt.toISOString() : row.validAt,
+    knownAt: row.knownAt instanceof Date ? row.knownAt.toISOString() : row.knownAt,
+    state: row.state as FeatureState,
+    value:
+      row.value === null
+        ? null
+        : typeof row.value === "number"
+          ? row.value
+          : Number(row.value),
+    sourceId: row.sourceId,
+    // null (nullable DB column) collapses to absent, matching the contract.
+    derivedFromGameIds: row.derivedFromGameIds ?? undefined,
+  };
+}
