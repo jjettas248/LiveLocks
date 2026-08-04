@@ -195,6 +195,10 @@ function seed() {
   let st2 = seed();
   st2 = updatePosterior(st2, { value: 9, weight: 1, season: S, gameId: "nba:game:TARGET" }, { excludeGameId: "nba:player:TARGET" });
   ok(combineSeasonWindow(st2, S).count === 0, "a wrong-kind (non-game) excludeGameId fails closed");
+  // A blank (whitespace-only) native exclude segment must not read as valid.
+  let stB = seed();
+  stB = updatePosterior(stB, { value: 9, weight: 1, season: S, gameId: "nba:game:TARGET" }, { excludeGameId: "nba:game:   " });
+  ok(combineSeasonWindow(stB, S).count === 0, "a blank-native excludeGameId (\"nba:game:   \") fails closed");
   // Fail-closed refuses ANY game-bearing obs under an invalid exclude (can't rule
   // out the target), but a GAMELESS observation can never be the target → folds.
   let st3 = seed();

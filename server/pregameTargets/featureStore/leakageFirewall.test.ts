@@ -88,6 +88,12 @@ const ctx = (over: Partial<LeakageContext> = {}): LeakageContext => ({ predictio
     ctx({ targetGameId: "nba:player:TARGET" }),
   );
   ok(!rKind.ok && rKind.violations.includes("invalid_target_game_id"), "a wrong-kind (non-game) canonical target fails closed → invalid_target_game_id");
+  // A blank (whitespace-only) native target segment must not read as valid.
+  const rBlank = checkFeatureLeakage(
+    row({ derivedFromGameIds: ["nba:game:TARGET"] }),
+    ctx({ targetGameId: "nba:game:   " }),
+  );
+  ok(!rBlank.ok && rBlank.violations.includes("invalid_target_game_id"), "a blank-native target (\"nba:game:   \") fails closed → invalid_target_game_id");
   // But a provenance-less static prior has nothing to match — a bad target does
   // not reject it.
   ok(isLeakageSafe(row(), ctx({ targetGameId: "TARGET" })), "a bad target does not reject a provenance-less static prior");

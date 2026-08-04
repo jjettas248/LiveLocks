@@ -60,10 +60,10 @@ export function buildCanonicalId(
 
 /**
  * Parse a canonical id string back into parts. Fail-closed: returns null on any
- * structural problem (wrong segment count, empty native id, unknown sport/kind).
- * Native ids themselves may legally contain the separator only if the caller
- * built them that way — we split on the FIRST two separators so the native id
- * keeps any remaining ones.
+ * structural problem (wrong segment count, empty/blank native id, unknown
+ * sport/kind). Native ids themselves may legally contain the separator only if
+ * the caller built them that way — we split on the FIRST two separators so the
+ * native id keeps any remaining ones.
  */
 export function parseCanonicalId(
   canonicalId: string,
@@ -76,7 +76,12 @@ export function parseCanonicalId(
   const sport = canonicalId.slice(0, firstSep);
   const kind = canonicalId.slice(firstSep + 1, secondSep);
   const nativeId = canonicalId.slice(secondSep + 1);
-  if (nativeId.length === 0) return null;
+  // Reject a native id that is empty OR whitespace-only: `buildCanonicalId`
+  // trims the native id, so a blank one (e.g. "nba:game:   ") would normalize to
+  // a native-empty "nba:game:" and be wrongly treated as a valid identity —
+  // silently defeating the strict `canonicalGameId` fail-closed guards. Test the
+  // trimmed length so blank natives never parse to a real entity.
+  if (nativeId.trim().length === 0) return null;
   if (!isPregameSport(sport)) return null;
   if (!isPregameEntityKind(kind)) return null;
   return { sport, kind, nativeId };

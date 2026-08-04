@@ -148,6 +148,11 @@ const dir: EntityDirectoryEntry[] = [
   ok(canonicalGameId("nba:player:1") === null, "a wrong-kind (player) canonical id → null");
   ok(canonicalGameId("garbage") === null, "an unparseable id → null");
   ok(canonicalGameId(123 as never) === null, "a non-string → null (never throws)");
+  // A blank (whitespace-only) native segment must NOT normalize to "nba:game:" —
+  // it has no identity and would silently pass the strict fail-closed guards.
+  ok(parseCanonicalId("nba:game:   ") === null, "a whitespace-only native id does not parse");
+  ok(canonicalGameId("nba:game:   ") === null, "a whitespace-only native game id → null (not \"nba:game:\")");
+  ok(canonicalGameId("nba:game:") === null, "a truly empty native game id → null");
   // normalizeGameKey is lenient: canonical game ids normalize, everything else
   // is passed through trimmed (opaque key), and it never returns null.
   ok(normalizeGameKey("nba:game:123 ") === "nba:game:123", "normalizeGameKey canonicalizes a game id");
