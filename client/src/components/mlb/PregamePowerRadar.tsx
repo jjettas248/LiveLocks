@@ -32,6 +32,10 @@ interface PowerDriver {
   label: string;
   direction: "positive" | "negative" | "neutral";
   evidence?: string;
+  // Server-stamped display gate. `false` = do not render this chip (it may still
+  // count as evidence server-side). Read verbatim — never recompute.
+  displayEligible?: boolean;
+  tier?: string;
 }
 
 type SetupLabel = "Elite" | "Strong" | "Solid" | "Watch";
@@ -462,7 +466,7 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   // keeps a qualifying pull metric from being crowded off by the cap WITHOUT
   // reordering or dropping any other driver. The remaining chips keep their
   // existing order and 4-cap; overflow is surfaced as "+N more".
-  const positiveDriversAll = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
+  const positiveDriversAll = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair" && d.displayEligible !== false);
   const positives = positiveDriversAll
     .slice()
     .sort((a, b) => priority(a) - priority(b))
@@ -955,7 +959,7 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
   // Exclude power_pullair — raw pull rate is shown truthfully as "Pull Rate" in
   // the compact value + the Core Power Profile below; it must never render via
   // its server driver label "Pull-Side Power" (not a true pulled-air metric).
-  const allPositives = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair");
+  const allPositives = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair" && d.displayEligible !== false);
   const coverage = coverageLabel(diag.dataCoverageScore);
   const components = COMPONENT_LABELS
     .map(({ key, label }) => ({ label, value: diag[key] as number | null | undefined }))

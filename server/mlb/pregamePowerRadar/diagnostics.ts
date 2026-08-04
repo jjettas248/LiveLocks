@@ -156,6 +156,12 @@ export function buildResponse(
 
   const out = includeSuppressed ? signals : publicSignals;
 
+  // NOTE: the ISO distribution guardrail runs at the ASSESSMENT BOUNDARY in the
+  // build layer (buildPregamePowerRadar → recordAndLogIsoSlateAudit), where the
+  // complete IsoAssessment collection is available. buildResponse only sees
+  // signal objects, so auditing here would undercount hitters whose assessment
+  // ran but whose signal was dropped/suppressed.
+
   return {
     date,
     buildId,
