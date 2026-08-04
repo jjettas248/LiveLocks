@@ -467,7 +467,11 @@ app.use((req, res, next) => {
         ADD COLUMN IF NOT EXISTS official_eligibility_version text,
         ADD COLUMN IF NOT EXISTS official_eligibility_reasons text,
         ADD COLUMN IF NOT EXISTS data_quality text,
-        ADD COLUMN IF NOT EXISTS current_stat_known boolean;
+        ADD COLUMN IF NOT EXISTS current_stat_known boolean,
+        ADD COLUMN IF NOT EXISTS edge_version text,
+        ADD COLUMN IF NOT EXISTS no_vig_book_probability numeric,
+        ADD COLUMN IF NOT EXISTS probability_semantics text,
+        ADD COLUMN IF NOT EXISTS lane text;
     `);
     await pool.query(`
       DO $$

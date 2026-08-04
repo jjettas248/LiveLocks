@@ -18,6 +18,12 @@ import {
   MLB_OFFICIAL_ELIGIBILITY_VERSION,
   type MlbOfficialEligibilityResult,
 } from "./mlbOfficialEligibility";
+import {
+  evaluateMlbProductionLane,
+  type MlbProductionLaneResult,
+} from "./mlbProductionLane";
+import type { MlbLane } from "./productionPolicy";
+import { MLB_EDGE_VERSION } from "./oddsProbability";
 
 export const MLB_FINALIZATION_VERSION = "mlb_signal_finalizer_v1";
 
@@ -47,7 +53,111 @@ export interface MlbFinalizedSignal {
   lifecycleClassification: MlbLifecycleClassification;
   officialEligibility: MlbOfficialEligibilityResult;
   decisionReasons: string[];
+  // ── MLB Live Edge safety-core (Stage A part 2) ─────────────────────────────
+  // Authoritative production lane + canonical no-vig edge + calibration
+  // semantics. `lane === "official"` is strictly NARROWER than
+  // officialEligibility.eligible (base current-tick eligibility): official
+  // additionally requires the market rollout mode, inning band, hard evidence
+  // invariants, no-vig price floor, probability floor, integer-line-push, and
+  // calibration/provisional gates — see mlbProductionLane.ts. home_runs is
+  // excluded from that matrix and keeps its base-eligibility lane.
+  lane: MlbLane;
+  laneReasons: string[];
+  modelEdgePctPoints: number | null;
+  noVigBookProbability: number | null;
+  rawBookImpliedProbability: number | null;
+  edgeVersion: string;
+  outcomeProbabilitySemantics: "raw_provisional" | "outcome_calibrated";
+  calibratedCandidateProbability: number | null;
+  lineIsInteger: boolean;
+  inningBand: string;
   version: string;
+}
+
+// Computes the production lane for a signal. home_runs bypasses the market
+// rollout matrix entirely (it is governed by the HR Radar lifecycle, not this
+// module): its lane mirrors base eligibility so the existing FIRE→official path
+// is preserved untouched. Every other market flows through the full production
+// gate in evaluateMlbProductionLane.
+function computeLane(sig: MLBQualifiedSignal, baseEligible: boolean): {
+  lane: MlbLane;
+  laneReasons: string[];
+  modelEdgePctPoints: number | null;
+  noVigBookProbability: number | null;
+  rawBookImpliedProbability: number | null;
+  outcomeProbabilitySemantics: "raw_provisional" | "outcome_calibrated";
+  calibratedCandidateProbability: number | null;
+  lineIsInteger: boolean;
+  inningBand: string;
+} {
+  const side = sig.side === "OVER" || sig.side === "UNDER" ? sig.side : "OVER";
+
+  if (sig.market === "home_runs") {
+    // HR keeps its own lifecycle — no production-matrix gate, no no-vig edge.
+    return {
+      lane: baseEligible ? "official" : "shadow",
+      laneReasons: baseEligible ? ["hr_lifecycle_official"] : ["hr_lifecycle_non_official"],
+      modelEdgePctPoints: null,
+      noVigBookProbability: null,
+      rawBookImpliedProbability: null,
+      outcomeProbabilitySemantics: "raw_provisional",
+      calibratedCandidateProbability: null,
+      lineIsInteger: false,
+      inningBand: "n/a",
+    };
+  }
+
+  const bothOdds = sig.overOdds != null && sig.underOdds != null;
+  const result: MlbProductionLaneResult = evaluateMlbProductionLane({
+    market: sig.market,
+    side,
+    line: sig.line,
+    inning: sig.inning ?? 0,
+    gameStatus: sig.gameStatus ?? "live",
+    baseEligible,
+    candidateProbabilityPct: sig.engineProbability,
+    // Stage A: no real outcome calibrator exists yet — calibrated stays null.
+    calibratedProbabilityPct: sig.calibratedCandidateProbability ?? null,
+    quote: {
+      book: sig.sportsbook,
+      line: sig.line,
+      overOdds: sig.overOdds,
+      underOdds: sig.underOdds,
+      sourceTimestamp: sig.oddsTimestamp,
+      ageMs: sig.oddsAgeMs ?? null,
+    },
+    evidence: {
+      market: sig.market,
+      side,
+      currentStatKnown: sig.currentStatKnown === true,
+      // Derived from fields already on the signal by finalization time — no
+      // qualify-time pre-stamp needed (currentStatKnown is set by the caller
+      // AFTER qualifySignal returns, so it can only be read here).
+      liveStateComplete: sig.currentStatKnown === true && sig.isDegraded !== true,
+      liveStateFresh: sig.currentStatKnown === true,
+      modelMethod: sig.modelMethod ?? null,
+      fallbackUsed: sig.fallbackUsed === true,
+      capApplied: sig.safetyCeilingApplied === true,
+      remainingOpportunity: sig.remainingOpportunity ?? null,
+      neededOutcomes:
+        side === "OVER" && Number.isFinite(sig.line)
+          ? Math.max(0, Math.ceil(sig.line) - (Number.isFinite(sig.currentStat) ? sig.currentStat : 0))
+          : null,
+      hasFreshTwoSidedOdds: bothOdds,
+    },
+  });
+
+  return {
+    lane: result.lane,
+    laneReasons: result.actionabilityReasons,
+    modelEdgePctPoints: result.modelEdgePctPoints,
+    noVigBookProbability: result.noVigBookProbability,
+    rawBookImpliedProbability: result.rawBookImpliedProbability,
+    outcomeProbabilitySemantics: result.probabilitySemantics,
+    calibratedCandidateProbability: result.calibratedProbabilityPct,
+    lineIsInteger: result.lineIsInteger,
+    inningBand: result.inningBand,
+  };
 }
 
 function classify(
@@ -115,6 +225,7 @@ export function finalizeMlbSignal(sig: MLBQualifiedSignal): MlbFinalizedSignal {
 
   const officialEligibility = evaluateMlbOfficialEligibility(sig);
   const { classification, reasons } = classify(sig, isBettable, officialEligibility);
+  const laneInfo = computeLane(sig, officialEligibility.eligible);
 
   return {
     signalId: sig.id,
@@ -132,6 +243,16 @@ export function finalizeMlbSignal(sig: MLBQualifiedSignal): MlbFinalizedSignal {
     lifecycleClassification: classification,
     officialEligibility,
     decisionReasons: reasons,
+    lane: laneInfo.lane,
+    laneReasons: laneInfo.laneReasons,
+    modelEdgePctPoints: laneInfo.modelEdgePctPoints,
+    noVigBookProbability: laneInfo.noVigBookProbability,
+    rawBookImpliedProbability: laneInfo.rawBookImpliedProbability,
+    edgeVersion: MLB_EDGE_VERSION,
+    outcomeProbabilitySemantics: laneInfo.outcomeProbabilitySemantics,
+    calibratedCandidateProbability: laneInfo.calibratedCandidateProbability,
+    lineIsInteger: laneInfo.lineIsInteger,
+    inningBand: laneInfo.inningBand,
     version: MLB_FINALIZATION_VERSION,
   };
 }
@@ -148,12 +269,31 @@ export function finalizeMlbSignal(sig: MLBQualifiedSignal): MlbFinalizedSignal {
  * never reach autoPersistMLBSignals — carries the same finalized values by
  * the time it is written to mlbEdgeCache.
  */
-export function stampMlbSignalFinalization(signals: MLBQualifiedSignal[]): void {
+export function stampMlbSignalFinalization(signals: MLBQualifiedSignal[], nowMs: number = Date.now()): void {
   for (const sig of signals) {
+    // Stamp odds observation age + game status here (the one place with a
+    // clock) so finalizeMlbSignal itself stays pure/deterministic. gameStatus
+    // is "live" — this orchestrator only processes in-progress games.
+    if (sig.gameStatus == null) sig.gameStatus = "live";
+    sig.oddsAgeMs = sig.oddsTimestamp != null ? Math.max(0, nowMs - sig.oddsTimestamp) : null;
     const finalized = finalizeMlbSignal(sig);
     sig.officialEligibility = { eligible: finalized.officialEligibility.eligible, reasons: finalized.officialEligibility.reasons, version: finalized.officialEligibility.version };
     sig.isBettable = finalized.isBettable;
     sig.lifecycleClassification = finalized.lifecycleClassification;
     sig.decisionReasons = finalized.decisionReasons;
+    // Stage A part 2 — stamp the authoritative production lane + canonical
+    // no-vig edge + calibration semantics. Additive metadata (not an
+    // IMMUTABLE_FIELDS value); every downstream consumer reads these rather
+    // than recomputing.
+    sig.lane = finalized.lane;
+    sig.laneReasons = finalized.laneReasons;
+    sig.modelEdgePctPoints = finalized.modelEdgePctPoints;
+    sig.noVigBookProbability = finalized.noVigBookProbability;
+    sig.rawBookImpliedProbability = finalized.rawBookImpliedProbability;
+    sig.edgeVersion = finalized.edgeVersion;
+    sig.outcomeProbabilitySemantics = finalized.outcomeProbabilitySemantics;
+    sig.calibratedCandidateProbability = finalized.calibratedCandidateProbability;
+    sig.lineIsInteger = finalized.lineIsInteger;
+    sig.inningBand = finalized.inningBand;
   }
 }

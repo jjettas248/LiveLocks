@@ -2915,6 +2915,16 @@ export async function registerRoutes(
           continue;
         }
 
+        // ── MLB Live Edge safety-core (Stage A part 2) — the production-lane
+        // gate, identical to autoPersistMLBSignals. Official persistence
+        // requires lane === "official" (innings 1-3, shadow markets, missing
+        // no-vig price, uncalibrated non-hits markets, etc. never qualify).
+        // Fail-closed: unstamped/undefined lane is non-official.
+        if (qs.lane !== "official") {
+          console.log(`[MLB_ROUTE_PERSIST_SAFETY] non_official_lane player=${qs.playerName} market=${qs.market} lane=${qs.lane ?? "unstamped"} reasons=${(qs.laneReasons ?? []).join(",")}`);
+          continue;
+        }
+
         const dir = qs.side === "OVER" ? "over" : "under";
         // [MLB Canonical Probability v1] Reject persistence rather than fall back
         // to signalScore. The orchestrator's primary persistence path will retry.
@@ -2935,7 +2945,13 @@ export async function registerRoutes(
           line: qs.line,
           projection: qs.projection,
           probability: validProb,
-          edge: qs.evPct ?? 0,
+          // Stage A part 2 — canonical no-vig edge replaces evPct=prob-50 (see
+          // autoPersistMLBSignals). Legacy edge_gap left null for MLB.
+          modelEdgePctPoints: qs.modelEdgePctPoints ?? null,
+          noVigBookProbability: qs.noVigBookProbability ?? null,
+          edgeVersion: qs.edgeVersion ?? null,
+          probabilitySemantics: qs.outcomeProbabilitySemantics ?? null,
+          lane: qs.lane ?? null,
           sportsbook: qs.sportsbook,
           derivedLine: false,
           createdAt: qs.engineGeneratedAt ?? Date.now(),

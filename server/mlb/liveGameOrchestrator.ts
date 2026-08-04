@@ -2969,6 +2969,18 @@ export class LiveGameOrchestrator {
       console.log(`[SIGNAL_ENGINE] player=${output.playerName} market=${output.market} family=${marketFamily} mode=${signalMode} sss=${scoreBreakdown.total} edge=${output.edge?.toFixed(1)} prob=${output.calibratedProbability?.toFixed(1)} actionable=${signal.actionable}${hrRadarResult ? ` hrRadar=${hrRadarResult.total}` : ""}`);
     }
 
+    // ── MLB Live Edge safety-core (Stage A part 2) — stamp the two evidence
+    // inputs the finalizer's production-lane authority cannot derive from the
+    // signal itself (they live only on the calculator output): the outcome
+    // distribution method and the remaining-opportunity count. Everything else
+    // the lane needs (currentStatKnown, isDegraded, currentStat, line, odds,
+    // safetyCeilingApplied) is already on the signal by finalization time.
+    signal.modelMethod = output.modelMethod ?? null;
+    signal.remainingOpportunity =
+      output.remainingPA != null && Number.isFinite(output.remainingPA)
+        ? output.remainingPA
+        : (Number.isFinite(input.remainingPA) ? input.remainingPA : null);
+
     if (process.env.DEBUG_PIPELINE === "true") {
       console.log(`[MLB_SIGNAL_BUILT] gameId=${gameId} player=${output.playerName} market=${output.market} prob=${output.calibratedProbability?.toFixed(1)} edge=${output.edge?.toFixed(1)} actionable=${signal.actionable} fallback=${signal.fallbackUsed}`);
     }
@@ -3236,6 +3248,15 @@ export class LiveGameOrchestrator {
     watchSignal.opportunityScore = watchOppScore;
     watchSignal.liveScore = Math.round(watchLiveScore * 10000) / 10000;
     watchSignal.eventBoost = scoreBreakdown.eventBoost;
+
+    // Stage A part 2 — same two evidence inputs as qualifySignal (a watch
+    // signal is never official, but stamping keeps the finalizer's lane inputs
+    // uniform across both signal builders).
+    watchSignal.modelMethod = output.modelMethod ?? null;
+    watchSignal.remainingOpportunity =
+      output.remainingPA != null && Number.isFinite(output.remainingPA)
+        ? output.remainingPA
+        : (Number.isFinite(input.remainingPA) ? input.remainingPA : null);
 
     this.sanitizeUserFacingFields(watchSignal);
 
@@ -6106,6 +6127,26 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
       continue;
     }
 
+    // ── MLB Live Edge safety-core (Stage A part 2) — the production-lane gate.
+    // Official persistence requires lane === "official", which is strictly
+    // narrower than base eligibility: it additionally enforces the market
+    // rollout mode, inning band (innings 1-3 never official), hard evidence
+    // invariants, no-vig price floor, probability floor, integer-line-push, and
+    // calibration/provisional gates (server/mlb/mlbProductionLane.ts, stamped by
+    // the finalizer). Fail-closed: an unstamped/undefined lane is non-official.
+    // This can only SUPPRESS official plays, never add one — an empty official
+    // feed is a legal outcome. home_runs keeps its own lifecycle (its lane
+    // mirrors base eligibility, so this gate is a no-op for HR).
+    if (sig.lane !== "official") {
+      skipped++;
+      const laneReason = sig.lane == null ? "lane_unstamped" : `lane_${sig.lane}`;
+      skipReasons[laneReason] = (skipReasons[laneReason] ?? 0) + 1;
+      if (Array.isArray(sig.laneReasons)) {
+        for (const r of sig.laneReasons) skipReasons[`lanereason_${r}`] = (skipReasons[`lanereason_${r}`] ?? 0) + 1;
+      }
+      continue;
+    }
+
     const dir = sig.side === "OVER" ? "over" : "under";
 
     const canonicalKey = `${sig.playerId}|${sig.market}|${dir}|${gameId}|${today}`;
@@ -6137,7 +6178,18 @@ function autoPersistMLBSignals(gameId: string, qualifiedSignals: MLBQualifiedSig
       line: sig.line,
       projection: sig.projection,
       probability: sig.engineProbability,
-      edge: sig.evPct ?? 0,
+      // ── MLB Live Edge safety-core (Stage A part 2) — retire evPct-as-edge.
+      // The legacy `edge` (→ edge_gap) previously carried evPct = probability -
+      // 50, which is neither expected value nor book-relative edge. It is no
+      // longer written for MLB (left null); the canonical no-vig model edge in
+      // percentage points is persisted via modelEdgePctPoints (→ model_edge),
+      // tagged with edgeVersion. Edge is null (never 0) when no-vig is
+      // unavailable.
+      modelEdgePctPoints: sig.modelEdgePctPoints ?? null,
+      noVigBookProbability: sig.noVigBookProbability ?? null,
+      edgeVersion: sig.edgeVersion ?? null,
+      probabilitySemantics: sig.outcomeProbabilitySemantics ?? null,
+      lane: sig.lane ?? null,
       sportsbook: sig.sportsbook,
       derivedLine: false,
       createdAt: sig.engineGeneratedAt ?? Date.now(),

@@ -793,6 +793,36 @@ export interface MLBQualifiedSignal {
   // when the signal IS official (positive confirmation tags), never an
   // empty array on success.
   decisionReasons?: string[] | null;
+
+  // ── MLB Live Edge safety-core (Stage A part 2) ─────────────────────────────
+  // Evidence/odds INPUTS stamped at qualify time (server/mlb/liveGameOrchestrator
+  // qualifySignal/buildWatchSignal) so the finalizer's production-lane authority
+  // (server/mlb/mlbProductionLane.ts) can decide official/watch/shadow without
+  // reaching for I/O. All optional + fail-closed: an absent value is treated as
+  // "not proven" by evaluateMarketEvidenceInvariants, never as a pass.
+  modelMethod?: import("./types").DistributionModelMethod | null;
+  remainingOpportunity?: number | null;   // remaining PA (batter) / BF (pitcher)
+  neededOutcomes?: number | null;          // additional outcomes an OVER still needs
+  capApplied?: boolean | null;             // a probability cap/ceiling was applied
+  liveStateComplete?: boolean | null;
+  liveStateFresh?: boolean | null;
+  gameStatus?: import("../oddsService").MlbGameStatus | null;
+  oddsAgeMs?: number | null;               // Date.now() - real odds source timestamp
+
+  // Production-lane OUTPUTS stamped by the finalizer (single authority). No
+  // consumer re-derives these. `lane` is the authoritative official/watch/shadow
+  // classification; `edgeVersion` segregates canonical no-vig edge from legacy.
+  lane?: import("./productionPolicy").MlbLane | null;
+  laneReasons?: string[] | null;
+  modelEdgePctPoints?: number | null;      // canonical no-vig model edge (pp)
+  noVigBookProbability?: number | null;
+  rawBookImpliedProbability?: number | null;
+  edgeVersion?: string | null;
+  outcomeProbabilitySemantics?: "raw_provisional" | "outcome_calibrated" | null;
+  calibratedCandidateProbability?: number | null; // null until a real calibrator exists
+  lineIsInteger?: boolean | null;
+  inningBand?: string | null;
+
   pitcherAnalysis?: {
     stuff: number;
     command: number;

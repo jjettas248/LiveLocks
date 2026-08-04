@@ -503,6 +503,17 @@ export const persistedPlays = pgTable("persisted_plays", {
   officialEligibilityReasons: text("official_eligibility_reasons"),
   dataQuality: text("data_quality"),
   currentStatKnown: boolean("current_stat_known"),
+  // ── MLB Live Edge safety-core (Stage A part 2) — canonical no-vig edge +
+  // lane provenance. Additive, nullable, MLB-populated only. The legacy
+  // `edge_gap` column is deliberately LEFT NULL for new MLB rows (it previously
+  // carried the invalid evPct = probability - 50); canonical model edge now
+  // lives in `model_edge` (percentage points) and is tagged with `edge_version`
+  // so analytics can segregate legacy-invalid rows from canonical no-vig rows.
+  // No backfill of historical rows.
+  edgeVersion: text("edge_version"),
+  noVigBookProbability: numeric("no_vig_book_probability"),
+  probabilitySemantics: text("probability_semantics"),
+  lane: text("lane"),
 }, (table) => ({
   gameDateIdx: index("persisted_plays_game_date_idx").on(table.gameDate),
   resultIdx: index("persisted_plays_result_idx").on(table.result),

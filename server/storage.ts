@@ -390,6 +390,10 @@ export interface IStorage {
     dataQuality?: string;
     currentStatKnown?: boolean;
     calibrationVersion?: string;
+    edgeVersion?: string;
+    noVigBookProbability?: number;
+    probabilitySemantics?: string;
+    lane?: string;
   }): Promise<{ id: string; isDuplicate: boolean }>;
   getPlays(opts: { sport?: string; limit?: number; settled?: string; date?: string }): Promise<{ plays: PersistedPlay[]; total: number }>;
   getPendingPlaysForGrading(limit?: number): Promise<PersistedPlay[]>;
@@ -2559,6 +2563,11 @@ export class DatabaseStorage implements IStorage {
     dataQuality?: string;
     currentStatKnown?: boolean;
     calibrationVersion?: string;
+    // MLB Live Edge safety-core (Stage A part 2) — canonical no-vig edge + lane.
+    edgeVersion?: string;
+    noVigBookProbability?: number;
+    probabilitySemantics?: string;
+    lane?: string;
   }): Promise<{ id: string; isDuplicate: boolean }> {
     // ── MLB Live Edge Trust Recovery (Phase 4) — immutable official episode ──
     // MLB official rows are keyed on officialEpisodeKey (game+player+market),
@@ -2802,6 +2811,10 @@ export class DatabaseStorage implements IStorage {
       officialEligibilityReasons: play.officialEligibilityReasons ?? null,
       dataQuality: play.dataQuality ?? null,
       currentStatKnown: play.currentStatKnown ?? null,
+      edgeVersion: play.edgeVersion ?? null,
+      noVigBookProbability: play.noVigBookProbability != null ? String(play.noVigBookProbability) : null,
+      probabilitySemantics: play.probabilitySemantics ?? null,
+      lane: play.lane ?? null,
     }).onConflictDoNothing({ target: persistedPlays.officialEpisodeKey }).returning({ id: persistedPlays.id });
 
     if (inserted.length > 0) {
