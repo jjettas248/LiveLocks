@@ -122,6 +122,16 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(!Number.isFinite(instantMs("2026-01-10T05:00:00.000")), "offsetless datetime with millis → NaN");
   ok(!isStructurallyValidFeatureRow(row({ validAt: "2026-01-10T02:30:00" })), "offsetless validAt is structurally invalid");
   ok(!isStructurallyValidFeatureRow(row({ knownAt: "2026-01-10T05:00:00" })), "offsetless knownAt is structurally invalid");
+  // Out-of-range calendar dates must be rejected — Date.parse silently NORMALIZES
+  // overflow (Feb 31 → Mar 3), which would shift the as-of cutoff.
+  ok(!Number.isFinite(instantMs("2026-02-31T00:00:00.000Z")), "Feb 31 → NaN (overflow date, not normalized)");
+  ok(!Number.isFinite(instantMs("2026-13-01T00:00:00.000Z")), "month 13 → NaN");
+  ok(!Number.isFinite(instantMs("2026-01-32T00:00:00.000Z")), "day 32 → NaN");
+  ok(!Number.isFinite(instantMs("2026-01-10T25:00:00.000Z")), "hour 25 → NaN");
+  ok(!Number.isFinite(instantMs("2026-02-29T00:00:00.000Z")), "Feb 29 in a non-leap year → NaN");
+  ok(Number.isFinite(instantMs("2024-02-29T00:00:00.000Z")), "Feb 29 in a leap year is valid");
+  ok(Number.isFinite(instantMs("2026-01-10T05:00Z")), "minute-precision instant (no seconds) with offset is valid");
+  ok(!isStructurallyValidFeatureRow(row({ validAt: "2026-02-31T00:00:00.000Z" })), "an overflow calendar date in validAt is structurally invalid");
 }
 
 // ── DB-persisted row normalization (Date instants + numeric-as-string value) ─

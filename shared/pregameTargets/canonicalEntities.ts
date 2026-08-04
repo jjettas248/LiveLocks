@@ -90,19 +90,50 @@ export function isPregameEntityKind(v: unknown): v is PregameEntityKind {
   return typeof v === "string" && (PREGAME_ENTITY_KINDS as readonly string[]).includes(v);
 }
 
-// An instant must carry an EXPLICIT timezone designator (Z or ±HH:MM / ±HHMM).
-// `Date.parse` silently interprets an offsetless datetime in the process-local
-// timezone, which would make the foundational `knownAt <= predictionAt` cutoff
-// depend on where the process runs. We reject offsetless strings up front.
-const ISO_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+// An instant must be a full ISO-8601 date-time with an EXPLICIT timezone
+// designator (Z or ±HH:MM / ±HHMM). `Date.parse` silently interprets an
+// offsetless datetime in the process-local timezone, which would make the
+// foundational `knownAt <= predictionAt` cutoff depend on where the process
+// runs. The seconds and fractional part are optional; the offset is not.
+const ISO_INSTANT_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,9})?(?:Z|[+-]\d{2}:?\d{2})$/i;
 
 /**
  * Parse an ISO-8601 instant to epoch ms, REQUIRING an explicit offset. Returns
  * NaN for a non-string, an offsetless datetime, or an unparseable value — so
  * every temporal comparison in the foundation is timezone-independent.
+ *
+ * Additionally rejects OUT-OF-RANGE calendar dates. V8's `Date.parse` silently
+ * normalizes overflow (`2026-02-31T00:00:00Z` → Mar 3, `2026-13-01` → next
+ * year), which would let a malformed `validAt`/`knownAt` pass structural/firewall
+ * checks and shift the as-of cutoff. We validate the wall-clock date via a
+ * `Date.UTC` round-trip (offset-independent: whether Feb 31 exists doesn't depend
+ * on the zone) before trusting `Date.parse` for the epoch/offset arithmetic.
  */
 export function isoInstantMs(iso: unknown): number {
-  if (typeof iso !== "string" || !ISO_OFFSET_RE.test(iso)) return NaN;
+  if (typeof iso !== "string") return NaN;
+  const m = ISO_INSTANT_RE.exec(iso);
+  if (!m) return NaN;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = m[6] === undefined ? 0 : Number(m[6]);
+  // Date.UTC normalizes overflow, so if any normalized field differs from the
+  // input the date/time is not real (Feb 31, month 13, hour 24, minute/second
+  // 60, …). This is a pure calendar-validity check, independent of the offset.
+  const probe = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== month - 1 ||
+    probe.getUTCDate() !== day ||
+    probe.getUTCHours() !== hour ||
+    probe.getUTCMinutes() !== minute ||
+    probe.getUTCSeconds() !== second
+  ) {
+    return NaN;
+  }
   const ms = Date.parse(iso);
   return Number.isFinite(ms) ? ms : NaN;
 }

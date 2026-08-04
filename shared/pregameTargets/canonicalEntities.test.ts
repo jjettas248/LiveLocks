@@ -2,6 +2,7 @@
 import {
   type EntityDirectoryEntry,
   buildCanonicalId,
+  isoInstantMs,
   parseCanonicalId,
   resolveCanonicalEntity,
 } from "./canonicalEntities";
@@ -118,6 +119,23 @@ const dir: EntityDirectoryEntry[] = [
   ];
   const r2 = resolveCanonicalEntity("nba:player:1", windowed, asOf);
   ok(!r2.ok, "an offsetless window bound makes the row ineligible (fail closed)");
+}
+
+// ── isoInstantMs rejects out-of-range calendar dates (no silent normalization)
+{
+  ok(Number.isFinite(isoInstantMs("2026-01-10T05:00:00.000Z")), "a real instant parses");
+  ok(Number.isFinite(isoInstantMs("2026-01-10T05:00:00-05:00")), "explicit offset parses");
+  ok(!Number.isFinite(isoInstantMs("2026-02-31T00:00:00Z")), "Feb 31 → NaN (V8 would normalize to Mar 3)");
+  ok(!Number.isFinite(isoInstantMs("2026-00-10T00:00:00Z")), "month 00 → NaN");
+  ok(!Number.isFinite(isoInstantMs("2026-01-00T00:00:00Z")), "day 00 → NaN");
+  ok(!Number.isFinite(isoInstantMs("2026-04-31T00:00:00Z")), "Apr 31 → NaN (April has 30 days)");
+  ok(!Number.isFinite(isoInstantMs("2026-01-10T24:00:00Z")), "hour 24 → NaN");
+  ok(!Number.isFinite(isoInstantMs("2026-01-10T05:60:00Z")), "minute 60 → NaN");
+  ok(Number.isFinite(isoInstantMs("2024-02-29T00:00:00Z")), "leap-year Feb 29 is a real date");
+  ok(!Number.isFinite(isoInstantMs("2026-02-29T00:00:00Z")), "non-leap-year Feb 29 → NaN");
+  // A resolution using an overflow as-of date fails closed as malformed.
+  const rBad = resolveCanonicalEntity("nba:player:1", dir, "2026-02-31T00:00:00Z");
+  ok(!rBad.ok && rBad.reason === "malformed_id", "an overflow as-of calendar date is rejected as malformed_id");
 }
 
 console.log(`\ncanonicalEntities.test: ${passed} passed, ${failed} failed`);
