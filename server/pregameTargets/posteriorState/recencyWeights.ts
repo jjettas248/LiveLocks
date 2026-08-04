@@ -92,10 +92,14 @@ export function computeRecencyWeight(
   // be false, and Math.pow would yield NaN — so a non-finite offset must
   // fail-safe to 0, not silently poison the weight.
   const offset = Number.isFinite(inputs.seasonOffset) ? Math.trunc(inputs.seasonOffset) : NaN;
+  // Clamp the CONFIGURED decay to [0,1] too (same reason as continuityFloor
+  // below): a custom seasonDecay of 2 or NaN would otherwise push the season
+  // factor above 1 or to NaN, breaking the [0,1] weight invariant.
+  const decay = clamp01(config.seasonDecay);
   const season =
     !Number.isFinite(offset) || offset < 0 || offset > config.maxSeasonOffset
       ? 0
-      : Math.pow(config.seasonDecay, offset);
+      : Math.pow(decay, offset);
 
   // Recency factor — exponential half-life decay on age. Negative age (a fact
   // "from the future" relative to the decision) is clamped to 0 age = weight 1;

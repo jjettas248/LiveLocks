@@ -70,6 +70,21 @@ function seed() {
   ok(after1.sumW === after2.sumW && after1.count === after2.count, "re-adding the same game is a no-op");
 }
 
+// ── Same-game CORRECTION replaces the prior contribution (append-only) ───────
+{
+  let st = seed();
+  st = updatePosterior(st, { value: 10, weight: 1, season: S, gameId: "g1" });
+  ok(approx(posteriorMean(combineSeasonWindow(st, S)), 10), "initial fold registers value 10");
+  // A corrected reading for the SAME game (different value) replaces the stale one.
+  st = updatePosterior(st, { value: 4, weight: 1, season: S, gameId: "g1" });
+  const after = combineSeasonWindow(st, S);
+  ok(approx(posteriorMean(after), 4), "corrected same-game observation replaces the stale value (not discarded)");
+  ok(after.count === 1, "a correction does not add a second fold (count stays 1)");
+  // Corrected weight is honored too.
+  st = updatePosterior(st, { value: 4, weight: 5, season: S, gameId: "g1" });
+  ok(effectiveSampleSize(combineSeasonWindow(st, S)) === 1, "still one effective observation after a weight correction");
+}
+
 // ── No self-update: the game being predicted is refused ──────────────────────
 {
   let st = seed();

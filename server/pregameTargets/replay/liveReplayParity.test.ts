@@ -146,5 +146,23 @@ const origin: ReplayOrigin = {
   ok(Object.isFrozen(store.all()[0]), "stored rows are frozen (append-only; a correction is a new row)");
 }
 
+// ── Unpinned-version tie-break is deterministic (featureVersion tail) ────────
+{
+  const sameSnap = [
+    feat({ featureKey: "vtie", featureVersion: "v1", knownAt: beforeT, validAt: "2026-01-10T00:00:00.000Z", value: 1, sourceId: "sx" }),
+    feat({ featureKey: "vtie", featureVersion: "v2", knownAt: beforeT, validAt: "2026-01-10T00:00:00.000Z", value: 2, sourceId: "sx" }),
+  ];
+  const a = createInMemoryAsOfFeatureStore();
+  a.writeMany(sameSnap);
+  const b = createInMemoryAsOfFeatureStore();
+  b.writeMany([...sameSnap].reverse());
+  const o: ReplayOrigin = { ...origin, featureKeys: ["vtie"], targetGameId: undefined };
+  ok(
+    serializeReplayResult(replayOrigin(a, o)) === serializeReplayResult(replayOrigin(b, o)),
+    "two versions from the same snapshot (equal knownAt/validAt/sourceId) resolve identically regardless of insertion order",
+  );
+  ok(replayOrigin(a, o).features.vtie?.featureVersion === "v2", "tie-break prefers the greater featureVersion");
+}
+
 console.log(`\nliveReplayParity.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

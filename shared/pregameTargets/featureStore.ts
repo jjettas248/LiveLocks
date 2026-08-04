@@ -22,7 +22,7 @@
 // derivation from these instants must still go through the ET date helpers.
 
 import type { PregameEntityKind, PregameSport } from "./canonicalEntities";
-import { isoInstantMs } from "./canonicalEntities";
+import { isoInstantMs, parseCanonicalId } from "./canonicalEntities";
 
 /**
  * The observability state of a feature value. `missing` and `observed_zero` are
@@ -110,7 +110,17 @@ export function isStructurallyValidFeatureRow(row: AsOfFeatureRow): boolean {
   if (!Number.isFinite(instantMs(row.knownAt))) return false;
   if (typeof row.featureKey !== "string" || row.featureKey.length === 0) return false;
   if (typeof row.featureVersion !== "string" || row.featureVersion.length === 0) return false;
+  if (typeof row.sourceId !== "string" || row.sourceId.length === 0) return false;
   if (!Number.isInteger(row.season)) return false;
+
+  // Identity fields must be internally consistent: the canonical id must parse
+  // and its sport/kind must equal the row's redundant `sport`/`entityKind`. A
+  // row like sport="nba", entityCanonicalId="nba:player:1", entityKind="team"
+  // is malformed and must never enter an input set via a string-only filter.
+  const parsedId = parseCanonicalId(row.entityCanonicalId);
+  if (!parsedId) return false;
+  if (parsedId.sport !== row.sport) return false;
+  if (parsedId.kind !== row.entityKind) return false;
 
   // `observed_zero` means a GENUINELY MEASURED zero — it must carry exactly 0.
   // A nonzero value under this state would defeat the measured-zero distinction.

@@ -92,6 +92,12 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(!isStructurallyValidFeatureRow(row({ featureKey: "" })), "empty featureKey is invalid");
   ok(!isStructurallyValidFeatureRow(row({ featureVersion: "" })), "empty featureVersion is invalid");
   ok(!isStructurallyValidFeatureRow(row({ season: 2026.5 })), "non-integer season is invalid");
+  // Identity fields must be internally consistent with the canonical id.
+  ok(!isStructurallyValidFeatureRow(row({ entityKind: "team" })), "entityKind not matching the canonical id's kind is invalid");
+  ok(!isStructurallyValidFeatureRow(row({ entityCanonicalId: "nba:team:1", entityKind: "player" })), "canonical-id kind vs entityKind mismatch is invalid");
+  ok(!isStructurallyValidFeatureRow(row({ entityCanonicalId: "garbage" })), "unparseable canonical id is invalid");
+  ok(!isStructurallyValidFeatureRow(row({ sourceId: "" })), "empty sourceId is invalid");
+  ok(isStructurallyValidFeatureRow(row({ entityCanonicalId: "nba:team:5", entityKind: "team" })), "a consistent team identity is valid");
   ok(Number.isFinite(instantMs("2026-01-10T05:00:00.000Z")), "ISO instant with Z parses to finite ms");
   ok(Number.isFinite(instantMs("2026-01-10T05:00:00-05:00")), "ISO instant with explicit offset parses");
   ok(!Number.isFinite(instantMs("garbage")), "garbage instant → NaN");

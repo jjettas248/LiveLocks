@@ -19,15 +19,33 @@
 
 export const POSTERIOR_STATE_VERSION = 1;
 
+/** One game's contribution to a season's sufficient statistics. */
+export interface GameContribution {
+  w: number; // w
+  wx: number; // w·x
+  wx2: number; // w·x²
+  w2: number; // w²
+}
+
 /** Weighted sufficient statistics for a single season. */
 export interface SeasonSufficientStats {
   sumW: number; // Σ w
   sumWX: number; // Σ w·x
   sumWX2: number; // Σ w·x²
   sumW2: number; // Σ w²   (for ESS)
-  count: number; // raw number of observations folded in
+  count: number; // number of distinct folds (games + gameless observations)
   /** Sorted, de-duplicated game ids folded into this season (lineage). */
   gameIds: string[];
+  /**
+   * Per-game contribution, keyed by canonical game id (sorted keys). Retaining
+   * each game's contribution is what lets a CORRECTION for an already-folded
+   * game REPLACE its prior contribution (append-only correction model) rather
+   * than being discarded as a retry — the aggregate sums are adjusted by the
+   * delta (new − old), so the posterior tracks the corrected value.
+   */
+  byGame: Record<string, GameContribution>;
+  /** Folds with no game id (cannot be corrected or de-duplicated). */
+  gamelessCount: number;
 }
 
 export interface PosteriorState {
@@ -48,7 +66,7 @@ export interface PosteriorObservation {
 }
 
 function emptySeasonStats(): SeasonSufficientStats {
-  return { sumW: 0, sumWX: 0, sumWX2: 0, sumW2: 0, count: 0, gameIds: [] };
+  return { sumW: 0, sumWX: 0, sumWX2: 0, sumW2: 0, count: 0, gameIds: [], byGame: {}, gamelessCount: 0 };
 }
 
 export function emptyPosteriorState(
@@ -68,7 +86,7 @@ export function emptyPosteriorState(
 /** True iff `gameId` has already been folded into any season of this state. */
 export function posteriorIncludesGame(state: PosteriorState, gameId: string): boolean {
   for (const season of Object.keys(state.bySeason)) {
-    if (state.bySeason[Number(season)].gameIds.includes(gameId)) return true;
+    if (state.bySeason[Number(season)].byGame[gameId] !== undefined) return true;
   }
   return false;
 }
@@ -86,9 +104,16 @@ export interface UpdatePosteriorOptions {
  * Fold one observation into the state, returning a NEW state (pure). No-ops when:
  *  • the weight is non-finite or <= 0 (nothing to add),
  *  • the value is non-finite,
- *  • the observation's game equals `excludeGameId` (self-update), or
- *  • the observation's game was already folded in (idempotent lineage).
- * Otherwise the season's sufficient statistics advance deterministically.
+ *  • the season is not an integer, or
+ *  • the observation's game equals `excludeGameId` (self-update).
+ *
+ * When the observation's game was ALREADY folded in, it is treated as a
+ * CORRECTION: the prior per-game contribution is replaced (aggregate sums are
+ * adjusted by new − old), honoring the append-only correction model rather than
+ * discarding the update. Re-folding an identical value+weight is therefore a
+ * true no-op (delta 0); a corrected value moves the posterior. Game count is
+ * unchanged on a correction. A gameless observation is purely additive (it can
+ * neither be de-duplicated nor corrected). Deterministic; keys kept sorted.
  */
 export function updatePosterior(
   state: PosteriorState,
@@ -101,23 +126,60 @@ export function updatePosterior(
   if (obs.gameId != null && options.excludeGameId != null && obs.gameId === options.excludeGameId) {
     return state; // no self-update
   }
-  if (obs.gameId != null && posteriorIncludesGame(state, obs.gameId)) {
-    return state; // idempotent — the same game never double-counts
-  }
 
   const prev = state.bySeason[obs.season] ?? emptySeasonStats();
   const w = obs.weight;
   const x = obs.value;
+  const contribution: GameContribution = { w, wx: w * x, wx2: w * x * x, w2: w * w };
+
+  let sumW = prev.sumW;
+  let sumWX = prev.sumWX;
+  let sumWX2 = prev.sumWX2;
+  let sumW2 = prev.sumW2;
+  let count = prev.count;
+  let gamelessCount = prev.gamelessCount;
+  const byGame: Record<string, GameContribution> = { ...prev.byGame };
+
+  if (obs.gameId == null) {
+    // Gameless: purely additive; no provenance, no correction possible.
+    sumW += contribution.w;
+    sumWX += contribution.wx;
+    sumWX2 += contribution.wx2;
+    sumW2 += contribution.w2;
+    count += 1;
+    gamelessCount += 1;
+  } else if (byGame[obs.gameId] !== undefined) {
+    // Correction (or identical re-fold): replace the prior contribution.
+    const old = byGame[obs.gameId];
+    sumW += contribution.w - old.w;
+    sumWX += contribution.wx - old.wx;
+    sumWX2 += contribution.wx2 - old.wx2;
+    sumW2 += contribution.w2 - old.w2;
+    byGame[obs.gameId] = contribution; // count unchanged — same fold, new value
+  } else {
+    // New game.
+    sumW += contribution.w;
+    sumWX += contribution.wx;
+    sumWX2 += contribution.wx2;
+    sumW2 += contribution.w2;
+    count += 1;
+    byGame[obs.gameId] = contribution;
+  }
+
+  // Canonical key ordering so serialization is insertion-order-independent.
+  const gameIds = Object.keys(byGame).sort();
+  const sortedByGame: Record<string, GameContribution> = {};
+  for (const k of gameIds) sortedByGame[k] = byGame[k];
+
   const nextSeason: SeasonSufficientStats = {
-    sumW: prev.sumW + w,
-    sumWX: prev.sumWX + w * x,
-    sumWX2: prev.sumWX2 + w * x * x,
-    sumW2: prev.sumW2 + w * w,
-    count: prev.count + 1,
-    gameIds:
-      obs.gameId != null
-        ? [...prev.gameIds, obs.gameId].sort()
-        : prev.gameIds.slice(),
+    sumW,
+    sumWX,
+    sumWX2,
+    sumW2,
+    count,
+    gameIds,
+    byGame: sortedByGame,
+    gamelessCount,
   };
 
   return {

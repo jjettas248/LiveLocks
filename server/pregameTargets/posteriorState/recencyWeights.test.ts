@@ -68,6 +68,13 @@ const approx = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
     const nan = computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill" }, { ...DEFAULT_RECENCY_CONFIG, continuityFloor: NaN });
     ok(Number.isFinite(nan.weight), "NaN continuityFloor → finite weight");
   }
+  // A custom seasonDecay outside [0,1] must not break the invariant either.
+  {
+    const hi = computeRecencyWeight({ ageDays: 0, seasonOffset: 1, featureClass: "skill" }, { ...DEFAULT_RECENCY_CONFIG, seasonDecay: 2 });
+    ok(hi.season <= 1 && hi.weight <= 1, "seasonDecay > 1 is clamped → season/weight stay <= 1");
+    const nan = computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill" }, { ...DEFAULT_RECENCY_CONFIG, seasonDecay: NaN });
+    ok(Number.isFinite(nan.weight), "NaN seasonDecay → finite weight");
+  }
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", dataQuality: 2 }).quality === 1, "quality clamped to 1");
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", contextSimilarity: -1 }).context === 0, "negative context clamped to 0");
   ok(computeRecencyWeight({ ageDays: -10, seasonOffset: 0, featureClass: "skill" }).recency === 1, "negative age clamped to 0 → recency 1");

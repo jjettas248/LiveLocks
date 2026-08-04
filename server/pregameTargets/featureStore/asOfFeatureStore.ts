@@ -66,8 +66,11 @@ export interface AsOfFeatureStore {
 
 /**
  * Deterministic tie-break when two eligible readings share the same knownAt:
- * prefer the later validAt, then the lexicographically greater sourceId. This
- * guarantees a single, reproducible choice regardless of insertion order.
+ * prefer the later validAt, then the greater sourceId, then the greater
+ * featureVersion. The featureVersion tail matters when version selection is
+ * unpinned and two versions are computed from the SAME source snapshot (equal
+ * knownAt/validAt/sourceId) — without it the choice would depend on insertion
+ * order and break live/replay parity. The DB as-of query orders by the same keys.
  */
 function isPreferred(candidate: AsOfFeatureRow, incumbent: AsOfFeatureRow): boolean {
   const cK = instantMs(candidate.knownAt);
@@ -76,7 +79,8 @@ function isPreferred(candidate: AsOfFeatureRow, incumbent: AsOfFeatureRow): bool
   const cV = instantMs(candidate.validAt);
   const iV = instantMs(incumbent.validAt);
   if (cV !== iV) return cV > iV;
-  return candidate.sourceId > incumbent.sourceId;
+  if (candidate.sourceId !== incumbent.sourceId) return candidate.sourceId > incumbent.sourceId;
+  return candidate.featureVersion > incumbent.featureVersion;
 }
 
 /**

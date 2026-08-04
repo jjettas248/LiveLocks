@@ -4281,6 +4281,7 @@ export class DatabaseStorage implements IStorage {
         desc(pregameFeatureSnapshots.knownAt),
         desc(pregameFeatureSnapshots.validAt),
         desc(pregameFeatureSnapshots.sourceId),
+        desc(pregameFeatureSnapshots.featureVersion),
       )
       .limit(1);
     return rows[0] ?? null;
