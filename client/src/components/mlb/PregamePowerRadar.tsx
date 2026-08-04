@@ -560,8 +560,16 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
                 data-testid={`pregame-cashed-${s.batterName.replace(/\s+/g, "-").toLowerCase()}`}
               >
                 <PartyPopper className="w-3 h-3" /> HOMERED
+                {/* Only render Top/Bot when the half is actually known. The
+                    inning and half are resolved from independent fallback
+                    sources server-side, so a known inning can arrive with a
+                    null half — treating every non-"top" value as "Bot" would
+                    fabricate a bottom-half location. Fall back to a plain
+                    "Inning N" when the half is unknown. */}
                 {s.outcomes?.hrInning != null
-                  ? ` · ${s.outcomes.hrHalf === "top" ? "Top" : "Bot"} ${s.outcomes.hrInning}`
+                  ? s.outcomes.hrHalf === "top" || s.outcomes.hrHalf === "bottom"
+                    ? ` · ${s.outcomes.hrHalf === "top" ? "Top" : "Bot"} ${s.outcomes.hrInning}`
+                    : ` · Inning ${s.outcomes.hrInning}`
                   : ""}
               </span>
             )}
