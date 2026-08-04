@@ -514,6 +514,19 @@ export const persistedPlays = pgTable("persisted_plays", {
   noVigBookProbability: numeric("no_vig_book_probability"),
   probabilitySemantics: text("probability_semantics"),
   lane: text("lane"),
+  // ── PR2 (Pregame Targets contract layer, §10) — additive, nullable official-
+  // target SNAPSHOT-LINEAGE provenance columns. These carry which pregame
+  // product surface produced an official target and the ids of the two frozen
+  // snapshots behind it (the line-BLIND projection core vs the line-decision
+  // layer), plus the target tier and role certainty. Populated ONLY by the
+  // future Pregame Targets products (PR3+); left null for every existing row and
+  // for every product that does not emit them. No backfill, no fabrication, and
+  // NO existing column is rewritten (additive only — migration principle #1).
+  surface: text("surface"),
+  projectionSnapshotId: text("projection_snapshot_id"),
+  decisionSnapshotId: text("decision_snapshot_id"),
+  targetTier: text("target_tier"),
+  roleCertainty: numeric("role_certainty"),
 }, (table) => ({
   gameDateIdx: index("persisted_plays_game_date_idx").on(table.gameDate),
   resultIdx: index("persisted_plays_result_idx").on(table.result),

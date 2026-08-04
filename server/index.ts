@@ -27,6 +27,7 @@ import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2Shad
 import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
 import { ensurePersistedPlaysSafetyCoreColumns } from "./dbMigrations/persistedPlaysSafetyCoreColumns";
 import { ensurePregameTargetsFoundationSchema } from "./dbMigrations/pregameTargetsFoundationPersistence";
+import { ensurePregameTargetsProvenanceColumns } from "./dbMigrations/pregameTargetsProvenancePersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
@@ -286,6 +287,13 @@ app.use((req, res, next) => {
   // creates schema, never rows. See docs/pregame-targets/ + server/pregameTargets/.
   await ensurePregameTargetsFoundationSchema(pool);
   console.log("[startup] Pregame Targets temporal-foundation persistence schema ensured");
+
+  // Durable persistence bootstrap: Pregame Targets official-target provenance
+  // columns on persisted_plays (PR2 contract layer, §10). Additive, nullable,
+  // self-heal ADD COLUMN IF NOT EXISTS — no product writes them yet; existing
+  // rows and non-emitting products stay null. See docs/pregame-targets/.
+  await ensurePregameTargetsProvenanceColumns(pool);
+  console.log("[startup] Pregame Targets official-target provenance columns ensured");
 
   // Schema migration: add email-verification columns if they don't exist yet.
   // Safe to run on every startup — uses IF NOT EXISTS so it's a no-op once applied.
