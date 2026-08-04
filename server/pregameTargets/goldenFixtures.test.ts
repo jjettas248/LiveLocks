@@ -578,16 +578,21 @@ async function main(): Promise<void> {
       suppressedReasons: ["batter_power_missing"],
     }),
   );
+  // Inputs are deliberately in ASCENDING score10 order (suppressed 3.0 before
+  // public 7.5) so the builder's descending `score10` sort MUST reorder them.
+  // Deleting that production sort flips the include_suppressed output to
+  // ascending and fails byte-equality — this is what actually locks ordering.
+  const plateAscending = [plateSuppressed, platePublic];
   checkGroup(
     "plateBuildResponse",
     {
       public_only: buildResponse(
         "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-        [platePublic, plateSuppressed], FROZEN_COUNTERS, false,
+        plateAscending, FROZEN_COUNTERS, false,
       ),
       include_suppressed: buildResponse(
         "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-        [platePublic, plateSuppressed], FROZEN_COUNTERS, true,
+        plateAscending, FROZEN_COUNTERS, true,
       ),
     },
   );
@@ -609,16 +614,19 @@ async function main(): Promise<void> {
       suppressedReasons: ["starter_not_confirmed"],
     }),
   );
+  // Ascending input (suppressed 3.2 before public 6.9) for the same reason as
+  // plate above — the include_research output must come back descending.
+  const moundAscending = [moundSuppressed, moundPublic];
   checkGroup(
     "moundBuildResponse",
     {
       public_only: buildMoundResponse(
         "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-        [moundPublic, moundSuppressed], FROZEN_COUNTERS, false, false,
+        moundAscending, FROZEN_COUNTERS, false, false,
       ),
       include_research: buildMoundResponse(
         "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-        [moundPublic, moundSuppressed], FROZEN_COUNTERS, true, true,
+        moundAscending, FROZEN_COUNTERS, true, true,
       ),
     },
   );
@@ -648,6 +656,27 @@ async function main(): Promise<void> {
   ok(
     JSON.stringify(canonicalize(freshEnd)) !== JSON.stringify(canonicalize(staleEnd)),
     "odds-freshness gate changes computeProbability output across the 599/600 boundary",
+  );
+
+  // Ordering self-check: fed ASCENDING input, both response builders must emit
+  // signals DESCENDING by score10 — so the output order differs from the input
+  // order, proving the production sort actually ran (not just that the input
+  // happened to be pre-sorted).
+  const plateOrder = buildResponse(
+    "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
+    plateAscending, FROZEN_COUNTERS, true,
+  ).signals.map((s) => Number(s.score10));
+  ok(
+    plateOrder.length === 2 && plateOrder[0] > plateOrder[1],
+    `plate buildResponse sorts descending by score10 despite ascending input (got ${plateOrder.join(",")})`,
+  );
+  const moundOrder = buildMoundResponse(
+    "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
+    moundAscending, FROZEN_COUNTERS, true, true,
+  ).signals.map((s) => Number(s.score10));
+  ok(
+    moundOrder.length === 2 && moundOrder[0] > moundOrder[1],
+    `mound buildMoundResponse sorts descending by score10 despite ascending input (got ${moundOrder.join(",")})`,
   );
 
   // Fixture-resolution self-check: a missing fixture must FAIL verification, and
