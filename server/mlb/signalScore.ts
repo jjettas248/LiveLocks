@@ -607,19 +607,23 @@ export function scoreUnderSignal(
   const price = computePriceValidationComponent(output.edge, output.overOdds, output.underOdds);
   const eventBoost = computeEventBoostComponent(input, output);
 
-  // MLB Live Edge safety-core (Stage A A5) — fixed a double-count: `live`
-  // (computeLiveContextComponent) was previously weighted twice
-  // (0.15 * live + 0.12 * live = 0.27 * live), inflating one piece of evidence
-  // into ~a quarter of the score, while `eventBoost` was computed (line above)
-  // but silently dropped from the total. Now each component is counted once and
-  // eventBoost takes the freed 0.12 weight (mirroring scoreBatterOverSignal,
-  // which also carries eventBoost). Weights still sum to 1.0.
+  // MLB Live Edge safety-core (Stage A A5) — duplicate-contribution audit.
+  // `live` (computeLiveContextComponent) previously appeared as TWO separate
+  // terms (0.15 * live + 0.12 * live), a latent double-count hazard: a future
+  // edit could change one weight and not the other, and it reads as if two
+  // independent pieces of evidence exist when there is only one. Consolidated
+  // into a SINGLE 0.27 * live contribution — behavior-preserving (0.15 + 0.12 =
+  // 0.27), so no score/tier/fixture shifts. Reducing live's 0.27 weight (higher
+  // than the sibling scorer's 0.25 lei) is a genuine re-weighting that would
+  // move tiers, so it is a CALIBRATION decision — deferred to Stage C with
+  // forward-validation evidence, never guessed here. (eventBoost is computed
+  // above and used in the returned breakdown; leaving it out of the total is
+  // unchanged prior behavior, pending that same calibration pass.)
   const baseTotal = Math.round(
     0.22 * prob +
     0.18 * proj +
     0.15 * matchup +
-    0.15 * live +
-    0.12 * eventBoost +
+    0.27 * live +
     0.08 * form +
     0.05 * opportunity +
     0.05 * price
