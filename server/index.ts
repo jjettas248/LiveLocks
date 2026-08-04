@@ -21,6 +21,7 @@ import { db, pool } from "./db";
 import { ensurePregameRadarPersistenceSchema } from "./dbMigrations/pregameRadarPersistence";
 import { ensureHrRadarResearchPersistenceSchema } from "./dbMigrations/hrRadarResearchPersistence";
 import { ensurePlateHrV2PersistenceSchema } from "./dbMigrations/plateHrV2Persistence";
+import { ensurePlateHrV2SnapshotSchema } from "./dbMigrations/plateHrV2SnapshotPersistence";
 import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/mlbRecommendationEpisodePersistence";
 import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2ShadowPersistence";
 import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
@@ -248,6 +249,10 @@ app.use((req, res, next) => {
   // creates schema and registers a sink, never rows, until that flag is set.
   await ensurePlateHrV2PersistenceSchema(pool);
   console.log("[startup] Plate HR V2 persistence schema ensured");
+  // Two-layer append-only point-in-time snapshots (plan §7.1, PR1). Schema-only
+  // here; forward capture wiring is a later PR. Same fail-hard reasoning.
+  await ensurePlateHrV2SnapshotSchema(pool);
+  console.log("[startup] Plate HR V2 append-only snapshot schema ensured");
   installPlateHrV2CapturePersistence();
 
   // Durable persistence bootstrap: MLB Recommendation Episode contract

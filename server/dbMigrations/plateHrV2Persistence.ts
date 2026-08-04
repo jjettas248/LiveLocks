@@ -195,6 +195,7 @@ const PLATE_HR_V2_SUFFICIENT_STATS = `
     walks INTEGER NOT NULL DEFAULT 0,
     batted_ball_events INTEGER NOT NULL DEFAULT 0,
     pitch_family_stats JSONB NOT NULL DEFAULT '{}',
+    pitch_type_stats JSONB NOT NULL DEFAULT '{}',
     ev_percentiles JSONB NOT NULL DEFAULT '{}',
     la_percentiles JSONB NOT NULL DEFAULT '{}',
     pulled_bip INTEGER NOT NULL DEFAULT 0,
@@ -202,6 +203,12 @@ const PLATE_HR_V2_SUFFICIENT_STATS = `
     source_row_count INTEGER NOT NULL DEFAULT 0,
     computed_at TIMESTAMP NOT NULL DEFAULT NOW()
   );
+`;
+// PR4: a pre-PR4 copy of this table created before pitch_type_stats existed.
+// Additive-only — a no-op once the column is present (same SELF_HEAL idiom).
+const PLATE_HR_V2_SUFFICIENT_STATS_SELF_HEAL = `
+  ALTER TABLE plate_hr_v2_sufficient_stats
+    ADD COLUMN IF NOT EXISTS pitch_type_stats JSONB NOT NULL DEFAULT '{}';
 `;
 const PLATE_HR_V2_SUFFICIENT_STATS_ENTITY_DATE_IDX = `
   CREATE INDEX IF NOT EXISTS plate_hr_v2_sufficient_stats_entity_date_idx
@@ -232,6 +239,7 @@ export const PLATE_HR_V2_PERSISTENCE_STATEMENTS: readonly string[] = [
   PLATE_HR_V2_MODEL_REGISTRY_STATUS_IDX,
   PLATE_HR_V2_MODEL_REGISTRY_FEATURE_VERSION_IDX,
   PLATE_HR_V2_SUFFICIENT_STATS,
+  PLATE_HR_V2_SUFFICIENT_STATS_SELF_HEAL,
   PLATE_HR_V2_SUFFICIENT_STATS_ENTITY_DATE_IDX,
   PLATE_HR_V2_SUFFICIENT_STATS_AS_OF_DATE_IDX,
 ];

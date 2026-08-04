@@ -26,6 +26,11 @@
 import { z } from "zod";
 
 export const PLATE_HR_V2_FEATURES_V1 = "plate_hr_v2_features_v1" as const;
+// V2 (PR5) adds the `recentContactForm` group. V1 is PRESERVED unchanged so
+// historical V1 snapshots still parse; a single feature version never represents
+// two shapes. New snapshots are written as PLATE_HR_V2_FEATURES_CURRENT (= V2).
+export const PLATE_HR_V2_FEATURES_V2 = "plate_hr_v2_features_v2" as const;
+export const PLATE_HR_V2_FEATURES_CURRENT = PLATE_HR_V2_FEATURES_V2;
 
 // Independently-versioned raw-input envelope contract version — distinct from
 // PLATE_HR_V2_FEATURES_V1 so a feature-builder bug can be fixed and features
@@ -52,7 +57,7 @@ export const plateHrV2BatterPowerFeaturesSchema = z.object({
   hrPerPaSeason: numericLeaf,
   paSample: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2BatterPowerFeatures = z.infer<typeof plateHrV2BatterPowerFeaturesSchema>;
 
 // ── B. Bat-tracking / swing-quality skill ───────────────────────────────────
@@ -68,7 +73,7 @@ export const plateHrV2BatTrackingFeaturesSchema = z.object({
   blastPerSwingPct: numericLeaf,
   swingSample: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2BatTrackingFeatures = z.infer<typeof plateHrV2BatTrackingFeaturesSchema>;
 
 // ── E. Pitcher HR vulnerability ──────────────────────────────────────────────
@@ -83,7 +88,7 @@ export const plateHrV2PitcherVulnerabilityFeaturesSchema = z.object({
   flyBallAllowedPct: numericLeaf,
   bfSample: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2PitcherVulnerabilityFeatures = z.infer<typeof plateHrV2PitcherVulnerabilityFeaturesSchema>;
 
 // ── C/F. Pitch-type interaction ──────────────────────────────────────────────
@@ -99,14 +104,20 @@ const pitchFamilyLeafSchema = z.object({
   usageShare: numericLeaf,
   batterXslg: numericLeaf,
   batterWhiffPct: numericLeaf,
+  // PR4.1: grain-typed denominators. `batterDamageBbeSample` (BBE) shrinks the
+  // xSLG damage split; `batterWhiffSwingSample` (swings) shrinks whiff%. Kept
+  // separate so a BBE count is never used as a swing count. `batterSampleSwings`
+  // is retained (deprecated) and now carries the swing sample to match its name.
   batterSampleSwings: numericLeaf,
-});
+  batterDamageBbeSample: numericLeaf,
+  batterWhiffSwingSample: numericLeaf,
+}).strict();
 export const plateHrV2PitchTypeFeaturesSchema = z.object({
   fastball: pitchFamilyLeafSchema,
   breaking: pitchFamilyLeafSchema,
   offspeed: pitchFamilyLeafSchema,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2PitchTypeFeatures = z.infer<typeof plateHrV2PitchTypeFeaturesSchema>;
 
 // ── D. Zone / location interaction ──────────────────────────────────────────
@@ -118,7 +129,7 @@ export const plateHrV2ZoneLocationFeaturesSchema = z.object({
   pitcherMiddleMiddleRate: numericLeaf,
   pitcherHangerRate: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2ZoneLocationFeatures = z.infer<typeof plateHrV2ZoneLocationFeaturesSchema>;
 
 // ── I/J. Park + weather + spray + fence geometry ────────────────────────────
@@ -137,7 +148,7 @@ export const plateHrV2ParkWeatherSprayFeaturesSchema = z.object({
   avgFenceHeightFt: numericLeaf,
   avgHrDistanceFt: numericLeaf,
   extra: extraLeaves, // PR3 weather-physics/xHR extension point — no named fields invented ahead of math/ itself having them
-});
+}).strict();
 export type PlateHrV2ParkWeatherSprayFeatures = z.infer<typeof plateHrV2ParkWeatherSprayFeaturesSchema>;
 
 // ── K. Lineup / opportunity / volume ────────────────────────────────────────
@@ -147,7 +158,7 @@ export const plateHrV2LineupOpportunityFeaturesSchema = z.object({
   obpAhead: numericLeaf,
   lineupConfirmed: z.boolean(),
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2LineupOpportunityFeatures = z.infer<typeof plateHrV2LineupOpportunityFeaturesSchema>;
 
 // ── L/M. Starter exposure + bullpen path ────────────────────────────────────
@@ -158,7 +169,7 @@ export const plateHrV2StarterBullpenFeaturesSchema = z.object({
   bullpenHrPer9: numericLeaf,
   bullpenBarrelAllowedPct: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2StarterBullpenFeatures = z.infer<typeof plateHrV2StarterBullpenFeaturesSchema>;
 
 // ── O. Market confirmation — confirm/rank only, never creates a candidate ───
@@ -167,7 +178,7 @@ export const plateHrV2MarketFeaturesSchema = z.object({
   impliedHrProbability: numericLeaf,
   noVigImpliedHrProbability: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2MarketFeatures = z.infer<typeof plateHrV2MarketFeaturesSchema>;
 
 // ── P. Availability suppressors ──────────────────────────────────────────────
@@ -177,7 +188,7 @@ export const plateHrV2AvailabilityFeaturesSchema = z.object({
   restDayRisk: z.boolean().nullable(),
   platoonSubRisk: z.boolean().nullable(),
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2AvailabilityFeatures = z.infer<typeof plateHrV2AvailabilityFeaturesSchema>;
 
 // ── NEW group (PR1 addition, absent from math/'s PregameMathInputs today) ──
@@ -192,8 +203,28 @@ export const plateHrV2ContactOpportunityFeaturesSchema = z.object({
   zoneContactRatePct: numericLeaf,
   chaseRatePct: numericLeaf,
   extra: extraLeaves,
-});
+}).strict();
 export type PlateHrV2ContactOpportunityFeatures = z.infer<typeof plateHrV2ContactOpportunityFeaturesSchema>;
+
+// ── NEW group (PR5 addition) — stabilized recent-contact form. Additive/shadow:
+// no scorer reads it yet (PR6 wires one). Computed from the real `contact_events`
+// per-BBE stream (EV EWMA, EV90, air%, barrel%) reliability-blended with a season
+// baseline; recentFormPulledAirShare is season-only and recentFormXHrPerContact is
+// always null (no per-event spray/xSLG stream exists). Recent HR count can never
+// contribute. All-null when absent. ──────────────────────────────────────────────
+export const plateHrV2RecentContactFormFeaturesSchema = z.object({
+  recentFormEv: numericLeaf,
+  recentFormEv90: numericLeaf,
+  recentFormAirBallPct: numericLeaf,
+  recentFormBarrelPct: numericLeaf,
+  recentFormPulledAirShare: numericLeaf,
+  recentFormXHrPerContact: numericLeaf,
+  effectiveBbe: numericLeaf,
+  last15Bbe: numericLeaf,
+  reliabilityWeight: numericLeaf,
+  extra: extraLeaves,
+}).strict();
+export type PlateHrV2RecentContactFormFeatures = z.infer<typeof plateHrV2RecentContactFormFeaturesSchema>;
 
 // ── Data quality (feature-vector-level summary) — no `extra`, this block IS
 // the escape hatch's own accounting. ────────────────────────────────────────
@@ -204,7 +235,7 @@ export const plateHrV2DataQualityFeaturesSchema = z.object({
   batterPowerFullyAvailable: z.boolean(),
   missingInputs: z.array(z.string()),
   overallQuality: z.enum(["full", "degraded", "missing"]),
-});
+}).strict();
 export type PlateHrV2DataQualityFeatures = z.infer<typeof plateHrV2DataQualityFeaturesSchema>;
 
 // ── Derived feature vector (validated against the `derived_features` jsonb
@@ -224,8 +255,54 @@ export const plateHrV2DerivedFeatureVectorV1Schema = z.object({
   contactOpportunity: plateHrV2ContactOpportunityFeaturesSchema,
   dataQuality: plateHrV2DataQualityFeaturesSchema,
   slateBaselineGameHrProbability: numericLeaf,
-});
+}).strict();
 export type PlateHrV2DerivedFeatureVectorV1 = z.infer<typeof plateHrV2DerivedFeatureVectorV1Schema>;
+
+// ── V2 derived vector = V1 + recentContactForm (PR5). A distinct featureVersion
+// literal so the two shapes never collide. STRICT so no extra group rides along. ─
+export const plateHrV2DerivedFeatureVectorV2Schema = plateHrV2DerivedFeatureVectorV1Schema.extend({
+  featureVersion: z.literal(PLATE_HR_V2_FEATURES_V2),
+  recentContactForm: plateHrV2RecentContactFormFeaturesSchema,
+}).strict();
+export type PlateHrV2DerivedFeatureVectorV2 = z.infer<typeof plateHrV2DerivedFeatureVectorV2Schema>;
+
+/** Accepts either version, discriminated on featureVersion — the reader for a
+ * heterogeneous store of historical (V1) + current (V2) snapshots. */
+export const plateHrV2DerivedFeatureVectorAnySchema = z.discriminatedUnion("featureVersion", [
+  plateHrV2DerivedFeatureVectorV1Schema,
+  plateHrV2DerivedFeatureVectorV2Schema,
+]);
+export type PlateHrV2DerivedFeatureVectorAny = z.infer<typeof plateHrV2DerivedFeatureVectorAnySchema>;
+
+// ── AUTHORIZED PERSISTED PROJECTION (PR5.2 gap 1) ─────────────────────────────
+// What actually lands in the `derived_features` jsonb column: the closed
+// AUTHORIZED_DERIVED_FEATURE_GROUPS set = the full vector MINUS market + zoneLocation
+// (both stripped at capture). STRICT + version-specific so the training reader can
+// validate the persisted projection and reject a V2 row missing recentContactForm,
+// a V1 row carrying the V2 group, or any extra group.
+export const plateHrV2AuthorizedProjectionV1Schema = plateHrV2DerivedFeatureVectorV1Schema
+  .omit({ market: true, zoneLocation: true }).strict();
+export type PlateHrV2AuthorizedProjectionV1 = z.infer<typeof plateHrV2AuthorizedProjectionV1Schema>;
+
+export const plateHrV2AuthorizedProjectionV2Schema = plateHrV2DerivedFeatureVectorV2Schema
+  .omit({ market: true, zoneLocation: true }).strict();
+export type PlateHrV2AuthorizedProjectionV2 = z.infer<typeof plateHrV2AuthorizedProjectionV2Schema>;
+
+/** Strictly parse a persisted derived-features projection against the schema for
+ * `featureVersion`; also enforces top-level version === embedded version. */
+export function parseAuthorizedProjection(
+  featureVersion: string,
+  derivedFeatures: unknown,
+): { ok: true; version: string } | { ok: false; reason: string } {
+  const schema = featureVersion === PLATE_HR_V2_FEATURES_V2 ? plateHrV2AuthorizedProjectionV2Schema
+    : featureVersion === PLATE_HR_V2_FEATURES_V1 ? plateHrV2AuthorizedProjectionV1Schema
+    : null;
+  if (schema == null) return { ok: false, reason: `unknown_feature_version:${featureVersion}` };
+  const parsed = schema.safeParse(derivedFeatures);
+  if (!parsed.success) return { ok: false, reason: "derived_features_projection_invalid" };
+  if (parsed.data.featureVersion !== featureVersion) return { ok: false, reason: "feature_version_embedded_mismatch" };
+  return { ok: true, version: featureVersion };
+}
 
 // ── Per-leaf presence/quality mirror (validated against the `availability`
 // jsonb column) ──────────────────────────────────────────────────────────────
@@ -250,6 +327,23 @@ export const plateHrV2FeatureAvailabilityVectorV1Schema = z.object({
   contactOpportunity: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
 });
 export type PlateHrV2FeatureAvailabilityVectorV1 = z.infer<typeof plateHrV2FeatureAvailabilityVectorV1Schema>;
+
+// ── V2 availability = V1 + recentContactForm (PR5). ───────────────────────────
+export const plateHrV2FeatureAvailabilityVectorV2Schema = plateHrV2FeatureAvailabilityVectorV1Schema.extend({
+  featureVersion: z.literal(PLATE_HR_V2_FEATURES_V2),
+  recentContactForm: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
+});
+export type PlateHrV2FeatureAvailabilityVectorV2 = z.infer<typeof plateHrV2FeatureAvailabilityVectorV2Schema>;
+
+/** Guard: a single training artifact must not mix feature versions. Returns the
+ * common version, or an error listing the distinct versions seen. */
+export function resolveSingleFeatureVersion(
+  versions: readonly string[],
+): { ok: true; version: string } | { ok: false; versions: string[] } {
+  const distinct = Array.from(new Set(versions));
+  if (distinct.length === 1) return { ok: true, version: distinct[0] };
+  return { ok: false, versions: distinct };
+}
 
 // ── Per-feature-family source/freshness (validated against the
 // `feature_freshness` jsonb column) — distinct from `availability`, which is

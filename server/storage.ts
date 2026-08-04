@@ -57,8 +57,12 @@ import {
   plateHrV2SufficientStats,
   plateHrV2Labels,
   plateHrV2ModelRegistry,
+  plateHrV2SourceEvidence,
+  plateHrV2PredictionSnapshots,
   type InsertPlateHrV2FeatureSnapshot,
   type InsertPlateHrV2SufficientStats,
+  type InsertPlateHrV2SourceEvidence,
+  type InsertPlateHrV2PredictionSnapshot,
   type PlateHrV2FeatureSnapshotRow,
   type InsertPlateHrV2Label,
   type PlateHrV2LabelRow,
@@ -454,6 +458,9 @@ export interface IStorage {
   // authority — see docs/audits/plate-hr-v2-feature-source-audit.md) ────────
   upsertPlateHrV2FeatureSnapshot(row: InsertPlateHrV2FeatureSnapshot): Promise<void>;
   upsertPlateHrV2SufficientStats(row: InsertPlateHrV2SufficientStats): Promise<void>;
+  // Append-only two-layer point-in-time snapshots (PR3) — idempotent inserts.
+  insertPlateHrV2SourceEvidence(rows: InsertPlateHrV2SourceEvidence[]): Promise<void>;
+  insertPlateHrV2PredictionSnapshot(row: InsertPlateHrV2PredictionSnapshot): Promise<void>;
   getLatestPregamePowerBuild(sessionDate: string): Promise<PregamePowerRadarBuildRow | null>;
 
   // ── Plate HR Probability V2 — PR 2 (labeling, fitting, model registry;
@@ -3848,6 +3855,7 @@ export class DatabaseStorage implements IStorage {
           walks: row.walks,
           battedBallEvents: row.battedBallEvents,
           pitchFamilyStats: row.pitchFamilyStats,
+          pitchTypeStats: row.pitchTypeStats ?? {},
           evPercentiles: row.evPercentiles,
           laPercentiles: row.laPercentiles,
           pulledBip: row.pulledBip,
@@ -3856,6 +3864,24 @@ export class DatabaseStorage implements IStorage {
           computedAt: new Date(),
         },
       });
+  }
+
+  // ── Plate HR V2 — append-only two-layer point-in-time snapshots (PR3) ──────
+  // Both inserts are idempotent: ON CONFLICT DO NOTHING. Source evidence is
+  // deduped on its content-derived PK; a prediction revision is deduped on the
+  // composite (game_pk, batter_id, feature_version, prediction_as_of) — a new
+  // predictionAsOf appends a new row rather than overwriting a prior revision.
+  async insertPlateHrV2SourceEvidence(rows: InsertPlateHrV2SourceEvidence[]): Promise<void> {
+    if (rows.length === 0) return;
+    await db.insert(plateHrV2SourceEvidence).values(rows).onConflictDoNothing({
+      target: plateHrV2SourceEvidence.sourceSnapshotId,
+    });
+  }
+
+  async insertPlateHrV2PredictionSnapshot(row: InsertPlateHrV2PredictionSnapshot): Promise<void> {
+    await db.insert(plateHrV2PredictionSnapshots).values(row).onConflictDoNothing({
+      target: plateHrV2PredictionSnapshots.predictionSnapshotId,
+    });
   }
 
   // ── Plate HR Probability V2 — PR 2 (labeling, fitting, model registry) ───

@@ -1612,6 +1612,9 @@ export const plateHrV2SufficientStats = pgTable("plate_hr_v2_sufficient_stats", 
   walks: integer("walks").notNull().default(0),
   battedBallEvents: integer("batted_ball_events").notNull().default(0),
   pitchFamilyStats: jsonb("pitch_family_stats").notNull().default({}),
+  // §5a (PR4): exact-pitch grain-typed counts × opponent hand, keyed
+  // `${hand}:${code}`. Additive — retained 3-family block above for fallback.
+  pitchTypeStats: jsonb("pitch_type_stats").notNull().default({}),
   evPercentiles: jsonb("ev_percentiles").notNull().default({}),
   laPercentiles: jsonb("la_percentiles").notNull().default({}),
   pulledBip: integer("pulled_bip").notNull().default(0),
@@ -1628,6 +1631,97 @@ export const plateHrV2SufficientStats = pgTable("plate_hr_v2_sufficient_stats", 
 export const insertPlateHrV2SufficientStatsSchema = createInsertSchema(plateHrV2SufficientStats).omit({ computedAt: true });
 export type PlateHrV2SufficientStatsRow = typeof plateHrV2SufficientStats.$inferSelect;
 export type InsertPlateHrV2SufficientStats = z.infer<typeof insertPlateHrV2SufficientStatsSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Plate HR V2 — two-layer, APPEND-ONLY point-in-time snapshots (plan §7.1, PR1).
+//
+// Immutability = append-only with unique keys, NOT rebuild-in-place. Two layers:
+//
+//   plate_hr_v2_source_evidence   — one row per provider fetch of an entity's
+//     evidence, shared/referenced by id (never duplicated into each batter row).
+//   plate_hr_v2_prediction_snapshots — one row per (batter-game, moment); a late
+//     lineup/probable/weather change creates a NEW row (new prediction_as_of),
+//     the prior one is retained. Composite uniqueness
+//     (game_pk, batter_id, feature_version, prediction_as_of).
+//
+// Point-in-time eligibility is evidenceKind-specific and lives in
+// server/mlb/pregamePowerRadar/hrProbabilityV2/plateHrV2Snapshots.ts (pure).
+// Nothing writes these tables yet — forward capture is wired in PR3.
+// ─────────────────────────────────────────────────────────────────────────────
+export const plateHrV2SourceEvidence = pgTable("plate_hr_v2_source_evidence", {
+  sourceSnapshotId: text("source_snapshot_id").primaryKey(),
+  provider: text("provider").notNull(),
+  entityId: text("entity_id").notNull(),
+  // batter | pitcher | game | venue
+  entityType: text("entity_type").notNull(),
+  // historical_stat | lineup | probable | weather_forecast | park
+  evidenceKind: text("evidence_kind").notNull(),
+  // Latest game/date the underlying data actually covers (historical_stat only).
+  dataThroughAt: timestamp("data_through_at"),
+  // Verified time the evidence could have been known. NULLABLE (PR4.3): a
+  // provenance-incomplete source has honestly null timestamps — never a
+  // substituted capture moment — and is always training-INELIGIBLE.
+  availableAt: timestamp("available_at"),
+  // fetched_at | provider_published_at | provider_issued_at | verified_as_of | unverified
+  availabilitySource: text("availability_source").notNull(),
+  // The time the evidence DESCRIBES (weather forecast game time — may be future).
+  validForAt: timestamp("valid_for_at"),
+  // True when fetched after the prediction moment (excluded unless verified as-of).
+  reconstructed: boolean("reconstructed").notNull().default(false),
+  // PR4.3: true when the real fetch time / cutoff was unavailable → ineligible.
+  provenanceIncomplete: boolean("provenance_incomplete").notNull().default(false),
+  fetchedAt: timestamp("fetched_at"),
+  schemaVersion: text("schema_version").notNull(),
+  contentHash: text("content_hash").notNull(),
+  payloadRef: text("payload_ref"),
+  // Immutable authorized payload this row hashes over (zone fields stripped).
+  // Self-contained, content-addressed — never a pointer to a mutable row.
+  // NULLABLE (PR4.2 #3): a null payload (e.g. a legacy row) is training-INELIGIBLE
+  // and never certified as `{}`; every new write supplies a verified non-null payload.
+  authorizedPayload: jsonb("authorized_payload"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  entityIdx: index("plate_hr_v2_source_evidence_entity_idx").on(table.entityType, table.entityId),
+  kindIdx: index("plate_hr_v2_source_evidence_kind_idx").on(table.evidenceKind),
+  availableAtIdx: index("plate_hr_v2_source_evidence_available_at_idx").on(table.availableAt),
+}));
+
+export const insertPlateHrV2SourceEvidenceSchema = createInsertSchema(plateHrV2SourceEvidence).omit({ createdAt: true });
+export type PlateHrV2SourceEvidenceRow = typeof plateHrV2SourceEvidence.$inferSelect;
+export type InsertPlateHrV2SourceEvidence = z.infer<typeof insertPlateHrV2SourceEvidenceSchema>;
+
+export const plateHrV2PredictionSnapshots = pgTable("plate_hr_v2_prediction_snapshots", {
+  predictionSnapshotId: text("prediction_snapshot_id").primaryKey(),
+  gamePk: text("game_pk").notNull(),
+  batterId: text("batter_id").notNull(),
+  featureVersion: text("feature_version").notNull(),
+  predictionAsOf: timestamp("prediction_as_of").notNull(),
+  firstPitchTime: timestamp("first_pitch_time"),
+  // Ids into plate_hr_v2_source_evidence — referenced, never duplicated.
+  sourceSnapshotIds: jsonb("source_snapshot_ids").notNull().default([]),
+  derivedFeatures: jsonb("derived_features").notNull(),
+  contentHash: text("content_hash").notNull(),
+  // Authority is assigned at TRAINING-READ time via deterministic latest-≤-first-
+  // pitch selection (PR4.3); the writer always persists false.
+  authoritative: boolean("authoritative").notNull().default(false),
+  // Cached result of the write-time eligibility check (the training reader
+  // RECOMPUTES; this is a cross-check, not the authority). Nullable until resolved.
+  trainingEligible: boolean("training_eligible"),
+  // PR4.3: write-time block reasons persisted for observability/audit.
+  trainingBlockReasons: jsonb("training_block_reasons").notNull().default([]),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  // Append-only revisions: a distinct prediction_as_of is a distinct row.
+  identityIdx: uniqueIndex("plate_hr_v2_prediction_snapshots_identity_idx").on(
+    table.gamePk, table.batterId, table.featureVersion, table.predictionAsOf,
+  ),
+  gameBatterIdx: index("plate_hr_v2_prediction_snapshots_game_batter_idx").on(table.gamePk, table.batterId),
+  predictionAsOfIdx: index("plate_hr_v2_prediction_snapshots_prediction_as_of_idx").on(table.predictionAsOf),
+}));
+
+export const insertPlateHrV2PredictionSnapshotSchema = createInsertSchema(plateHrV2PredictionSnapshots).omit({ createdAt: true });
+export type PlateHrV2PredictionSnapshotRow = typeof plateHrV2PredictionSnapshots.$inferSelect;
+export type InsertPlateHrV2PredictionSnapshot = z.infer<typeof insertPlateHrV2PredictionSnapshotSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MLB Recommendation Episode — MLB Flagship Program Phase 1 foundation. The

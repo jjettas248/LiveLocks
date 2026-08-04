@@ -19,7 +19,7 @@
 // fitted to historical outcomes. Empirical calibration is a deferred future phase.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import type { PregameMathInputs, LogOddsTerm } from "./mathTypes";
+import type { PregameMathInputs, LogOddsTerm, SegmentedHrPerPaResult } from "./mathTypes";
 import { sigmoid, logit, clamp } from "./normalizeStats";
 import { shrinkRate, STABILIZATION_K } from "./shrinkRates";
 import { scoreBatterTruePower } from "./scoreBatterTruePower";
@@ -29,7 +29,8 @@ import { scorePitchTypeInteraction } from "./scorePitchTypeInteraction";
 import { scoreZoneLocationInteraction } from "./scoreZoneLocationInteraction";
 import { scoreParkWeatherSprayInteraction } from "./scoreParkWeatherSprayInteraction";
 import { scoreLineupOpportunity } from "./scoreLineupOpportunity";
-import { scoreStarterBullpenPath } from "./scoreStarterBullpenPath";
+import { scoreStarterBullpenPath, scoreBullpenVulnerability } from "./scoreStarterBullpenPath";
+import { scoreRecentContactForm } from "./scoreRecentContactForm";
 import { scoreMarketConfirmation } from "./scoreMarketConfirmation";
 import { scoreAvailabilitySuppressors } from "./scoreAvailabilitySuppressors";
 
@@ -154,4 +155,111 @@ function clampHrPerPa(p: number): number {
 function computeCoreCoverage(batterAvailable: boolean, pitcherAvailable: boolean): number {
   // Batter power is the dominant family; weight it 0.7, pitcher 0.3.
   return (batterAvailable ? 0.7 : 0) + (pitcherAvailable ? 0.3 : 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PR6 — segmented (starter vs bullpen) per-PA HR probability.
+//
+// §10 per-segment decomposition. BOTH segments share the hitter / recent-form /
+// park terms; only the opponent terms differ:
+//
+//   logit(p_s) = β0 + Hitter + RecentForm + ParkWeather
+//                   + StarterVulnerability + StarterPitchMix + StarterZone
+//   logit(p_b) = β0 + Hitter + RecentForm + ParkWeather
+//                   + ExpectedBullpenVulnerability
+//
+// Starter-only opponent terms (pitcher vulnerability, starter pitch-mix, starter
+// zone) NEVER enter p_b; hitter/form/park ALWAYS enter p_b. Lineup opportunity and
+// market are DELIBERATELY excluded from the per-PA rate here — lineup drives PA
+// VOLUME (the joint PA-path, not the rate) and market is confirm/rank-only and is
+// excluded from probability entirely (product principle). This is a genuine
+// correction over the legacy single-rate `buildPregameHrPerPa`, which folded both
+// into the rate.
+//
+// Each segment's pre-suppressor rate is shrunk toward the league prior by its own
+// core coverage × sample, then the availability suppressor penalty is re-applied
+// last so suppressors can only ever LOWER the rate (never be raised back toward
+// league by prior shrinkage on a low-coverage row).
+// ─────────────────────────────────────────────────────────────────────────────
+export function buildSegmentedHrPerPa(inputs: PregameMathInputs): SegmentedHrPerPaResult {
+  // Shared batter / form / park terms (identical in both segments).
+  const batterPower = scoreBatterTruePower(inputs.batterPower);
+  const batTracking = scoreBatTrackingPower(inputs.batTracking);
+  const recentForm = scoreRecentContactForm(inputs.recentContactForm ?? null);
+  const park = scoreParkWeatherSprayInteraction(inputs.parkWeatherSpray);
+
+  // Starter opponent terms.
+  const pitcher = scorePitcherHrVulnerability(inputs.pitcherVulnerability);
+  const pitchType = scorePitchTypeInteraction(inputs.pitchType);
+  const zone = scoreZoneLocationInteraction(inputs.zoneLocation);
+
+  // Bullpen opponent term (pure vulnerability; exposure lives in the PA-path).
+  const bullpen = scoreBullpenVulnerability(inputs.starterBullpen);
+
+  // Availability suppressor (applies to both segments).
+  const suppressor = scoreAvailabilitySuppressors(inputs.availability);
+
+  const sharedLogit =
+    INTERCEPT + batterPower.logOdds + batTracking.logOdds + recentForm.logOdds + park.logOdds;
+  const starterOpponentLogOdds = pitcher.logOdds + pitchType.logOdds + zone.logOdds;
+  const bullpenOpponentLogOdds = bullpen.logOdds;
+
+  const effectiveSample = inputs.batterPower?.paSample ?? 0;
+  const starterCoreCoverage = computeCoreCoverage(batterPower.available, pitcher.available);
+  const bullpenCoreCoverage = computeCoreCoverage(batterPower.available, bullpen.available);
+
+  const starterHrPerPa = shrinkThenSuppress(
+    sharedLogit + starterOpponentLogOdds,
+    effectiveSample,
+    starterCoreCoverage,
+    suppressor.penaltyLogOdds,
+  );
+  const bullpenHrPerPa = shrinkThenSuppress(
+    sharedLogit + bullpenOpponentLogOdds,
+    effectiveSample,
+    bullpenCoreCoverage,
+    suppressor.penaltyLogOdds,
+  );
+
+  const terms: LogOddsTerm[] = [
+    batterPower, batTracking, recentForm, park, pitcher, pitchType, zone, bullpen,
+  ];
+
+  return {
+    starterHrPerPa,
+    bullpenHrPerPa,
+    sharedLogit,
+    starterOpponentLogOdds,
+    bullpenOpponentLogOdds,
+    recentFormLogOdds: recentForm.logOdds,
+    bullpenVulnerabilityAvailable: bullpen.available,
+    terms,
+    suppressors: suppressor.suppressors,
+    suppressorPenalty: suppressor.penaltyLogOdds,
+    confidenceFactor: suppressor.confidenceFactor,
+    starterCoreCoverage,
+    bullpenCoreCoverage,
+    effectiveSample,
+  };
+}
+
+/**
+ * Model-stability shrinkage toward the league prior by coverage × sample, then
+ * re-apply the availability suppressor penalty LAST (monotone: suppressors can
+ * only lower the rate). Mirrors the legacy `buildPregameHrPerPa` discipline.
+ */
+function shrinkThenSuppress(
+  preSuppressorLogit: number,
+  effectiveSample: number,
+  coreCoverage: number,
+  suppressorPenaltyLogOdds: number,
+): number {
+  const preSuppressorHrPerPa = clampHrPerPa(sigmoid(preSuppressorLogit));
+  const { value: shrunkPre } = shrinkRate(
+    preSuppressorHrPerPa,
+    Math.max(1, effectiveSample) * coreCoverage,
+    LEAGUE_HR_PER_PA,
+    STABILIZATION_K.hrPerPa,
+  );
+  return clampHrPerPa(sigmoid(logit(shrunkPre) - suppressorPenaltyLogOdds));
 }

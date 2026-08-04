@@ -31,10 +31,11 @@ export function buildPitchTypeInteractionInputsFromSavant(
         usageShare: usageFraction(pitcher, family),
         batterXslg: split?.xSLG ?? null,
         batterWhiffPct: split?.whiffPct ?? null,
-        // Current BatterPitchSplit does not preserve its own denominator. Keep
-        // this null rather than fabricating sample size; scorePitchTypeInteraction
-        // will apply its missing-sample shrinkage path.
-        batterSample: null,
+        // PR4: damage (xSLG) shrinkage uses the BBE denominator; PR4.1: whiff%
+        // shrinkage uses the SEPARATE swing denominator. Null only when genuinely
+        // absent (older rows) — never fabricated.
+        batterSample: split?.bbeSample ?? null,
+        batterWhiffSample: split?.whiffSwings ?? null,
       };
     }).filter((f) => f.usageShare != null && (f.batterXslg != null || f.batterWhiffPct != null)),
   };
