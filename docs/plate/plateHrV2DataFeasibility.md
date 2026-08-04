@@ -16,6 +16,7 @@ Script: `server/mlb/pregamePowerRadar/hrProbabilityV2/scripts/auditSavantFields.
 | Run | Env | Result |
 |---|---|---|
 | 2026-08-02, this sandbox | agent-proxied egress | **HTTP 403 from `baseballsavant.mlb.com` → INCONCLUSIVE.** The agent proxy is non-selective and Savant is not in its no-proxy allowlist; Savant rejects the proxied request. |
+| 2026-08-04, this sandbox (PR7 pre-gate re-run) | agent-proxied egress | **HTTP 403 again → still INCONCLUSIVE.** Re-ran `auditSavantFields.ts` (player 592450, 2025-04-01..15). Proxy `__agentproxy/status`: `selective:false`, Savant not in `noProxy`, `recentRelayFailures:[]` — i.e. an application-level block by Savant, not a TLS/proxy fault. The five location fields therefore remain **UNVERIFIED**; the spike must be run in the production/Railway environment (where `fetchBaseballSavantData` succeeds daily) before PR7 can be authorized. |
 
 **Consequence (fail-closed):** every field whose live presence this spike could not confirm is **UNVERIFIED → UNAUTHORIZED** until the spike is re-run where Savant is reachable (the production/Railway environment, where `fetchBaseballSavantData` already succeeds daily). The spike must be re-run and its per-field coverage recorded in this table before the zone gate (PR7) or bat-speed/official-barrel features may be authorized.
 
