@@ -96,8 +96,15 @@ export function computeRecencyWeight(
   // below): a custom seasonDecay of 2 or NaN would otherwise push the season
   // factor above 1 or to NaN, breaking the [0,1] weight invariant.
   const decay = clamp01(config.seasonDecay);
+  // Normalize the configured window bound to a finite non-negative integer. A
+  // non-finite maxSeasonOffset (NaN/Infinity) would make `offset > maxSeasonOffset`
+  // always false, so out-of-window seasons would keep weight instead of dropping
+  // to 0 — a misconfigured window must fail SAFE (keep only the current season).
+  const maxOffset = Number.isFinite(config.maxSeasonOffset)
+    ? Math.max(0, Math.trunc(config.maxSeasonOffset))
+    : 0;
   const season =
-    !Number.isFinite(offset) || offset < 0 || offset > config.maxSeasonOffset
+    !Number.isFinite(offset) || offset < 0 || offset > maxOffset
       ? 0
       : Math.pow(decay, offset);
 

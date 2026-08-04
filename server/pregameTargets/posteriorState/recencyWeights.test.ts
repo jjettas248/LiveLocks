@@ -75,6 +75,15 @@ const approx = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
     const nan = computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill" }, { ...DEFAULT_RECENCY_CONFIG, seasonDecay: NaN });
     ok(Number.isFinite(nan.weight), "NaN seasonDecay → finite weight");
   }
+  // A non-finite maxSeasonOffset must not disable the rollover (fail-safe: keep
+  // only the current season).
+  {
+    const nanW = { ...DEFAULT_RECENCY_CONFIG, maxSeasonOffset: NaN };
+    ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 2, featureClass: "skill" }, nanW).season === 0, "NaN maxSeasonOffset → out-of-window offset drops to 0");
+    ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill" }, nanW).season === 1, "current season (offset 0) still survives a bad window config");
+    const infW = { ...DEFAULT_RECENCY_CONFIG, maxSeasonOffset: Infinity };
+    ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 5, featureClass: "skill" }, infW).season === 0, "Infinity maxSeasonOffset → still drops beyond the window");
+  }
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", dataQuality: 2 }).quality === 1, "quality clamped to 1");
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", contextSimilarity: -1 }).context === 0, "negative context clamped to 0");
   ok(computeRecencyWeight({ ageDays: -10, seasonOffset: 0, featureClass: "skill" }).recency === 1, "negative age clamped to 0 → recency 1");
