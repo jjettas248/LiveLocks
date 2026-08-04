@@ -66,12 +66,42 @@ const dir: EntityDirectoryEntry[] = [
 
 // ── genuine ambiguity is rejected, never guessed ─────────────────────────────
 {
+  // Two consistent rows for the same identity with OVERLAPPING windows — the
+  // temporal data doesn't cleanly partition, so resolution fails closed.
   const dupes: EntityDirectoryEntry[] = [
-    { sport: "nba", kind: "player", nativeId: "9", canonicalId: "nba:player:9a", activeFrom: null, activeTo: null },
-    { sport: "nba", kind: "player", nativeId: "9", canonicalId: "nba:player:9b", activeFrom: null, activeTo: null },
+    { sport: "nba", kind: "player", nativeId: "9", canonicalId: "nba:player:9", activeFrom: null, activeTo: null },
+    { sport: "nba", kind: "player", nativeId: "9", canonicalId: "nba:player:9", activeFrom: null, activeTo: null },
   ];
   const r = resolveCanonicalEntity("nba:player:9", dupes, asOf);
   ok(!r.ok && r.reason === "ambiguous", "two overlapping candidates → ambiguous (fail closed)");
+}
+
+// ── self-inconsistent directory row is never used (fail-closed identity) ─────
+{
+  // The redundant canonicalId contradicts the row's own (sport, kind, nativeId).
+  const inconsistent: EntityDirectoryEntry[] = [
+    { sport: "nba", kind: "player", nativeId: "1", canonicalId: "nba:player:2", activeFrom: null, activeTo: null },
+  ];
+  const r = resolveCanonicalEntity("nba:player:1", inconsistent, asOf);
+  ok(!r.ok && r.reason === "unknown_id", "a row whose canonicalId contradicts its identity is skipped (never returned)");
+  // A consistent row alongside the bad one still resolves — to the CORRECT identity.
+  const mixed: EntityDirectoryEntry[] = [
+    { sport: "nba", kind: "player", nativeId: "1", canonicalId: "nba:player:2", activeFrom: null, activeTo: null },
+    { sport: "nba", kind: "player", nativeId: "1", canonicalId: "nba:player:1", activeFrom: null, activeTo: null },
+  ];
+  const r2 = resolveCanonicalEntity("nba:player:1", mixed, asOf);
+  ok(r2.ok && r2.entity.canonicalId === "nba:player:1", "resolved canonicalId always equals the request, never a mismatched row's id");
+}
+
+// ── offsetless instants are rejected (timezone-independent cutoff) ──────────
+{
+  const r = resolveCanonicalEntity("nba:player:1", dir, "2026-01-15T00:00:00"); // no Z/offset
+  ok(!r.ok && r.reason === "malformed_id", "offsetless as-of instant is rejected (would be process-TZ dependent)");
+  const windowed: EntityDirectoryEntry[] = [
+    { sport: "nba", kind: "player", nativeId: "1", canonicalId: "nba:player:1", activeFrom: "2026-01-01T00:00:00", activeTo: null },
+  ];
+  const r2 = resolveCanonicalEntity("nba:player:1", windowed, asOf);
+  ok(!r2.ok, "an offsetless window bound makes the row ineligible (fail closed)");
 }
 
 console.log(`\ncanonicalEntities.test: ${passed} passed, ${failed} failed`);

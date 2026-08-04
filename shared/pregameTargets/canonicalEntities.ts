@@ -86,6 +86,23 @@ export function isPregameEntityKind(v: unknown): v is PregameEntityKind {
   return typeof v === "string" && (PREGAME_ENTITY_KINDS as readonly string[]).includes(v);
 }
 
+// An instant must carry an EXPLICIT timezone designator (Z or ±HH:MM / ±HHMM).
+// `Date.parse` silently interprets an offsetless datetime in the process-local
+// timezone, which would make the foundational `knownAt <= predictionAt` cutoff
+// depend on where the process runs. We reject offsetless strings up front.
+const ISO_OFFSET_RE = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+/**
+ * Parse an ISO-8601 instant to epoch ms, REQUIRING an explicit offset. Returns
+ * NaN for a non-string, an offsetless datetime, or an unparseable value — so
+ * every temporal comparison in the foundation is timezone-independent.
+ */
+export function isoInstantMs(iso: unknown): number {
+  if (typeof iso !== "string" || !ISO_OFFSET_RE.test(iso)) return NaN;
+  const ms = Date.parse(iso);
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
 /**
  * A directory candidate. `activeFrom`/`activeTo` bound when this native id maps
  * to this canonical entity (ISO instants). A player traded mid-season yields two
@@ -136,7 +153,7 @@ export function resolveCanonicalEntity(
     return { ok: false, reason: "malformed_id", detail: canonicalId };
   }
 
-  const asOfMs = Date.parse(asOfIso);
+  const asOfMs = isoInstantMs(asOfIso);
   if (!Number.isFinite(asOfMs)) {
     return { ok: false, reason: "malformed_id", detail: `bad asOf: ${asOfIso}` };
   }
@@ -146,6 +163,11 @@ export function resolveCanonicalEntity(
       e.sport === parsed.sport &&
       e.kind === parsed.kind &&
       e.nativeId === parsed.nativeId &&
+      // Reject a self-inconsistent directory row whose redundant canonicalId does
+      // not equal its own (sport, kind, nativeId) — never return a mismatched
+      // identity (fail-closed). This guarantees the resolved canonicalId equals
+      // the requested one.
+      e.canonicalId === buildCanonicalId(e.sport, e.kind, e.nativeId) &&
       instantInWindow(asOfMs, e.activeFrom, e.activeTo),
   );
 
@@ -172,11 +194,11 @@ function instantInWindow(
   activeTo: string | null | undefined,
 ): boolean {
   if (activeFrom != null) {
-    const fromMs = Date.parse(activeFrom);
+    const fromMs = isoInstantMs(activeFrom);
     if (!Number.isFinite(fromMs) || asOfMs < fromMs) return false;
   }
   if (activeTo != null) {
-    const toMs = Date.parse(activeTo);
+    const toMs = isoInstantMs(activeTo);
     if (!Number.isFinite(toMs) || asOfMs >= toMs) return false;
   }
   return true;

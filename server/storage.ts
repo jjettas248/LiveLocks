@@ -4208,8 +4208,34 @@ export class DatabaseStorage implements IStorage {
   async createPregameRawSourceSnapshot(
     row: InsertPregameRawSourceSnapshot,
   ): Promise<PregameRawSourceSnapshotRow> {
-    const [inserted] = await db.insert(pregameRawSourceSnapshots).values(row).returning();
-    return inserted;
+    // Idempotent capture: a re-fetch of the SAME source with unchanged content
+    // (same source_kind + source_key + content_hash) is a no-op, not an error —
+    // a routine unchanged polling response must never abort an ingestion batch.
+    const [inserted] = await db
+      .insert(pregameRawSourceSnapshots)
+      .values(row)
+      .onConflictDoNothing({
+        target: [
+          pregameRawSourceSnapshots.sourceKind,
+          pregameRawSourceSnapshots.sourceKey,
+          pregameRawSourceSnapshots.contentHash,
+        ],
+      })
+      .returning();
+    if (inserted) return inserted;
+    // Conflict → return the already-captured snapshot for this source+content.
+    const existing = await db
+      .select()
+      .from(pregameRawSourceSnapshots)
+      .where(
+        and(
+          eq(pregameRawSourceSnapshots.sourceKind, row.sourceKind),
+          eq(pregameRawSourceSnapshots.sourceKey, row.sourceKey),
+          eq(pregameRawSourceSnapshots.contentHash, row.contentHash),
+        ),
+      )
+      .limit(1);
+    return existing[0];
   }
 
   async getPregameRawSourceSnapshot(snapshotId: string): Promise<PregameRawSourceSnapshotRow | null> {

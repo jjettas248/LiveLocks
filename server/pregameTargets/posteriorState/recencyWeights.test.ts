@@ -54,6 +54,12 @@ const approx = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
   const base = computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill" });
   ok(base.context === 1 && base.quality === 1 && base.weight === 1, "absent optionals → factors 1, weight 1");
   ok(computeRecencyWeight({ ageDays: NaN, seasonOffset: 0, featureClass: "skill" }).recency === 0, "NaN age → recency 0 (fail-safe, not NaN)");
+  {
+    const w = computeRecencyWeight({ ageDays: 0, seasonOffset: NaN, featureClass: "skill" });
+    ok(w.season === 0 && w.weight === 0, "NaN seasonOffset → season 0, weight 0 (fail-safe, not NaN)");
+    ok(Number.isFinite(w.weight), "weight stays finite under a NaN seasonOffset");
+  }
+  ok(computeRecencyWeight({ ageDays: 0, seasonOffset: Infinity, featureClass: "skill" }).season === 0, "Infinity seasonOffset → season 0");
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", dataQuality: 2 }).quality === 1, "quality clamped to 1");
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", contextSimilarity: -1 }).context === 0, "negative context clamped to 0");
   ok(computeRecencyWeight({ ageDays: -10, seasonOffset: 0, featureClass: "skill" }).recency === 1, "negative age clamped to 0 → recency 1");

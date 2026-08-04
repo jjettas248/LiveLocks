@@ -88,8 +88,15 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(!isStructurallyValidFeatureRow(row({ featureKey: "" })), "empty featureKey is invalid");
   ok(!isStructurallyValidFeatureRow(row({ featureVersion: "" })), "empty featureVersion is invalid");
   ok(!isStructurallyValidFeatureRow(row({ season: 2026.5 })), "non-integer season is invalid");
-  ok(Number.isFinite(instantMs("2026-01-10T05:00:00.000Z")), "ISO instant parses to finite ms");
+  ok(Number.isFinite(instantMs("2026-01-10T05:00:00.000Z")), "ISO instant with Z parses to finite ms");
+  ok(Number.isFinite(instantMs("2026-01-10T05:00:00-05:00")), "ISO instant with explicit offset parses");
   ok(!Number.isFinite(instantMs("garbage")), "garbage instant → NaN");
+  // Offsetless datetime → NaN: Date.parse would read it in the process-local
+  // zone, making knownAt <= predictionAt depend on where the process runs.
+  ok(!Number.isFinite(instantMs("2026-01-10T05:00:00")), "offsetless datetime → NaN (timezone-unsafe)");
+  ok(!Number.isFinite(instantMs("2026-01-10T05:00:00.000")), "offsetless datetime with millis → NaN");
+  ok(!isStructurallyValidFeatureRow(row({ validAt: "2026-01-10T02:30:00" })), "offsetless validAt is structurally invalid");
+  ok(!isStructurallyValidFeatureRow(row({ knownAt: "2026-01-10T05:00:00" })), "offsetless knownAt is structurally invalid");
 }
 
 console.log(`\nfeatureStore.test: ${passed} passed, ${failed} failed`);

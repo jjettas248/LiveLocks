@@ -87,10 +87,13 @@ export function computeRecencyWeight(
   inputs: RecencyWeightInputs,
   config: RecencyWeightConfig = DEFAULT_RECENCY_CONFIG,
 ): RecencyWeightBreakdown {
-  // Season factor — rolling-window rollover: older-than-window → 0.
-  const offset = Math.trunc(inputs.seasonOffset);
+  // Season factor — rolling-window rollover: older-than-window → 0. Test
+  // finiteness BEFORE truncating: Math.trunc(NaN) is NaN, both comparisons would
+  // be false, and Math.pow would yield NaN — so a non-finite offset must
+  // fail-safe to 0, not silently poison the weight.
+  const offset = Number.isFinite(inputs.seasonOffset) ? Math.trunc(inputs.seasonOffset) : NaN;
   const season =
-    offset < 0 || offset > config.maxSeasonOffset
+    !Number.isFinite(offset) || offset < 0 || offset > config.maxSeasonOffset
       ? 0
       : Math.pow(config.seasonDecay, offset);
 

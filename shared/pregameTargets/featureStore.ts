@@ -22,6 +22,7 @@
 // derivation from these instants must still go through the ET date helpers.
 
 import type { PregameEntityKind, PregameSport } from "./canonicalEntities";
+import { isoInstantMs } from "./canonicalEntities";
 
 /**
  * The observability state of a feature value. `missing` and `observed_zero` are
@@ -86,10 +87,14 @@ export interface AsOfFeatureRow {
   derivedFromGameIds?: readonly string[];
 }
 
-/** Parse an ISO instant to epoch ms; returns NaN on anything non-finite. */
+/**
+ * Parse an ISO instant to epoch ms. Delegates to `isoInstantMs`, which REQUIRES
+ * an explicit timezone offset (…Z or ±HH:MM) — an offsetless datetime would be
+ * parsed in the process-local zone and make `knownAt <= predictionAt` depend on
+ * where the process runs. Returns NaN for offsetless/unparseable values.
+ */
 export function instantMs(iso: string): number {
-  const ms = Date.parse(iso);
-  return Number.isFinite(ms) ? ms : NaN;
+  return isoInstantMs(iso);
 }
 
 /**
