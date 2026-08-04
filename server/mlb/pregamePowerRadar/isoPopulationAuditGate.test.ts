@@ -9,6 +9,7 @@
 
 import {
   buildPopulationReport,
+  parseNumberFlag,
   type HitterRow,
   type PopulationAuditOptions,
 } from "../../../scripts/plateIsoPopulationAudit";
@@ -69,6 +70,29 @@ function realisticPopulation(n: number): HitterRow[] {
   const hotReport = buildPopulationReport(hot, OPTS);
   ok(hotReport.passed === false, "over-cap Elite prevalence FAILS the gate");
   ok(hotReport.failReasons.some((r) => r.includes("Elite prevalence")), "over-cap cites Elite prevalence");
+}
+
+// ── Malformed CLI thresholds fail closed (NaN would defeat every comparison) ─
+{
+  function threw(fn: () => unknown): boolean {
+    try { fn(); return false; } catch { return true; }
+  }
+  // Valid values pass through untouched.
+  ok(parseNumberFlag("--min-valid-pct", "50", 0, 100) === 50, "valid flag value is parsed");
+  ok(parseNumberFlag("--min-population", "30", 1, Number.MAX_SAFE_INTEGER) === 30, "valid population floor is parsed");
+
+  // A missing or nonnumeric CI variable → Number(...) === NaN → must throw, not
+  // silently disable the threshold (the P1: `n < NaN`/`validPct < NaN` are always false).
+  ok(threw(() => parseNumberFlag("--min-valid-pct", "nope", 0, 100)), "nonnumeric --min-valid-pct throws");
+  ok(threw(() => parseNumberFlag("--min-valid-pct", undefined, 0, 100)), "missing --min-valid-pct value throws");
+  ok(threw(() => parseNumberFlag("--min-population", "nope", 1, Number.MAX_SAFE_INTEGER)), "nonnumeric --min-population throws");
+  ok(threw(() => parseNumberFlag("--max-elite-pct", "", 0, 100)), "empty --max-elite-pct throws");
+
+  // Out-of-range and non-finite values are also rejected.
+  ok(threw(() => parseNumberFlag("--max-elite-pct", "150", 0, 100)), "out-of-range percentage throws");
+  ok(threw(() => parseNumberFlag("--min-valid-pct", "-1", 0, 100)), "negative percentage throws");
+  ok(threw(() => parseNumberFlag("--min-population", "0", 1, Number.MAX_SAFE_INTEGER)), "zero population floor throws");
+  ok(threw(() => parseNumberFlag("--min-valid-pct", "Infinity", 0, 100)), "Infinity throws");
 }
 
 console.log(`\nisoPopulationAuditGate.test: ${passed} passed, ${failed} failed`);

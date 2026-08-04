@@ -9,7 +9,7 @@
 // It imports only the pure classifier; it never touches the engine, bus, storage,
 // or any live signal. It exits NON-ZERO when the gate cannot CERTIFY the release:
 // an empty/too-small population, too few VALID assessments (so it provides no real
-// validation evidence), Elite prevalence over the cap, or a malformed export.
+// validation evidence), Elite prevalence over the cap, or a malformed export/flag.
 //
 // Usage:
 //   npx tsx scripts/plateIsoPopulationAudit.ts <export.json> \
@@ -61,6 +61,23 @@ export interface PopulationAuditReport {
   thresholds: { maxElitePct: number; minPopulation: number; minValidPct: number };
   passed: boolean;
   failReasons: string[];
+}
+
+/**
+ * Parse a numeric CLI flag and fail closed (throw) on anything that isn't a
+ * finite number within [min, max] — a malformed value (NaN from a typo like
+ * "nope", a missing value, a negative, or an out-of-range percentage) must never
+ * silently disable a gate threshold. `validPct < NaN` and `n < NaN` are both
+ * always false in JS, so an un-validated bad flag (these flags are often
+ * populated from CI variables) would recreate exactly the false-positive-PASS
+ * bug this gate exists to prevent.
+ */
+export function parseNumberFlag(flag: string, raw: string | undefined, min: number, max: number): number {
+  const n = Number(raw);
+  if (raw === undefined || raw === "" || !Number.isFinite(n) || n < min || n > max) {
+    throw new Error(`${flag} must be a finite number in [${min}, ${max}], got "${raw ?? "<missing>"}"`);
+  }
+  return n;
 }
 
 function rowToIso(r: HitterRow): number | null {
@@ -123,9 +140,11 @@ function parseArgs(argv: string[]): { path: string | null; opts: PopulationAudit
   let json = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--max-elite-pct") opts.maxElitePct = Number(argv[++i]);
-    else if (a === "--min-population") opts.minPopulation = Number(argv[++i]);
-    else if (a === "--min-valid-pct") opts.minValidPct = Number(argv[++i]);
+    // Fail closed on malformed thresholds — a NaN/out-of-range flag would defeat
+    // every gate comparison and falsely CERTIFY the audit (see parseNumberFlag).
+    if (a === "--max-elite-pct") opts.maxElitePct = parseNumberFlag(a, argv[++i], 0, 100);
+    else if (a === "--min-population") opts.minPopulation = parseNumberFlag(a, argv[++i], 1, Number.MAX_SAFE_INTEGER);
+    else if (a === "--min-valid-pct") opts.minValidPct = parseNumberFlag(a, argv[++i], 0, 100);
     else if (a === "--json") json = true;
     else if (!a.startsWith("--")) path = a;
   }
@@ -133,7 +152,15 @@ function parseArgs(argv: string[]): { path: string | null; opts: PopulationAudit
 }
 
 function main(): void {
-  const { path, opts, json } = parseArgs(process.argv.slice(2));
+  let parsed: { path: string | null; opts: PopulationAuditOptions; json: boolean };
+  try {
+    parsed = parseArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(`[PLATE_ISO_POPULATION_AUDIT] FAILED — invalid CLI argument: ${(err as Error).message}`);
+    process.exit(2);
+    return;
+  }
+  const { path, opts, json } = parsed;
   if (!path) {
     console.error(
       "[PLATE_ISO_POPULATION_AUDIT] UNEXECUTED — no historical export provided.\n" +
@@ -145,9 +172,9 @@ function main(): void {
 
   let rows: HitterRow[];
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    if (!Array.isArray(parsed)) throw new Error("export must be a JSON array of hitter rows");
-    rows = parsed as HitterRow[];
+    const parsedJson = JSON.parse(readFileSync(path, "utf8"));
+    if (!Array.isArray(parsedJson)) throw new Error("export must be a JSON array of hitter rows");
+    rows = parsedJson as HitterRow[];
   } catch (err) {
     console.error(`[PLATE_ISO_POPULATION_AUDIT] FAILED to read export "${path}": ${(err as Error).message}`);
     process.exit(2);
