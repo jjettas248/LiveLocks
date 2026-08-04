@@ -51,13 +51,17 @@ export function gameHrProbability(
  * distribution over (n_s, n_b) supplies the exposure. Monotonically increasing in
  * p_s, p_b, and total PA; always bounded [0,1]. When the path is all-starter
  * (n_b ≡ 0) this reduces exactly to the single-path result for p_s.
+ *
+ * Returns NULL — never a fabricated value — when the path is unavailable (no
+ * exposure evidence) or empty. Missing exposure must surface honestly, not as a
+ * silent all-starter default.
  */
 export function jointGameHrProbability(
   pStarter: number | null | undefined,
   pBullpen: number | null | undefined,
   path: PaPathJointDistribution | null | undefined,
-): number {
-  if (!path || !path.joint) return 0;
+): number | null {
+  if (!path || !path.joint || path.available === false) return null;
   const ps = pStarter != null && Number.isFinite(pStarter) ? clamp01(pStarter) : 0;
   const pb = pBullpen != null && Number.isFinite(pBullpen) ? clamp01(pBullpen) : 0;
 
@@ -70,7 +74,7 @@ export function jointGameHrProbability(
     noHrProb += mass * Math.pow(1 - ps, ns) * Math.pow(1 - pb, nb);
     massSum += mass;
   }
-  if (massSum <= 0) return 0;
+  if (massSum <= 0) return null;
   // Renormalize defensively if the joint didn't sum to exactly 1.
   if (Math.abs(massSum - 1) > 1e-9) noHrProb /= massSum;
   return clamp01(1 - noHrProb);

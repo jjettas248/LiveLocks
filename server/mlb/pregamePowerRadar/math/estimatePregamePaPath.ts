@@ -7,75 +7,90 @@
 // of N PA, n_s ∈ {0..N} and n_b = N − n_s.
 //
 // Construction:
-//   1. Total-PA marginal P(N=n) from estimatePregamePaDistribution (slot + runs).
-//   2. Expected starter-faced PA (muS) from the projected split (opener-aware).
-//   3. For each total n, a discrete kernel over the starter-faced count k∈{0..n}
-//      centered on muS (truncated + renormalized), then joint mass
+//   1. Total-PA marginal P(N=n) from estimatePregamePaDistribution (slot ONLY —
+//      NOT teamImpliedRuns, which is market-derived and excluded from probability).
+//   2. A starter EXPOSURE SHARE ∈ [0,1] from the projected split (BOTH fields
+//      matter): starterShare = s / (s + b). When only one projection exists, the
+//      other is inferred from the total-PA mean. An opener signal independently
+//      moves mass toward the bullpen (discounts the share, or supplies a frozen
+//      opener prior when no explicit split exists).
+//   3. For each total n, the conditional starter-faced mean is n · starterShare;
+//      a discrete kernel over k∈{0..n} is centered there (boundary shares collapse
+//      cleanly to all-starter / all-bullpen), then joint mass
 //      P(n_s=k, n_b=n−k) = P(N=n) · P(k | n).
 //
-// Opener/bulk-pitcher handling: a short-leash starter has a small muS, so the
-// kernel concentrates mass at low k (few PA vs the starter, most vs the pen). A
-// deep starter has a large muS, concentrating mass at high k.
+// No-op-safe degradation: when there is NO exposure evidence at all (no projected
+// split AND no opener signal), the path is UNAVAILABLE — `available:false`,
+// `joint:{}`, reason `missing_pa_path`. It is NOT fabricated as all-starter (which
+// would maximize starter exposure and ignore the bullpen). Missing exposure cannot
+// be reconstructed later (no-backfill), so it must be captured, never assumed.
 //
-// No-op-safe degradation: when NO projected split is available (both
-// projectedPaVsStarter and projectedPaVsBullpen null), the whole game routes to
-// the starter path (n_b = 0). The joint game-HR probability then collapses to the
-// single starter-path result — missing optional bullpen exposure is neutral, never
-// fabricated.
-//
-// Kernel spread / muS anchors below are documented DEFAULT PRIORS, NOT fitted.
+// Share/kernel/opener anchors below are documented DEFAULT PRIORS, NOT fitted.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { PaPathJointDistribution, StarterBullpenPathInputs } from "./mathTypes";
-import { clamp } from "./normalizeStats";
+import { clamp, clamp01 } from "./normalizeStats";
 import { estimatePregamePaDistribution } from "./estimatePregamePaDistribution";
 
-/** Base spread of the starter-faced-PA kernel (in PA). Widened when the split is uncertain. */
+/** Base spread of the starter-faced-PA kernel (in PA). Widened for an opener. */
 const STARTER_KERNEL_SIGMA = 0.9;
 const OPENER_KERNEL_SIGMA = 1.3;
 
+/**
+ * Frozen opener exposure prior: with an opener signal but NO explicit projected
+ * split, the batter is expected to face the starter for a small share of PA (an
+ * opener typically faces the batter ~once), with the rest vs the bullpen.
+ */
+const OPENER_STARTER_SHARE_PRIOR = 0.2;
+/**
+ * Frozen opener discount: when an explicit split EXISTS and the opener flag is
+ * set, move additional mass toward the bullpen (short leash) on top of the split.
+ */
+const OPENER_STARTER_SHARE_DISCOUNT = 0.6;
+
+const SHARE_EPS = 1e-6;
+
 export interface PregamePaPathArgs {
   battingOrderSlot: number | null | undefined;
-  teamImpliedRuns?: number | null;
   starterBullpen?: StarterBullpenPathInputs | null;
 }
 
 export function estimatePregamePaPath(args: PregamePaPathArgs): PaPathJointDistribution {
+  // Total-PA marginal — slot only; teamImpliedRuns is market-derived and excluded.
   const { distribution: totalDist } = estimatePregamePaDistribution({
     battingOrderSlot: args.battingOrderSlot,
-    teamImpliedRuns: args.teamImpliedRuns,
   });
+  const totalMean = meanOf(totalDist);
 
   const sb = args.starterBullpen ?? null;
-  const vsStarter = finiteOrNull(sb?.projectedPaVsStarter);
-  const vsBullpen = finiteOrNull(sb?.projectedPaVsBullpen);
+  const vsStarter = finiteNonNegOrNull(sb?.projectedPaVsStarter);
+  const vsBullpen = finiteNonNegOrNull(sb?.projectedPaVsBullpen);
+  const isOpener = sb?.isOpenerLikely === true;
 
-  // No projected split → route the whole game to the starter path (neutral).
-  const noSplitSignal = vsStarter == null && vsBullpen == null;
-  if (noSplitSignal) {
-    return allStarterPath(totalDist);
+  const shareResult = computeStarterShare(vsStarter, vsBullpen, totalMean, isOpener);
+  if (shareResult == null) {
+    return unavailablePath("missing_pa_path");
   }
-
-  // Expected starter-faced PA. Prefer the explicit projection; otherwise derive
-  // from the total mean minus projected bullpen PA. Clamp into a sane range.
-  const totalMeanRaw = meanOf(totalDist);
-  let muS: number;
-  if (vsStarter != null) {
-    muS = vsStarter;
-  } else {
-    // vsBullpen present, vsStarter absent.
-    muS = totalMeanRaw - (vsBullpen ?? 0);
-  }
-  muS = clamp(muS, 0, 6);
-
-  const sigma = sb?.isOpenerLikely === true ? OPENER_KERNEL_SIGMA : STARTER_KERNEL_SIGMA;
+  const { starterShare, usedOpenerExposurePrior } = shareResult;
+  const sigma = isOpener ? OPENER_KERNEL_SIGMA : STARTER_KERNEL_SIGMA;
 
   const joint: Record<string, number> = {};
   for (const [key, pn] of Object.entries(totalDist)) {
     const n = Number(key);
     if (!Number.isFinite(n) || n < 0 || !Number.isFinite(pn) || pn <= 0) continue;
 
-    // Conditional kernel over k = starter-faced count ∈ {0..n}, centered on muS.
+    // Boundary shares collapse cleanly (no kernel leakage).
+    if (starterShare >= 1 - SHARE_EPS) {
+      addMass(joint, n, 0, pn);
+      continue;
+    }
+    if (starterShare <= SHARE_EPS) {
+      addMass(joint, 0, n, pn);
+      continue;
+    }
+
+    // Conditional starter-faced mean scales with total PA (both projections matter).
+    const muS = n * starterShare;
     const weights: number[] = [];
     let wsum = 0;
     for (let k = 0; k <= n; k++) {
@@ -84,36 +99,84 @@ export function estimatePregamePaPath(args: PregamePaPathArgs): PaPathJointDistr
       wsum += w;
     }
     if (wsum <= 0) {
-      // Degenerate (should not happen) — put all mass on all-starter.
-      joint[`${n}:0`] = (joint[`${n}:0`] ?? 0) + pn;
+      addMass(joint, n, 0, pn);
       continue;
     }
     for (let k = 0; k <= n; k++) {
-      const pk = weights[k] / wsum;
-      const nb = n - k;
-      const kk = `${k}:${nb}`;
-      joint[kk] = (joint[kk] ?? 0) + pn * pk;
+      addMass(joint, k, n - k, pn * (weights[k] / wsum));
     }
   }
 
-  return finalize(joint);
+  return finalize(joint, usedOpenerExposurePrior);
+}
+
+// ── share model ────────────────────────────────────────────────────────────
+
+/**
+ * Starter exposure share ∈ [0,1]. Returns null when there is NO exposure evidence
+ * (no projections and no opener signal) — the path is then unavailable.
+ */
+function computeStarterShare(
+  vsStarter: number | null,
+  vsBullpen: number | null,
+  totalMean: number,
+  isOpener: boolean,
+): { starterShare: number; usedOpenerExposurePrior: boolean } | null {
+  let share: number;
+  let usedOpenerExposurePrior = false;
+
+  if (vsStarter != null && vsBullpen != null) {
+    const denom = vsStarter + vsBullpen;
+    if (denom <= 0) return null; // no exposure to either — cannot model
+    share = vsStarter / denom;
+    if (isOpener) share *= OPENER_STARTER_SHARE_DISCOUNT;
+  } else if (vsStarter != null) {
+    // Infer bullpen exposure from the total-PA mean.
+    const impliedBullpen = Math.max(0, totalMean - vsStarter);
+    const denom = vsStarter + impliedBullpen;
+    share = denom > 0 ? vsStarter / denom : 1;
+    if (isOpener) share *= OPENER_STARTER_SHARE_DISCOUNT;
+  } else if (vsBullpen != null) {
+    // Infer starter exposure from the total-PA mean.
+    const impliedStarter = Math.max(0, totalMean - vsBullpen);
+    const denom = impliedStarter + vsBullpen;
+    share = denom > 0 ? impliedStarter / denom : 0;
+    if (isOpener) share *= OPENER_STARTER_SHARE_DISCOUNT;
+  } else if (isOpener) {
+    // Opener signal with no explicit split → frozen opener prior (lower confidence).
+    share = OPENER_STARTER_SHARE_PRIOR;
+    usedOpenerExposurePrior = true;
+  } else {
+    return null; // no exposure evidence at all
+  }
+
+  return { starterShare: clamp01(share), usedOpenerExposurePrior };
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-function allStarterPath(totalDist: Record<string, number>): PaPathJointDistribution {
-  const joint: Record<string, number> = {};
-  for (const [key, pn] of Object.entries(totalDist)) {
-    const n = Number(key);
-    if (!Number.isFinite(n) || !Number.isFinite(pn) || pn <= 0) continue;
-    joint[`${n}:0`] = (joint[`${n}:0`] ?? 0) + pn;
-  }
-  const out = finalize(joint);
-  out.allStarter = true;
-  return out;
+function unavailablePath(reason: string): PaPathJointDistribution {
+  return {
+    joint: {},
+    starterMean: 0,
+    bullpenMean: 0,
+    totalMean: 0,
+    allStarter: false,
+    available: false,
+    unavailableReason: reason,
+    usedOpenerExposurePrior: false,
+  };
 }
 
-function finalize(joint: Record<string, number>): PaPathJointDistribution {
+function addMass(joint: Record<string, number>, ns: number, nb: number, mass: number): void {
+  const key = `${ns}:${nb}`;
+  joint[key] = (joint[key] ?? 0) + mass;
+}
+
+function finalize(
+  joint: Record<string, number>,
+  usedOpenerExposurePrior: boolean,
+): PaPathJointDistribution {
   // Renormalize defensively.
   let total = 0;
   for (const v of Object.values(joint)) total += v;
@@ -134,7 +197,10 @@ function finalize(joint: Record<string, number>): PaPathJointDistribution {
     starterMean,
     bullpenMean,
     totalMean: starterMean + bullpenMean,
-    allStarter: bullpenMean === 0,
+    allStarter: bullpenMean <= 1e-12,
+    available: true,
+    unavailableReason: null,
+    usedOpenerExposurePrior,
   };
 }
 
@@ -147,6 +213,6 @@ function meanOf(dist: Record<string, number>): number {
   return m;
 }
 
-function finiteOrNull(v: number | null | undefined): number | null {
-  return v != null && Number.isFinite(v) ? v : null;
+function finiteNonNegOrNull(v: number | null | undefined): number | null {
+  return v != null && Number.isFinite(v) && v >= 0 ? v : null;
 }

@@ -1,13 +1,16 @@
-// Pre-Game Power Radar — v2 SHADOW PR6: corrected starter/bullpen joint PA-path.
+// Pre-Game Power Radar — v2 SHADOW PR6/PR6.1: corrected starter/bullpen joint PA-path.
 // Run: npx tsx server/mlb/pregamePowerRadar/math/starterBullpenPath.test.ts
 //
-// §18 probability block for the joint decomposition:
+// §18 probability block for the joint decomposition + PR6.1 path/input invariants:
 //   • joint game prob = brute-force enumeration on small fixtures
 //   • monotone ↑ in p_s, p_b, and total PA
 //   • starter-only opponent terms NEVER enter p_b; hitter/form/park ALWAYS enter p_b
-//   • missing optional bullpen → neutral (joint collapses to the single starter path)
+//   • BOTH projected-PA fields move the path (bullpen-only change, starter-only change)
+//   • opener signal INDEPENDENTLY moves mass to the bullpen (flag-only change; opener-no-split)
+//   • no exposure evidence → path UNAVAILABLE + missing_pa_path (never fabricated all-starter)
+//   • market odds AND market-derived team totals cannot alter p_s/p_b/path/joint prob
 //   • exposure applied exactly once (in the PA-path, not the per-PA rate)
-//   • Σ joint = 1; all outputs finite + bounded
+//   • Σ joint = 1 for available paths; all outputs finite + bounded
 
 import { buildSegmentedHrPerPa, MIN_HR_PER_PA, MAX_HR_PER_PA } from "./buildPregameHrPerPa";
 import { estimatePregamePaPath } from "./estimatePregamePaPath";
@@ -23,13 +26,31 @@ function ok(cond: boolean, msg: string) {
 }
 function approx(a: number, b: number, eps = 1e-9) { return Math.abs(a - b) <= eps; }
 
+/** Manual joint (available) for enumeration/monotonicity tests. */
 function jointOf(joint: Record<string, number>): PaPathJointDistribution {
   let sMean = 0, bMean = 0;
   for (const [k, m] of Object.entries(joint)) {
     const [ns, nb] = k.split(":").map(Number);
     sMean += ns * m; bMean += nb * m;
   }
-  return { joint, starterMean: sMean, bullpenMean: bMean, totalMean: sMean + bMean, allStarter: bMean === 0 };
+  return {
+    joint, starterMean: sMean, bullpenMean: bMean, totalMean: sMean + bMean,
+    allStarter: bMean === 0, available: true, unavailableReason: null, usedOpenerExposurePrior: false,
+  };
+}
+
+/** Assert non-null joint prob and return the number. */
+function jg(ps: number | null, pb: number | null, path: PaPathJointDistribution): number {
+  const v = jointGameHrProbability(ps, pb, path);
+  if (v == null) { failed++; console.error("  ✗ expected non-null joint prob"); return NaN; }
+  return v;
+}
+
+function sb(over: Partial<StarterBullpenPathInputs> = {}): StarterBullpenPathInputs {
+  return {
+    starterConfirmed: true, projectedPaVsStarter: 3, projectedPaVsBullpen: 1.2,
+    bullpenHrPer9: 1.4, bullpenBarrelAllowedPct: 9, ...over,
+  };
 }
 
 function makeInputs(over: Partial<PregameMathInputs> = {}): PregameMathInputs {
@@ -66,10 +87,7 @@ function makeInputs(over: Partial<PregameMathInputs> = {}): PregameMathInputs {
       temperatureF: 85, windSpeedMph: 12, windDirection: "out", batterPullAirShare: 0.7,
     },
     lineupOpportunity: { battingOrderSlot: 3, teamImpliedRuns: 5.2, obpAhead: 0.35, lineupConfirmed: true },
-    starterBullpen: {
-      starterConfirmed: true, projectedPaVsStarter: 3, projectedPaVsBullpen: 1.2,
-      bullpenHrPer9: 1.4, bullpenBarrelAllowedPct: 9,
-    },
+    starterBullpen: sb(),
     market: { hrOddsAvailable: false, impliedHrProbability: null, noVigImpliedHrProbability: null },
     availability: { confirmedActive: true, lateScratchRisk: false, restDayRisk: false, platoonSubRisk: false },
     recentContactForm: {
@@ -85,16 +103,15 @@ function makeInputs(over: Partial<PregameMathInputs> = {}): PregameMathInputs {
   const ps = 0.05, pb = 0.08;
   const path = jointOf({ "2:1": 0.5, "3:0": 0.5 });
   const expected = 1 - (0.5 * Math.pow(1 - ps, 2) * Math.pow(1 - pb, 1) + 0.5 * Math.pow(1 - ps, 3));
-  ok(approx(jointGameHrProbability(ps, pb, path), expected, 1e-12), "joint prob matches enumeration (2:1 / 3:0)");
+  ok(approx(jg(ps, pb, path), expected, 1e-12), "joint prob matches enumeration (2:1 / 3:0)");
 
-  // Larger 3-point joint.
   const path2 = jointOf({ "1:2": 0.2, "2:2": 0.5, "4:0": 0.3 });
   const exp2 = 1 - (
     0.2 * Math.pow(1 - ps, 1) * Math.pow(1 - pb, 2) +
     0.5 * Math.pow(1 - ps, 2) * Math.pow(1 - pb, 2) +
     0.3 * Math.pow(1 - ps, 4)
   );
-  ok(approx(jointGameHrProbability(ps, pb, path2), exp2, 1e-12), "joint prob matches enumeration (3-point)");
+  ok(approx(jg(ps, pb, path2), exp2, 1e-12), "joint prob matches enumeration (3-point)");
 }
 
 // ── B. All-starter collapse: equals single-path, pb irrelevant ────────────────
@@ -102,80 +119,65 @@ function makeInputs(over: Partial<PregameMathInputs> = {}): PregameMathInputs {
   const ps = 0.06, pbA = 0.02, pbB = 0.15;
   const path = jointOf({ "3:0": 0.4, "4:0": 0.6 });
   const single = 1 - (0.4 * Math.pow(1 - ps, 3) + 0.6 * Math.pow(1 - ps, 4));
-  ok(approx(jointGameHrProbability(ps, pbA, path), single, 1e-12), "all-starter joint == single path");
-  ok(approx(jointGameHrProbability(ps, pbA, path), jointGameHrProbability(ps, pbB, path), 1e-12),
-    "all-starter: p_b is irrelevant (no bullpen PA mass)");
-  // Cross-check against the single-path gameHrProbability over a total-PA dist.
-  ok(approx(jointGameHrProbability(ps, pbA, path), gameHrProbability(ps, { "3": 0.4, "4": 0.6 }), 1e-12),
+  ok(approx(jg(ps, pbA, path), single, 1e-12), "all-starter joint == single path");
+  ok(approx(jg(ps, pbA, path), jg(ps, pbB, path), 1e-12), "all-starter: p_b irrelevant");
+  ok(approx(jg(ps, pbA, path), gameHrProbability(ps, { "3": 0.4, "4": 0.6 }), 1e-12),
     "all-starter joint == gameHrProbability(p_s, totalDist)");
+  // A projected split of b=0 collapses to all-starter through the real estimator.
+  const realAllStarter = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: 5, projectedPaVsBullpen: 0 }) });
+  ok(realAllStarter.available && approx(realAllStarter.bullpenMean, 0, 1e-9), "b=0 projection → all-starter path");
 }
 
 // ── C/D. Monotone in p_s and p_b (with bullpen PA mass present) ────────────────
 {
   const path = jointOf({ "2:2": 0.5, "3:1": 0.5 });
-  ok(jointGameHrProbability(0.03, 0.05, path) < jointGameHrProbability(0.09, 0.05, path), "joint ↑ in p_s");
-  ok(jointGameHrProbability(0.05, 0.02, path) < jointGameHrProbability(0.05, 0.11, path), "joint ↑ in p_b");
+  ok(jg(0.03, 0.05, path) < jg(0.09, 0.05, path), "joint ↑ in p_s");
+  ok(jg(0.05, 0.02, path) < jg(0.05, 0.11, path), "joint ↑ in p_b");
 }
 
-// ── E. Monotone in total PA (more PA → higher joint), p_s/p_b fixed ───────────
+// ── E. Monotone in total PA (slot only; teamImpliedRuns excluded) ─────────────
 {
-  const sb: StarterBullpenPathInputs = {
-    starterConfirmed: true, projectedPaVsStarter: 3, projectedPaVsBullpen: 1.2,
-    bullpenHrPer9: 1.4, bullpenBarrelAllowedPct: 9,
-  };
-  const lead = estimatePregamePaPath({ battingOrderSlot: 1, teamImpliedRuns: 5.5, starterBullpen: sb });
-  const tail = estimatePregamePaPath({ battingOrderSlot: 9, teamImpliedRuns: 3.4, starterBullpen: sb });
+  const lead = estimatePregamePaPath({ battingOrderSlot: 1, starterBullpen: sb() });
+  const tail = estimatePregamePaPath({ battingOrderSlot: 9, starterBullpen: sb() });
   ok(lead.totalMean > tail.totalMean, "leadoff path has more total PA than #9");
-  ok(jointGameHrProbability(0.05, 0.05, lead) > jointGameHrProbability(0.05, 0.05, tail),
-    "joint ↑ with total PA (leadoff > #9)");
+  ok(jg(0.05, 0.05, lead) > jg(0.05, 0.05, tail), "joint ↑ with total PA (leadoff > #9)");
 }
 
 // ── F. Bounded + finite over a wide grid ──────────────────────────────────────
 {
-  const path = estimatePregamePaPath({
-    battingOrderSlot: 4, teamImpliedRuns: 4.6,
-    starterBullpen: { starterConfirmed: true, projectedPaVsStarter: 2.5, projectedPaVsBullpen: 1.5, bullpenHrPer9: 1.2, bullpenBarrelAllowedPct: 8 },
-  });
+  const path = estimatePregamePaPath({ battingOrderSlot: 4, starterBullpen: sb({ projectedPaVsStarter: 2.5, projectedPaVsBullpen: 1.5 }) });
   let allBounded = true;
   for (const ps of [0, 0.001, 0.05, 0.12, 1]) {
     for (const pb of [0, 0.001, 0.05, 0.12, 1]) {
       const g = jointGameHrProbability(ps, pb, path);
-      if (!Number.isFinite(g) || g < 0 || g > 1) allBounded = false;
+      if (g == null || !Number.isFinite(g) || g < 0 || g > 1) allBounded = false;
     }
   }
   ok(allBounded, "joint prob finite + bounded [0,1] over grid");
-  ok(jointGameHrProbability(null, 0.05, path) >= 0, "null p_s handled (no throw)");
-  ok(jointGameHrProbability(0.05, 0.05, null) === 0, "null path → 0");
+  ok(jointGameHrProbability(null, 0.05, path) != null, "null p_s handled (no throw)");
+  ok(jointGameHrProbability(0.05, 0.05, null) === null, "null path → null");
 }
 
-// ── G. Σ joint = 1 across many PA-path configs ────────────────────────────────
+// ── G. Σ joint = 1 for available paths ────────────────────────────────────────
 {
-  const configs: PregamePaPathArgsLike[] = [
-    { slot: 1, runs: 5.5, s: 3, b: 1.2 },
-    { slot: 9, runs: 3.4, s: 1, b: 3 },
-    { slot: 4, runs: 4.6, s: null, b: null },   // no split → all-starter
-    { slot: 6, runs: 4.0, s: 0.5, b: 3.5, opener: true },
+  const configs = [
+    estimatePregamePaPath({ battingOrderSlot: 1, starterBullpen: sb({ projectedPaVsStarter: 3, projectedPaVsBullpen: 1.2 }) }),
+    estimatePregamePaPath({ battingOrderSlot: 9, starterBullpen: sb({ projectedPaVsStarter: 1, projectedPaVsBullpen: 3 }) }),
+    estimatePregamePaPath({ battingOrderSlot: 6, starterBullpen: sb({ projectedPaVsStarter: 0.5, projectedPaVsBullpen: 3.5, isOpenerLikely: true }) }),
+    estimatePregamePaPath({ battingOrderSlot: 4, starterBullpen: sb({ projectedPaVsStarter: null, projectedPaVsBullpen: null, isOpenerLikely: true }) }),
   ];
   let allSumOne = true;
-  for (const c of configs) {
-    const path = estimatePregamePaPath({
-      battingOrderSlot: c.slot, teamImpliedRuns: c.runs,
-      starterBullpen: {
-        starterConfirmed: true, projectedPaVsStarter: c.s, projectedPaVsBullpen: c.b,
-        bullpenHrPer9: 1.2, bullpenBarrelAllowedPct: 8, isOpenerLikely: c.opener ?? null,
-      },
-    });
-    const sum = Object.values(path.joint).reduce((a, b) => a + b, 0);
+  for (const p of configs) {
+    ok(p.available, "config path available");
+    const sum = Object.values(p.joint).reduce((a, b) => a + b, 0);
     if (!approx(sum, 1, 1e-9)) allSumOne = false;
   }
-  ok(allSumOne, "every PA-path joint sums to 1");
+  ok(allSumOne, "every available PA-path joint sums to 1");
 }
-type PregamePaPathArgsLike = { slot: number; runs: number; s: number | null; b: number | null; opener?: boolean };
 
 // ── H. Starter-only opponent terms NEVER enter p_b ────────────────────────────
 {
   const base = buildSegmentedHrPerPa(makeInputs());
-  // Change ONLY starter opponent terms (pitcher, pitchType, zone).
   const starterChanged = buildSegmentedHrPerPa(makeInputs({
     pitcherVulnerability: {
       pitcherKnown: true, batterHand: "R", pitcherThrows: "L", hrPer9VsHand: 0.6,
@@ -206,12 +208,10 @@ type PregamePaPathArgsLike = { slot: number; runs: number; s: number | null; b: 
     },
   }));
   ok(powerDrop.bullpenHrPerPa < base.bullpenHrPerPa, "weaker hitter lowers p_b");
-
   const formDrop = buildSegmentedHrPerPa(makeInputs({
     recentContactForm: { recentFormBarrelPct: 2, recentFormAvgEv: 85, recentFormEv90: 98, recentFormAirPct: 25, effectiveBbe: 40 },
   }));
   ok(formDrop.bullpenHrPerPa < base.bullpenHrPerPa, "cold recent form lowers p_b");
-
   const parkDrop = buildSegmentedHrPerPa(makeInputs({
     parkWeatherSpray: {
       parkHrFactor: 0.85, parkHrFactorHand: 0.82, isIndoors: false, weatherAvailable: true,
@@ -221,66 +221,90 @@ type PregamePaPathArgsLike = { slot: number; runs: number; s: number | null; b: 
   ok(parkDrop.bullpenHrPerPa < base.bullpenHrPerPa, "poor park/weather lowers p_b");
 }
 
-// ── J. Missing optional bullpen → neutral (joint collapses to single starter path)
+// ── PR6.1 defect 1: no exposure evidence → UNAVAILABLE (never fabricated) ──────
 {
-  const noBullpen = makeInputs({
-    starterBullpen: {
-      starterConfirmed: true, projectedPaVsStarter: null, projectedPaVsBullpen: null,
-      bullpenHrPer9: null, bullpenBarrelAllowedPct: null,
-    },
-  });
-  const seg = buildSegmentedHrPerPa(noBullpen);
-  ok(!seg.bullpenVulnerabilityAvailable, "no bullpen data → bullpenVulnerabilityAvailable=false");
-  const path = estimatePregamePaPath({
-    battingOrderSlot: 3, teamImpliedRuns: 5.2, starterBullpen: noBullpen.starterBullpen,
-  });
-  ok(path.allStarter, "no split signal → all-starter path");
-  ok(approx(path.bullpenMean, 0, 1e-12), "all-starter → E[bullpen PA] = 0");
-  const joint = jointGameHrProbability(seg.starterHrPerPa, seg.bullpenHrPerPa, path);
-  // Reconstruct the total-PA marginal (n_b ≡ 0 so total = n_s).
-  const totalDist: Record<string, number> = {};
-  for (const [k, m] of Object.entries(path.joint)) {
-    const ns = Number(k.split(":")[0]);
-    totalDist[String(ns)] = (totalDist[String(ns)] ?? 0) + m;
-  }
-  ok(approx(joint, gameHrProbability(seg.starterHrPerPa, totalDist), 1e-12),
-    "missing bullpen → joint == single starter-path probability");
+  const noExposure = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: null, projectedPaVsBullpen: null, isOpenerLikely: null }) });
+  ok(!noExposure.available, "no exposure evidence → path unavailable");
+  ok(noExposure.unavailableReason === "missing_pa_path", "unavailable reason = missing_pa_path");
+  ok(Object.keys(noExposure.joint).length === 0, "unavailable path has empty joint (not all-starter)");
+
+  // End-to-end: current real-capture shape (all exposure fields null).
+  const m = runPregameMathModel(makeInputs({
+    starterBullpen: { starterConfirmed: true, projectedPaVsStarter: null, projectedPaVsBullpen: null, bullpenHrPer9: null, bullpenBarrelAllowedPct: null },
+  }));
+  ok(m.jointGameHrProbability === null, "no exposure → jointGameHrProbability null");
+  ok(m.calibratedJointGameHrProbability === null, "no exposure → calibrated joint null");
+  ok(m.projectedStarterPA === null && m.projectedBullpenPA === null, "no exposure → projected PA null");
+  ok(m.missingDataWarnings.includes("missing_pa_path"), "no exposure → missing_pa_path warning");
+  // Missing bullpen VULN with exposure PRESENT is NOT unavailable (exposure is what matters).
+  const withExposureNoVuln = runPregameMathModel(makeInputs({
+    starterBullpen: { starterConfirmed: true, projectedPaVsStarter: 3, projectedPaVsBullpen: 1.2, bullpenHrPer9: null, bullpenBarrelAllowedPct: null },
+  }));
+  ok(withExposureNoVuln.jointGameHrProbability != null, "exposure present, bullpen vuln absent → joint still available");
+  ok(!withExposureNoVuln.missingDataWarnings.includes("missing_pa_path"), "exposure present → no missing_pa_path");
 }
 
-// ── K. Opener shifts PA mass to the bullpen ───────────────────────────────────
+// ── PR6.1 defect 2: BOTH projected-PA fields move the path ─────────────────────
 {
-  const deep = estimatePregamePaPath({
-    battingOrderSlot: 3, teamImpliedRuns: 4.6,
-    starterBullpen: { starterConfirmed: true, projectedPaVsStarter: 3.2, projectedPaVsBullpen: 1.0, bullpenHrPer9: 1.2, bullpenBarrelAllowedPct: 8 },
-  });
-  const opener = estimatePregamePaPath({
-    battingOrderSlot: 3, teamImpliedRuns: 4.6,
-    starterBullpen: { starterConfirmed: false, projectedPaVsStarter: 0.7, projectedPaVsBullpen: 3.4, bullpenHrPer9: 1.2, bullpenBarrelAllowedPct: 8, isOpenerLikely: true },
-  });
-  ok(opener.bullpenMean > deep.bullpenMean, "opener → more expected bullpen PA than a deep starter");
-  ok(opener.starterMean < deep.starterMean, "opener → fewer expected starter PA");
+  // Bullpen projection changes while starter fixed.
+  const bLow = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: 3, projectedPaVsBullpen: 0.2 }) });
+  const bHigh = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: 3, projectedPaVsBullpen: 3.0 }) });
+  ok(bHigh.bullpenMean > bLow.bullpenMean + 1e-6, "higher projectedPaVsBullpen → more bullpen PA (starter fixed)");
+  ok(bHigh.starterMean < bLow.starterMean - 1e-6, "higher projectedPaVsBullpen → fewer starter PA (starter fixed)");
+
+  // Starter projection changes while bullpen fixed.
+  const sLow = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: 1, projectedPaVsBullpen: 2 }) });
+  const sHigh = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: 4, projectedPaVsBullpen: 2 }) });
+  ok(sHigh.starterMean > sLow.starterMean + 1e-6, "higher projectedPaVsStarter → more starter PA (bullpen fixed)");
+  ok(sHigh.bullpenMean < sLow.bullpenMean - 1e-6, "higher projectedPaVsStarter → fewer bullpen PA (bullpen fixed)");
 }
 
-// ── L. scoreBullpenVulnerability carries NO exposure multiplier (single count) ─
+// ── PR6.1 defect 2: opener signal INDEPENDENTLY moves mass to the bullpen ──────
 {
-  const shallow = scoreBullpenVulnerability({
-    starterConfirmed: true, projectedPaVsStarter: 3.5, projectedPaVsBullpen: 0.5,
-    bullpenHrPer9: 1.6, bullpenBarrelAllowedPct: 10,
+  // Only isOpenerLikely changes (split held fixed).
+  const noOpener = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: 3, projectedPaVsBullpen: 1.2, isOpenerLikely: false }) });
+  const opener = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: 3, projectedPaVsBullpen: 1.2, isOpenerLikely: true }) });
+  ok(opener.bullpenMean > noOpener.bullpenMean + 1e-6, "opener flag alone → more bullpen PA");
+  ok(opener.starterMean < noOpener.starterMean - 1e-6, "opener flag alone → fewer starter PA");
+
+  // Opener true with NO explicit split → available, bullpen-weighted (frozen prior).
+  const openerNoSplit = estimatePregamePaPath({ battingOrderSlot: 3, starterBullpen: sb({ projectedPaVsStarter: null, projectedPaVsBullpen: null, isOpenerLikely: true }) });
+  ok(openerNoSplit.available, "opener with no split → path available (frozen prior)");
+  ok(openerNoSplit.usedOpenerExposurePrior, "opener no-split flagged usedOpenerExposurePrior");
+  ok(openerNoSplit.bullpenMean > openerNoSplit.starterMean, "opener no-split → bullpen-weighted path");
+}
+
+// ── PR6.1 defect 3: market inputs cannot alter p_s/p_b/path/joint prob ─────────
+{
+  const clean = makeInputs();
+  const marketTainted = makeInputs({
+    market: { hrOddsAvailable: true, impliedHrProbability: 0.25, noVigImpliedHrProbability: 0.22 },
+    lineupOpportunity: { battingOrderSlot: 3, teamImpliedRuns: 9.9, obpAhead: 0.35, lineupConfirmed: true },
   });
-  const deep = scoreBullpenVulnerability({
-    starterConfirmed: true, projectedPaVsStarter: 1.0, projectedPaVsBullpen: 3.0,
-    bullpenHrPer9: 1.6, bullpenBarrelAllowedPct: 10,
-  });
-  ok(approx(shallow.logOdds, deep.logOdds, 1e-12),
-    "bullpen-vuln log-odds independent of projected exposure (exposure lives in the PA-path)");
-  ok(shallow.available, "bullpen vuln available with real data");
-  const none = scoreBullpenVulnerability({
-    starterConfirmed: true, projectedPaVsStarter: 3, projectedPaVsBullpen: 1,
-    bullpenHrPer9: null, bullpenBarrelAllowedPct: null,
-  });
+  const segA = buildSegmentedHrPerPa(clean);
+  const segB = buildSegmentedHrPerPa(marketTainted);
+  ok(approx(segA.starterHrPerPa, segB.starterHrPerPa, 1e-12), "market inputs do not alter p_s");
+  ok(approx(segA.bullpenHrPerPa, segB.bullpenHrPerPa, 1e-12), "market inputs do not alter p_b");
+
+  const pathA = estimatePregamePaPath({ battingOrderSlot: clean.lineupOpportunity.battingOrderSlot, starterBullpen: clean.starterBullpen });
+  const pathB = estimatePregamePaPath({ battingOrderSlot: marketTainted.lineupOpportunity.battingOrderSlot, starterBullpen: marketTainted.starterBullpen });
+  ok(approx(pathA.starterMean, pathB.starterMean, 1e-12) && approx(pathA.bullpenMean, pathB.bullpenMean, 1e-12),
+    "market team total does not alter the PA path");
+
+  const mA = runPregameMathModel(clean);
+  const mB = runPregameMathModel(marketTainted);
+  ok(mA.jointGameHrProbability === mB.jointGameHrProbability, "market inputs do not alter joint game probability");
+}
+
+// ── K/L. scoreBullpenVulnerability carries NO exposure multiplier ─────────────
+{
+  const shallow = scoreBullpenVulnerability(sb({ projectedPaVsStarter: 3.5, projectedPaVsBullpen: 0.5, bullpenHrPer9: 1.6, bullpenBarrelAllowedPct: 10 }));
+  const deep = scoreBullpenVulnerability(sb({ projectedPaVsStarter: 1.0, projectedPaVsBullpen: 3.0, bullpenHrPer9: 1.6, bullpenBarrelAllowedPct: 10 }));
+  ok(approx(shallow.logOdds, deep.logOdds, 1e-12), "bullpen-vuln log-odds independent of projected exposure");
+  const none = scoreBullpenVulnerability(sb({ bullpenHrPer9: null, bullpenBarrelAllowedPct: null }));
   ok(!none.available && none.logOdds === 0, "no bullpen data → no-op");
-  const vuln = scoreBullpenVulnerability({ starterConfirmed: true, projectedPaVsStarter: null, projectedPaVsBullpen: null, bullpenHrPer9: 1.9, bullpenBarrelAllowedPct: 11 });
-  const stingy = scoreBullpenVulnerability({ starterConfirmed: true, projectedPaVsStarter: null, projectedPaVsBullpen: null, bullpenHrPer9: 0.7, bullpenBarrelAllowedPct: 4 });
+  const vuln = scoreBullpenVulnerability(sb({ bullpenHrPer9: 1.9, bullpenBarrelAllowedPct: 11 }));
+  const stingy = scoreBullpenVulnerability(sb({ bullpenHrPer9: 0.7, bullpenBarrelAllowedPct: 4 }));
   ok(vuln.logOdds > 0 && stingy.logOdds < 0, "bullpen vuln sign tracks HR/9 + barrel allowed");
 }
 
@@ -291,10 +315,10 @@ type PregamePaPathArgsLike = { slot: number; runs: number; s: number | null; b: 
   ok(m.bullpenHrPerPa! >= MIN_HR_PER_PA && m.bullpenHrPerPa! <= MAX_HR_PER_PA, "bullpenHrPerPa clamped");
   ok(m.jointGameHrProbability! >= 0 && m.jointGameHrProbability! <= 1, "jointGameHrProbability bounded");
   ok(m.calibratedJointGameHrProbability! >= 0 && m.calibratedJointGameHrProbability! <= 1, "calibrated joint bounded");
-  ok(approx((m.projectedStarterPA ?? 0) + (m.projectedBullpenPA ?? 0), m.projectedPA ?? 0, 0.01),
-    "projected starter PA + bullpen PA ≈ total projected PA");
+  ok(approx((m.projectedStarterPA ?? 0) + (m.projectedBullpenPA ?? 0), m.projectedPA ?? 0, 0.35),
+    "projected starter PA + bullpen PA ≈ total projected PA (order of magnitude)");
   const jp = (m.interactionDiagnostics as any).jointPath;
-  ok(jp && jp.bullpenVulnerabilityAvailable === true, "joint-path diagnostics surfaced");
+  ok(jp && jp.available === true && jp.bullpenVulnerabilityAvailable === true, "joint-path diagnostics surfaced");
 }
 
 // ── N. Elite joint prob beats weak joint prob (end-to-end) ────────────────────

@@ -167,6 +167,14 @@ export interface ParkWeatherSprayInputs {
 /** K. Lineup / opportunity / volume (confirmed lineup + market totals). */
 export interface LineupOpportunityInputs {
   battingOrderSlot: number | null;
+  /**
+   * MARKET-DERIVED team run total (implied by the game total/odds). Per the locked
+   * rule that odds are excluded from probability, this field MUST NOT enter the
+   * PR6 joint probability path (p_s, p_b, PA-path, or joint game probability). It
+   * remains consumed only by the legacy single-path diagnostic (unchanged). A
+   * future non-market run projection with explicit provenance would be a separate
+   * field, never this one.
+   */
   teamImpliedRuns: number | null;
   obpAhead: number | null;
   lineupConfirmed: boolean;
@@ -274,17 +282,30 @@ export interface SegmentedHrPerPaResult {
  * Joint distribution over (PA vs starter = n_s, PA vs bullpen = n_b). Keys are
  * `"${n_s}:${n_b}"` and the values sum to 1. The batter's PA are sequential, so
  * for a given total N the starter is faced first (n_s) then the bullpen (n_b).
+ *
+ * `available` is false when there is NO exposure evidence at all (no projected
+ * PA split and no opener signal). In that case the path is NOT fabricated as
+ * all-starter (which would maximize starter exposure and ignore the bullpen);
+ * `joint` is empty and the joint game probability is null with a `missing_pa_path`
+ * reason. Missing exposure cannot be reconstructed later (no-backfill), so it must
+ * be captured, never assumed.
  */
 export interface PaPathJointDistribution {
   joint: Record<string, number>;
-  /** E[N_s] — expected PA vs the starter. */
+  /** E[N_s] — expected PA vs the starter (0 when unavailable). */
   starterMean: number;
-  /** E[N_b] — expected PA vs the bullpen. */
+  /** E[N_b] — expected PA vs the bullpen (0 when unavailable). */
   bullpenMean: number;
-  /** E[N_s + N_b] — expected total PA. */
+  /** E[N_s + N_b] — expected total PA (0 when unavailable). */
   totalMean: number;
-  /** True when the whole game routes to the starter path (no bullpen exposure modeled). */
+  /** True when the whole game routes to the starter path (all exposure vs the starter). */
   allStarter: boolean;
+  /** False when no exposure evidence exists — the path is unavailable, not fabricated. */
+  available: boolean;
+  /** Reason code when unavailable (e.g. `missing_pa_path`), else null. */
+  unavailableReason: string | null;
+  /** True when a frozen opener exposure prior was used (opener signal, no explicit split). */
+  usedOpenerExposurePrior: boolean;
 }
 
 /** A single additive log-odds term contributed by one component. */
