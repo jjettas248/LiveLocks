@@ -8,10 +8,13 @@
 //
 // It imports only the pure classifier; it never touches the engine, bus, storage,
 // or any live signal. It exits NON-ZERO when Elite prevalence exceeds the cap
-// (so CI fails on a re-inflating tag) or the export is malformed.
+// (so CI fails on a re-inflating tag), the export is malformed, OR the export
+// is too small/too degraded to be meaningful evidence (empty, or mostly/only
+// UNAVAILABLE assessments) — see MIN_POPULATION_DEFAULT/MIN_VALID_ASSESSED_PCT_DEFAULT.
 //
 // Usage:
-//   npx tsx scripts/plateIsoPopulationAudit.ts <export.json> [--max-elite-pct 25] [--json]
+//   npx tsx scripts/plateIsoPopulationAudit.ts <export.json> \
+//     [--max-elite-pct 25] [--min-population 20] [--min-valid-pct 50] [--json]
 //
 // Export format — a JSON array of hitters, each either:
 //   { "ab": 480, "slg": 0.512, "avg": 0.271, "split": "vs_rhp" }   // ISO = slg - avg
@@ -24,6 +27,15 @@ import { assessIso, type IsoAssessment, type IsoSource } from "../server/mlb/pre
 import { ISO_ASSESSMENT_VERSION } from "../server/mlb/pregamePowerRadar/isoAssessmentConfig";
 
 const ELITE_PREVALENCE_CAP_DEFAULT = 25; // percent — matches the runtime guardrail
+// A truncated/empty export (n=0) or one where every row falls back to
+// UNAVAILABLE (0 valid assessments) drives elitePct to 0, which trivially
+// satisfies the elite-prevalence cap below — the gate would report PASS while
+// providing zero real validation evidence. These floors make that impossible:
+// the export must contain a statistically meaningful number of hitters AND a
+// meaningful share of them must have produced a usable (non-UNAVAILABLE) ISO
+// assessment before `passed` can ever be true.
+const MIN_POPULATION_DEFAULT = 20; // below this, prevalence % is noise
+const MIN_VALID_ASSESSED_PCT_DEFAULT = 50; // percent — at least half the export must assess
 
 interface HitterRow {
   id?: string;
@@ -35,17 +47,23 @@ interface HitterRow {
   source?: IsoSource;
 }
 
-function parseArgs(argv: string[]): { path: string | null; maxElitePct: number; json: boolean } {
+function parseArgs(
+  argv: string[],
+): { path: string | null; maxElitePct: number; minPopulation: number; minValidAssessedPct: number; json: boolean } {
   let path: string | null = null;
   let maxElitePct = ELITE_PREVALENCE_CAP_DEFAULT;
+  let minPopulation = MIN_POPULATION_DEFAULT;
+  let minValidAssessedPct = MIN_VALID_ASSESSED_PCT_DEFAULT;
   let json = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--max-elite-pct") maxElitePct = Number(argv[++i]);
+    else if (a === "--min-population") minPopulation = Number(argv[++i]);
+    else if (a === "--min-valid-pct") minValidAssessedPct = Number(argv[++i]);
     else if (a === "--json") json = true;
     else if (!a.startsWith("--")) path = a;
   }
-  return { path, maxElitePct, json };
+  return { path, maxElitePct, minPopulation, minValidAssessedPct, json };
 }
 
 function rowToIso(r: HitterRow): number | null {
@@ -55,7 +73,7 @@ function rowToIso(r: HitterRow): number | null {
 }
 
 function main(): void {
-  const { path, maxElitePct, json } = parseArgs(process.argv.slice(2));
+  const { path, maxElitePct, minPopulation, minValidAssessedPct, json } = parseArgs(process.argv.slice(2));
   if (!path) {
     console.error(
       "[PLATE_ISO_POPULATION_AUDIT] UNEXECUTED — no historical export provided.\n" +
@@ -94,17 +112,41 @@ function main(): void {
   }
 
   const n = rows.length;
+  const validAssessed = n - unavailable;
   const elitePct = n > 0 ? (100 * eliteEligible) / n : 0;
   const fallbackPct = n > 0 ? (100 * unavailable) / n : 0;
+  const validAssessedPct = n > 0 ? (100 * validAssessed) / n : 0;
+
+  // Population/coverage floors — checked BEFORE the elite-prevalence cap, since
+  // an empty or all-UNAVAILABLE export drives elitePct to 0 and would otherwise
+  // trivially satisfy `elitePct <= maxElitePct` while providing zero real
+  // validation evidence (see MIN_POPULATION_DEFAULT/MIN_VALID_ASSESSED_PCT_DEFAULT
+  // above).
+  const populationReasons: string[] = [];
+  if (n < minPopulation) {
+    populationReasons.push(`population=${n} < required minimum ${minPopulation}`);
+  }
+  if (validAssessedPct < minValidAssessedPct) {
+    populationReasons.push(
+      `valid-assessed=${Number(validAssessedPct.toFixed(2))}% < required minimum ${minValidAssessedPct}%`,
+    );
+  }
+  const elitePrevalenceOk = elitePct <= maxElitePct;
+
   const report = {
     version: ISO_ASSESSMENT_VERSION,
     population: n,
+    validAssessed,
+    validAssessedPct: Number(validAssessedPct.toFixed(2)),
+    minPopulation,
+    minValidAssessedPct,
     tierCounts,
     eliteEligible,
     elitePct: Number(elitePct.toFixed(2)),
     fallbackPct: Number(fallbackPct.toFixed(2)),
     maxElitePct,
-    passed: elitePct <= maxElitePct,
+    populationReasons,
+    passed: populationReasons.length === 0 && elitePrevalenceOk,
   };
 
   if (json) {
@@ -112,8 +154,16 @@ function main(): void {
   } else {
     console.log(`[PLATE_ISO_POPULATION_AUDIT] v=${report.version} population=${n}`);
     console.log(`  tiers: ${JSON.stringify(tierCounts)}`);
+    console.log(
+      `  valid-assessed: ${validAssessed}/${n} (${report.validAssessedPct}%, min ${minValidAssessedPct}%)  ` +
+        `min population: ${minPopulation}`,
+    );
     console.log(`  ELITE prevalence: ${report.elitePct}% (cap ${maxElitePct}%)  fallback: ${report.fallbackPct}%`);
-    console.log(`  ${report.passed ? "PASS" : "FAIL"} — Elite prevalence ${report.passed ? "within" : "EXCEEDS"} the selectivity cap`);
+    if (populationReasons.length > 0) {
+      console.log(`  FAIL — insufficient validation evidence: ${populationReasons.join("; ")}`);
+    } else {
+      console.log(`  ${elitePrevalenceOk ? "PASS" : "FAIL"} — Elite prevalence ${elitePrevalenceOk ? "within" : "EXCEEDS"} the selectivity cap`);
+    }
   }
 
   process.exit(report.passed ? 0 : 1);
