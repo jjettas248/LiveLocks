@@ -22,8 +22,8 @@ physically retrievable** (PR0 correction #5). Every "capability" row is marked
 
 | Feature family | Spec ref | Current asset | Class | Notes / gap |
 | --- | --- | --- | --- | --- |
-| Player game logs | §6.2 | `nbaStatsService.getPlayerGameLogs` | **R** | Adapter exists; **3-season depth + `knownAt` unverified**. |
-| Team game logs / pace | §6.2 | `nbaStatsService.getTeamGameLogs` | **R** | Pace as *distribution* (§6A.4) not built — only point rates today. |
+| Player game logs | §6.2 | `nbaStatsService.getPlayerGameLogs` | **R** (current season only) | Adapter takes **no season param** — hard-codes `getCurrentSeason()` (`nbaStatsService.ts:414,422`), so **prior seasons are `M`** (must-build: add a season parameter) — a confirmed code gap, not just unverified depth. `knownAt` unverified. |
+| Team game logs / pace | §6.2 | `nbaStatsService.getTeamGameLogs` | **R** (current season only) | Same **no-season-param** gap (`getCurrentSeason()`, `nbaStatsService.ts:474,486`) → prior seasons **`M`**. Pace as *distribution* (§6A.4) not built — only point rates today. |
 | Minutes (pregame projection) | §6A.3 | `minutesProjectionService` | **R** | Returns a projection, **not** a bounded role-aware mixture distribution. |
 | Rotation / role state | §5B.6 | `nbaRotationHistoryService.getPlayoffRotationProfile` | **R** | Has `dataSource` provenance; **role-state segmentation by dated lineup is missing**. |
 | Injury / availability scenarios | §6.3, §6A.2 | — | **M** | No scenario-weighted availability tree; only ad-hoc live handling. |
@@ -66,12 +66,21 @@ seasons, kept separate** (current = primary evidence; priors decayed, never a
 | Season | Player logs | Team/pace | Rotation/role | Tracking (shot/PA/reb-chance) | Scheme/DvP | Class |
 | --- | --- | --- | --- | --- | --- | --- |
 | Current (2025-26) | R | R | R | U | M | **R/U** |
-| Prior-1 (2024-25) | R | R | U | U | M | **U** |
-| Prior-2 (2023-24) | R | R | U | U | M | **U** |
+| Prior-1 (2024-25) | M† | M† | U | U | M | **M/U** |
+| Prior-2 (2023-24) | M† | M† | U | U | M | **M/U** |
 
-> Downgrade from Current→Prior reflects that **older-season role-state fidelity,
-> tracking coverage, and `knownAt` reconstruction are progressively less certain**
-> and must be verified per season, not assumed from the current-season adapter.
+> **† Player/team logs are `M` (must-build) for prior seasons — a confirmed code
+> gap, not merely unverified depth.** `getPlayerGameLogs` / `getTeamGameLogs`
+> (`server/services/nbaStatsService.ts:405-424`, `467-486`) accept only
+> `{ playerId/teamAbbr, seasonType, limit }` and hard-code
+> `const season = getCurrentSeason()` in the request — there is **no season
+> parameter**, so a 2024-25 or 2023-24 pull is impossible without first extending
+> the adapter. Only the current season is retrievable today.
+>
+> Downgrade from Current→Prior otherwise reflects that **older-season role-state
+> fidelity, tracking coverage, and `knownAt` reconstruction are progressively
+> less certain** and must be verified per season, not assumed from the
+> current-season adapter.
 
 ### 3b. NFL (illustrative window: current 2026 · prior-1 2025 · prior-2 2024)
 
@@ -119,8 +128,10 @@ sport-owned semantics, never shared math.
 ## 5. Verification owed to PR1 (turns U/R into A)
 
 1. Stand up the as-of feature store (`validAt`/`knownAt`) + leakage firewall.
-2. Prove a real 3-season NBA pull per season (depth, `knownAt`, rate-limit
-   throughput) and record coverage into `pregame_raw_source_snapshots`.
+2. **First extend `getPlayerGameLogs` / `getTeamGameLogs` with an explicit season
+   parameter** (they hard-code `getCurrentSeason()` today), then prove a real
+   3-season NBA pull per season (depth, `knownAt`, rate-limit throughput) and
+   record coverage into `pregame_raw_source_snapshots`.
 3. Byte-equivalent live/replay feature fixtures (§9A.3) before any backtest.
 4. Select + wire an NFL provider; repeat (2)–(3) for NFL.
 
