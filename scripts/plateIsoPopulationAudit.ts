@@ -7,11 +7,13 @@
 // pre-deployment gate the sandbox cannot satisfy (no live Stats API / DB here).
 //
 // It imports only the pure classifier; it never touches the engine, bus, storage,
-// or any live signal. It exits NON-ZERO when Elite prevalence exceeds the cap
-// (so CI fails on a re-inflating tag) or the export is malformed.
+// or any live signal. It exits NON-ZERO when the gate cannot CERTIFY the release:
+// an empty/too-small population, too few VALID assessments (so it provides no real
+// validation evidence), Elite prevalence over the cap, or a malformed export.
 //
 // Usage:
-//   npx tsx scripts/plateIsoPopulationAudit.ts <export.json> [--max-elite-pct 25] [--json]
+//   npx tsx scripts/plateIsoPopulationAudit.ts <export.json> \
+//     [--max-elite-pct 25] [--min-population 30] [--min-valid-pct 50] [--json]
 //
 // Export format — a JSON array of hitters, each either:
 //   { "ab": 480, "slg": 0.512, "avg": 0.271, "split": "vs_rhp" }   // ISO = slg - avg
@@ -20,12 +22,17 @@
 // (default "overall"/"current_overall").
 
 import { readFileSync } from "fs";
-import { assessIso, type IsoAssessment, type IsoSource } from "../server/mlb/pregamePowerRadar/isoAssessment";
+import { assessIso, type IsoSource } from "../server/mlb/pregamePowerRadar/isoAssessment";
 import { ISO_ASSESSMENT_VERSION } from "../server/mlb/pregamePowerRadar/isoAssessmentConfig";
 
-const ELITE_PREVALENCE_CAP_DEFAULT = 25; // percent — matches the runtime guardrail
+export const ELITE_PREVALENCE_CAP_DEFAULT = 25; // percent — matches the runtime guardrail
+// A gate that certifies "we validated on the real population" must actually SEE a
+// real population. An empty export, or one where nearly every row fails closed
+// (missing ISO/AB, out-of-range), provides no evidence and must FAIL, not pass.
+export const MIN_POPULATION_DEFAULT = 30; // minimum rows to certify anything
+export const MIN_VALID_PCT_DEFAULT = 50; // minimum % of rows producing a usable tier
 
-interface HitterRow {
+export interface HitterRow {
   id?: string;
   iso?: number | null;
   slg?: number | null;
@@ -35,17 +42,25 @@ interface HitterRow {
   source?: IsoSource;
 }
 
-function parseArgs(argv: string[]): { path: string | null; maxElitePct: number; json: boolean } {
-  let path: string | null = null;
-  let maxElitePct = ELITE_PREVALENCE_CAP_DEFAULT;
-  let json = false;
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--max-elite-pct") maxElitePct = Number(argv[++i]);
-    else if (a === "--json") json = true;
-    else if (!a.startsWith("--")) path = a;
-  }
-  return { path, maxElitePct, json };
+export interface PopulationAuditOptions {
+  maxElitePct: number;
+  minPopulation: number;
+  minValidPct: number;
+}
+
+export interface PopulationAuditReport {
+  version: string;
+  population: number;
+  valid: number; // rows producing a usable tier (not UNAVAILABLE)
+  unavailable: number;
+  validPct: number;
+  tierCounts: Record<string, number>;
+  eliteEligible: number;
+  elitePct: number;
+  fallbackPct: number;
+  thresholds: { maxElitePct: number; minPopulation: number; minValidPct: number };
+  passed: boolean;
+  failReasons: string[];
 }
 
 function rowToIso(r: HitterRow): number | null {
@@ -54,13 +69,76 @@ function rowToIso(r: HitterRow): number | null {
   return null;
 }
 
+/** Pure evaluator — no I/O. A gate can only PASS on a real, mostly-valid population. */
+export function buildPopulationReport(rows: readonly HitterRow[], opts: PopulationAuditOptions): PopulationAuditReport {
+  const tierCounts: Record<string, number> = { ELITE: 0, STRONG: 0, AVERAGE: 0, WEAK: 0, UNAVAILABLE: 0 };
+  let eliteEligible = 0;
+  let unavailable = 0;
+  for (const r of rows) {
+    const rawIso = rowToIso(r);
+    const a = assessIso({
+      rawIso,
+      sampleAB: r.ab ?? null,
+      split: r.split ?? "overall",
+      source: r.source ?? (rawIso != null ? "current_overall" : "league_fallback"),
+    });
+    tierCounts[a.tier] = (tierCounts[a.tier] ?? 0) + 1;
+    if (a.eliteEligible) eliteEligible++;
+    if (a.tier === "UNAVAILABLE") unavailable++;
+  }
+  const n = rows.length;
+  const valid = n - unavailable;
+  const elitePct = n > 0 ? (100 * eliteEligible) / n : 0;
+  const validPct = n > 0 ? (100 * valid) / n : 0;
+  const fallbackPct = n > 0 ? (100 * unavailable) / n : 0;
+
+  const failReasons: string[] = [];
+  if (n < opts.minPopulation) failReasons.push(`population ${n} < min ${opts.minPopulation} (no real-population evidence)`);
+  if (validPct < opts.minValidPct) failReasons.push(`valid assessments ${validPct.toFixed(1)}% < min ${opts.minValidPct}% (export mostly failed closed)`);
+  if (elitePct > opts.maxElitePct) failReasons.push(`Elite prevalence ${elitePct.toFixed(1)}% > cap ${opts.maxElitePct}%`);
+
+  return {
+    version: ISO_ASSESSMENT_VERSION,
+    population: n,
+    valid,
+    unavailable,
+    validPct: Number(validPct.toFixed(2)),
+    tierCounts,
+    eliteEligible,
+    elitePct: Number(elitePct.toFixed(2)),
+    fallbackPct: Number(fallbackPct.toFixed(2)),
+    thresholds: { maxElitePct: opts.maxElitePct, minPopulation: opts.minPopulation, minValidPct: opts.minValidPct },
+    passed: failReasons.length === 0,
+    failReasons,
+  };
+}
+
+function parseArgs(argv: string[]): { path: string | null; opts: PopulationAuditOptions; json: boolean } {
+  let path: string | null = null;
+  const opts: PopulationAuditOptions = {
+    maxElitePct: ELITE_PREVALENCE_CAP_DEFAULT,
+    minPopulation: MIN_POPULATION_DEFAULT,
+    minValidPct: MIN_VALID_PCT_DEFAULT,
+  };
+  let json = false;
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--max-elite-pct") opts.maxElitePct = Number(argv[++i]);
+    else if (a === "--min-population") opts.minPopulation = Number(argv[++i]);
+    else if (a === "--min-valid-pct") opts.minValidPct = Number(argv[++i]);
+    else if (a === "--json") json = true;
+    else if (!a.startsWith("--")) path = a;
+  }
+  return { path, opts, json };
+}
+
 function main(): void {
-  const { path, maxElitePct, json } = parseArgs(process.argv.slice(2));
+  const { path, opts, json } = parseArgs(process.argv.slice(2));
   if (!path) {
     console.error(
       "[PLATE_ISO_POPULATION_AUDIT] UNEXECUTED — no historical export provided.\n" +
         "  This is a required pre-deployment gate; run it against a real hitter export:\n" +
-        "  npx tsx scripts/plateIsoPopulationAudit.ts <export.json> [--max-elite-pct 25]",
+        "  npx tsx scripts/plateIsoPopulationAudit.ts <export.json> [--max-elite-pct 25] [--min-population 30] [--min-valid-pct 50]",
     );
     process.exit(2);
   }
@@ -76,47 +154,25 @@ function main(): void {
     return;
   }
 
-  const tierCounts: Record<string, number> = { ELITE: 0, STRONG: 0, AVERAGE: 0, WEAK: 0, UNAVAILABLE: 0 };
-  let eliteEligible = 0;
-  let unavailable = 0;
-  const assessments: IsoAssessment[] = [];
-  for (const r of rows) {
-    const a = assessIso({
-      rawIso: rowToIso(r),
-      sampleAB: r.ab ?? null,
-      split: r.split ?? "overall",
-      source: r.source ?? (rowToIso(r) != null ? "current_overall" : "league_fallback"),
-    });
-    assessments.push(a);
-    tierCounts[a.tier] = (tierCounts[a.tier] ?? 0) + 1;
-    if (a.eliteEligible) eliteEligible++;
-    if (a.tier === "UNAVAILABLE") unavailable++;
-  }
-
-  const n = rows.length;
-  const elitePct = n > 0 ? (100 * eliteEligible) / n : 0;
-  const fallbackPct = n > 0 ? (100 * unavailable) / n : 0;
-  const report = {
-    version: ISO_ASSESSMENT_VERSION,
-    population: n,
-    tierCounts,
-    eliteEligible,
-    elitePct: Number(elitePct.toFixed(2)),
-    fallbackPct: Number(fallbackPct.toFixed(2)),
-    maxElitePct,
-    passed: elitePct <= maxElitePct,
-  };
+  const report = buildPopulationReport(rows, opts);
 
   if (json) {
     console.log(JSON.stringify(report, null, 2));
   } else {
-    console.log(`[PLATE_ISO_POPULATION_AUDIT] v=${report.version} population=${n}`);
-    console.log(`  tiers: ${JSON.stringify(tierCounts)}`);
-    console.log(`  ELITE prevalence: ${report.elitePct}% (cap ${maxElitePct}%)  fallback: ${report.fallbackPct}%`);
-    console.log(`  ${report.passed ? "PASS" : "FAIL"} — Elite prevalence ${report.passed ? "within" : "EXCEEDS"} the selectivity cap`);
+    console.log(`[PLATE_ISO_POPULATION_AUDIT] v=${report.version} population=${report.population} valid=${report.valid} (${report.validPct}%)`);
+    console.log(`  tiers: ${JSON.stringify(report.tierCounts)}`);
+    console.log(`  ELITE prevalence: ${report.elitePct}% (cap ${opts.maxElitePct}%)  fallback: ${report.fallbackPct}%`);
+    if (report.passed) {
+      console.log(`  PASS — real population validated, Elite prevalence within the selectivity cap`);
+    } else {
+      console.log(`  FAIL — ${report.failReasons.join("; ")}`);
+    }
   }
 
   process.exit(report.passed ? 0 : 1);
 }
 
-main();
+// Only run the CLI when invoked directly (so the pure evaluator can be imported in tests).
+if (process.argv[1] && /plateIsoPopulationAudit\.ts$/.test(process.argv[1])) {
+  main();
+}
