@@ -658,16 +658,39 @@ function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[
   }
 }
 
-// ── PR5.3 gap 2: nested unauthorized fields rejected (strict nested schemas) ───
+// ── PR5.3.1 gap: MATRIX — an unknown property in EVERY authorized nested group is
+// rejected through the real training-reader path (so no group is missed mechanically).
 {
-  // V2: an extra nested field inside an authorized group must be rejected.
-  const v2Bad = { ...buildProjection(), batterPower: { ...(buildProjection().batterPower as Record<string, unknown>), unversionedFeature: 123 } };
-  const pred = mkPrediction({ featureVersion: PLATE_HR_V2_FEATURES_V2, derivedFeatures: v2Bad }, []);
-  ok(evaluatePredictionRowIntegrity(pred, new Map()).reasons.some((r) => r.startsWith("derived_projection")), "an unauthorized NESTED field in a V2 projection is rejected");
-  // V1 likewise.
-  const v1Bad = { ...buildV1Projection(), pitcherVulnerability: { ...(buildV1Projection().pitcherVulnerability as Record<string, unknown>), secretEdge: 1 } };
-  const pred1 = mkPrediction({ featureVersion: PLATE_HR_V2_FEATURES_V1, derivedFeatures: v1Bad }, []);
-  ok(evaluatePredictionRowIntegrity(pred1, new Map()).reasons.some((r) => r.startsWith("derived_projection")), "an unauthorized NESTED field in a V1 projection is rejected");
+  const runMatrix = (version: string, projection: Record<string, unknown>) => {
+    const groupKeys = Object.keys(projection).filter((k) => {
+      const v = projection[k];
+      return v != null && typeof v === "object" && !Array.isArray(v);
+    });
+    ok(groupKeys.length >= 8, `${version}: matrix covers the authorized nested groups (${groupKeys.length})`);
+    for (const k of groupKeys) {
+      const bad = { ...projection, [k]: { ...(projection[k] as Record<string, unknown>), __unauthorized__: 123 } };
+      const pred = mkPrediction({ featureVersion: version, derivedFeatures: bad }, []);
+      ok(
+        evaluatePredictionRowIntegrity(pred, new Map()).reasons.some((r) => r.startsWith("derived_projection")),
+        `${version}: an unauthorized field inside "${k}" is rejected`,
+      );
+    }
+    // A nested pitch-FAMILY leaf is strict too.
+    const pt = projection.pitchType as Record<string, Record<string, unknown>> | undefined;
+    if (pt?.fastball) {
+      const badLeaf = { ...projection, pitchType: { ...pt, fastball: { ...pt.fastball, __unauthorized__: 1 } } };
+      const pred = mkPrediction({ featureVersion: version, derivedFeatures: badLeaf }, []);
+      ok(evaluatePredictionRowIntegrity(pred, new Map()).reasons.some((r) => r.startsWith("derived_projection")), `${version}: an unauthorized field inside a pitch-family leaf is rejected`);
+    }
+  };
+  runMatrix(PLATE_HR_V2_FEATURES_V2, buildProjection());
+  runMatrix(PLATE_HR_V2_FEATURES_V1, buildV1Projection());
+  // Explicit parkWeatherSpray coherently-rehashed case (the PR5.3.1 miss), both versions.
+  for (const [ver, proj] of [[PLATE_HR_V2_FEATURES_V2, buildProjection()], [PLATE_HR_V2_FEATURES_V1, buildV1Projection()]] as const) {
+    const bad = { ...proj, parkWeatherSpray: { ...(proj.parkWeatherSpray as Record<string, unknown>), unauthorizedFeature: 123 } };
+    const pred = mkPrediction({ featureVersion: ver, derivedFeatures: bad }, []);
+    ok(evaluatePredictionRowIntegrity(pred, new Map()).reasons.some((r) => r.startsWith("derived_projection")), `${ver}: an unauthorized field inside parkWeatherSpray is rejected`);
+  }
 }
 
 // ── schema round-trip (full PR4.3 shape) ──────────────────────────────────────

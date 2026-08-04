@@ -148,7 +148,7 @@ export const plateHrV2ParkWeatherSprayFeaturesSchema = z.object({
   avgFenceHeightFt: numericLeaf,
   avgHrDistanceFt: numericLeaf,
   extra: extraLeaves, // PR3 weather-physics/xHR extension point — no named fields invented ahead of math/ itself having them
-});
+}).strict();
 export type PlateHrV2ParkWeatherSprayFeatures = z.infer<typeof plateHrV2ParkWeatherSprayFeaturesSchema>;
 
 // ── K. Lineup / opportunity / volume ────────────────────────────────────────
