@@ -494,7 +494,11 @@ function mlbMoundGradingCases(): CaseMap {
     // Edge: null direction → unavailable + no_edge (no side ever recommended).
     market_null_direction: deriveMoundMarketOutcome(marketInput({ moundDirection: null })),
 
-    // Edge: STAT CORRECTION — same inputs, corrected final flips the result.
+    // Edge: STAT CORRECTION — the PURE outcome derivation. Identical inputs with
+    // a corrected `actual` flip the derived result missed→cashed. This locks the
+    // derivation only; the STATEFUL regrade of an already-settled signal
+    // (gradeMoundOutcomes skips a graded signal unless live-win refresh /
+    // direction repair) needs storage and is [NEEDS-EXTERNAL] — see __fixtures__/README.md.
     correction_before: deriveMoundMarketOutcome(marketInput({ actual: 6 })), // under 6.5 → missed
     correction_after: deriveMoundMarketOutcome(marketInput({ actual: 8 })), // corrected → cashed
 
@@ -508,7 +512,10 @@ function mlbMoundGradingCases(): CaseMap {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group 8 — Plate win attribution (pure)
+// Group 8 — Plate win attribution (pure). This is the attribution step GIVEN a
+// known `hitHr`; the grader that DECIDES hitHr from a box score
+// (shadowOutcomes.resolveOutcome, incl. the pre-`final` miss guard + TB
+// exactness) is stateful/live and is [NEEDS-EXTERNAL] — see __fixtures__/README.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function plateWinAttributionCases(): CaseMap {
