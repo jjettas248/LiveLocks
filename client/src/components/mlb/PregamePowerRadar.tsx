@@ -492,12 +492,17 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const showPullRate = pullDriver != null && pullRateValue != null;
 
   // Market-aware final state — server-stamped outcomes only; the card never
-  // derives win/loss. A cashed-HR celebration shows ONLY when HR is the primary
-  // angle. A Total-Bases-primary card shows its final TB count instead (TB has
-  // no stored line → never a cash/miss). HR-primary misses show a plain factual
-  // "No HR" — shown, not erased.
+  // derives win/loss. A home run is a cash on ANY card: the green HOMERED
+  // celebration fires whenever the server confirms outcomes.hitHr, regardless
+  // of whether Home Runs or Total Bases was the primary angle. A power target
+  // who goes deep has hit, and the card must settle green — the server already
+  // grades every such HR as a pregame_win (see deriveWinAttribution), so gating
+  // the celebration on isHrPrimary was silently dropping real HRs off the
+  // Total-Bases-primary cards. HR-primary misses still show a plain factual
+  // "No HR" — shown, not erased. A Total-Bases-primary card still surfaces its
+  // final TB count for the extra-base context beyond the HR.
   const isHrPrimary = s.primaryMarket === "home_runs";
-  const hitHr = isHrPrimary && s.outcomes?.hitHr === true;
+  const hitHr = s.outcomes?.hitHr === true;
   const noHr = isHrPrimary && s.outcomes != null && s.outcomes.hitHr === false;
   const finalTotalBases = !isHrPrimary && s.outcomes != null ? (s.outcomes.totalBases ?? null) : null;
   const cashedColor = "#10b981";
