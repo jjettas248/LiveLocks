@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 // (below, in main) so this assignment runs before that import evaluates.
 process.env.DATABASE_URL ??= "postgres://fixture:fixture@240.0.0.1:1/fixture";
 
-import { finalizeNbaProbability, type FinalizerContext } from "../nba/probabilityFinalizer";
+import { finalizeNbaProbability, deriveFreshOdds, type FinalizerContext } from "../nba/probabilityFinalizer";
 import { computeProbability, type EngineInput } from "../nba/probabilityEngine";
 import { processNBAEngine, type NBAEngineCandidate } from "../engines/nba/index";
 import {
@@ -268,6 +268,45 @@ function nbaComputeProbabilityCases(): CaseMap {
     contradictory_recent_hot: computeProbability(
       engineInput({ rateRecent: { points: 1.2 }, rateSeason: { points: 0.6 }, rateRole: { points: 0.65 } }),
     ),
+    // Edge: odds-age freshness gate wired END-TO-END. Same high-rate input
+    // (raw probability above the stale 76 ceiling) at 599s (fresh) vs 600s
+    // (stale, cutoff is strict `< 600`) — the two outputs MUST differ, proving
+    // oddsAgeSec flows through deriveFreshOdds into the finalizer's stale cap.
+    odds_fresh_599: computeProbability(
+      engineInput({ rateRecent: { points: 1.6 }, rateSeason: { points: 1.5 }, rateRole: { points: 1.55 }, oddsAgeSec: 599 }),
+    ),
+    odds_stale_600: computeProbability(
+      engineInput({ rateRecent: { points: 1.6 }, rateSeason: { points: 1.5 }, rateRole: { points: 1.55 }, oddsAgeSec: 600 }),
+    ),
+    // Edge: unknown odds age → fail-closed stale (same input, undefined age).
+    odds_unknown_stale: computeProbability(
+      engineInput({ rateRecent: { points: 1.6 }, rateSeason: { points: 1.5 }, rateRole: { points: 1.55 }, oddsAgeSec: undefined }),
+    ),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Group 2b — NBA odds-freshness derivation (pure: oddsAgeSec -> freshOdds gate)
+// Locks the 600s cutoff (strict `<`) and the fail-closed non-finite handling,
+// upstream of the finalizer's stale-odds cap (which nbaFinalize already covers).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function nbaFreshOddsCases(): CaseMap {
+  return {
+    fresh_zero: deriveFreshOdds(0),
+    fresh_typical_60: deriveFreshOdds(60),
+    fresh_just_under_599: deriveFreshOdds(599),
+    // Boundary: cutoff is strict `< 600`, so exactly 600 is STALE.
+    boundary_600_stale: deriveFreshOdds(600),
+    stale_601: deriveFreshOdds(601),
+    stale_far_3600: deriveFreshOdds(3600),
+    // Fail-closed: unknown / non-finite ages are STALE.
+    unknown_undefined: deriveFreshOdds(undefined),
+    unknown_null: deriveFreshOdds(null),
+    unknown_nan: deriveFreshOdds(NaN),
+    unknown_infinity: deriveFreshOdds(Infinity),
+    // Documents current behavior: a negative finite age is treated as fresh.
+    negative_finite_is_fresh: deriveFreshOdds(-5),
   };
 }
 
@@ -506,6 +545,7 @@ function plateWinAttributionCases(): CaseMap {
 async function main(): Promise<void> {
   // Pure engine/scoring/grading groups (no DB import needed).
   checkGroup("nbaFinalize", nbaFinalizeCases());
+  checkGroup("nbaFreshOdds", nbaFreshOddsCases());
   checkGroup("nbaComputeProbability", nbaComputeProbabilityCases());
   checkGroup("nbaEngineWrapper", nbaEngineWrapperCases());
   checkGroup("mlbPlateScoring", mlbPlateScoringCases());
@@ -591,6 +631,17 @@ async function main(): Promise<void> {
   const once = JSON.stringify(canonicalize(nbaComputeProbabilityCases()));
   const twice = JSON.stringify(canonicalize(nbaComputeProbabilityCases()));
   ok(once === twice, "computeProbability output is deterministic across runs");
+
+  // Freshness-gate self-check: the end-to-end fresh(599) vs stale(600) pair MUST
+  // diverge (fresh keeps the high probability; stale is capped), else the gate
+  // would be unobservable and the golden pair meaningless.
+  const highRate = { points: 1.6 } as const;
+  const freshEnd = computeProbability(engineInput({ rateRecent: highRate, rateSeason: { points: 1.5 }, rateRole: { points: 1.55 }, oddsAgeSec: 599 }));
+  const staleEnd = computeProbability(engineInput({ rateRecent: highRate, rateSeason: { points: 1.5 }, rateRole: { points: 1.55 }, oddsAgeSec: 600 }));
+  ok(
+    JSON.stringify(canonicalize(freshEnd)) !== JSON.stringify(canonicalize(staleEnd)),
+    "odds-freshness gate changes computeProbability output across the 599/600 boundary",
+  );
 
   // Fixture-resolution self-check: a missing fixture must FAIL verification, and
   // creation must be confined to RECORD mode (locks the two behaviors above).
