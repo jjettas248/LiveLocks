@@ -33,6 +33,15 @@ function ok(cond: boolean, msg: string) {
   ];
   const wsResolved = resolveCanonicalEntity(buildCanonicalId("nba", "player", " 123 "), trimmedDir, "2026-01-15T00:00:00.000Z");
   ok(wsResolved.ok && wsResolved.entity.canonicalId === "nba:player:123", "a whitespaced native id joins the same canonical entity");
+  // The DIRECTORY row itself may carry a whitespaced native id while its
+  // canonicalId is already normalized (built via buildCanonicalId). It is
+  // self-consistent and must still match a normalized request — resolution
+  // compares trimmed native ids, not raw ones.
+  const wsDir: EntityDirectoryEntry[] = [
+    { sport: "nba", kind: "player", nativeId: " 123 ", canonicalId: "nba:player:123", activeFrom: null, activeTo: null },
+  ];
+  const wsDirResolved = resolveCanonicalEntity("nba:player:123", wsDir, "2026-01-15T00:00:00.000Z");
+  ok(wsDirResolved.ok && wsDirResolved.entity.canonicalId === "nba:player:123", "a directory row with a whitespaced native id still resolves the normalized request");
 }
 
 // ── fail-closed resolution ───────────────────────────────────────────────────

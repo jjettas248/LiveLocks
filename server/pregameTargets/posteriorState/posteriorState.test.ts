@@ -113,6 +113,35 @@ function seed() {
   ok(win2.count === 2, "window counts the staying game and the relocated game once each");
 }
 
+// ── Zero-weight VETO of a folded game removes its stale contribution ─────────
+{
+  let st = seed();
+  st = updatePosterior(st, { value: 10, weight: 2, season: S, gameId: "gV" });
+  st = updatePosterior(st, { value: 5, weight: 3, season: S, gameId: "gKeep" });
+  ok(combineSeasonWindow(st, S).count === 2, "two games folded before the veto");
+  // A later as-of correction vetoes gV (data-quality/context) with weight 0.
+  st = updatePosterior(st, { value: 10, weight: 0, season: S, gameId: "gV" });
+  const after = combineSeasonWindow(st, S);
+  ok(after.count === 1, "a zero-weight veto removes the folded game (count drops to 1)");
+  ok(!posteriorIncludesGame(st, "gV"), "the vetoed game leaves the lineage");
+  ok(posteriorIncludesGame(st, "gKeep"), "an unrelated folded game is untouched by the veto");
+  ok(approx(posteriorMean(after), 5), "the posterior reflects only the surviving game");
+  // A veto that empties the only season deletes the season entirely.
+  let solo = seed();
+  solo = updatePosterior(solo, { value: 7, weight: 1, season: 2025, gameId: "gSolo" });
+  solo = updatePosterior(solo, { value: 7, weight: 0, season: 2025, gameId: "gSolo" });
+  ok(solo.bySeason[2025] === undefined, "vetoing the last game in a season removes the empty season");
+  // A veto of a never-folded game (or a gameless veto) is a pure no-op.
+  const base = seed();
+  ok(updatePosterior(base, { value: 1, weight: 0, season: S, gameId: "ghost" }) === base, "vetoing a never-folded game returns the same state (no-op)");
+  ok(updatePosterior(base, { value: 1, weight: 0, season: S }) === base, "a gameless zero-weight observation is a no-op");
+  // A negative weight behaves like a zero-weight veto for a folded game.
+  let neg = seed();
+  neg = updatePosterior(neg, { value: 3, weight: 1, season: S, gameId: "gNeg" });
+  neg = updatePosterior(neg, { value: 3, weight: -1, season: S, gameId: "gNeg" });
+  ok(!posteriorIncludesGame(neg, "gNeg") && combineSeasonWindow(neg, S).count === 0, "a negative-weight correction also removes the folded game");
+}
+
 // ── No self-update: the game being predicted is refused ──────────────────────
 {
   let st = seed();

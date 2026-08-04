@@ -166,11 +166,18 @@ export function resolveCanonicalEntity(
     (e) =>
       e.sport === parsed.sport &&
       e.kind === parsed.kind &&
-      e.nativeId === parsed.nativeId &&
+      // Compare native ids in their NORMALIZED (trimmed) form — the same
+      // normalization `buildCanonicalId` applies. A directory row built from a
+      // provider id with incidental whitespace (`nativeId: " 123 "`, canonicalId
+      // `nba:player:123`) is self-consistent yet would be rejected by a raw
+      // `===` against the trimmed request id, dropping the only candidate as
+      // `unknown_id`. Trimming both sides lets the normalized id join.
+      e.nativeId.trim() === parsed.nativeId.trim() &&
       // Reject a self-inconsistent directory row whose redundant canonicalId does
       // not equal its own (sport, kind, nativeId) — never return a mismatched
       // identity (fail-closed). This guarantees the resolved canonicalId equals
-      // the requested one.
+      // the requested one. (buildCanonicalId trims, so a whitespace nativeId with
+      // a canonical canonicalId still passes this check.)
       e.canonicalId === buildCanonicalId(e.sport, e.kind, e.nativeId) &&
       instantInWindow(asOfMs, e.activeFrom, e.activeTo),
   );

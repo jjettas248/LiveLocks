@@ -122,6 +122,27 @@ function removeGameFromSeason(
   };
 }
 
+/**
+ * Remove a game's contribution from EVERY season it appears in (by the
+ * one-season-per-game invariant, at most one), deleting any season left empty.
+ * Returns the SAME state reference when the game was never folded, preserving
+ * the no-op contract. Used by a zero-weight VETO correction of a folded game.
+ */
+function removeGameFromAllSeasons(state: PosteriorState, gameId: string): PosteriorState {
+  const bySeasonNext: Record<number, SeasonSufficientStats> = { ...state.bySeason };
+  let changed = false;
+  for (const key of Object.keys(bySeasonNext)) {
+    const seasonNum = Number(key);
+    const existing = bySeasonNext[seasonNum].byGame[gameId];
+    if (existing === undefined) continue;
+    const reduced = removeGameFromSeason(bySeasonNext[seasonNum], gameId, existing);
+    if (reduced === null) delete bySeasonNext[seasonNum];
+    else bySeasonNext[seasonNum] = reduced;
+    changed = true;
+  }
+  return changed ? { ...state, bySeason: bySeasonNext } : state;
+}
+
 export interface UpdatePosteriorOptions {
   /**
    * Canonical id of the game being predicted. An observation drawn from this
@@ -133,10 +154,14 @@ export interface UpdatePosteriorOptions {
 
 /**
  * Fold one observation into the state, returning a NEW state (pure). No-ops when:
- *  • the weight is non-finite or <= 0 (nothing to add),
+ *  • the weight is non-finite,
  *  • the value is non-finite,
  *  • the season is not an integer, or
  *  • the observation's game equals `excludeGameId` (self-update).
+ *
+ * A finite, non-positive weight is a deliberate VETO: for a game already folded
+ * it REMOVES the prior contribution (its latest as-of row now carries no mass),
+ * and for a gameless/never-folded observation it is a plain no-op.
  *
  * When the observation's game was ALREADY folded in, it is treated as a
  * CORRECTION: the prior per-game contribution is replaced (aggregate sums are
@@ -158,12 +183,24 @@ export function updatePosterior(
   obs: PosteriorObservation,
   options: UpdatePosteriorOptions = {},
 ): PosteriorState {
-  if (!Number.isFinite(obs.weight) || obs.weight <= 0) return state;
-  if (!Number.isFinite(obs.value)) return state;
-  if (!Number.isInteger(obs.season)) return state;
+  // Self-update first: the predicted game is never folded, so a correction that
+  // names it has nothing to add and nothing to remove.
   if (obs.gameId != null && options.excludeGameId != null && obs.gameId === options.excludeGameId) {
     return state; // no self-update
   }
+
+  // A finite, non-positive weight is a deliberate VETO (e.g. a data-quality /
+  // context correction that zeroes an earlier reading). For an ALREADY-folded
+  // game it must REMOVE the stale contribution — otherwise combineSeasonWindow
+  // keeps counting mass the latest as-of row disowns. A gameless veto is a pure
+  // no-op (nothing to remove). A NON-finite weight or a non-finite value is
+  // MALFORMED — not a deliberate veto — and must never drop a good contribution.
+  if (Number.isFinite(obs.weight) && obs.weight <= 0) {
+    return obs.gameId == null ? state : removeGameFromAllSeasons(state, obs.gameId);
+  }
+  if (!Number.isFinite(obs.weight)) return state;
+  if (!Number.isFinite(obs.value)) return state;
+  if (!Number.isInteger(obs.season)) return state;
 
   // Work against an editable clone of bySeason: a cross-season correction below
   // may modify TWO seasons (the old one loses the game, the new one gains it).
