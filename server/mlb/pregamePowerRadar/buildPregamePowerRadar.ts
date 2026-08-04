@@ -104,7 +104,8 @@ import {
   type PlateHrV2SufficientStatsCaptureRow,
 } from "./hrProbabilityV2/plateHrV2ForwardCapture";
 import { assemblePlateHrV2EvidenceDescriptors } from "./hrProbabilityV2/plateHrV2SnapshotCapture";
-import { PLATE_HR_V2_FEATURES_V1 } from "./hrProbabilityV2/plateHrV2FeatureContract";
+import { PLATE_HR_V2_FEATURES_CURRENT } from "./hrProbabilityV2/plateHrV2FeatureContract";
+import { buildRecentContactFormEvidence } from "./hrProbabilityV2/recentContactForm";
 
 let isPregamePowerRadarBuildRunning = false;
 
@@ -1250,7 +1251,7 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               pitcherId: opposingPitcher?.pitcherId ?? null,
               capturedAtIso: new Date(capturedAtMs).toISOString(),
               firstPitchIso: startsAt ?? null,
-              schemaVersion: PLATE_HR_V2_FEATURES_V1,
+              schemaVersion: PLATE_HR_V2_FEATURES_CURRENT,
               batterSufficientStats: savant?.plateHrV2BatterSufficientStats ?? null,
               batterStatsRef: sufficientStatsRef,
               batterFetchedAtMs: savant?.savantFetchedAtMs ?? null,
@@ -1275,11 +1276,35 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
               },
             });
 
+            // PR5: stabilized recent-contact-form shadow feature from the batched
+            // contact_events window + a season baseline, with a content-addressed
+            // contact_events evidence descriptor for EXACT re-derivation. Shadow-only:
+            // no scorer reads it; the boundary is the prediction moment (capture).
+            const recentFormBuilt = buildRecentContactFormEvidence({
+              events: nearHrContactByPlayer.get(player.playerId) ?? [],
+              asOfExclusiveMs: capturedAtMs,
+              retrievalAtMs: capturedAtMs,
+              batterId: player.playerId,
+              schemaVersion: PLATE_HR_V2_FEATURES_CURRENT,
+              seasonBaseline: {
+                avgEv: powerInputs.exitVelocity,
+                ev90: savant?.plateHrV2BatterSufficientStats?.evPercentiles?.p90 ?? null,
+                barrelPct: powerInputs.barrelRatePct,
+                // No clean season air%(LA≥10) source — flyBall% is a stricter, different
+                // definition, so it is deliberately left null (recent air% stays null).
+                airBallPct: null,
+                // Pull-rate proxy (season), not air-specific — matches batterPullAirShare.
+                pulledAirShare: savant?.pullRatePercent != null ? savant.pullRatePercent / 100 : null,
+              },
+            });
+            if (recentFormBuilt.evidence) plateHrV2Evidence.push(recentFormBuilt.evidence);
+
             const capturedRow = capturePlateHrV2Candidate({
               sessionDate,
               gameId: game.gameId,
               gamePk: String(gamePk),
               evidence: plateHrV2Evidence,
+              recentContactForm: recentFormBuilt.inputs,
               buildId,
               batterId: player.playerId,
               batterName: player.playerName,

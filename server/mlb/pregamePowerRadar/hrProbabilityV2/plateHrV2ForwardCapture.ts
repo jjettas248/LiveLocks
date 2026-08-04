@@ -37,10 +37,11 @@ import {
   assemblePlateHrV2FeatureSnapshot,
   type PlateHrV2SourceMeta,
 } from "./plateHrV2FeatureBuilder";
-import { PLATE_HR_V2_FEATURES_V1 } from "./plateHrV2FeatureContract";
+import { PLATE_HR_V2_FEATURES_CURRENT } from "./plateHrV2FeatureContract";
 import type { PlateHrV2EvidenceDescriptor } from "./plateHrV2Snapshots";
 import { isPlateHrV2ForwardCaptureEnabled } from "./plateHrV2CaptureFlags";
-import type { PlateHrV2DerivedFeatureVectorV1, PlateHrV2FeatureAvailabilityVectorV1, PlateHrV2FeatureFreshnessVectorV1, PlateHrV2RawInputEnvelope } from "./plateHrV2FeatureContract";
+import type { PlateHrV2DerivedFeatureVectorV2, PlateHrV2FeatureAvailabilityVectorV2, PlateHrV2FeatureFreshnessVectorV1, PlateHrV2RawInputEnvelope } from "./plateHrV2FeatureContract";
+import type { RecentContactFormInputs } from "./recentContactForm";
 import type { PlateHrV2SufficientStatsRaw } from "./plateHrV2SufficientStats";
 
 export interface PlateHrV2CaptureRow {
@@ -74,8 +75,8 @@ export interface PlateHrV2CaptureRow {
   frozenInput: FrozenPlateHrV2Input;
   inputHash: string;
   featureVersion: string;
-  derivedFeatures: PlateHrV2DerivedFeatureVectorV1;
-  availability: PlateHrV2FeatureAvailabilityVectorV1;
+  derivedFeatures: PlateHrV2DerivedFeatureVectorV2;
+  availability: PlateHrV2FeatureAvailabilityVectorV2;
   featureFreshness: PlateHrV2FeatureFreshnessVectorV1;
   rawInputs: PlateHrV2RawInputEnvelope;
   leakageWarnings: string[];
@@ -137,6 +138,10 @@ export interface CapturePlateHrV2CandidateArgs {
   market: MarketConfirmationInputs;
   availability: AvailabilitySuppressorInputs;
   contactOpportunity: ContactOpportunityInputs;
+  // PR5 additive shadow input — omitted → the builder emits a neutral group. The
+  // caller (buildPregamePowerRadar) also appends the content-addressed
+  // contact_events evidence descriptor to `evidence` so this leaf is reproducible.
+  recentContactForm?: RecentContactFormInputs;
   slateBaselineGameHrProbability: number | null;
   savantQuality: "full" | "fallback" | "missing";
   venueResolved: boolean;
@@ -186,6 +191,7 @@ export function capturePlateHrV2Candidate(args: CapturePlateHrV2CandidateArgs): 
       market: args.market,
       availability: args.availability,
       contactOpportunity: args.contactOpportunity,
+      recentContactForm: args.recentContactForm,
       slateBaselineGameHrProbability: args.slateBaselineGameHrProbability,
     },
     dataQuality: {
@@ -220,6 +226,7 @@ export function capturePlateHrV2Candidate(args: CapturePlateHrV2CandidateArgs): 
     market: args.market,
     availability: args.availability,
     contactOpportunity: args.contactOpportunity,
+    recentContactForm: args.recentContactForm,
     slateBaselineGameHrProbability: args.slateBaselineGameHrProbability,
     batterPowerMeta: args.batterPowerMeta,
     batTrackingMeta: args.batTrackingMeta,
@@ -236,7 +243,7 @@ export function capturePlateHrV2Candidate(args: CapturePlateHrV2CandidateArgs): 
   // Deterministic key so re-capturing the same (feature-version, session,
   // game, batter) is idempotent — mirrors the champion's own
   // `mlb-pregame:${sessionDate}:${gameId}:${batterId}` signalId convention.
-  const snapshotId = `plate-hr-v2:${PLATE_HR_V2_FEATURES_V1}:${args.sessionDate}:${args.gameId}:${args.batterId}`;
+  const snapshotId = `plate-hr-v2:${PLATE_HR_V2_FEATURES_CURRENT}:${args.sessionDate}:${args.gameId}:${args.batterId}`;
 
   return {
     snapshotId,
@@ -261,10 +268,10 @@ export function capturePlateHrV2Candidate(args: CapturePlateHrV2CandidateArgs): 
     secondsToFirstPitch,
     lineupConfirmedAtIso,
     starterConfirmed: args.starterConfirmed,
-    inputContractVersion: PLATE_HR_V2_FEATURES_V1,
+    inputContractVersion: PLATE_HR_V2_FEATURES_CURRENT,
     frozenInput,
     inputHash,
-    featureVersion: PLATE_HR_V2_FEATURES_V1,
+    featureVersion: PLATE_HR_V2_FEATURES_CURRENT,
     derivedFeatures: built.derivedFeatures,
     availability: built.availability,
     featureFreshness: built.featureFreshness,

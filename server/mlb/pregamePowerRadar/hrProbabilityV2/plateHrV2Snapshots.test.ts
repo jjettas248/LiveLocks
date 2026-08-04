@@ -56,6 +56,16 @@ ok(
   ok(!r.eligible && r.reason === "data_not_strictly_before_prediction", "historical stat with cutoff after prediction is excluded (leakage)");
 }
 
+// ── contact_events: same point-in-time rule as historical_stat ────────────────
+ok(
+  isSourceEvidenceEligible(ev({ evidenceKind: "contact_events", dataThroughAt: "2026-06-30T23:59:00Z" }), PREDICTION, FIRST_PITCH).eligible,
+  "contact_events covering only prior days is eligible",
+);
+{
+  const r = isSourceEvidenceEligible(ev({ evidenceKind: "contact_events", dataThroughAt: "2026-07-01T20:00:00Z" }), PREDICTION, FIRST_PITCH);
+  ok(!r.eligible && r.reason === "data_not_strictly_before_prediction", "contact_events with data at/after prediction is excluded (leakage)");
+}
+
 // ── weather_forecast: the key regression ──────────────────────────────────────
 {
   const r = isSourceEvidenceEligible(

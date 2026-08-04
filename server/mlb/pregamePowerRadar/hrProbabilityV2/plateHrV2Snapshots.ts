@@ -28,6 +28,10 @@ export const EVIDENCE_KINDS = [
   "probable",
   "weather_forecast",
   "park",
+  // PR5.1: the raw per-BBE contact_events window + baseline + params that a
+  // recentContactForm leaf is reproducibly derived from. Point-in-time rule is
+  // identical to historical_stat (dataThroughAt < predictionAsOf ≤ firstPitch).
+  "contact_events",
 ] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
@@ -324,12 +328,41 @@ function validateGenericPayload(payload: unknown): { ok: boolean; reasons: strin
   return { ok: true, reasons: [] };
 }
 
+/** Validate a contact_events evidence payload (PR5.1): the raw per-BBE window +
+ * baseline + params a recentContactForm leaf is reproducibly derived from. Requires
+ * a non-empty events array of numeric-or-null EV/LA + boolean-or-null barrel +
+ * strict-ISO timestamp, a finite asOfExclusiveMs, and an integer windowMax. */
+function validateContactEventsPayload(payload: unknown): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (!isPlainObject(payload)) return { ok: false, reasons: ["payload_not_object"] };
+  const events = (payload as Record<string, unknown>).events;
+  if (!Array.isArray(events) || events.length === 0) reasons.push("events_empty_or_not_array");
+  else {
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
+      if (!isPlainObject(e)) { reasons.push(`event_not_object:${i}`); continue; }
+      const ev = e.exitVelocity, la = e.launchAngle, barrel = e.isBarrel, ts = e.timestamp;
+      if (!(ev === null || (typeof ev === "number" && Number.isFinite(ev)))) reasons.push(`event_ev:${i}`);
+      if (!(la === null || (typeof la === "number" && Number.isFinite(la)))) reasons.push(`event_la:${i}`);
+      if (!(barrel === null || typeof barrel === "boolean")) reasons.push(`event_barrel:${i}`);
+      if (!(typeof ts === "string" && isValidIsoTimestamp(ts))) reasons.push(`event_ts:${i}`);
+    }
+  }
+  const asOf = (payload as Record<string, unknown>).asOfExclusiveMs;
+  if (typeof asOf !== "number" || !Number.isFinite(asOf)) reasons.push("asOfExclusiveMs_not_finite");
+  const win = (payload as Record<string, unknown>).windowMax;
+  if (typeof win !== "number" || !Number.isInteger(win) || win <= 0) reasons.push("windowMax_not_positive_int");
+  try { canonicalJson(payload); } catch { reasons.push("payload_noncanonical"); }
+  return { ok: reasons.length === 0, reasons };
+}
+
 /** Evidence-kind-aware payload validation used at BOTH write and strict read. */
 export function validateSourcePayload(kind: EvidenceKind, payload: unknown): { ok: boolean; reasons: string[] } {
   if (kind === "historical_stat") {
     const r = validateAuthorizedPayload(payload);
     return { ok: r.ok, reasons: r.reasons };
   }
+  if (kind === "contact_events") return validateContactEventsPayload(payload);
   return validateGenericPayload(payload);
 }
 
@@ -566,7 +599,8 @@ export function isSourceEvidenceEligible(
   const predictionBeforeFirstPitch = fp == null || pAsOf <= fp;
 
   switch (ev.evidenceKind) {
-    case "historical_stat": {
+    case "historical_stat":
+    case "contact_events": {
       const dta = ms(ev.dataThroughAt);
       if (dta == null) return { eligible: false, reason: "missing_data_through_at" };
       if (!(dta < pAsOf)) return { eligible: false, reason: "data_not_strictly_before_prediction" };

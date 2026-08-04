@@ -26,6 +26,11 @@
 import { z } from "zod";
 
 export const PLATE_HR_V2_FEATURES_V1 = "plate_hr_v2_features_v1" as const;
+// V2 (PR5) adds the `recentContactForm` group. V1 is PRESERVED unchanged so
+// historical V1 snapshots still parse; a single feature version never represents
+// two shapes. New snapshots are written as PLATE_HR_V2_FEATURES_CURRENT (= V2).
+export const PLATE_HR_V2_FEATURES_V2 = "plate_hr_v2_features_v2" as const;
+export const PLATE_HR_V2_FEATURES_CURRENT = PLATE_HR_V2_FEATURES_V2;
 
 // Independently-versioned raw-input envelope contract version — distinct from
 // PLATE_HR_V2_FEATURES_V1 so a feature-builder bug can be fixed and features
@@ -248,11 +253,26 @@ export const plateHrV2DerivedFeatureVectorV1Schema = z.object({
   market: plateHrV2MarketFeaturesSchema,
   availability: plateHrV2AvailabilityFeaturesSchema,
   contactOpportunity: plateHrV2ContactOpportunityFeaturesSchema,
-  recentContactForm: plateHrV2RecentContactFormFeaturesSchema,
   dataQuality: plateHrV2DataQualityFeaturesSchema,
   slateBaselineGameHrProbability: numericLeaf,
 });
 export type PlateHrV2DerivedFeatureVectorV1 = z.infer<typeof plateHrV2DerivedFeatureVectorV1Schema>;
+
+// ── V2 derived vector = V1 + recentContactForm (PR5). A distinct featureVersion
+// literal so the two shapes never collide. ────────────────────────────────────
+export const plateHrV2DerivedFeatureVectorV2Schema = plateHrV2DerivedFeatureVectorV1Schema.extend({
+  featureVersion: z.literal(PLATE_HR_V2_FEATURES_V2),
+  recentContactForm: plateHrV2RecentContactFormFeaturesSchema,
+});
+export type PlateHrV2DerivedFeatureVectorV2 = z.infer<typeof plateHrV2DerivedFeatureVectorV2Schema>;
+
+/** Accepts either version, discriminated on featureVersion — the reader for a
+ * heterogeneous store of historical (V1) + current (V2) snapshots. */
+export const plateHrV2DerivedFeatureVectorAnySchema = z.discriminatedUnion("featureVersion", [
+  plateHrV2DerivedFeatureVectorV1Schema,
+  plateHrV2DerivedFeatureVectorV2Schema,
+]);
+export type PlateHrV2DerivedFeatureVectorAny = z.infer<typeof plateHrV2DerivedFeatureVectorAnySchema>;
 
 // ── Per-leaf presence/quality mirror (validated against the `availability`
 // jsonb column) ──────────────────────────────────────────────────────────────
@@ -275,9 +295,25 @@ export const plateHrV2FeatureAvailabilityVectorV1Schema = z.object({
   market: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
   availability: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
   contactOpportunity: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
-  recentContactForm: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
 });
 export type PlateHrV2FeatureAvailabilityVectorV1 = z.infer<typeof plateHrV2FeatureAvailabilityVectorV1Schema>;
+
+// ── V2 availability = V1 + recentContactForm (PR5). ───────────────────────────
+export const plateHrV2FeatureAvailabilityVectorV2Schema = plateHrV2FeatureAvailabilityVectorV1Schema.extend({
+  featureVersion: z.literal(PLATE_HR_V2_FEATURES_V2),
+  recentContactForm: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
+});
+export type PlateHrV2FeatureAvailabilityVectorV2 = z.infer<typeof plateHrV2FeatureAvailabilityVectorV2Schema>;
+
+/** Guard: a single training artifact must not mix feature versions. Returns the
+ * common version, or an error listing the distinct versions seen. */
+export function resolveSingleFeatureVersion(
+  versions: readonly string[],
+): { ok: true; version: string } | { ok: false; versions: string[] } {
+  const distinct = Array.from(new Set(versions));
+  if (distinct.length === 1) return { ok: true, version: distinct[0] };
+  return { ok: false, versions: distinct };
+}
 
 // ── Per-feature-family source/freshness (validated against the
 // `feature_freshness` jsonb column) — distinct from `availability`, which is

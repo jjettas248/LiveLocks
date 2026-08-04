@@ -33,10 +33,10 @@ import { isPredictionBeforeFirstPitch, buildLeakageWarnings } from "../math/leak
 import type { ContactOpportunityInputs } from "./frozenPlateHrV2Input";
 import { neutralRecentContactForm, type RecentContactFormInputs } from "./recentContactForm";
 import {
-  PLATE_HR_V2_FEATURES_V1,
+  PLATE_HR_V2_FEATURES_CURRENT,
   PLATE_HR_V2_RAW_INPUTS_V1,
-  type PlateHrV2DerivedFeatureVectorV1,
-  type PlateHrV2FeatureAvailabilityVectorV1,
+  type PlateHrV2DerivedFeatureVectorV2,
+  type PlateHrV2FeatureAvailabilityVectorV2,
   type PlateHrV2FeatureFreshnessVectorV1,
   type PlateHrV2RawInputEnvelope,
 } from "./plateHrV2FeatureContract";
@@ -93,8 +93,8 @@ export interface PlateHrV2FeatureBuilderInput {
 }
 
 export interface PlateHrV2FeatureBuilderResult {
-  derivedFeatures: PlateHrV2DerivedFeatureVectorV1;
-  availability: PlateHrV2FeatureAvailabilityVectorV1;
+  derivedFeatures: PlateHrV2DerivedFeatureVectorV2;
+  availability: PlateHrV2FeatureAvailabilityVectorV2;
   featureFreshness: PlateHrV2FeatureFreshnessVectorV1;
   rawInputs: PlateHrV2RawInputEnvelope;
   boundaryOk: boolean;
@@ -199,8 +199,8 @@ export function assemblePlateHrV2FeatureSnapshot(
   if (!input.venueResolved) missingInputs.push("parkWeatherSpray.venue");
   if (!input.pitcherHandResolved) missingInputs.push("pitcherVulnerability.hand");
 
-  const derivedFeatures: PlateHrV2DerivedFeatureVectorV1 = {
-    featureVersion: PLATE_HR_V2_FEATURES_V1,
+  const derivedFeatures: PlateHrV2DerivedFeatureVectorV2 = {
+    featureVersion: PLATE_HR_V2_FEATURES_CURRENT,
     batterPower: { ...input.batterPower, extra: {} },
     // math/'s BatTrackingInputs marks 4 leaves optional (`avgAttackAngle?`
     // etc.) rather than nullable-required, so a plain spread would leak
@@ -257,8 +257,8 @@ export function assemblePlateHrV2FeatureSnapshot(
     slateBaselineGameHrProbability: input.slateBaselineGameHrProbability,
   };
 
-  const availability: PlateHrV2FeatureAvailabilityVectorV1 = {
-    featureVersion: PLATE_HR_V2_FEATURES_V1,
+  const availability: PlateHrV2FeatureAvailabilityVectorV2 = {
+    featureVersion: PLATE_HR_V2_FEATURES_CURRENT,
     batterPower: leafAvailability(input.batterPower as unknown as Record<string, unknown>),
     batTracking: leafAvailability(input.batTracking as unknown as Record<string, unknown>),
     pitcherVulnerability: leafAvailability(input.pitcherVulnerability as unknown as Record<string, unknown>),
