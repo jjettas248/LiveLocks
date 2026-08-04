@@ -79,7 +79,12 @@ export function checkFeatureLeakage(
   // `updatePosterior`'s normalized key comparison.
   if (ctx.targetGameId != null && Array.isArray(row.derivedFromGameIds)) {
     const target = normalizeGameKey(ctx.targetGameId);
-    if (row.derivedFromGameIds.some((g) => normalizeGameKey(g) === target)) {
+    // Guard `typeof g === "string"` before normalizing: this check runs
+    // independently of the structural check, so a non-string element (e.g. a
+    // jsonb `[123]`) must be skipped, not passed to `normalizeGameKey` — whose
+    // `id.trim()` fallback would throw on a non-string and abort the input build
+    // instead of the row being cleanly rejected as `structural_invalid`.
+    if (row.derivedFromGameIds.some((g) => typeof g === "string" && normalizeGameKey(g) === target)) {
       violations.push("same_game_self_update");
     }
   }

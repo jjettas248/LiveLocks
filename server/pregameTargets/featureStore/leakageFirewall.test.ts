@@ -106,6 +106,18 @@ const ctx = (over: Partial<LeakageContext> = {}): LeakageContext => ({ predictio
   ok(!threw, "malformed derivedFromGameIds does not throw in the firewall");
   ok(!!malformed && !malformed.ok && malformed.violations.includes("structural_invalid"), "malformed provenance → structural_invalid");
   ok(!!malformed && !malformed.violations.includes("same_game_self_update"), "same-game guard is skipped for non-array provenance (no string-substring match)");
+  // An ARRAY with a non-string element (e.g. jsonb [123]) must not throw when a
+  // targetGameId is present — normalizeGameKey is only applied to strings.
+  let threw2 = false;
+  let nonStr: ReturnType<typeof checkFeatureLeakage> | undefined;
+  try {
+    nonStr = checkFeatureLeakage(row({ derivedFromGameIds: [123] as never }), ctx({ targetGameId: "nba:game:TARGET" }));
+  } catch {
+    threw2 = true;
+  }
+  ok(!threw2, "an array with a non-string provenance element does not throw in the firewall");
+  ok(!!nonStr && !nonStr.ok && nonStr.violations.includes("structural_invalid"), "non-string provenance element → structural_invalid");
+  ok(!!nonStr && !nonStr.violations.includes("same_game_self_update"), "the non-string element is skipped, not normalized into a false self-update match");
 }
 
 // ── multiple violations are all reported ─────────────────────────────────────
