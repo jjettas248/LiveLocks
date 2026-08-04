@@ -22,11 +22,11 @@ const PREGAME_RAW_SOURCE_SNAPSHOTS = `
     sport TEXT NOT NULL,
     source_kind TEXT NOT NULL,
     source_key TEXT NOT NULL,
-    valid_at TIMESTAMP NOT NULL,
-    known_at TIMESTAMP NOT NULL,
+    valid_at TIMESTAMPTZ NOT NULL,
+    known_at TIMESTAMPTZ NOT NULL,
     payload JSONB NOT NULL,
     content_hash TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
   );
 `;
 
@@ -45,9 +45,9 @@ const PREGAME_RAW_SOURCE_SNAPSHOTS_SOURCE_KEY_IDX = `
     ON pregame_raw_source_snapshots (source_key);
 `;
 
-const PREGAME_RAW_SOURCE_SNAPSHOTS_CONTENT_HASH_UIDX = `
-  CREATE UNIQUE INDEX IF NOT EXISTS pregame_raw_source_snapshots_content_hash_uidx
-    ON pregame_raw_source_snapshots (content_hash);
+const PREGAME_RAW_SOURCE_SNAPSHOTS_SOURCE_CONTENT_UIDX = `
+  CREATE UNIQUE INDEX IF NOT EXISTS pregame_raw_source_snapshots_source_content_uidx
+    ON pregame_raw_source_snapshots (source_kind, source_key, content_hash);
 `;
 
 const PREGAME_FEATURE_SNAPSHOTS = `
@@ -59,13 +59,13 @@ const PREGAME_FEATURE_SNAPSHOTS = `
     feature_key TEXT NOT NULL,
     feature_version TEXT NOT NULL,
     season INTEGER NOT NULL,
-    valid_at TIMESTAMP NOT NULL,
-    known_at TIMESTAMP NOT NULL,
+    valid_at TIMESTAMPTZ NOT NULL,
+    known_at TIMESTAMPTZ NOT NULL,
     state TEXT NOT NULL,
     value NUMERIC,
     source_id TEXT NOT NULL,
     derived_from_game_ids JSONB,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
   );
 `;
 
@@ -93,8 +93,8 @@ const PREGAME_POSTERIOR_STATES = `
     feature_version TEXT NOT NULL,
     state_version INTEGER NOT NULL,
     by_season JSONB NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
-    created_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW()
   );
 `;
 
@@ -113,7 +113,7 @@ export const PREGAME_TARGETS_FOUNDATION_PERSISTENCE_STATEMENTS: readonly string[
   PREGAME_RAW_SOURCE_SNAPSHOTS_SPORT_KIND_IDX,
   PREGAME_RAW_SOURCE_SNAPSHOTS_KNOWN_AT_IDX,
   PREGAME_RAW_SOURCE_SNAPSHOTS_SOURCE_KEY_IDX,
-  PREGAME_RAW_SOURCE_SNAPSHOTS_CONTENT_HASH_UIDX,
+  PREGAME_RAW_SOURCE_SNAPSHOTS_SOURCE_CONTENT_UIDX,
   PREGAME_FEATURE_SNAPSHOTS,
   PREGAME_FEATURE_SNAPSHOTS_ENTITY_FEATURE_KNOWN_AT_IDX,
   PREGAME_FEATURE_SNAPSHOTS_SPORT_FEATURE_IDX,

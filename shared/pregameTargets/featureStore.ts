@@ -97,6 +97,10 @@ export function instantMs(iso: string): number {
  * CONTRACT check (shape), not the leakage check (which needs a predictionAt).
  */
 export function isStructurallyValidFeatureRow(row: AsOfFeatureRow): boolean {
+  // The state must be a DECLARED enum member — a typo (e.g. "observd") has no
+  // defined semantics and must never clear structural validity (and thus never
+  // clear the leakage firewall) just because it happens not to be value-bearing.
+  if (!isFeatureState(row.state)) return false;
   if (!Number.isFinite(instantMs(row.validAt))) return false;
   if (!Number.isFinite(instantMs(row.knownAt))) return false;
   if (typeof row.featureKey !== "string" || row.featureKey.length === 0) return false;

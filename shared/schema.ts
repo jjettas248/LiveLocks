@@ -1923,20 +1923,30 @@ export const pregameRawSourceSnapshots = pgTable("pregame_raw_source_snapshots",
   sourceKind: text("source_kind").notNull(),
   /** Provider request key / params (identifies WHAT was fetched). */
   sourceKey: text("source_key").notNull(),
+  // Absolute instants — timezone-aware so a round trip can never shift them and
+  // change the knownAt <= predictionAt cutoff (Postgres `timestamptz`).
   /** Event time — when the underlying facts became true. */
-  validAt: timestamp("valid_at").notNull(),
+  validAt: timestamp("valid_at", { withTimezone: true }).notNull(),
   /** Observation time — when this payload was fetched / could be known. */
-  knownAt: timestamp("known_at").notNull(),
+  knownAt: timestamp("known_at", { withTimezone: true }).notNull(),
   /** Raw response, stored verbatim and never mutated (a correction is a new row). */
   payload: jsonb("payload").notNull(),
   /** Content hash of the payload — dedupe / idempotent capture. */
   contentHash: text("content_hash").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => ({
   sportKindIdx: index("pregame_raw_source_snapshots_sport_kind_idx").on(table.sport, table.sourceKind),
   knownAtIdx: index("pregame_raw_source_snapshots_known_at_idx").on(table.knownAt),
   sourceKeyIdx: index("pregame_raw_source_snapshots_source_key_idx").on(table.sourceKey),
-  contentHashIdx: uniqueIndex("pregame_raw_source_snapshots_content_hash_uidx").on(table.contentHash),
+  // Uniqueness is scoped to the REQUESTED SOURCE, not the payload alone: two
+  // different source_key requests can legitimately return the same payload
+  // (commonly an empty response), and each is a distinct capture. Only a genuine
+  // re-fetch of the SAME source with an unchanged payload dedupes.
+  sourceContentIdx: uniqueIndex("pregame_raw_source_snapshots_source_content_uidx").on(
+    table.sourceKind,
+    table.sourceKey,
+    table.contentHash,
+  ),
 }));
 
 export const insertPregameRawSourceSnapshotSchema = createInsertSchema(pregameRawSourceSnapshots).omit({ createdAt: true });
@@ -1952,8 +1962,9 @@ export const pregameFeatureSnapshots = pgTable("pregame_feature_snapshots", {
   featureKey: text("feature_key").notNull(),
   featureVersion: text("feature_version").notNull(),
   season: integer("season").notNull(),
-  validAt: timestamp("valid_at").notNull(),
-  knownAt: timestamp("known_at").notNull(),
+  // Timezone-aware absolute instants (see raw-snapshot note above).
+  validAt: timestamp("valid_at", { withTimezone: true }).notNull(),
+  knownAt: timestamp("known_at", { withTimezone: true }).notNull(),
   /** observed | observed_zero | not_applicable | missing | stale | disagreement | imputed */
   state: text("state").notNull(),
   /** Finite reading for value-bearing states; NULL otherwise (never 0-for-missing). */
@@ -1962,7 +1973,7 @@ export const pregameFeatureSnapshots = pgTable("pregame_feature_snapshots", {
   sourceId: text("source_id").notNull(),
   /** Canonical game ids that contributed (provenance / self-update guard). */
   derivedFromGameIds: jsonb("derived_from_game_ids"),
-  createdAt: timestamp("created_at").defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => ({
   // Primary as-of read path: by entity+feature, most-recent knownAt <= predictionAt.
   entityFeatureKnownAtIdx: index("pregame_feature_snapshots_entity_feature_known_at_idx").on(
@@ -1988,8 +1999,8 @@ export const pregamePosteriorStates = pgTable("pregame_posterior_states", {
   stateVersion: integer("state_version").notNull(),
   /** Record<season, SeasonSufficientStats> — the per-season sufficient stats. */
   bySeason: jsonb("by_season").notNull(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => ({
   entityFeatureVersionUidx: uniqueIndex("pregame_posterior_states_entity_feature_version_uidx").on(
     table.entityCanonicalId,

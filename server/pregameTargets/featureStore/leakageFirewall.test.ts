@@ -84,6 +84,9 @@ const ctx = (over: Partial<LeakageContext> = {}): LeakageContext => ({ predictio
   ok(!r1.ok && r1.violations.includes("structural_invalid"), "broken state↔value pairing → structural_invalid");
   const r2 = checkFeatureLeakage(row({ knownAt: "nonsense" }), ctx());
   ok(!r2.ok && r2.violations.includes("malformed_instants"), "unparseable instant → malformed_instants");
+  // A state outside the enum (typo) can no longer clear the firewall.
+  const r3 = checkFeatureLeakage(row({ state: "observd" as never, value: null }), ctx());
+  ok(!r3.ok && r3.violations.includes("structural_invalid"), "enum-invalid state → structural_invalid (cannot enter inputs)");
 }
 
 // ── multiple violations are all reported ─────────────────────────────────────

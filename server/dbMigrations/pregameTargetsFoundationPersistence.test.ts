@@ -48,7 +48,7 @@ const ALL_SQL = STMTS.join("\n").toUpperCase();
     "pregame_raw_source_snapshots_sport_kind_idx",
     "pregame_raw_source_snapshots_known_at_idx",
     "pregame_raw_source_snapshots_source_key_idx",
-    "pregame_raw_source_snapshots_content_hash_uidx",
+    "pregame_raw_source_snapshots_source_content_uidx",
     "pregame_feature_snapshots_entity_feature_known_at_idx",
     "pregame_feature_snapshots_sport_feature_idx",
     "pregame_feature_snapshots_season_idx",
@@ -64,8 +64,17 @@ const ALL_SQL = STMTS.join("\n").toUpperCase();
     "as-of read index is composite (entity_canonical_id, feature_key, known_at)",
   );
   // The two uniqueness guarantees are UNIQUE indexes.
-  ok(/CREATE UNIQUE INDEX IF NOT EXISTS PREGAME_RAW_SOURCE_SNAPSHOTS_CONTENT_HASH_UIDX/.test(ALL_SQL), "content hash is a UNIQUE index");
+  ok(/CREATE UNIQUE INDEX IF NOT EXISTS PREGAME_RAW_SOURCE_SNAPSHOTS_SOURCE_CONTENT_UIDX/.test(ALL_SQL), "snapshot uniqueness is a UNIQUE index");
+  // Snapshot uniqueness is scoped to the SOURCE, not the payload alone — so two
+  // different source_key requests returning the same payload never collide.
+  ok(
+    /PREGAME_RAW_SOURCE_SNAPSHOTS_SOURCE_CONTENT_UIDX[\s\S]*?\(SOURCE_KIND, SOURCE_KEY, CONTENT_HASH\)/.test(ALL_SQL),
+    "snapshot uniqueness is composite (source_kind, source_key, content_hash)",
+  );
   ok(/CREATE UNIQUE INDEX IF NOT EXISTS PREGAME_POSTERIOR_STATES_ENTITY_FEATURE_VERSION_UIDX/.test(ALL_SQL), "posterior identity is a UNIQUE index");
+  // Absolute instants must be timezone-aware so a round trip can't shift the cutoff.
+  ok(!/VALID_AT TIMESTAMP\b(?!TZ)/.test(ALL_SQL) && /VALID_AT TIMESTAMPTZ/.test(ALL_SQL), "valid_at is TIMESTAMPTZ");
+  ok(!/KNOWN_AT TIMESTAMP\b(?!TZ)/.test(ALL_SQL) && /KNOWN_AT TIMESTAMPTZ/.test(ALL_SQL), "known_at is TIMESTAMPTZ");
 }
 
 // ── IF-NOT-EXISTS only; every statement is CREATE TABLE / CREATE INDEX ────────

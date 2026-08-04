@@ -75,6 +75,10 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(!isStructurallyValidFeatureRow(row({ state: "missing", value: 0 })), "non-value-bearing state with 0 value is invalid (must be null)");
   ok(!isStructurallyValidFeatureRow(row({ state: "stale", value: 5 })), "stale with a numeric value is invalid");
   ok(isStructurallyValidFeatureRow(row({ state: "not_applicable", value: null })), "not_applicable with null is valid");
+  // A state OUTSIDE the enum (typo) must be rejected — it has no semantics and
+  // must never slip through the non-value-bearing path into the firewall.
+  ok(!isStructurallyValidFeatureRow(row({ state: "observd" as never, value: null })), "typo state (not in enum) is invalid even with null value");
+  ok(!isStructurallyValidFeatureRow(row({ state: "" as never, value: null })), "empty state is invalid");
 }
 
 // ── Instant + field validity ─────────────────────────────────────────────────
