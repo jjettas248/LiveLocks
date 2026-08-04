@@ -112,6 +112,7 @@ npx tsx server/pregameTargets/posteriorState/recencyWeights.test.ts # Pregame Ta
 npx tsx server/pregameTargets/posteriorState/posteriorState.test.ts # Pregame Targets PR1 — posterior sufficient stats: ESS=(Σw)²/Σw², weighted mean/variance, idempotent lineage, no-self-update, rolling-window rollover, ESS-boundary prior shrinkage
 npx tsx server/pregameTargets/replay/liveReplayParity.test.ts # Pregame Targets PR1 — live vs replay byte-identical reconstruction via the shared as-of read path; monotonic corrections; deterministic tie-break
 npx tsx server/dbMigrations/pregameTargetsFoundationPersistence.test.ts # Pregame Targets PR1 — foundation schema bootstrap: idempotence, IF-NOT-EXISTS-only, required indexes by name, no destructive SQL, failure propagates
+npx tsx server/dbMigrations/pregameTargetsProvenancePersistence.test.ts # Pregame Targets PR2 — persisted_plays official-target provenance columns (surface/projection_snapshot_id/decision_snapshot_id/target_tier/role_certainty): additive ADD COLUMN IF NOT EXISTS self-heal, nullable/no-default, persisted_plays-only, no destructive SQL, idempotence, failure propagates
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
