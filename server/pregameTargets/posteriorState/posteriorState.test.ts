@@ -140,6 +140,16 @@ function seed() {
   neg = updatePosterior(neg, { value: 3, weight: 1, season: S, gameId: "gNeg" });
   neg = updatePosterior(neg, { value: 3, weight: -1, season: S, gameId: "gNeg" });
   ok(!posteriorIncludesGame(neg, "gNeg") && combineSeasonWindow(neg, S).count === 0, "a negative-weight correction also removes the folded game");
+  // A MALFORMED zero-weight row (non-finite value or non-integer season) is NOT
+  // a trustworthy veto — it must be a no-op, never erasing good posterior mass.
+  let mal = seed();
+  mal = updatePosterior(mal, { value: 9, weight: 2, season: S, gameId: "gMal" });
+  const malState = mal;
+  mal = updatePosterior(mal, { value: NaN, weight: 0, season: S, gameId: "gMal" });
+  ok(mal === malState, "a weight-0 row with a NaN value is a malformed no-op (same state ref), not a veto");
+  ok(posteriorIncludesGame(mal, "gMal") && approx(posteriorMean(combineSeasonWindow(mal, S)), 9), "the folded game survives a malformed zero-weight correction");
+  mal = updatePosterior(mal, { value: 5, weight: 0, season: 2026.5, gameId: "gMal" });
+  ok(posteriorIncludesGame(mal, "gMal"), "a weight-0 row with a non-integer season does not erase the folded game either");
 }
 
 // ── No self-update: the game being predicted is refused ──────────────────────

@@ -189,18 +189,23 @@ export function updatePosterior(
     return state; // no self-update
   }
 
-  // A finite, non-positive weight is a deliberate VETO (e.g. a data-quality /
-  // context correction that zeroes an earlier reading). For an ALREADY-folded
-  // game it must REMOVE the stale contribution — otherwise combineSeasonWindow
-  // keeps counting mass the latest as-of row disowns. A gameless veto is a pure
-  // no-op (nothing to remove). A NON-finite weight or a non-finite value is
-  // MALFORMED — not a deliberate veto — and must never drop a good contribution.
+  // Reject MALFORMED rows before anything else — a correction we cannot trust
+  // must never mutate stored mass, not even as a "veto". A non-finite value or a
+  // non-integer season signals a parse/ingestion error, not a deliberate
+  // zero-weight veto, so it must not be allowed to erase a good contribution.
+  if (!Number.isFinite(obs.value)) return state;
+  if (!Number.isInteger(obs.season)) return state;
+
+  // A finite, non-positive weight on a WELL-FORMED row is a deliberate VETO
+  // (e.g. a data-quality / context correction that zeroes an earlier reading).
+  // For an ALREADY-folded game it must REMOVE the stale contribution — otherwise
+  // combineSeasonWindow keeps counting mass the latest as-of row disowns. A
+  // gameless veto is a pure no-op (nothing to remove). A NON-finite weight is
+  // malformed and never mutates state.
   if (Number.isFinite(obs.weight) && obs.weight <= 0) {
     return obs.gameId == null ? state : removeGameFromAllSeasons(state, obs.gameId);
   }
   if (!Number.isFinite(obs.weight)) return state;
-  if (!Number.isFinite(obs.value)) return state;
-  if (!Number.isInteger(obs.season)) return state;
 
   // Work against an editable clone of bySeason: a cross-season correction below
   // may modify TWO seasons (the old one loses the game, the new one gains it).
