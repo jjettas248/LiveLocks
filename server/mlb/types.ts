@@ -743,7 +743,7 @@ export interface MLBQualifiedSignal {
 
   mode?: "watch" | "heating_up" | "lean" | "strong" | "elite" | "hr_watch" | "hr_heating_up" | "hr_strong" | "hr_elite" | null;
   signalStrengthScore?: number;
-  marketFamily?: "batter_over" | "under" | "hr_radar" | null;
+  marketFamily?: "batter_over" | "under" | "pitcher_over" | "hr_radar" | null;
   hrRadarScore?: number;
   batterArchetype?: string | null;
   pitcherArchetype?: string | null;

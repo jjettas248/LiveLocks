@@ -184,6 +184,31 @@ MLB Live Edge is narrowed to three books (`draftkings,fanduel,hardrockbet` — `
 - **Refresh is interest-driven**, not a blanket per-tick sweep: `server/odds/mlbOddsRefreshCoordinator.ts` (deliberately separate from `oddsScheduler.ts`, which stays game-state-polling-only). Dedup by `eventId:market`. Watched=2min cadence, near-actionable (live + stale)=30s with an immediate fire on promotion. `final` status removes all scheduled interest for that event.
 - A derived per-player snapshot cache (`server/odds/oddsCache.ts`, keyed by event+market+**player**) still exists for presentation/last-known-good display — that layer is unrelated to the provider-response cache above and was not narrowed.
 
+### 3.2c MLB Live Edge safety-core — production lane (Stage A) — fail-closed
+A 7-day sample (-35.28u; innings 1-3 = -70.58u; TB/pitcher_outs/HRR/hits_allowed all negative)
+proved several older Goldmaster clauses wrong. Stage A adds a **production-lane authority**
+(`server/mlb/mlbProductionLane.ts`) layered on top of — never replacing — base eligibility
+(`mlbOfficialEligibility.ts`, its locked contract unchanged). `lane === "official"` is strictly
+NARROWER than `officialEligibility.eligible`: a signal reaches the official lane only when it is
+base-eligible AND clears the market rollout mode + inning band (`productionPolicy.ts`), the
+market-specific **hard evidence invariants** (`marketEvidenceInvariants.ts`), a fresh
+same-book/same-line **no-vig** price floor (`oddsProbability.ts`), a probability floor, the
+integer-line-push gate, and the calibration/provisional gate. The finalizer stamps `lane` +
+canonical no-vig edge; `autoPersistMLBSignals` and the `routes.ts` safety-net gate official
+persistence on `lane === "official"` (fail-closed AND). **An empty official feed is legal.**
+
+Default matrix: innings 1-3 never official; `hits` official (provisional_uncalibrated, stamped
+`raw_provisional`, never Elite/Strong); `total_bases`/`hrr`/`pitcher_outs`/`hits_allowed`/
+`pitcher_strikeouts` shadow. HR Radar is excluded (keeps its own lifecycle — its lane mirrors base
+eligibility).
+
+**Superseded clauses (do NOT restore):** `edge = displayProbability - 50` (edge is now calibrated
+recommended-side prob − no-vig book prob, in pp, in `model_edge` + `edge_version`; legacy `edge_gap`
+left null for new MLB rows); "empty official feed is illegal" (official fails closed);
+static caps ARE NOT calibration; `signalScore` MUST NOT rank/qualify/promote an official play or set
+its tier; pitcher OVER MUST NOT route through the UNDER family (`pitcher_over` family exists). When no
+compatible calibrator exists, `calibratedProbability` is **null** (never an identity copy of raw).
+
 ### 3.3 The signal pipeline (single source of truth)
 ```
 ENGINE  →  NORMALIZER  →  LiveSignalBus  →  Lifecycle Store  →  UI / Alerts

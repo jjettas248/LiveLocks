@@ -3,15 +3,24 @@ import { EXPERIMENTAL_MARKETS } from "./types";
 import { getPitchFamily } from "./pitchTypeNormalizer";
 import { isBarrel } from "./statcastXBA";
 
-export type MarketFamily = "batter_over" | "under" | "hr_radar";
+// MLB Live Edge safety-core (Stage A part 2) — direction-correct market
+// families. A pitcher OVER (e.g. pitcher_strikeouts OVER) must NOT be routed
+// through the UNDER family: an OVER thesis is helped by the same fatigue/
+// removal-risk evidence that hurts an UNDER, so tagging it "under" inverted its
+// directional treatment. `pitcher_over` gives it its own honest family.
+export type MarketFamily = "batter_over" | "under" | "pitcher_over" | "hr_radar";
 
 const BATTER_OVER_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+const PITCHER_FAMILY_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"];
 
 export function getMarketFamily(market: MLBMarket, side: string): MarketFamily | null {
   if (BATTER_OVER_MARKETS.includes(market)) return "batter_over";
+  if (PITCHER_FAMILY_MARKETS.includes(market)) {
+    // Route by side: pitcher OVER gets its own family, pitcher UNDER stays in
+    // the generic under family. Never collapse a pitcher OVER into "under".
+    return side === "OVER" ? "pitcher_over" : "under";
+  }
   if (side === "UNDER") return "under";
-  const pitcherMarkets: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"];
-  if (pitcherMarkets.includes(market)) return "under";
   return null;
 }
 
