@@ -10,7 +10,7 @@
 // reading is dropped from the input set (and surfaces as `missing`), never
 // silently coerced. All comparisons are absolute-instant (epoch ms) comparisons.
 
-import { normalizeGameKey } from "../../../shared/pregameTargets/canonicalEntities";
+import { canonicalGameId, normalizeGameKey } from "../../../shared/pregameTargets/canonicalEntities";
 import {
   type AsOfFeatureRow,
   instantMs,
@@ -23,6 +23,7 @@ export const LEAKAGE_VIOLATIONS = [
   "knownAt_before_validAt", // observed before it became true — impossible
   "future_knownAt", // knownAt > predictionAt — not knowable at decision time
   "same_game_self_update", // provenance includes the game being predicted
+  "invalid_target_game_id", // target game id is not a canonical game id (can't verify self-update)
   "outcome_in_input", // a declared-outcome feature key used as an input
 ] as const;
 export type LeakageViolation = (typeof LEAKAGE_VIOLATIONS)[number];
@@ -72,19 +73,27 @@ export function checkFeatureLeakage(
 
   // Guard with Array.isArray: the same-game check runs independently of the
   // structural check above, so it must never throw (or apply string-substring
-  // semantics) on a malformed, non-array `derivedFromGameIds`. Normalize BOTH
-  // the context target id and each provenance entry before the membership test:
-  // an incidental format variant (e.g. `"nba:game:TARGET "`) on either side must
-  // never let a self-update slip through the exact match, mirroring
-  // `updatePosterior`'s normalized key comparison.
+  // semantics) on a malformed, non-array `derivedFromGameIds`.
   if (ctx.targetGameId != null && Array.isArray(row.derivedFromGameIds)) {
-    const target = normalizeGameKey(ctx.targetGameId);
+    // The target must be a STRICT canonical game id: provenance is contractually
+    // canonical, so a non-canonical target (a bare native id like `"TARGET"`, or
+    // a wrong-kind canonical id) could never match `"nba:game:TARGET"` and would
+    // silently DISABLE the self-update guard. `canonicalGameId` returns null for
+    // anything that isn't a real game id.
+    const target = canonicalGameId(ctx.targetGameId);
     // Guard `typeof g === "string"` before normalizing: this check runs
     // independently of the structural check, so a non-string element (e.g. a
     // jsonb `[123]`) must be skipped, not passed to `normalizeGameKey` — whose
     // `id.trim()` fallback would throw on a non-string and abort the input build
     // instead of the row being cleanly rejected as `structural_invalid`.
-    if (row.derivedFromGameIds.some((g) => typeof g === "string" && normalizeGameKey(g) === target)) {
+    const stringProvenance = row.derivedFromGameIds.filter((g): g is string => typeof g === "string");
+    if (target == null) {
+      // Fail CLOSED: with an unverifiable target, any row that carries game
+      // provenance could be the target game itself — reject it rather than let
+      // target-game data into the input set. (A provenance-less static prior has
+      // nothing to match and is unaffected.)
+      if (stringProvenance.length > 0) violations.push("invalid_target_game_id");
+    } else if (stringProvenance.some((g) => normalizeGameKey(g) === target)) {
       violations.push("same_game_self_update");
     }
   }

@@ -74,6 +74,24 @@ const ctx = (over: Partial<LeakageContext> = {}): LeakageContext => ({ predictio
     ctx({ targetGameId: "nba:game:TARGET " }),
   );
   ok(!rWs.ok && rWs.violations.includes("same_game_self_update"), "a whitespaced targetGameId still matches normalized provenance → self_update");
+  // A NON-canonical target id (bare native id) can't match canonical provenance;
+  // it must FAIL CLOSED (invalid_target_game_id), never silently disable the guard.
+  const rBare = checkFeatureLeakage(
+    row({ derivedFromGameIds: ["nba:game:TARGET"] }),
+    ctx({ targetGameId: "TARGET" }),
+  );
+  ok(!rBare.ok && rBare.violations.includes("invalid_target_game_id"), "a bare (non-canonical) targetGameId fails closed → invalid_target_game_id");
+  ok(!rBare.violations.includes("same_game_self_update"), "a non-canonical target is not silently reported as safe/self_update — it's invalid");
+  // A wrong-KIND canonical target (player, not game) also fails closed.
+  const rKind = checkFeatureLeakage(
+    row({ derivedFromGameIds: ["nba:game:TARGET"] }),
+    ctx({ targetGameId: "nba:player:TARGET" }),
+  );
+  ok(!rKind.ok && rKind.violations.includes("invalid_target_game_id"), "a wrong-kind (non-game) canonical target fails closed → invalid_target_game_id");
+  // But a provenance-less static prior has nothing to match — a bad target does
+  // not reject it.
+  ok(isLeakageSafe(row(), ctx({ targetGameId: "TARGET" })), "a bad target does not reject a provenance-less static prior");
+  ok(isLeakageSafe(row({ derivedFromGameIds: [] }), ctx({ targetGameId: "TARGET" })), "a bad target does not reject an empty-provenance row");
 }
 
 // ── outcome_in_input ─────────────────────────────────────────────────────────

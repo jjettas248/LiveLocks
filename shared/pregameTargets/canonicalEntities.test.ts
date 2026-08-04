@@ -2,7 +2,9 @@
 import {
   type EntityDirectoryEntry,
   buildCanonicalId,
+  canonicalGameId,
   isoInstantMs,
+  normalizeGameKey,
   parseCanonicalId,
   resolveCanonicalEntity,
 } from "./canonicalEntities";
@@ -136,6 +138,20 @@ const dir: EntityDirectoryEntry[] = [
   // A resolution using an overflow as-of date fails closed as malformed.
   const rBad = resolveCanonicalEntity("nba:player:1", dir, "2026-02-31T00:00:00Z");
   ok(!rBad.ok && rBad.reason === "malformed_id", "an overflow as-of calendar date is rejected as malformed_id");
+}
+
+// ── canonicalGameId (strict) vs normalizeGameKey (lenient) ───────────────────
+{
+  ok(canonicalGameId("nba:game:123") === "nba:game:123", "a canonical game id returns its canonical form");
+  ok(canonicalGameId("nba:game:123 ") === "nba:game:123", "a whitespaced canonical game id is normalized");
+  ok(canonicalGameId("TARGET") === null, "a bare native id is NOT a canonical game id → null");
+  ok(canonicalGameId("nba:player:1") === null, "a wrong-kind (player) canonical id → null");
+  ok(canonicalGameId("garbage") === null, "an unparseable id → null");
+  ok(canonicalGameId(123 as never) === null, "a non-string → null (never throws)");
+  // normalizeGameKey is lenient: canonical game ids normalize, everything else
+  // is passed through trimmed (opaque key), and it never returns null.
+  ok(normalizeGameKey("nba:game:123 ") === "nba:game:123", "normalizeGameKey canonicalizes a game id");
+  ok(normalizeGameKey("  g1 ") === "g1", "normalizeGameKey trims a non-canonical opaque key");
 }
 
 console.log(`\ncanonicalEntities.test: ${passed} passed, ${failed} failed`);

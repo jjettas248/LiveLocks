@@ -91,21 +91,33 @@ export function isPregameEntityKind(v: unknown): v is PregameEntityKind {
 }
 
 /**
- * Normalize a `game` lineage/match key to its canonical form (the native id
- * trimmed, exactly as `buildCanonicalId` does), so incidental format variants
- * like `"nba:game:X "` collapse to the same key. A non-canonical or non-`game`
- * key is passed through trimmed — callers (posterior lineage, the firewall's
- * self-update membership check) use it as an OPAQUE match key, and canonical
- * structure is separately enforced at the feature-store contract. Normalizing
- * both sides of a comparison guarantees a whitespace variant can never evade a
- * self-update / dedupe match.
+ * STRICT canonical `game` id: returns the id in its normalized canonical form
+ * (native id trimmed, exactly as `buildCanonicalId` does) IFF it parses as a
+ * canonical `game` id; otherwise `null`. Never throws (a non-string / malformed
+ * value parses to `null`). Use this where a value MUST be a real game id and a
+ * non-canonical one has to fail closed — e.g. the firewall's target-game
+ * self-update check, whose provenance side is contractually canonical.
  */
-export function normalizeGameKey(id: string): string {
+export function canonicalGameId(id: unknown): string | null {
+  if (typeof id !== "string") return null;
   const parsed = parseCanonicalId(id);
   if (parsed && parsed.kind === "game") {
     return buildCanonicalId(parsed.sport, parsed.kind, parsed.nativeId);
   }
-  return id.trim();
+  return null;
+}
+
+/**
+ * Normalize a `game` lineage/match key to its canonical form so incidental
+ * format variants like `"nba:game:X "` collapse to the same key. A non-canonical
+ * or non-`game` key is passed through trimmed — callers (posterior lineage) use
+ * it as an OPAQUE match key, and canonical structure is separately enforced at
+ * the feature-store contract. Normalizing both sides of a comparison guarantees
+ * a whitespace variant can never evade a self-update / dedupe match. Where a
+ * value must be a *real* canonical game id (fail-closed), use `canonicalGameId`.
+ */
+export function normalizeGameKey(id: string): string {
+  return canonicalGameId(id) ?? id.trim();
 }
 
 // An instant must be a full ISO-8601 date-time with an EXPLICIT timezone
