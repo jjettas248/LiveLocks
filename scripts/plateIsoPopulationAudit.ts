@@ -47,6 +47,22 @@ interface HitterRow {
   source?: IsoSource;
 }
 
+/**
+ * Parse a numeric CLI flag value and fail closed (throw) on anything that
+ * isn't a finite number within [min, max] — a malformed value (NaN from a
+ * typo like "nope", a negative, an out-of-range percentage) must never
+ * silently disable a gate threshold. `validAssessedPct < NaN` and
+ * `n < NaN` are both always false in JS, so an un-validated bad flag would
+ * recreate exactly the false-positive-PASS bug this gate exists to prevent.
+ */
+function parseNumberFlag(flag: string, raw: string | undefined, min: number, max: number): number {
+  const n = Number(raw);
+  if (raw === undefined || raw === "" || !Number.isFinite(n) || n < min || n > max) {
+    throw new Error(`${flag} must be a finite number in [${min}, ${max}], got "${raw ?? "<missing>"}"`);
+  }
+  return n;
+}
+
 function parseArgs(
   argv: string[],
 ): { path: string | null; maxElitePct: number; minPopulation: number; minValidAssessedPct: number; json: boolean } {
@@ -57,9 +73,9 @@ function parseArgs(
   let json = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--max-elite-pct") maxElitePct = Number(argv[++i]);
-    else if (a === "--min-population") minPopulation = Number(argv[++i]);
-    else if (a === "--min-valid-pct") minValidAssessedPct = Number(argv[++i]);
+    if (a === "--max-elite-pct") maxElitePct = parseNumberFlag(a, argv[++i], 0, 100);
+    else if (a === "--min-population") minPopulation = parseNumberFlag(a, argv[++i], 0, Number.MAX_SAFE_INTEGER);
+    else if (a === "--min-valid-pct") minValidAssessedPct = parseNumberFlag(a, argv[++i], 0, 100);
     else if (a === "--json") json = true;
     else if (!a.startsWith("--")) path = a;
   }
@@ -73,7 +89,14 @@ function rowToIso(r: HitterRow): number | null {
 }
 
 function main(): void {
-  const { path, maxElitePct, minPopulation, minValidAssessedPct, json } = parseArgs(process.argv.slice(2));
+  let path: string | null, maxElitePct: number, minPopulation: number, minValidAssessedPct: number, json: boolean;
+  try {
+    ({ path, maxElitePct, minPopulation, minValidAssessedPct, json } = parseArgs(process.argv.slice(2)));
+  } catch (err) {
+    console.error(`[PLATE_ISO_POPULATION_AUDIT] FAILED — invalid CLI argument: ${(err as Error).message}`);
+    process.exit(2);
+    return;
+  }
   if (!path) {
     console.error(
       "[PLATE_ISO_POPULATION_AUDIT] UNEXECUTED — no historical export provided.\n" +
