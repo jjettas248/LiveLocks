@@ -686,6 +686,14 @@ async function main(): Promise<void> {
     `mound buildMoundResponse sorts descending by score10 despite ascending input (got ${moundOrder.join(",")})`,
   );
 
+  // Non-finite self-check: NaN / ±Infinity must stay distinguishable from `null`
+  // and from each other after canonicalize — otherwise JSON.stringify collapses
+  // them all to `null` and a null→NaN/Infinity regression in a null-locked
+  // fixture would pass unseen.
+  ok(JSON.stringify(canonicalize(NaN)) !== JSON.stringify(canonicalize(null)), "canonicalize keeps NaN distinct from null");
+  ok(JSON.stringify(canonicalize(Infinity)) !== JSON.stringify(canonicalize(null)), "canonicalize keeps Infinity distinct from null");
+  ok(JSON.stringify(canonicalize(-Infinity)) !== JSON.stringify(canonicalize(Infinity)), "canonicalize keeps -Infinity distinct from Infinity");
+
   // Fixture-resolution self-check: a missing fixture must FAIL verification, and
   // creation must be confined to RECORD mode (locks the two behaviors above).
   ok(resolveFixtureAction(true, false) === "record", "RECORD mode creates a fixture even when absent");

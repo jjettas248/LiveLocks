@@ -43,6 +43,12 @@ export const VOLATILE_SENTINEL = "<volatile>";
  * with a sentinel, preserve numbers/null/undefined distinctions exactly.
  * `undefined` object properties are dropped (JSON semantics); `null` is kept
  * (so "missing" vs "observed null" stays observable).
+ *
+ * Non-finite numbers (`NaN`, `±Infinity`) are encoded as DISTINCT string
+ * sentinels. Without this, `JSON.stringify` serializes them all as `null`, so a
+ * covered output whose baseline is `null` regressing to `NaN`/`Infinity` would
+ * falsely compare equal — hiding exactly the null-handling regressions several
+ * fixtures (null outcomes/directions) exist to catch.
  */
 export function canonicalize(value: unknown): unknown {
   if (value === null) return null;
@@ -60,8 +66,16 @@ export function canonicalize(value: unknown): unknown {
     }
     return out;
   }
-  // number (incl. -0 normalized to 0), string, boolean
-  if (typeof value === "number" && Object.is(value, -0)) return 0;
+  if (typeof value === "number") {
+    // -0 normalized to 0; non-finite values get distinct sentinels so they can
+    // never collapse to `null` (or to each other) under JSON.stringify.
+    if (Object.is(value, -0)) return 0;
+    if (Number.isNaN(value)) return "<NaN>";
+    if (value === Infinity) return "<Infinity>";
+    if (value === -Infinity) return "<-Infinity>";
+    return value;
+  }
+  // string, boolean
   return value;
 }
 
