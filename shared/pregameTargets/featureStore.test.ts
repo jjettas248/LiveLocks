@@ -65,6 +65,10 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(readableValue(observedZero) === 0, "observed_zero reads as a real 0");
   ok(readableValue(missing) === null, "missing reads as null, never 0");
   ok(readableValue(observedZero) !== readableValue(missing), "observed_zero and missing are never conflated");
+  // observed_zero must be EXACTLY 0 — a nonzero/null value under this state
+  // would defeat the measured-zero distinction the contract exists to protect.
+  ok(!isStructurallyValidFeatureRow(row({ state: "observed_zero", value: 0.3 })), "observed_zero with a nonzero value is invalid");
+  ok(!isStructurallyValidFeatureRow(row({ state: "observed_zero", value: null })), "observed_zero with null is invalid (must be 0)");
 }
 
 // ── Structural validity of state↔value pairing ───────────────────────────────

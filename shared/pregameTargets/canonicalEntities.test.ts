@@ -26,6 +26,13 @@ function ok(cond: boolean, msg: string) {
   ok(parseCanonicalId("nbaplayer12345") === null, "no separators → null");
   ok(parseCanonicalId("nba:sasquatch:1") === null, "unknown kind → null (parse)");
   ok(parseCanonicalId("xfl:player:1") === null, "unknown sport → null (parse)");
+  // Native id is trimmed so incidental whitespace can't split identity.
+  ok(buildCanonicalId("nba", "player", "  123 ") === "nba:player:123", "buildCanonicalId trims native-id whitespace");
+  const trimmedDir: EntityDirectoryEntry[] = [
+    { sport: "nba", kind: "player", nativeId: "123", canonicalId: "nba:player:123", activeFrom: null, activeTo: null },
+  ];
+  const wsResolved = resolveCanonicalEntity(buildCanonicalId("nba", "player", " 123 "), trimmedDir, "2026-01-15T00:00:00.000Z");
+  ok(wsResolved.ok && wsResolved.entity.canonicalId === "nba:player:123", "a whitespaced native id joins the same canonical entity");
 }
 
 // ── fail-closed resolution ───────────────────────────────────────────────────

@@ -132,5 +132,19 @@ const origin: ReplayOrigin = {
   ok(r.features.tie?.sourceId === "bbb", "identical knownAt+validAt tie-breaks deterministically by sourceId");
 }
 
+// ── Stored rows are detached from caller mutation (append-only immutability) ─
+{
+  const store = createInMemoryAsOfFeatureStore();
+  const mutable = feat({ featureKey: "mut", knownAt: beforeT, value: 0.5, sourceId: "sm", derivedFromGameIds: ["g1"] });
+  store.write(mutable);
+  const o: ReplayOrigin = { ...origin, featureKeys: ["mut"], targetGameId: undefined };
+  const before = serializeReplayResult(replayOrigin(store, o));
+  // Caller mutates its OWN object after handing it to write().
+  (mutable as { value: number }).value = 999;
+  const after = serializeReplayResult(replayOrigin(store, o));
+  ok(before === after, "mutating the caller's row after write does not change stored/replayed history");
+  ok(Object.isFrozen(store.all()[0]), "stored rows are frozen (append-only; a correction is a new row)");
+}
+
 console.log(`\nliveReplayParity.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

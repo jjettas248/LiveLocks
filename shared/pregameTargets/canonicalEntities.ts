@@ -45,13 +45,17 @@ export type EntityResolution =
 
 const CANONICAL_ID_SEP = ":";
 
-/** Build the canonical id string. Native id is trimmed; empty is invalid upstream. */
+/**
+ * Build the canonical id string. The native id is TRIMMED so a provider id with
+ * incidental leading/trailing whitespace ("  123 ") cannot split into a separate
+ * canonical identity from "123" and break directory joins.
+ */
 export function buildCanonicalId(
   sport: PregameSport,
   kind: PregameEntityKind,
   nativeId: string,
 ): string {
-  return `${sport}${CANONICAL_ID_SEP}${kind}${CANONICAL_ID_SEP}${nativeId}`;
+  return `${sport}${CANONICAL_ID_SEP}${kind}${CANONICAL_ID_SEP}${nativeId.trim()}`;
 }
 
 /**

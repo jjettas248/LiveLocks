@@ -105,10 +105,14 @@ export function computeRecencyWeight(
   const recency =
     halfLife > 0 && Number.isFinite(age) ? Math.pow(0.5, age / halfLife) : 0;
 
+  // Clamp the CONFIGURED floor to [0,1] — an experiment passing a non-finite or
+  // out-of-range floor must not break the advertised [0,1] weight invariant
+  // (e.g. floor 2 with all continuities 0 would otherwise yield a factor of 8).
+  const floor = clamp01(config.continuityFloor);
   const continuity =
-    continuityFactor(inputs.roleContinuity, config.continuityFloor) *
-    continuityFactor(inputs.orgContinuity, config.continuityFloor) *
-    continuityFactor(inputs.schemeContinuity, config.continuityFloor);
+    continuityFactor(inputs.roleContinuity, floor) *
+    continuityFactor(inputs.orgContinuity, floor) *
+    continuityFactor(inputs.schemeContinuity, floor);
 
   const context = inputs.contextSimilarity == null ? 1 : clamp01(inputs.contextSimilarity);
   const quality = inputs.dataQuality == null ? 1 : clamp01(inputs.dataQuality);

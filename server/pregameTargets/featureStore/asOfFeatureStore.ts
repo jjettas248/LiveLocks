@@ -79,6 +79,21 @@ function isPreferred(candidate: AsOfFeatureRow, incumbent: AsOfFeatureRow): bool
   return candidate.sourceId > incumbent.sourceId;
 }
 
+/**
+ * Store an ISOLATED, deeply-frozen copy so a caller that mutates its row after
+ * `write` cannot retroactively rewrite stored history (append-only: a correction
+ * is a NEW row, never an edit). The provenance array is copied and frozen too.
+ */
+function isolateRow(row: AsOfFeatureRow): AsOfFeatureRow {
+  const copy: AsOfFeatureRow = {
+    ...row,
+    derivedFromGameIds: row.derivedFromGameIds
+      ? Object.freeze([...row.derivedFromGameIds])
+      : undefined,
+  };
+  return Object.freeze(copy);
+}
+
 export function createInMemoryAsOfFeatureStore(): AsOfFeatureStore {
   const rows: AsOfFeatureRow[] = [];
 
@@ -101,10 +116,10 @@ export function createInMemoryAsOfFeatureStore(): AsOfFeatureStore {
 
   return {
     write(row) {
-      rows.push(row);
+      rows.push(isolateRow(row));
     },
     writeMany(batch) {
-      for (const r of batch) rows.push(r);
+      for (const r of batch) rows.push(isolateRow(r));
     },
     readAsOf,
     buildInputSet(sport, entityCanonicalId, featureKeys, ctx, featureVersions) {

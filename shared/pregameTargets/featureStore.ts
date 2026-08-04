@@ -112,6 +112,11 @@ export function isStructurallyValidFeatureRow(row: AsOfFeatureRow): boolean {
   if (typeof row.featureVersion !== "string" || row.featureVersion.length === 0) return false;
   if (!Number.isInteger(row.season)) return false;
 
+  // `observed_zero` means a GENUINELY MEASURED zero — it must carry exactly 0.
+  // A nonzero value under this state would defeat the measured-zero distinction.
+  if (row.state === "observed_zero") {
+    return row.value === 0;
+  }
   const valueBearing = VALUE_BEARING_STATES.has(row.state);
   if (valueBearing) {
     return typeof row.value === "number" && Number.isFinite(row.value);

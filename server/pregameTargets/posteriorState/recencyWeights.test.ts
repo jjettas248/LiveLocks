@@ -60,6 +60,14 @@ const approx = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
     ok(Number.isFinite(w.weight), "weight stays finite under a NaN seasonOffset");
   }
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: Infinity, featureClass: "skill" }).season === 0, "Infinity seasonOffset → season 0");
+  // A custom config with an out-of-range continuityFloor must not break [0,1].
+  {
+    const allBroken = { ageDays: 0, seasonOffset: 0, featureClass: "skill" as const, roleContinuity: 0, orgContinuity: 0, schemeContinuity: 0 };
+    const hi = computeRecencyWeight(allBroken, { ...DEFAULT_RECENCY_CONFIG, continuityFloor: 2 });
+    ok(hi.continuity <= 1 && hi.weight <= 1, "continuityFloor > 1 is clamped → weight stays <= 1");
+    const nan = computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill" }, { ...DEFAULT_RECENCY_CONFIG, continuityFloor: NaN });
+    ok(Number.isFinite(nan.weight), "NaN continuityFloor → finite weight");
+  }
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", dataQuality: 2 }).quality === 1, "quality clamped to 1");
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", contextSimilarity: -1 }).context === 0, "negative context clamped to 0");
   ok(computeRecencyWeight({ ageDays: -10, seasonOffset: 0, featureClass: "skill" }).recency === 1, "negative age clamped to 0 → recency 1");
