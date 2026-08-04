@@ -24,6 +24,7 @@ import { ensurePlateHrV2PersistenceSchema } from "./dbMigrations/plateHrV2Persis
 import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/mlbRecommendationEpisodePersistence";
 import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2ShadowPersistence";
 import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
+import { ensurePersistedPlaysSafetyCoreColumns } from "./dbMigrations/persistedPlaysSafetyCoreColumns";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
@@ -256,6 +257,7 @@ app.use((req, res, next) => {
   // this table yet — wiring Plate/Mound/Live Edge to emit episodes is
   // later-phase work; this call only ever creates schema, never rows.
   await ensureMlbRecommendationEpisodePersistenceSchema(pool);
+  await ensurePersistedPlaysSafetyCoreColumns(pool);
   console.log("[startup] MLB Recommendation Episode persistence schema ensured");
 
   // Durable persistence bootstrap: Mound Radar V2 (shadow) prediction
@@ -467,12 +469,11 @@ app.use((req, res, next) => {
         ADD COLUMN IF NOT EXISTS official_eligibility_version text,
         ADD COLUMN IF NOT EXISTS official_eligibility_reasons text,
         ADD COLUMN IF NOT EXISTS data_quality text,
-        ADD COLUMN IF NOT EXISTS current_stat_known boolean,
-        ADD COLUMN IF NOT EXISTS edge_version text,
-        ADD COLUMN IF NOT EXISTS no_vig_book_probability numeric,
-        ADD COLUMN IF NOT EXISTS probability_semantics text,
-        ADD COLUMN IF NOT EXISTS lane text;
+        ADD COLUMN IF NOT EXISTS current_stat_known boolean;
     `);
+    // Safety-core canonical no-vig edge + lane columns own their own idempotent
+    // bootstrap module (ensurePersistedPlaysSafetyCoreColumns, called above) so
+    // they carry no-DROP/idempotence test coverage.
     await pool.query(`
       DO $$
       BEGIN
