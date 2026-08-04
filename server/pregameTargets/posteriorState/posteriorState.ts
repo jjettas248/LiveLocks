@@ -17,7 +17,28 @@
 // Nothing here contacts a database; persistence of these states is a separate
 // layer. Values are plain numbers; instants/season are the caller's concern.
 
+import { buildCanonicalId, parseCanonicalId } from "../../../shared/pregameTargets/canonicalEntities";
+
 export const POSTERIOR_STATE_VERSION = 1;
+
+/**
+ * Normalize a game lineage key. When the key is a canonical `game` id it is
+ * returned in its NORMALIZED form (same normalization `buildCanonicalId`
+ * applies — the native id is trimmed), so format variants like
+ * `"nba:game:X "` collapse to the same key. This matters at two safety points:
+ * the self-update comparison against `excludeGameId` (a non-normalized key would
+ * miss the exact match and fold the target game in) and the correction/dedupe
+ * lookups (a variant key would be treated as a distinct game and double-count).
+ * A non-canonical key (the primitive is format-agnostic and canonical structure
+ * is enforced upstream at the feature-store layer) is passed through trimmed.
+ */
+function normalizeGameKey(id: string): string {
+  const parsed = parseCanonicalId(id);
+  if (parsed && parsed.kind === "game") {
+    return buildCanonicalId(parsed.sport, parsed.kind, parsed.nativeId);
+  }
+  return id.trim();
+}
 
 /** One game's contribution to a season's sufficient statistics. */
 export interface GameContribution {
@@ -183,9 +204,19 @@ export function updatePosterior(
   obs: PosteriorObservation,
   options: UpdatePosteriorOptions = {},
 ): PosteriorState {
+  // Normalize the game lineage key up front so every downstream comparison uses
+  // the canonical form. A non-normalized key (e.g. "nba:game:X ") would
+  // otherwise miss the exact self-update match against a canonical excludeGameId
+  // (folding the target game in) and be treated as a distinct game by the
+  // correction/dedupe lookups (double-counting). excludeGameId is normalized the
+  // same way so the comparison is symmetric.
+  const gameId = obs.gameId == null ? undefined : normalizeGameKey(obs.gameId);
+  const excludeGameId =
+    options.excludeGameId == null ? undefined : normalizeGameKey(options.excludeGameId);
+
   // Self-update first: the predicted game is never folded, so a correction that
   // names it has nothing to add and nothing to remove.
-  if (obs.gameId != null && options.excludeGameId != null && obs.gameId === options.excludeGameId) {
+  if (gameId != null && excludeGameId != null && gameId === excludeGameId) {
     return state; // no self-update
   }
 
@@ -203,7 +234,7 @@ export function updatePosterior(
   // gameless veto is a pure no-op (nothing to remove). A NON-finite weight is
   // malformed and never mutates state.
   if (Number.isFinite(obs.weight) && obs.weight <= 0) {
-    return obs.gameId == null ? state : removeGameFromAllSeasons(state, obs.gameId);
+    return gameId == null ? state : removeGameFromAllSeasons(state, gameId);
   }
   if (!Number.isFinite(obs.weight)) return state;
 
@@ -214,13 +245,13 @@ export function updatePosterior(
   // Cross-season relocation: if this game is already folded under a DIFFERENT
   // season, strip its stale contribution from that season first so it survives
   // in exactly one season (the corrected one) and can never be double-counted.
-  if (obs.gameId != null) {
+  if (gameId != null) {
     for (const key of Object.keys(bySeasonNext)) {
       const seasonNum = Number(key);
       if (seasonNum === obs.season) continue;
-      const stale = bySeasonNext[seasonNum].byGame[obs.gameId];
+      const stale = bySeasonNext[seasonNum].byGame[gameId];
       if (stale === undefined) continue;
-      const reduced = removeGameFromSeason(bySeasonNext[seasonNum], obs.gameId, stale);
+      const reduced = removeGameFromSeason(bySeasonNext[seasonNum], gameId, stale);
       if (reduced === null) delete bySeasonNext[seasonNum];
       else bySeasonNext[seasonNum] = reduced;
     }
@@ -239,7 +270,7 @@ export function updatePosterior(
   let gamelessCount = prev.gamelessCount;
   const byGame: Record<string, GameContribution> = { ...prev.byGame };
 
-  if (obs.gameId == null) {
+  if (gameId == null) {
     // Gameless: purely additive; no provenance, no correction possible.
     sumW += contribution.w;
     sumWX += contribution.wx;
@@ -247,14 +278,14 @@ export function updatePosterior(
     sumW2 += contribution.w2;
     count += 1;
     gamelessCount += 1;
-  } else if (byGame[obs.gameId] !== undefined) {
+  } else if (byGame[gameId] !== undefined) {
     // Correction (or identical re-fold): replace the prior contribution.
-    const old = byGame[obs.gameId];
+    const old = byGame[gameId];
     sumW += contribution.w - old.w;
     sumWX += contribution.wx - old.wx;
     sumWX2 += contribution.wx2 - old.wx2;
     sumW2 += contribution.w2 - old.w2;
-    byGame[obs.gameId] = contribution; // count unchanged — same fold, new value
+    byGame[gameId] = contribution; // count unchanged — same fold, new value
   } else {
     // New game.
     sumW += contribution.w;
@@ -262,7 +293,7 @@ export function updatePosterior(
     sumWX2 += contribution.wx2;
     sumW2 += contribution.w2;
     count += 1;
-    byGame[obs.gameId] = contribution;
+    byGame[gameId] = contribution;
   }
 
   // Canonical key ordering so serialization is insertion-order-independent.

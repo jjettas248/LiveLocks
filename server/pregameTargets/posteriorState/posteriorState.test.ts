@@ -162,6 +162,28 @@ function seed() {
   ok(!posteriorIncludesGame(st, "target"), "refused game is not in lineage");
 }
 
+// ── Game-id normalization: self-update + dedupe survive format variants ──────
+{
+  // A non-normalized obs.gameId must still be caught by the self-update guard
+  // against a canonical excludeGameId — else the target game leaks in.
+  let st = seed();
+  st = updatePosterior(st, { value: 9, weight: 1, season: S, gameId: "nba:game:TARGET " }, { excludeGameId: "nba:game:TARGET" });
+  ok(combineSeasonWindow(st, S).count === 0 && !posteriorIncludesGame(st, "nba:game:TARGET"), "a whitespaced obs.gameId is still refused against a canonical excludeGameId");
+  // …and symmetrically when the excludeGameId is the non-normalized one.
+  let st2 = seed();
+  st2 = updatePosterior(st2, { value: 9, weight: 1, season: S, gameId: "nba:game:TARGET" }, { excludeGameId: "nba:game:TARGET " });
+  ok(combineSeasonWindow(st2, S).count === 0, "a whitespaced excludeGameId still refuses the canonical target observation");
+  // Format variants of the SAME game collapse to one lineage key (correction,
+  // not a second fold), so a whitespaced re-fold cannot double-count.
+  let st3 = seed();
+  st3 = updatePosterior(st3, { value: 10, weight: 1, season: S, gameId: "nba:game:G1" });
+  st3 = updatePosterior(st3, { value: 4, weight: 1, season: S, gameId: "nba:game:G1 " });
+  const c3 = combineSeasonWindow(st3, S);
+  ok(c3.count === 1, "a whitespaced re-fold of the same game is a correction, not a second fold");
+  ok(approx(posteriorMean(c3), 4), "the normalized correction replaces the stale value");
+  ok(posteriorIncludesGame(st3, "nba:game:G1"), "lineage stores the normalized canonical key");
+}
+
 // ── Determinism: order-independent, sorted lineage ───────────────────────────
 {
   let a = seed();
