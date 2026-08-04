@@ -105,7 +105,7 @@ import {
 } from "./hrProbabilityV2/plateHrV2ForwardCapture";
 import { assemblePlateHrV2EvidenceDescriptors } from "./hrProbabilityV2/plateHrV2SnapshotCapture";
 import { PLATE_HR_V2_FEATURES_CURRENT } from "./hrProbabilityV2/plateHrV2FeatureContract";
-import { buildRecentContactFormEvidence } from "./hrProbabilityV2/recentContactForm";
+import { buildRecentContactFormEvidence } from "./hrProbabilityV2/recentContactFormEvidence";
 
 let isPregamePowerRadarBuildRunning = false;
 
@@ -1293,8 +1293,9 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
                 // No clean season air%(LA≥10) source — flyBall% is a stricter, different
                 // definition, so it is deliberately left null (recent air% stays null).
                 airBallPct: null,
-                // Pull-rate proxy (season), not air-specific — matches batterPullAirShare.
-                pulledAirShare: savant?.pullRatePercent != null ? savant.pullRatePercent / 100 : null,
+                // pulled-air is intentionally NOT sourced: season pull-rate is a
+                // mislabeled proxy (not air-specific), so recentFormPulledAirShare
+                // stays null until a genuine pulled-air aggregate exists (PR5.2 gap 4).
               },
             });
             if (recentFormBuilt.evidence) plateHrV2Evidence.push(recentFormBuilt.evidence);

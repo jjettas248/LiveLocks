@@ -15,12 +15,12 @@ import {
   reliabilityWeight,
   normalizeWindowMax,
   neutralRecentContactForm,
-  buildRecentContactFormEvidence,
   recomputeRecentContactFormFromEvidence,
   type RecentContactEventLite,
   type RecentContactFormSeasonBaseline,
   type RecentContactFormEvidencePayload,
 } from "./recentContactForm";
+import { buildRecentContactFormEvidence } from "./recentContactFormEvidence";
 import { validateSourcePayload } from "./plateHrV2Snapshots";
 
 let passed = 0;
@@ -30,7 +30,7 @@ function ok(cond: boolean, msg: string) {
 }
 
 const BOUNDARY = Date.parse("2026-07-01T00:00:00.000Z");
-const BASE: RecentContactFormSeasonBaseline = { avgEv: 90, ev90: 105, airBallPct: 40, barrelPct: 7, pulledAirShare: 0.35 };
+const BASE: RecentContactFormSeasonBaseline = { avgEv: 90, ev90: 105, airBallPct: 40, barrelPct: 7 };
 
 /** N events ending just before `endMs`, one per hour. */
 function events(n: number, ev: number | null, la: number | null, barrel: boolean | null, endMs = BOUNDARY - 3_600_000, result = "field_out"): RecentContactEventLite[] {
@@ -128,7 +128,7 @@ function events(n: number, ev: number | null, la: number | null, barrel: boolean
 
 // ── PR5.1 gap 4: baseline domain validation ───────────────────────────────────
 {
-  const bad: RecentContactFormSeasonBaseline = { avgEv: 999, ev90: -5, airBallPct: 250, barrelPct: -1, pulledAirShare: 5 };
+  const bad: RecentContactFormSeasonBaseline = { avgEv: 999, ev90: -5, airBallPct: 250, barrelPct: -1 };
   const r = computeRecentContactForm({ events: events(40, 100, 20, true), asOfExclusiveMs: BOUNDARY, seasonBaseline: bad });
   ok(r.recentFormEv === null && r.recentFormEv90 === null && r.recentFormAirBallPct === null && r.recentFormBarrelPct === null && r.recentFormPulledAirShare === null, "out-of-domain baseline metrics are treated as absent → null");
 }
@@ -151,17 +151,17 @@ function events(n: number, ev: number | null, la: number | null, barrel: boolean
   ok(r.recentFormEv90 != null && r.recentFormAirBallPct != null && r.recentFormBarrelPct != null, "EV90/air%/barrel% surface from a well-covered window");
 }
 
-// ── pulled-air is season-only; xHR-per-contact is always null ─────────────────
+// ── PR5.2 gap 4: pulled-air is ALWAYS null (no genuine aggregate); xHR null ────
 {
-  const r = computeRecentContactForm({ events: events(30, 100, 20, true), asOfExclusiveMs: BOUNDARY, seasonBaseline: { pulledAirShare: 0.42 } });
-  ok(r.recentFormPulledAirShare === 0.42, "pulled-air share comes from the season baseline (never per-event)");
+  const r = computeRecentContactForm({ events: events(30, 100, 20, true), asOfExclusiveMs: BOUNDARY, seasonBaseline: BASE });
+  ok(r.recentFormPulledAirShare === null, "recentFormPulledAirShare is null until a genuine pulled-air aggregate exists (no mislabeled pull-rate proxy)");
   ok(r.recentFormXHrPerContact === null, "xHR-per-contact is always null (no per-event xSLG stream)");
 }
 
-// ── season pulled-air surfaces even with zero recent events ───────────────────
+// ── PR5.2 gap 4: no events → fully neutral (no non-neutral-without-evidence) ───
 {
-  const r = computeRecentContactForm({ events: [], asOfExclusiveMs: BOUNDARY, seasonBaseline: { pulledAirShare: 0.31 } });
-  ok(r.recentFormPulledAirShare === 0.31 && r.effectiveBbe === 0 && r.reliabilityWeight === 0, "season pulled-air surfaces at zero recent BBE with zero reliability weight");
+  const r = computeRecentContactForm({ events: [], asOfExclusiveMs: BOUNDARY, seasonBaseline: BASE });
+  ok(JSON.stringify(r) === JSON.stringify(neutralRecentContactForm()), "zero recent events → a fully-neutral leaf (never a non-neutral value with no evidence)");
 }
 
 // ── PR5.1 gap 2: content-addressed contact_events evidence + round-trip ───────

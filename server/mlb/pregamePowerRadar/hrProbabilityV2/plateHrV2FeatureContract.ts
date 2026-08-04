@@ -255,15 +255,15 @@ export const plateHrV2DerivedFeatureVectorV1Schema = z.object({
   contactOpportunity: plateHrV2ContactOpportunityFeaturesSchema,
   dataQuality: plateHrV2DataQualityFeaturesSchema,
   slateBaselineGameHrProbability: numericLeaf,
-});
+}).strict();
 export type PlateHrV2DerivedFeatureVectorV1 = z.infer<typeof plateHrV2DerivedFeatureVectorV1Schema>;
 
 // ── V2 derived vector = V1 + recentContactForm (PR5). A distinct featureVersion
-// literal so the two shapes never collide. ────────────────────────────────────
+// literal so the two shapes never collide. STRICT so no extra group rides along. ─
 export const plateHrV2DerivedFeatureVectorV2Schema = plateHrV2DerivedFeatureVectorV1Schema.extend({
   featureVersion: z.literal(PLATE_HR_V2_FEATURES_V2),
   recentContactForm: plateHrV2RecentContactFormFeaturesSchema,
-});
+}).strict();
 export type PlateHrV2DerivedFeatureVectorV2 = z.infer<typeof plateHrV2DerivedFeatureVectorV2Schema>;
 
 /** Accepts either version, discriminated on featureVersion — the reader for a
@@ -273,6 +273,36 @@ export const plateHrV2DerivedFeatureVectorAnySchema = z.discriminatedUnion("feat
   plateHrV2DerivedFeatureVectorV2Schema,
 ]);
 export type PlateHrV2DerivedFeatureVectorAny = z.infer<typeof plateHrV2DerivedFeatureVectorAnySchema>;
+
+// ── AUTHORIZED PERSISTED PROJECTION (PR5.2 gap 1) ─────────────────────────────
+// What actually lands in the `derived_features` jsonb column: the closed
+// AUTHORIZED_DERIVED_FEATURE_GROUPS set = the full vector MINUS market + zoneLocation
+// (both stripped at capture). STRICT + version-specific so the training reader can
+// validate the persisted projection and reject a V2 row missing recentContactForm,
+// a V1 row carrying the V2 group, or any extra group.
+export const plateHrV2AuthorizedProjectionV1Schema = plateHrV2DerivedFeatureVectorV1Schema
+  .omit({ market: true, zoneLocation: true }).strict();
+export type PlateHrV2AuthorizedProjectionV1 = z.infer<typeof plateHrV2AuthorizedProjectionV1Schema>;
+
+export const plateHrV2AuthorizedProjectionV2Schema = plateHrV2DerivedFeatureVectorV2Schema
+  .omit({ market: true, zoneLocation: true }).strict();
+export type PlateHrV2AuthorizedProjectionV2 = z.infer<typeof plateHrV2AuthorizedProjectionV2Schema>;
+
+/** Strictly parse a persisted derived-features projection against the schema for
+ * `featureVersion`; also enforces top-level version === embedded version. */
+export function parseAuthorizedProjection(
+  featureVersion: string,
+  derivedFeatures: unknown,
+): { ok: true; version: string } | { ok: false; reason: string } {
+  const schema = featureVersion === PLATE_HR_V2_FEATURES_V2 ? plateHrV2AuthorizedProjectionV2Schema
+    : featureVersion === PLATE_HR_V2_FEATURES_V1 ? plateHrV2AuthorizedProjectionV1Schema
+    : null;
+  if (schema == null) return { ok: false, reason: `unknown_feature_version:${featureVersion}` };
+  const parsed = schema.safeParse(derivedFeatures);
+  if (!parsed.success) return { ok: false, reason: "derived_features_projection_invalid" };
+  if (parsed.data.featureVersion !== featureVersion) return { ok: false, reason: "feature_version_embedded_mismatch" };
+  return { ok: true, version: featureVersion };
+}
 
 // ── Per-leaf presence/quality mirror (validated against the `availability`
 // jsonb column) ──────────────────────────────────────────────────────────────

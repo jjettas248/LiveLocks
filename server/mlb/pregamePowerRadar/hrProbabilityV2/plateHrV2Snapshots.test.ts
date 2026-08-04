@@ -27,6 +27,9 @@ import {
   type PredictionSnapshot,
   type SourceIdFields,
 } from "./plateHrV2Snapshots";
+import { assemblePlateHrV2FeatureSnapshot } from "./plateHrV2FeatureBuilder";
+import { PLATE_HR_V2_FEATURES_V1, PLATE_HR_V2_FEATURES_V2 } from "./plateHrV2FeatureContract";
+import { buildRecentContactFormEvidence } from "./recentContactFormEvidence";
 
 let passed = 0;
 let failed = 0;
@@ -36,6 +39,38 @@ function ok(cond: boolean, msg: string) {
 
 const FIRST_PITCH = "2026-07-01T23:05:00Z";
 const PREDICTION = "2026-07-01T18:00:00Z"; // ~5h before first pitch
+const PREDICTION_MS = Date.parse(PREDICTION);
+
+// A genuinely-valid V2 AUTHORIZED PROJECTION (built by the real feature builder,
+// with market + zoneLocation dropped as capture does), carrying a NEUTRAL
+// recentContactForm leaf — so a prediction using it needs no contact_events source.
+function buildProjection(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const built = assemblePlateHrV2FeatureSnapshot({
+    asOfMs: PREDICTION_MS, firstPitchAtMs: Date.parse(FIRST_PITCH), lineupConfirmedAtMs: null, starterConfirmed: false,
+    sessionDate: "2026-07-01", gameId: "g1", batterId: "b1", pitcherId: null, batterHand: "R", sufficientStatsRef: null,
+    batterPower: { xISO: null, xSLG: null, xwOBAcon: null, barrelRatePct: null, hardHitRatePct: null, exitVelocity: null, maxEV: null, flyBallPct: null, hrFBRatioPct: null, pullRatePct: null, sweetSpotPct: null, hrPerPaSeason: null, paSample: null },
+    batTracking: { avgBatSpeed: null, fastSwingRatePct: null, avgSwingLength: null, squaredUpPerSwingPct: null, blastPerSwingPct: null, swingSample: null },
+    pitcherVulnerability: { pitcherKnown: false, batterHand: null, pitcherThrows: null, hrPer9VsHand: null, hrPer9Overall: null, barrelAllowedPct: null, hardHitAllowedPct: null, flyBallAllowedPct: null, bfSample: null },
+    pitchType: { families: [] },
+    zoneLocation: { batterHeartXslg: null, batterElevatedFbXslg: null, batterLowBreakingXslg: null, pitcherHeartRate: null, pitcherMiddleMiddleRate: null, pitcherHangerRate: null },
+    parkWeatherSpray: { parkHrFactor: null, parkHrFactorHand: null, isIndoors: false, weatherAvailable: false, temperatureF: null, windSpeedMph: null, windDirection: null, batterPullAirShare: null },
+    lineupOpportunity: { battingOrderSlot: null, teamImpliedRuns: null, obpAhead: null, lineupConfirmed: false },
+    starterBullpen: { starterConfirmed: false, projectedPaVsStarter: null, projectedPaVsBullpen: null, bullpenHrPer9: null, bullpenBarrelAllowedPct: null },
+    market: { hrOddsAvailable: false, impliedHrProbability: null, noVigImpliedHrProbability: null },
+    availability: { confirmedActive: null, lateScratchRisk: null, restDayRisk: null, platoonSubRisk: null },
+    contactOpportunity: { kRatePct: null, bbRatePct: null, whiffRatePct: null, contactRatePct: null, zoneContactRatePct: null, chaseRatePct: null },
+    slateBaselineGameHrProbability: null,
+    savantQuality: "missing", venueResolved: false, pitcherHandResolved: false, batterPowerFullyAvailable: false,
+  });
+  const { market, zoneLocation, ...projection } = built.derivedFeatures as Record<string, unknown>;
+  return { ...projection, ...over };
+}
+const V2_PROJECTION = buildProjection();
+/** A valid V1 authorized projection = V2 projection minus recentContactForm, V1 version. */
+function buildV1Projection(): Record<string, unknown> {
+  const { recentContactForm, ...v1 } = buildProjection();
+  return { ...v1, featureVersion: PLATE_HR_V2_FEATURES_V1 };
+}
 
 type EvArgs = Pick<SourceEvidenceSnapshot, "evidenceKind" | "dataThroughAt" | "availableAt" | "validForAt" | "reconstructed">;
 const ev = (o: Partial<EvArgs> & Pick<EvArgs, "evidenceKind">): EvArgs => ({
@@ -251,11 +286,11 @@ function mkSource(over: Partial<SourceEvidenceSnapshot> = {}): SourceEvidenceSna
 }
 
 function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[] = []): PredictionSnapshot {
-  const gamePk = over.gamePk ?? "g1", batterId = over.batterId ?? "b1", featureVersion = over.featureVersion ?? "v2";
+  const gamePk = over.gamePk ?? "g1", batterId = over.batterId ?? "b1", featureVersion = over.featureVersion ?? PLATE_HR_V2_FEATURES_V2;
   const predictionAsOf = over.predictionAsOf ?? PREDICTION;
   const firstPitchTime = "firstPitchTime" in over ? (over.firstPitchTime ?? null) : FIRST_PITCH;
   const sorted = [...(over.sourceSnapshotIds ?? sourceIds)].sort();
-  const derivedFeatures = over.derivedFeatures ?? { batterPower: { xISO: 0.25 } };
+  const derivedFeatures = over.derivedFeatures ?? V2_PROJECTION;
   return {
     predictionSnapshotId: over.predictionSnapshotId ?? computePredictionSnapshotId({ gamePk, batterId, featureVersion, predictionAsOf }),
     gamePk, batterId, featureVersion, predictionAsOf, firstPitchTime, sourceSnapshotIds: sorted, derivedFeatures,
@@ -333,22 +368,29 @@ function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[
   const rows = new Map<string, SourceEvidenceSnapshot>([[src.sourceSnapshotId, src]]);
   const early = mkPrediction({ predictionAsOf: "2026-07-01T15:00:00Z" }, [src.sourceSnapshotId]);
   const late = mkPrediction({ predictionAsOf: "2026-07-01T18:00:00Z" }, [src.sourceSnapshotId]);
+  const V2 = PLATE_HR_V2_FEATURES_V2;
   const out = evaluateTrainingReadIntegrity([early, late], rows);
-  ok(out.admitted.length === 1, "exactly one authoritative revision admitted per batter-game");
-  ok(out.admitted[0].predictionSnapshotId === late.predictionSnapshotId, "the latest predictionAsOf ≤ first pitch is the authoritative revision");
+  ok((out.admittedByVersion[V2] ?? []).length === 1, "exactly one authoritative revision admitted per batter-game (partitioned by version)");
+  ok(out.admittedByVersion[V2][0].predictionSnapshotId === late.predictionSnapshotId, "the latest predictionAsOf ≤ first pitch is the authoritative revision");
   ok(out.rejected.some((r) => r.predictionSnapshotId === early.predictionSnapshotId && r.reasons.includes("superseded_by_authoritative_revision")), "earlier revision rejected as superseded (never a duplicate training row)");
 
   // A corrupt revision never displaces a valid one.
   const corrupt = mkPrediction({ predictionAsOf: "2026-07-01T19:00:00Z", contentHash: "bad" }, [src.sourceSnapshotId]);
   const out2 = evaluateTrainingReadIntegrity([late, corrupt], rows);
-  ok(out2.admitted.length === 1 && out2.admitted[0].predictionSnapshotId === late.predictionSnapshotId, "a later-but-corrupt revision is not admitted; the valid one is");
+  ok((out2.admittedByVersion[V2] ?? []).length === 1 && out2.admittedByVersion[V2][0].predictionSnapshotId === late.predictionSnapshotId, "a later-but-corrupt revision is not admitted; the valid one is");
 
   // Distinct batter-games each get their own authoritative row.
   const src2 = mkSource({ entityId: "b2" });
   const rows2 = new Map(rows); rows2.set(src2.sourceSnapshotId, src2);
   const other = mkPrediction({ batterId: "b2" }, [src2.sourceSnapshotId]);
   const out3 = evaluateTrainingReadIntegrity([late, other], rows2);
-  ok(out3.admitted.length === 2, "distinct batter-games each admit one authoritative row");
+  ok((out3.admittedByVersion[V2] ?? []).length === 2, "distinct batter-games each admit one authoritative row");
+  // PR5.2 gap 1: admitted is partitioned by version — never one mixed array.
+  const src3 = mkSource({ entityId: "b3" });
+  const v1Pred = mkPrediction({ batterId: "b3", featureVersion: PLATE_HR_V2_FEATURES_V1, derivedFeatures: buildV1Projection() }, [src3.sourceSnapshotId]);
+  const rows3 = new Map(rows); rows3.set(src3.sourceSnapshotId, src3);
+  const outMixed = evaluateTrainingReadIntegrity([late, v1Pred], rows3);
+  ok((outMixed.admittedByVersion[V2] ?? []).length === 1 && (outMixed.admittedByVersion[PLATE_HR_V2_FEATURES_V1] ?? []).length === 1, "V1 and V2 admitted rows are returned in separate version partitions");
 }
 
 // ── PR4.3.1 #1: reconstructed derived from fetchedAt (not availableAt) ─────────
@@ -422,7 +464,7 @@ function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[
   let batchThrew = false;
   let out: ReturnType<typeof evaluateTrainingReadIntegrity> | null = null;
   try { out = evaluateTrainingReadIntegrity([good, ...malformed], rows); } catch { batchThrew = true; }
-  ok(!batchThrew && out != null && out.admitted.length === 1 && out.rejected.length === malformed.length, "batch gateway admits the one valid row and rejects all malformed rows without throwing");
+  ok(!batchThrew && out != null && Object.values(out.admittedByVersion).flat().length === 1 && out.rejected.length === malformed.length, "batch gateway admits the one valid row and rejects all malformed rows without throwing");
 
   // Source under a wrong stored id (map key != stored sourceSnapshotId).
   const wrong = { ...src, sourceSnapshotId: "plate-hr-v2-src:some-other-key" };
@@ -521,6 +563,65 @@ function mkPrediction(over: Partial<PredictionSnapshot> = {}, sourceIds: string[
     try { reasons = evaluatePredictionRowIntegrity(p, m).reasons; } catch { threw = true; }
     ok(!threw && reasons.some((r) => r.startsWith("source_shape_invalid")), `read rejects non-ISO stored fetchedAt "${bad}" without throwing`);
   }
+}
+
+// ── PR5.2 gaps 1+3: V2 recentContactForm leaf re-derived from evidence at read ─
+{
+  const recentEvents = Array.from({ length: 30 }, (_, i) => ({
+    exitVelocity: 100, launchAngle: 20, isBarrel: true, result: "field_out",
+    timestamp: new Date(PREDICTION_MS - (30 - i) * 3_600_000).toISOString(),
+  }));
+  const baseline = { avgEv: 90, ev90: 105, airBallPct: 40, barrelPct: 7 };
+  const built = buildRecentContactFormEvidence({
+    events: recentEvents, asOfExclusiveMs: PREDICTION_MS, retrievalAtMs: PREDICTION_MS,
+    batterId: "b1", schemaVersion: PLATE_HR_V2_FEATURES_V2, seasonBaseline: baseline,
+  });
+  const d = built.evidence!;
+  // Map the descriptor to a stored source row (reconstructed=false; fetched == prediction).
+  const contactSrc: SourceEvidenceSnapshot = {
+    sourceSnapshotId: computeSourceSnapshotId({ ...d, reconstructed: false }),
+    provider: d.provider, entityId: d.entityId, entityType: d.entityType as SourceEvidenceSnapshot["entityType"],
+    evidenceKind: d.evidenceKind, dataThroughAt: d.dataThroughAt, availableAt: d.availableAt,
+    availabilitySource: d.availabilitySource, validForAt: d.validForAt, reconstructed: false,
+    provenanceIncomplete: d.provenanceIncomplete, fetchedAt: d.fetchedAt, schemaVersion: d.schemaVersion,
+    contentHash: d.contentHash, payloadRef: d.payloadRef, authorizedPayload: d.authorizedPayload,
+  };
+  const rows = new Map<string, SourceEvidenceSnapshot>([[contactSrc.sourceSnapshotId, contactSrc]]);
+  const leafGroup = { ...built.inputs, extra: {} };
+  const v2df = { ...buildProjection(), recentContactForm: leafGroup };
+  const mkV2 = (over: Partial<PredictionSnapshot> = {}, ids = [contactSrc.sourceSnapshotId]) =>
+    mkPrediction({ featureVersion: PLATE_HR_V2_FEATURES_V2, derivedFeatures: v2df, ...over }, ids);
+
+  ok(evaluatePredictionRowIntegrity(mkV2(), rows).readable, "a V2 row whose leaf re-derives from its contact_events evidence is readable");
+
+  // Forged-but-rehashed leaf: mutate the stored leaf + recompute the envelope hash so
+  // ONLY the evidence re-derivation catches it.
+  const forgedLeaf = { ...built.inputs, recentFormEv: (built.inputs.recentFormEv ?? 0) + 5, extra: {} };
+  const forgedDf = { ...buildProjection(), recentContactForm: forgedLeaf };
+  const forged = mkPrediction({ featureVersion: PLATE_HR_V2_FEATURES_V2, derivedFeatures: forgedDf }, [contactSrc.sourceSnapshotId]);
+  ok(evaluatePredictionRowIntegrity(forged, rows).reasons.includes("recent_contact_form_evidence_mismatch"), "a forged-but-rehashed leaf is caught by read-time re-derivation");
+
+  // Missing contact_events evidence for a non-neutral leaf.
+  ok(evaluatePredictionRowIntegrity(mkV2({}, ["plate-hr-v2-src:nope"]), new Map()).reasons.some((r) => r === "contact_events_missing" || r.startsWith("missing_source_evidence")), "a non-neutral V2 leaf with no contact_events evidence is rejected");
+
+  // Duplicate contact_events evidence.
+  const contactSrc2: SourceEvidenceSnapshot = { ...contactSrc };
+  // A second, distinct contact source id (different batter payload) counts as duplicate kind.
+  const d2 = buildRecentContactFormEvidence({ events: recentEvents.slice(0, 20), asOfExclusiveMs: PREDICTION_MS, retrievalAtMs: PREDICTION_MS, batterId: "b1", schemaVersion: PLATE_HR_V2_FEATURES_V2, seasonBaseline: baseline }).evidence!;
+  const dup: SourceEvidenceSnapshot = { ...contactSrc2, sourceSnapshotId: computeSourceSnapshotId({ ...d2, reconstructed: false }), dataThroughAt: d2.dataThroughAt, contentHash: d2.contentHash, authorizedPayload: d2.authorizedPayload };
+  const rowsDup = new Map(rows); rowsDup.set(dup.sourceSnapshotId, dup);
+  ok(evaluatePredictionRowIntegrity(mkV2({}, [contactSrc.sourceSnapshotId, dup.sourceSnapshotId]), rowsDup).reasons.includes("contact_events_duplicate"), "two contact_events sources for one prediction are rejected");
+
+  // Cross-bind: a stored source with a mismatched schemaVersion.
+  const badVer: SourceEvidenceSnapshot = { ...contactSrc, schemaVersion: "plate_hr_v2_features_v1" };
+  const badVerId = computeSourceSnapshotId({ ...d, schemaVersion: "plate_hr_v2_features_v1", reconstructed: false });
+  badVer.sourceSnapshotId = badVerId;
+  const rowsBadVer = new Map<string, SourceEvidenceSnapshot>([[badVerId, badVer]]);
+  ok(evaluatePredictionRowIntegrity(mkV2({}, [badVerId]), rowsBadVer).reasons.includes("contact_events_schema_version_mismatch"), "contact_events schemaVersion must match the prediction featureVersion");
+
+  // A neutral V2 leaf must NOT carry contact_events evidence.
+  const neutralDf = buildProjection(); // recentContactForm neutral
+  ok(evaluatePredictionRowIntegrity(mkPrediction({ featureVersion: PLATE_HR_V2_FEATURES_V2, derivedFeatures: neutralDf }, [contactSrc.sourceSnapshotId]), rows).reasons.includes("neutral_leaf_with_contact_evidence"), "a neutral V2 leaf with contact_events evidence is rejected");
 }
 
 // ── schema round-trip (full PR4.3 shape) ──────────────────────────────────────

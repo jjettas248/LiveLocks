@@ -21,6 +21,18 @@
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import {
+  PLATE_HR_V2_FEATURES_V1,
+  PLATE_HR_V2_FEATURES_V2,
+  parseAuthorizedProjection,
+} from "./plateHrV2FeatureContract";
+import {
+  recomputeRecentContactFormFromEvidence,
+  isNeutralRecentContactForm,
+  RECENT_CONTACT_WINDOW_HARD_CAP,
+  type RecentContactFormInputs,
+  type RecentContactFormEvidencePayload,
+} from "./recentContactForm";
 
 export const EVIDENCE_KINDS = [
   "historical_stat",
@@ -328,30 +340,55 @@ function validateGenericPayload(payload: unknown): { ok: boolean; reasons: strin
   return { ok: true, reasons: [] };
 }
 
-/** Validate a contact_events evidence payload (PR5.1): the raw per-BBE window +
- * baseline + params a recentContactForm leaf is reproducibly derived from. Requires
- * a non-empty events array of numeric-or-null EV/LA + boolean-or-null barrel +
- * strict-ISO timestamp, a finite asOfExclusiveMs, and an integer windowMax. */
+const CONTACT_EVENTS_TOP_KEYS: ReadonlySet<string> = new Set(["events", "seasonBaseline", "asOfExclusiveMs", "windowMax"]);
+const CONTACT_EVENT_KEYS: ReadonlySet<string> = new Set(["exitVelocity", "launchAngle", "isBarrel", "timestamp"]);
+const CONTACT_BASELINE_KEYS: ReadonlySet<string> = new Set(["avgEv", "ev90", "airBallPct", "barrelPct"]);
+const numOrNullInRange = (x: unknown, lo: number, hi: number): boolean =>
+  x === null || (typeof x === "number" && Number.isFinite(x) && x >= lo && x <= hi);
+
+/** STRICT validation of a contact_events evidence payload (PR5.2 gap 2): CLOSED
+ * top-level/event/baseline fields (extra keys like `result`/`recentHrCount`
+ * rejected), a REQUIRED closed+domain-checked seasonBaseline, EV/LA domains, an
+ * integer windowMax ≤ 50, events.length ≤ windowMax, and every event timestamp
+ * strictly before asOfExclusiveMs. (asOf↔prediction, dataThroughAt↔max-event, and
+ * schemaVersion↔featureVersion are cross-bound at read time in the reader.) */
 function validateContactEventsPayload(payload: unknown): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
   if (!isPlainObject(payload)) return { ok: false, reasons: ["payload_not_object"] };
-  const events = (payload as Record<string, unknown>).events;
+  for (const k of Object.keys(payload)) if (!CONTACT_EVENTS_TOP_KEYS.has(k)) reasons.push(`unexpected_top_field:${k}`);
+
+  const asOf = payload.asOfExclusiveMs;
+  if (typeof asOf !== "number" || !Number.isFinite(asOf)) reasons.push("asOfExclusiveMs_not_finite");
+  const win = payload.windowMax;
+  if (typeof win !== "number" || !Number.isInteger(win) || win <= 0 || win > RECENT_CONTACT_WINDOW_HARD_CAP) reasons.push("windowMax_not_1_to_50");
+
+  const events = payload.events;
   if (!Array.isArray(events) || events.length === 0) reasons.push("events_empty_or_not_array");
   else {
+    if (typeof win === "number" && Number.isFinite(win) && events.length > win) reasons.push("events_exceed_window");
     for (let i = 0; i < events.length; i++) {
       const e = events[i];
       if (!isPlainObject(e)) { reasons.push(`event_not_object:${i}`); continue; }
-      const ev = e.exitVelocity, la = e.launchAngle, barrel = e.isBarrel, ts = e.timestamp;
-      if (!(ev === null || (typeof ev === "number" && Number.isFinite(ev)))) reasons.push(`event_ev:${i}`);
-      if (!(la === null || (typeof la === "number" && Number.isFinite(la)))) reasons.push(`event_la:${i}`);
-      if (!(barrel === null || typeof barrel === "boolean")) reasons.push(`event_barrel:${i}`);
+      for (const k of Object.keys(e)) if (!CONTACT_EVENT_KEYS.has(k)) reasons.push(`event_unexpected_field:${i}:${k}`);
+      if (!numOrNullInRange(e.exitVelocity, 0.0001, 130)) reasons.push(`event_ev:${i}`);
+      if (!numOrNullInRange(e.launchAngle, -90, 90)) reasons.push(`event_la:${i}`);
+      if (!(e.isBarrel === null || typeof e.isBarrel === "boolean")) reasons.push(`event_barrel:${i}`);
+      const ts = e.timestamp;
       if (!(typeof ts === "string" && isValidIsoTimestamp(ts))) reasons.push(`event_ts:${i}`);
+      else if (typeof asOf === "number" && Number.isFinite(asOf) && !(Date.parse(ts) < asOf)) reasons.push(`event_ts_not_before_boundary:${i}`);
     }
   }
-  const asOf = (payload as Record<string, unknown>).asOfExclusiveMs;
-  if (typeof asOf !== "number" || !Number.isFinite(asOf)) reasons.push("asOfExclusiveMs_not_finite");
-  const win = (payload as Record<string, unknown>).windowMax;
-  if (typeof win !== "number" || !Number.isInteger(win) || win <= 0) reasons.push("windowMax_not_positive_int");
+
+  const baseline = payload.seasonBaseline;
+  if (!isPlainObject(baseline)) reasons.push("seasonBaseline_missing");
+  else {
+    for (const k of Object.keys(baseline)) if (!CONTACT_BASELINE_KEYS.has(k)) reasons.push(`baseline_unexpected_field:${k}`);
+    if (!numOrNullInRange(baseline.avgEv, 0.0001, 130)) reasons.push("baseline_avgEv");
+    if (!numOrNullInRange(baseline.ev90, 0.0001, 130)) reasons.push("baseline_ev90");
+    if (!numOrNullInRange(baseline.airBallPct, 0, 100)) reasons.push("baseline_airBallPct");
+    if (!numOrNullInRange(baseline.barrelPct, 0, 100)) reasons.push("baseline_barrelPct");
+  }
+
   try { canonicalJson(payload); } catch { reasons.push("payload_noncanonical"); }
   return { ok: reasons.length === 0, reasons };
 }
@@ -757,12 +794,14 @@ export function evaluatePredictionRowIntegrity(
   const sorted = [...ids].sort();
   if (ids.some((v, i) => v !== sorted[i])) reasons.push("source_ids_not_sorted");
 
+  const contactEventsSources: StoredSourceEvidence[] = [];
   for (const id of ids) {
     const raw = sourceRows.get(id);
     if (raw === undefined) { reasons.push(`missing_source_evidence:${id}`); continue; }
     const sp = storedSourceEvidenceSchema.safeParse(raw);
     if (!sp.success) { reasons.push(`source_shape_invalid:${id}`); continue; }
     const src = sp.data;
+    if (src.evidenceKind === "contact_events") contactEventsSources.push(src);
 
     // Triple identity: map key === stored id === recomputed id.
     if (src.sourceSnapshotId !== id) reasons.push(`source_stored_id_mismatch:${id}`);
@@ -795,6 +834,50 @@ export function evaluatePredictionRowIntegrity(
     }
   }
 
+  // PR5.2 gap 1: strict, version-specific authorized-projection validation of the
+  // persisted derivedFeatures + top-level ↔ embedded featureVersion binding.
+  const projection = parseAuthorizedProjection(prediction.featureVersion, prediction.derivedFeatures);
+  if (!projection.ok) reasons.push(`derived_projection:${projection.reason}`);
+
+  // PR5.2 gaps 3+4: a V2 row's recentContactForm leaf must be reproducible from a
+  // single content-addressed contact_events source (cross-bound), or fully neutral
+  // with no such evidence.
+  if (projection.ok && prediction.featureVersion === PLATE_HR_V2_FEATURES_V2) {
+    const leaf = extractRecentContactFormLeaf(prediction.derivedFeatures);
+    if (leaf == null) {
+      reasons.push("recent_contact_form_missing");
+    } else if (isNeutralRecentContactForm(leaf)) {
+      if (contactEventsSources.length > 0) reasons.push("neutral_leaf_with_contact_evidence");
+    } else if (contactEventsSources.length === 0) {
+      reasons.push("contact_events_missing");
+    } else if (contactEventsSources.length > 1) {
+      reasons.push("contact_events_duplicate");
+    } else {
+      const src = contactEventsSources[0];
+      const payload = src.authorizedPayload as RecentContactFormEvidencePayload | undefined;
+      if (src.schemaVersion !== prediction.featureVersion) reasons.push("contact_events_schema_version_mismatch");
+      if (!isPlainObject(payload)) {
+        reasons.push("contact_events_payload_missing");
+      } else {
+        // Cross-bind: boundary === prediction time; dataThroughAt === max event ts.
+        if (pAsOf == null || payload.asOfExclusiveMs !== pAsOf) reasons.push("contact_events_asof_not_prediction");
+        const evMs = payload.events.map((e) => Date.parse(e.timestamp)).filter((m) => Number.isFinite(m));
+        const maxEv = evMs.length > 0 ? Math.max(...evMs) : null;
+        const dta = ms(src.dataThroughAt);
+        if (maxEv == null || dta == null || dta !== maxEv) reasons.push("contact_events_datathrough_ne_max_event");
+        // Re-derive the leaf and require EXACT canonical equality with the stored one.
+        let rederived: RecentContactFormInputs | null = null;
+        try { rederived = recomputeRecentContactFormFromEvidence(payload); }
+        catch { reasons.push("contact_events_recompute_failed"); }
+        if (rederived != null) {
+          let match = false;
+          try { match = canonicalHash(rederived) === canonicalHash(leaf); } catch { match = false; }
+          if (!match) reasons.push("recent_contact_form_evidence_mismatch");
+        }
+      }
+    }
+  }
+
   let envHash: string | null = null;
   try { envHash = computePredictionEnvelopeHash(prediction); }
   catch { reasons.push("prediction_features_noncanonical"); }
@@ -803,10 +886,33 @@ export function evaluatePredictionRowIntegrity(
   return { readable: reasons.length === 0, reasons, prediction };
 }
 
+/** Extract the 9-field recentContactForm leaf (dropping `extra`) from a persisted
+ * derivedFeatures projection, for exact re-derivation comparison. */
+function extractRecentContactFormLeaf(derivedFeatures: unknown): RecentContactFormInputs | null {
+  if (!isPlainObject(derivedFeatures)) return null;
+  const g = derivedFeatures.recentContactForm;
+  if (!isPlainObject(g)) return null;
+  const f = (k: string): number | null => {
+    const v = g[k];
+    return v === null ? null : typeof v === "number" && Number.isFinite(v) ? v : NaN;
+  };
+  const leaf: RecentContactFormInputs = {
+    recentFormEv: f("recentFormEv"), recentFormEv90: f("recentFormEv90"),
+    recentFormAirBallPct: f("recentFormAirBallPct"), recentFormBarrelPct: f("recentFormBarrelPct"),
+    recentFormPulledAirShare: f("recentFormPulledAirShare"), recentFormXHrPerContact: f("recentFormXHrPerContact"),
+    effectiveBbe: f("effectiveBbe"), last15Bbe: f("last15Bbe"), reliabilityWeight: f("reliabilityWeight"),
+  };
+  // A NaN means a non-numeric/non-null stored field — treat as unreadable.
+  if (Object.values(leaf).some((v) => typeof v === "number" && Number.isNaN(v))) return null;
+  return leaf;
+}
+
 export interface TrainingReadOutcome {
-  /** Exactly one authoritative, integrity-valid revision per (gamePk, batterId,
-   * featureVersion) — safe to use as training observations. */
-  admitted: StoredPredictionSnapshot[];
+  /** Admitted observations PARTITIONED BY featureVersion (PR5.2 gap 1) — a training
+   * artifact must draw from exactly ONE version; a single mixed admitted array is
+   * never returned. Each partition holds one authoritative revision per (gamePk,
+   * batterId) for that version. */
+  admittedByVersion: Record<string, StoredPredictionSnapshot[]>;
   /** Every row that did NOT enter training, with the reasons why. */
   rejected: { predictionSnapshotId: string; reasons: string[] }[];
 }
@@ -826,7 +932,7 @@ export function evaluateTrainingReadIntegrity(
   const rejected: { predictionSnapshotId: string; reasons: string[] }[] = [];
   const valid: StoredPredictionSnapshot[] = [];
 
-  if (!Array.isArray(predictions)) return { admitted: [], rejected: [] };
+  if (!Array.isArray(predictions)) return { admittedByVersion: {}, rejected: [] };
 
   for (const raw of predictions) {
     const r = evaluatePredictionRowIntegrity(raw, sourceRows);
@@ -845,7 +951,7 @@ export function evaluateTrainingReadIntegrity(
     if (g) g.push(p); else groups.set(key, [p]);
   }
 
-  const admitted: StoredPredictionSnapshot[] = [];
+  const admittedByVersion: Record<string, StoredPredictionSnapshot[]> = {};
   for (const group of Array.from(groups.values())) {
     let best = group[0];
     for (let i = 1; i < group.length; i++) {
@@ -854,11 +960,11 @@ export function evaluateTrainingReadIntegrity(
       const b = ms(best.predictionAsOf) ?? -Infinity;
       if (a > b || (a === b && p.predictionSnapshotId > best.predictionSnapshotId)) best = p;
     }
-    admitted.push(best);
+    (admittedByVersion[best.featureVersion] ??= []).push(best);
     for (const p of group) {
       if (p !== best) rejected.push({ predictionSnapshotId: p.predictionSnapshotId, reasons: ["superseded_by_authoritative_revision"] });
     }
   }
 
-  return { admitted, rejected };
+  return { admittedByVersion, rejected };
 }
