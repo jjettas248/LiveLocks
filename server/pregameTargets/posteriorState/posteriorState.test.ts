@@ -184,6 +184,31 @@ function seed() {
   ok(posteriorIncludesGame(st3, "nba:game:G1"), "lineage stores the normalized canonical key");
 }
 
+// ── Fail closed on a non-canonical excludeGameId (safety-critical) ───────────
+{
+  // A bare native exclude id can't match a canonically-keyed observation; rather
+  // than silently fold the target game in, a game-bearing obs is REFUSED.
+  let st = seed();
+  st = updatePosterior(st, { value: 9, weight: 1, season: S, gameId: "nba:game:TARGET" }, { excludeGameId: "TARGET" });
+  ok(combineSeasonWindow(st, S).count === 0 && !posteriorIncludesGame(st, "nba:game:TARGET"), "a bare (non-canonical) excludeGameId fails closed — the game obs is refused, not folded");
+  // A wrong-kind canonical exclude id also fails closed.
+  let st2 = seed();
+  st2 = updatePosterior(st2, { value: 9, weight: 1, season: S, gameId: "nba:game:TARGET" }, { excludeGameId: "nba:player:TARGET" });
+  ok(combineSeasonWindow(st2, S).count === 0, "a wrong-kind (non-game) excludeGameId fails closed");
+  // Fail-closed refuses ANY game-bearing obs under an invalid exclude (can't rule
+  // out the target), but a GAMELESS observation can never be the target → folds.
+  let st3 = seed();
+  st3 = updatePosterior(st3, { value: 5, weight: 1, season: S }, { excludeGameId: "TARGET" });
+  ok(combineSeasonWindow(st3, S).count === 1, "a gameless observation still folds under an invalid excludeGameId");
+  let st4 = seed();
+  st4 = updatePosterior(st4, { value: 5, weight: 1, season: S, gameId: "nba:game:OTHER" }, { excludeGameId: "TARGET" });
+  ok(combineSeasonWindow(st4, S).count === 0, "a game-bearing obs is refused under an invalid exclude even when it isn't the (unidentifiable) target");
+  // A valid canonical exclude still folds a non-matching game normally.
+  let st5 = seed();
+  st5 = updatePosterior(st5, { value: 5, weight: 1, season: S, gameId: "nba:game:OTHER" }, { excludeGameId: "nba:game:TARGET" });
+  ok(combineSeasonWindow(st5, S).count === 1 && posteriorIncludesGame(st5, "nba:game:OTHER"), "a valid canonical exclude folds a non-target game normally");
+}
+
 // ── Determinism: order-independent, sorted lineage ───────────────────────────
 {
   let a = seed();

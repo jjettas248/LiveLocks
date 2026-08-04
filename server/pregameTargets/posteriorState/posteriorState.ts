@@ -17,7 +17,7 @@
 // Nothing here contacts a database; persistence of these states is a separate
 // layer. Values are plain numbers; instants/season are the caller's concern.
 
-import { normalizeGameKey } from "../../../shared/pregameTargets/canonicalEntities";
+import { canonicalGameId, normalizeGameKey } from "../../../shared/pregameTargets/canonicalEntities";
 
 export const POSTERIOR_STATE_VERSION = 1;
 
@@ -158,8 +158,10 @@ export interface UpdatePosteriorOptions {
  * Fold one observation into the state, returning a NEW state (pure). No-ops when:
  *  • the weight is non-finite,
  *  • the value is non-finite,
- *  • the season is not an integer, or
- *  • the observation's game equals `excludeGameId` (self-update).
+ *  • the season is not an integer,
+ *  • the observation's game equals `excludeGameId` (self-update), or
+ *  • it carries a game id while `excludeGameId` is present but not a canonical
+ *    game id (fail closed — the target can't be identified, so it is refused).
  *
  * A finite, non-positive weight is a deliberate VETO: for a game already folded
  * it REMOVES the prior contribution (its latest as-of row now carries no mass),
@@ -189,15 +191,24 @@ export function updatePosterior(
   // the canonical form. A non-normalized key (e.g. "nba:game:X ") would
   // otherwise miss the exact self-update match against a canonical excludeGameId
   // (folding the target game in) and be treated as a distinct game by the
-  // correction/dedupe lookups (double-counting). excludeGameId is normalized the
-  // same way so the comparison is symmetric.
+  // correction/dedupe lookups (double-counting).
   const gameId = obs.gameId == null ? undefined : normalizeGameKey(obs.gameId);
-  const excludeGameId =
-    options.excludeGameId == null ? undefined : normalizeGameKey(options.excludeGameId);
 
-  // Self-update first: the predicted game is never folded, so a correction that
-  // names it has nothing to add and nothing to remove.
-  if (gameId != null && excludeGameId != null && gameId === excludeGameId) {
+  // excludeGameId is the SAFETY-CRITICAL predicted-game id — it must be a real
+  // canonical game id (strict), not an opaque key. A non-canonical exclude (a
+  // bare native id like "TARGET", or a wrong-kind canonical id) canonicalized
+  // leniently could never match a canonically-keyed observation, silently
+  // disabling the aggregation-layer self-update guard. So resolve it strictly and
+  // FAIL CLOSED when it is present-but-invalid.
+  const excludeProvided = options.excludeGameId != null;
+  const excludeGameId = excludeProvided ? canonicalGameId(options.excludeGameId) : null;
+  const excludeInvalid = excludeProvided && excludeGameId == null;
+
+  // Self-update first: the predicted game is never folded. When the exclude id is
+  // invalid we cannot identify the target, so any game-bearing observation is
+  // refused (fail closed) — a gameless observation can never be the target and
+  // still folds.
+  if (gameId != null && (excludeInvalid || gameId === excludeGameId)) {
     return state; // no self-update
   }
 
