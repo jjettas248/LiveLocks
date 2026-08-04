@@ -17,7 +17,7 @@
 // Nothing here contacts a database; persistence of these states is a separate
 // layer. Values are plain numbers; instants/season are the caller's concern.
 
-import { canonicalGameId, normalizeGameKey } from "../../../shared/pregameTargets/canonicalEntities";
+import { canonicalGameId } from "../../../shared/pregameTargets/canonicalEntities";
 
 export const POSTERIOR_STATE_VERSION = 1;
 
@@ -159,6 +159,7 @@ export interface UpdatePosteriorOptions {
  *  • the weight is non-finite,
  *  • the value is non-finite,
  *  • the season is not an integer,
+ *  • `obs.gameId` is present but not a canonical game id (contract violation),
  *  • the observation's game equals `excludeGameId` (self-update), or
  *  • it carries a game id while `excludeGameId` is present but not a canonical
  *    game id (fail closed — the target can't be identified, so it is refused).
@@ -187,16 +188,23 @@ export function updatePosterior(
   obs: PosteriorObservation,
   options: UpdatePosteriorOptions = {},
 ): PosteriorState {
-  // Normalize the game lineage key up front so every downstream comparison uses
-  // the canonical form. A non-normalized key (e.g. "nba:game:X ") would
-  // otherwise miss the exact self-update match against a canonical excludeGameId
-  // (folding the target game in) and be treated as a distinct game by the
-  // correction/dedupe lookups (double-counting).
-  const gameId = obs.gameId == null ? undefined : normalizeGameKey(obs.gameId);
+  // A game-bearing observation's `gameId` must be a real canonical game id (per
+  // the contract). Resolve it STRICTLY: a non-canonical obs game id (a bare
+  // native id like "TARGET", a wrong-kind canonical id, or a blank native) is
+  // refused up front — otherwise it would be stored under, and compared against,
+  // a mismatched key space, missing the self-update match against a canonical
+  // excludeGameId (folding the target game in) and splitting a game across
+  // format variants in the correction/dedupe lookups. A gameless observation
+  // (no gameId) is unaffected. The canonical form is used everywhere below.
+  let gameId: string | undefined;
+  if (obs.gameId != null) {
+    const canonical = canonicalGameId(obs.gameId);
+    if (canonical == null) return state; // non-canonical obs game id → refused
+    gameId = canonical;
+  }
 
-  // excludeGameId is the SAFETY-CRITICAL predicted-game id — it must be a real
-  // canonical game id (strict), not an opaque key. A non-canonical exclude (a
-  // bare native id like "TARGET", or a wrong-kind canonical id) canonicalized
+  // excludeGameId is the SAFETY-CRITICAL predicted-game id — it must likewise be
+  // a real canonical game id (strict). A non-canonical exclude canonicalized
   // leniently could never match a canonically-keyed observation, silently
   // disabling the aggregation-layer self-update guard. So resolve it strictly and
   // FAIL CLOSED when it is present-but-invalid.

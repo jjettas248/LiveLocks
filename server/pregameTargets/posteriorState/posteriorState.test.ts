@@ -26,6 +26,10 @@ const S = 2026;
 function seed() {
   return emptyPosteriorState("nba.player.reb_per_min", "v1", "nba:player:1");
 }
+// Observation game ids MUST be canonical game ids (per the contract) — a
+// non-canonical obs.gameId is refused. This helper builds a canonical game id
+// from a short native id so the tests exercise the real (canonical) key path.
+const g = (nativeId: string) => `nba:game:${nativeId}`;
 
 // ── Empty state ──────────────────────────────────────────────────────────────
 {
@@ -40,9 +44,9 @@ function seed() {
 // ── Weighted sufficient stats: mean, variance, ESS ───────────────────────────
 {
   let st = seed();
-  st = updatePosterior(st, { value: 2, weight: 1, season: S, gameId: "g1" });
-  st = updatePosterior(st, { value: 4, weight: 1, season: S, gameId: "g2" });
-  st = updatePosterior(st, { value: 6, weight: 1, season: S, gameId: "g3" });
+  st = updatePosterior(st, { value: 2, weight: 1, season: S, gameId: g("g1") });
+  st = updatePosterior(st, { value: 4, weight: 1, season: S, gameId: g("g2") });
+  st = updatePosterior(st, { value: 6, weight: 1, season: S, gameId: g("g3") });
   const c = combineSeasonWindow(st, S);
   ok(approx(posteriorMean(c), 4), "equal-weight mean of [2,4,6] = 4");
   ok(approx(posteriorVariance(c), 8 / 3), "weighted population variance = 8/3");
@@ -51,8 +55,8 @@ function seed() {
 {
   // Unequal weights → ESS strictly below the raw count.
   let st = seed();
-  st = updatePosterior(st, { value: 1, weight: 9, season: S, gameId: "g1" });
-  st = updatePosterior(st, { value: 1, weight: 1, season: S, gameId: "g2" });
+  st = updatePosterior(st, { value: 1, weight: 9, season: S, gameId: g("g1") });
+  st = updatePosterior(st, { value: 1, weight: 1, season: S, gameId: g("g2") });
   const c = combineSeasonWindow(st, S);
   const ess = effectiveSampleSize(c);
   ok(ess > 1 && ess < 2, "ESS between 1 and 2 for lopsided weights (9,1)");
@@ -62,26 +66,26 @@ function seed() {
 // ── Idempotent lineage: same game never double-counts ────────────────────────
 {
   let st = seed();
-  st = updatePosterior(st, { value: 5, weight: 2, season: S, gameId: "gDup" });
+  st = updatePosterior(st, { value: 5, weight: 2, season: S, gameId: g("gDup") });
   const after1 = combineSeasonWindow(st, S);
-  st = updatePosterior(st, { value: 5, weight: 2, season: S, gameId: "gDup" });
+  st = updatePosterior(st, { value: 5, weight: 2, season: S, gameId: g("gDup") });
   const after2 = combineSeasonWindow(st, S);
-  ok(posteriorIncludesGame(st, "gDup"), "lineage records the included game");
+  ok(posteriorIncludesGame(st, g("gDup")), "lineage records the included game");
   ok(after1.sumW === after2.sumW && after1.count === after2.count, "re-adding the same game is a no-op");
 }
 
 // ── Same-game CORRECTION replaces the prior contribution (append-only) ───────
 {
   let st = seed();
-  st = updatePosterior(st, { value: 10, weight: 1, season: S, gameId: "g1" });
+  st = updatePosterior(st, { value: 10, weight: 1, season: S, gameId: g("g1") });
   ok(approx(posteriorMean(combineSeasonWindow(st, S)), 10), "initial fold registers value 10");
   // A corrected reading for the SAME game (different value) replaces the stale one.
-  st = updatePosterior(st, { value: 4, weight: 1, season: S, gameId: "g1" });
+  st = updatePosterior(st, { value: 4, weight: 1, season: S, gameId: g("g1") });
   const after = combineSeasonWindow(st, S);
   ok(approx(posteriorMean(after), 4), "corrected same-game observation replaces the stale value (not discarded)");
   ok(after.count === 1, "a correction does not add a second fold (count stays 1)");
   // Corrected weight is honored too.
-  st = updatePosterior(st, { value: 4, weight: 5, season: S, gameId: "g1" });
+  st = updatePosterior(st, { value: 4, weight: 5, season: S, gameId: g("g1") });
   ok(effectiveSampleSize(combineSeasonWindow(st, S)) === 1, "still one effective observation after a weight correction");
 }
 
@@ -89,13 +93,13 @@ function seed() {
 {
   let st = seed();
   // Fold the same canonical game under the WRONG season first.
-  st = updatePosterior(st, { value: 10, weight: 1, season: 2025, gameId: "gX" });
+  st = updatePosterior(st, { value: 10, weight: 1, season: 2025, gameId: g("gX") });
   // A backfill correction fixes both the value AND the season label.
-  st = updatePosterior(st, { value: 4, weight: 1, season: 2026, gameId: "gX" });
+  st = updatePosterior(st, { value: 4, weight: 1, season: 2026, gameId: g("gX") });
   // The game must now live in exactly one season (the corrected 2026), never both.
   ok(st.bySeason[2025] === undefined, "the stale 2025 season is removed once its only game relocates");
-  ok(st.bySeason[2026]?.byGame["gX"] !== undefined, "the game is present under the corrected 2026 season");
-  ok(posteriorIncludesGame(st, "gX"), "lineage still includes the relocated game");
+  ok(st.bySeason[2026]?.byGame[g("gX")] !== undefined, "the game is present under the corrected 2026 season");
+  ok(posteriorIncludesGame(st, g("gX")), "lineage still includes the relocated game");
   // A window spanning both seasons must see the game ONCE, at the corrected value.
   const win = combineSeasonWindow(st, 2026); // [2024,2025,2026]
   ok(win.count === 1, "the relocated game is counted exactly once across the window (no double-count)");
@@ -104,10 +108,10 @@ function seed() {
 
   // If the old season also held OTHER folds, only the relocated game leaves it.
   let st2 = seed();
-  st2 = updatePosterior(st2, { value: 10, weight: 1, season: 2025, gameId: "gMove" });
-  st2 = updatePosterior(st2, { value: 8, weight: 1, season: 2025, gameId: "gStay" });
-  st2 = updatePosterior(st2, { value: 4, weight: 1, season: 2026, gameId: "gMove" });
-  ok(st2.bySeason[2025]?.byGame["gStay"] !== undefined && st2.bySeason[2025]?.byGame["gMove"] === undefined, "only the relocated game leaves the old season; a co-resident game stays");
+  st2 = updatePosterior(st2, { value: 10, weight: 1, season: 2025, gameId: g("gMove") });
+  st2 = updatePosterior(st2, { value: 8, weight: 1, season: 2025, gameId: g("gStay") });
+  st2 = updatePosterior(st2, { value: 4, weight: 1, season: 2026, gameId: g("gMove") });
+  ok(st2.bySeason[2025]?.byGame[g("gStay")] !== undefined && st2.bySeason[2025]?.byGame[g("gMove")] === undefined, "only the relocated game leaves the old season; a co-resident game stays");
   ok(st2.bySeason[2025]?.count === 1, "old season count drops by exactly one on relocation");
   const win2 = combineSeasonWindow(st2, 2026);
   ok(win2.count === 2, "window counts the staying game and the relocated game once each");
@@ -116,56 +120,80 @@ function seed() {
 // ── Zero-weight VETO of a folded game removes its stale contribution ─────────
 {
   let st = seed();
-  st = updatePosterior(st, { value: 10, weight: 2, season: S, gameId: "gV" });
-  st = updatePosterior(st, { value: 5, weight: 3, season: S, gameId: "gKeep" });
+  st = updatePosterior(st, { value: 10, weight: 2, season: S, gameId: g("gV") });
+  st = updatePosterior(st, { value: 5, weight: 3, season: S, gameId: g("gKeep") });
   ok(combineSeasonWindow(st, S).count === 2, "two games folded before the veto");
   // A later as-of correction vetoes gV (data-quality/context) with weight 0.
-  st = updatePosterior(st, { value: 10, weight: 0, season: S, gameId: "gV" });
+  st = updatePosterior(st, { value: 10, weight: 0, season: S, gameId: g("gV") });
   const after = combineSeasonWindow(st, S);
   ok(after.count === 1, "a zero-weight veto removes the folded game (count drops to 1)");
-  ok(!posteriorIncludesGame(st, "gV"), "the vetoed game leaves the lineage");
-  ok(posteriorIncludesGame(st, "gKeep"), "an unrelated folded game is untouched by the veto");
+  ok(!posteriorIncludesGame(st, g("gV")), "the vetoed game leaves the lineage");
+  ok(posteriorIncludesGame(st, g("gKeep")), "an unrelated folded game is untouched by the veto");
   ok(approx(posteriorMean(after), 5), "the posterior reflects only the surviving game");
   // A veto that empties the only season deletes the season entirely.
   let solo = seed();
-  solo = updatePosterior(solo, { value: 7, weight: 1, season: 2025, gameId: "gSolo" });
-  solo = updatePosterior(solo, { value: 7, weight: 0, season: 2025, gameId: "gSolo" });
+  solo = updatePosterior(solo, { value: 7, weight: 1, season: 2025, gameId: g("gSolo") });
+  solo = updatePosterior(solo, { value: 7, weight: 0, season: 2025, gameId: g("gSolo") });
   ok(solo.bySeason[2025] === undefined, "vetoing the last game in a season removes the empty season");
   // A veto of a never-folded game (or a gameless veto) is a pure no-op.
   const base = seed();
-  ok(updatePosterior(base, { value: 1, weight: 0, season: S, gameId: "ghost" }) === base, "vetoing a never-folded game returns the same state (no-op)");
+  ok(updatePosterior(base, { value: 1, weight: 0, season: S, gameId: g("ghost") }) === base, "vetoing a never-folded game returns the same state (no-op)");
   ok(updatePosterior(base, { value: 1, weight: 0, season: S }) === base, "a gameless zero-weight observation is a no-op");
   // A negative weight behaves like a zero-weight veto for a folded game.
   let neg = seed();
-  neg = updatePosterior(neg, { value: 3, weight: 1, season: S, gameId: "gNeg" });
-  neg = updatePosterior(neg, { value: 3, weight: -1, season: S, gameId: "gNeg" });
-  ok(!posteriorIncludesGame(neg, "gNeg") && combineSeasonWindow(neg, S).count === 0, "a negative-weight correction also removes the folded game");
+  neg = updatePosterior(neg, { value: 3, weight: 1, season: S, gameId: g("gNeg") });
+  neg = updatePosterior(neg, { value: 3, weight: -1, season: S, gameId: g("gNeg") });
+  ok(!posteriorIncludesGame(neg, g("gNeg")) && combineSeasonWindow(neg, S).count === 0, "a negative-weight correction also removes the folded game");
   // A MALFORMED zero-weight row (non-finite value or non-integer season) is NOT
   // a trustworthy veto — it must be a no-op, never erasing good posterior mass.
   let mal = seed();
-  mal = updatePosterior(mal, { value: 9, weight: 2, season: S, gameId: "gMal" });
+  mal = updatePosterior(mal, { value: 9, weight: 2, season: S, gameId: g("gMal") });
   const malState = mal;
-  mal = updatePosterior(mal, { value: NaN, weight: 0, season: S, gameId: "gMal" });
+  mal = updatePosterior(mal, { value: NaN, weight: 0, season: S, gameId: g("gMal") });
   ok(mal === malState, "a weight-0 row with a NaN value is a malformed no-op (same state ref), not a veto");
-  ok(posteriorIncludesGame(mal, "gMal") && approx(posteriorMean(combineSeasonWindow(mal, S)), 9), "the folded game survives a malformed zero-weight correction");
-  mal = updatePosterior(mal, { value: 5, weight: 0, season: 2026.5, gameId: "gMal" });
-  ok(posteriorIncludesGame(mal, "gMal"), "a weight-0 row with a non-integer season does not erase the folded game either");
+  ok(posteriorIncludesGame(mal, g("gMal")) && approx(posteriorMean(combineSeasonWindow(mal, S)), 9), "the folded game survives a malformed zero-weight correction");
+  mal = updatePosterior(mal, { value: 5, weight: 0, season: 2026.5, gameId: g("gMal") });
+  ok(posteriorIncludesGame(mal, g("gMal")), "a weight-0 row with a non-integer season does not erase the folded game either");
 }
 
 // ── No self-update: the game being predicted is refused ──────────────────────
 {
   let st = seed();
   const before = combineSeasonWindow(st, S);
-  st = updatePosterior(st, { value: 9, weight: 1, season: S, gameId: "target" }, { excludeGameId: "target" });
+  st = updatePosterior(st, { value: 9, weight: 1, season: S, gameId: g("target") }, { excludeGameId: g("target") });
   const after = combineSeasonWindow(st, S);
   ok(before.sumW === after.sumW && after.count === 0, "an observation from the target game is refused (no self-update)");
-  ok(!posteriorIncludesGame(st, "target"), "refused game is not in lineage");
+  ok(!posteriorIncludesGame(st, g("target")), "refused game is not in lineage");
+}
+
+// ── obs.gameId must be canonical (fail closed on a non-canonical obs id) ──────
+{
+  // A bare/native obs.gameId is a contract violation and must be refused — never
+  // stored under, or compared against, a mismatched key space.
+  let st = seed();
+  st = updatePosterior(st, { value: 9, weight: 1, season: S, gameId: "TARGET" }, { excludeGameId: "nba:game:TARGET" });
+  ok(combineSeasonWindow(st, S).count === 0 && !posteriorIncludesGame(st, "nba:game:TARGET"), "a bare obs.gameId against a canonical excludeGameId is refused, never folded");
+  // Refused regardless of excludeGameId: a bare obs.gameId never folds.
+  let st2 = seed();
+  st2 = updatePosterior(st2, { value: 9, weight: 1, season: S, gameId: "OTHER" });
+  ok(combineSeasonWindow(st2, S).count === 0, "a bare obs.gameId is refused even with no excludeGameId");
+  // A wrong-kind / blank-native obs.gameId is likewise refused.
+  let st3 = seed();
+  st3 = updatePosterior(st3, { value: 9, weight: 1, season: S, gameId: "nba:player:1" });
+  ok(combineSeasonWindow(st3, S).count === 0, "a wrong-kind (non-game) obs.gameId is refused");
+  let st4 = seed();
+  st4 = updatePosterior(st4, { value: 9, weight: 1, season: S, gameId: "nba:game:   " });
+  ok(combineSeasonWindow(st4, S).count === 0, "a blank-native obs.gameId is refused");
+  // A whitespaced canonical obs.gameId is normalized (valid) and folds.
+  let st5 = seed();
+  st5 = updatePosterior(st5, { value: 9, weight: 1, season: S, gameId: "nba:game:OK " });
+  ok(posteriorIncludesGame(st5, "nba:game:OK"), "a whitespaced canonical obs.gameId normalizes and folds under the canonical key");
 }
 
 // ── Game-id normalization: self-update + dedupe survive format variants ──────
 {
-  // A non-normalized obs.gameId must still be caught by the self-update guard
-  // against a canonical excludeGameId — else the target game leaks in.
+  // A non-normalized (but canonical) obs.gameId must still be caught by the
+  // self-update guard against a canonical excludeGameId — else the target leaks.
   let st = seed();
   st = updatePosterior(st, { value: 9, weight: 1, season: S, gameId: "nba:game:TARGET " }, { excludeGameId: "nba:game:TARGET" });
   ok(combineSeasonWindow(st, S).count === 0 && !posteriorIncludesGame(st, "nba:game:TARGET"), "a whitespaced obs.gameId is still refused against a canonical excludeGameId");
@@ -216,21 +244,21 @@ function seed() {
 // ── Determinism: order-independent, sorted lineage ───────────────────────────
 {
   let a = seed();
-  a = updatePosterior(a, { value: 3, weight: 1, season: S, gameId: "b" });
-  a = updatePosterior(a, { value: 7, weight: 2, season: S, gameId: "a" });
+  a = updatePosterior(a, { value: 3, weight: 1, season: S, gameId: g("b") });
+  a = updatePosterior(a, { value: 7, weight: 2, season: S, gameId: g("a") });
   let b = seed();
-  b = updatePosterior(b, { value: 7, weight: 2, season: S, gameId: "a" });
-  b = updatePosterior(b, { value: 3, weight: 1, season: S, gameId: "b" });
+  b = updatePosterior(b, { value: 7, weight: 2, season: S, gameId: g("a") });
+  b = updatePosterior(b, { value: 3, weight: 1, season: S, gameId: g("b") });
   ok(JSON.stringify(a.bySeason) === JSON.stringify(b.bySeason), "state is independent of insertion order");
-  ok(JSON.stringify(a.bySeason[S].gameIds) === JSON.stringify(["a", "b"]), "lineage game ids are sorted");
+  ok(JSON.stringify(a.bySeason[S].gameIds) === JSON.stringify([g("a"), g("b")]), "lineage game ids are sorted");
 }
 
 // ── Rolling window: current + 2 priors, oldest drops on rollover ─────────────
 {
   let st = seed();
-  st = updatePosterior(st, { value: 1, weight: 1, season: 2024, gameId: "g24" });
-  st = updatePosterior(st, { value: 1, weight: 1, season: 2025, gameId: "g25" });
-  st = updatePosterior(st, { value: 1, weight: 1, season: 2026, gameId: "g26" });
+  st = updatePosterior(st, { value: 1, weight: 1, season: 2024, gameId: g("g24") });
+  st = updatePosterior(st, { value: 1, weight: 1, season: 2025, gameId: g("g25") });
+  st = updatePosterior(st, { value: 1, weight: 1, season: 2026, gameId: g("g26") });
   ok(combineSeasonWindow(st, 2026).seasonsIncluded.join(",") === "2024,2025,2026", "window @2026 includes current + 2 priors");
   ok(combineSeasonWindow(st, 2027).seasonsIncluded.join(",") === "2025,2026", "rollover @2027 drops 2024 (stored state unchanged)");
   ok(st.bySeason[2024] !== undefined, "rollover is a VIEW — the oldest season's stored stats are not deleted");
@@ -251,13 +279,13 @@ function seed() {
   ok(approx(shrunkPosteriorMean(combineSeasonWindow(seed(), S), prior), 0), "ESS 0 → exactly the prior mean");
   // Low ESS → shrunk hard toward the prior.
   let low = seed();
-  low = updatePosterior(low, { value: 10, weight: 1, season: S, gameId: "g1" });
+  low = updatePosterior(low, { value: 10, weight: 1, season: S, gameId: g("g1") });
   const lowShrunk = shrunkPosteriorMean(combineSeasonWindow(low, S), prior)!;
   ok(lowShrunk > 0 && lowShrunk < 1, "low ESS (1) vs strong prior (10) → mean pulled near prior");
   ok(approx(lowShrunk, (1 * 10 + 10 * 0) / 11), "shrinkage = (ESS·data + strength·prior)/(ESS+strength)");
   // High ESS → approaches the data mean.
   let high = seed();
-  for (let i = 0; i < 200; i++) high = updatePosterior(high, { value: 10, weight: 1, season: S, gameId: `g${i}` });
+  for (let i = 0; i < 200; i++) high = updatePosterior(high, { value: 10, weight: 1, season: S, gameId: g(`g${i}`) });
   const highShrunk = shrunkPosteriorMean(combineSeasonWindow(high, S), prior)!;
   ok(highShrunk > 9.4, "high ESS overwhelms the prior, approaching the data mean 10");
 }
