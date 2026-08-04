@@ -69,9 +69,12 @@ export function checkFeatureLeakage(
     if (knownMs > predMs) violations.push("future_knownAt");
   }
 
+  // Guard with Array.isArray: the same-game check runs independently of the
+  // structural check above, so it must never throw (or apply string-substring
+  // semantics) on a malformed, non-array `derivedFromGameIds`.
   if (
     ctx.targetGameId != null &&
-    row.derivedFromGameIds != null &&
+    Array.isArray(row.derivedFromGameIds) &&
     row.derivedFromGameIds.includes(ctx.targetGameId)
   ) {
     violations.push("same_game_self_update");

@@ -98,6 +98,13 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(!isStructurallyValidFeatureRow(row({ entityCanonicalId: "garbage" })), "unparseable canonical id is invalid");
   ok(!isStructurallyValidFeatureRow(row({ sourceId: "" })), "empty sourceId is invalid");
   ok(isStructurallyValidFeatureRow(row({ entityCanonicalId: "nba:team:5", entityKind: "team" })), "a consistent team identity is valid");
+  // Provenance, when present, must be an array of strings (jsonb-safe).
+  ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: {} as never })), "non-array derivedFromGameIds is invalid");
+  ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: "g1" as never })), "string derivedFromGameIds is invalid");
+  ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: [1, 2] as never })), "array of non-strings is invalid");
+  ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: ["g1", "g2"] })), "array of strings is valid");
+  ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: [] })), "empty provenance array is valid");
+  ok(isStructurallyValidFeatureRow(row()), "absent derivedFromGameIds is valid");
   ok(Number.isFinite(instantMs("2026-01-10T05:00:00.000Z")), "ISO instant with Z parses to finite ms");
   ok(Number.isFinite(instantMs("2026-01-10T05:00:00-05:00")), "ISO instant with explicit offset parses");
   ok(!Number.isFinite(instantMs("garbage")), "garbage instant → NaN");

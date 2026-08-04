@@ -122,6 +122,15 @@ export function isStructurallyValidFeatureRow(row: AsOfFeatureRow): boolean {
   if (parsedId.sport !== row.sport) return false;
   if (parsedId.kind !== row.entityKind) return false;
 
+  // Provenance, when present, must be an ARRAY OF STRINGS. A persisted/provider
+  // row could carry `{}` or a JSON string in this jsonb-backed field; the type
+  // annotation is not a runtime guarantee. A malformed value must fail here so
+  // the same-game guard never runs `.includes` on a non-array.
+  if (row.derivedFromGameIds !== undefined) {
+    if (!Array.isArray(row.derivedFromGameIds)) return false;
+    if (!row.derivedFromGameIds.every((g) => typeof g === "string")) return false;
+  }
+
   // `observed_zero` means a GENUINELY MEASURED zero — it must carry exactly 0.
   // A nonzero value under this state would defeat the measured-zero distinction.
   if (row.state === "observed_zero") {

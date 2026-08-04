@@ -91,9 +91,12 @@ function isPreferred(candidate: AsOfFeatureRow, incumbent: AsOfFeatureRow): bool
 function isolateRow(row: AsOfFeatureRow): AsOfFeatureRow {
   const copy: AsOfFeatureRow = {
     ...row,
-    derivedFromGameIds: row.derivedFromGameIds
+    // Array.isArray (not truthiness): a malformed non-array provenance would make
+    // the spread throw. Copy only a real array; otherwise carry it through as-is
+    // so structural validation (not this isolation step) is what rejects it.
+    derivedFromGameIds: Array.isArray(row.derivedFromGameIds)
       ? Object.freeze([...row.derivedFromGameIds])
-      : undefined,
+      : row.derivedFromGameIds,
   };
   return Object.freeze(copy);
 }

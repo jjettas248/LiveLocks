@@ -87,6 +87,18 @@ const ctx = (over: Partial<LeakageContext> = {}): LeakageContext => ({ predictio
   // A state outside the enum (typo) can no longer clear the firewall.
   const r3 = checkFeatureLeakage(row({ state: "observd" as never, value: null }), ctx());
   ok(!r3.ok && r3.violations.includes("structural_invalid"), "enum-invalid state → structural_invalid (cannot enter inputs)");
+  // Malformed provenance (a non-array) must not throw and must not be treated as
+  // a same-game match via string semantics — the row is structurally invalid.
+  let threw = false;
+  let malformed: ReturnType<typeof checkFeatureLeakage> | undefined;
+  try {
+    malformed = checkFeatureLeakage(row({ derivedFromGameIds: {} as never }), ctx({ targetGameId: "g1" }));
+  } catch {
+    threw = true;
+  }
+  ok(!threw, "malformed derivedFromGameIds does not throw in the firewall");
+  ok(!!malformed && !malformed.ok && malformed.violations.includes("structural_invalid"), "malformed provenance → structural_invalid");
+  ok(!!malformed && !malformed.violations.includes("same_game_self_update"), "same-game guard is skipped for non-array provenance (no string-substring match)");
 }
 
 // ── multiple violations are all reported ─────────────────────────────────────
