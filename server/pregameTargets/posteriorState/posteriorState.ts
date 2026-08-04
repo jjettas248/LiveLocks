@@ -304,13 +304,19 @@ export const DEFAULT_SEASON_WINDOW = 3; // current + 2 priors
  * [currentSeason - (windowSize-1), currentSeason]. Seasons outside the window
  * are excluded — this is the rollover: when `currentSeason` advances, the oldest
  * season silently leaves the combined view without any stored state changing.
+ *
+ * Fails CLOSED on a malformed window: without a finite integer anchor and a
+ * finite positive size, `oldest` would be NaN/±Infinity and the rollover filter
+ * would stop excluding stale seasons (a NaN window would pull in ALL history and
+ * corrupt the mean/ESS). A non-integer/non-finite `currentSeason` yields an
+ * EMPTY window; a non-finite or <1 `windowSize` clamps to the narrowest safe
+ * window (current season only).
  */
 export function combineSeasonWindow(
   state: PosteriorState,
   currentSeason: number,
   windowSize: number = DEFAULT_SEASON_WINDOW,
 ): CombinedStats {
-  const oldest = currentSeason - (windowSize - 1);
   const combined: CombinedStats = {
     sumW: 0,
     sumWX: 0,
@@ -319,6 +325,9 @@ export function combineSeasonWindow(
     count: 0,
     seasonsIncluded: [],
   };
+  if (!Number.isInteger(currentSeason)) return combined;
+  const window = Number.isFinite(windowSize) ? Math.max(1, Math.trunc(windowSize)) : 1;
+  const oldest = currentSeason - (window - 1);
   for (const key of Object.keys(state.bySeason)) {
     const season = Number(key);
     if (season < oldest || season > currentSeason) continue;

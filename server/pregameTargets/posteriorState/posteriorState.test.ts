@@ -183,6 +183,14 @@ function seed() {
   ok(combineSeasonWindow(st, 2026).seasonsIncluded.join(",") === "2024,2025,2026", "window @2026 includes current + 2 priors");
   ok(combineSeasonWindow(st, 2027).seasonsIncluded.join(",") === "2025,2026", "rollover @2027 drops 2024 (stored state unchanged)");
   ok(st.bySeason[2024] !== undefined, "rollover is a VIEW — the oldest season's stored stats are not deleted");
+  // A malformed window must fail closed, never pull in ALL history.
+  ok(combineSeasonWindow(st, NaN).seasonsIncluded.length === 0, "NaN currentSeason → empty window (fail closed, not all history)");
+  ok(combineSeasonWindow(st, Infinity).seasonsIncluded.length === 0, "Infinity currentSeason → empty window");
+  ok(combineSeasonWindow(st, 2026.5).seasonsIncluded.length === 0, "non-integer currentSeason → empty window");
+  ok(combineSeasonWindow(st, 2026, NaN).seasonsIncluded.join(",") === "2026", "NaN windowSize → narrowest safe window (current season only), not all history");
+  ok(combineSeasonWindow(st, 2026, Infinity).seasonsIncluded.join(",") === "2026", "Infinity windowSize → current season only");
+  ok(combineSeasonWindow(st, 2026, 0).seasonsIncluded.join(",") === "2026", "windowSize 0 clamps to 1 (current season only)");
+  ok(combineSeasonWindow(st, 2026, -5).seasonsIncluded.join(",") === "2026", "negative windowSize clamps to 1");
 }
 
 // ── Prior-mass guard at ESS boundaries ───────────────────────────────────────
