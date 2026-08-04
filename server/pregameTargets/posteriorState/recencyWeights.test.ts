@@ -84,6 +84,19 @@ const approx = (a: number, b: number, eps = 1e-9) => Math.abs(a - b) < eps;
     const infW = { ...DEFAULT_RECENCY_CONFIG, maxSeasonOffset: Infinity };
     ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 5, featureClass: "skill" }, infW).season === 0, "Infinity maxSeasonOffset → still drops beyond the window");
   }
+  // A non-finite half-life config must not silently disable age decay. Infinity
+  // half-life would make age/halfLife = 0 → 0.5^0 = 1 (full recency for any age);
+  // require a finite positive half-life so a bad config fails SAFE toward 0.
+  {
+    const stale = { ageDays: 1000, seasonOffset: 0, featureClass: "skill" as const };
+    const inf = { ...DEFAULT_RECENCY_CONFIG, halfLifeDaysByClass: { ...DEFAULT_RECENCY_CONFIG.halfLifeDaysByClass, skill: Infinity } };
+    ok(computeRecencyWeight(stale, inf).recency === 0, "Infinity half-life → recency 0 for a stale observation (not 1)");
+    const nan = { ...DEFAULT_RECENCY_CONFIG, halfLifeDaysByClass: { ...DEFAULT_RECENCY_CONFIG.halfLifeDaysByClass, skill: NaN } };
+    ok(computeRecencyWeight(stale, nan).recency === 0, "NaN half-life → recency 0 (fail-safe, not NaN)");
+    ok(Number.isFinite(computeRecencyWeight(stale, nan).weight), "NaN half-life → finite weight");
+    const neg = { ...DEFAULT_RECENCY_CONFIG, halfLifeDaysByClass: { ...DEFAULT_RECENCY_CONFIG.halfLifeDaysByClass, skill: -30 } };
+    ok(computeRecencyWeight(stale, neg).recency === 0, "non-positive half-life → recency 0");
+  }
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", dataQuality: 2 }).quality === 1, "quality clamped to 1");
   ok(computeRecencyWeight({ ageDays: 0, seasonOffset: 0, featureClass: "skill", contextSimilarity: -1 }).context === 0, "negative context clamped to 0");
   ok(computeRecencyWeight({ ageDays: -10, seasonOffset: 0, featureClass: "skill" }).recency === 1, "negative age clamped to 0 → recency 1");

@@ -111,10 +111,18 @@ export function computeRecencyWeight(
   // Recency factor — exponential half-life decay on age. Negative age (a fact
   // "from the future" relative to the decision) is clamped to 0 age = weight 1;
   // the leakage firewall, not this function, rejects future knownAt.
+  // Require a FINITE positive half-life. An experiment supplying a non-finite
+  // half-life (Infinity/NaN) would otherwise slip through: `Infinity > 0` is
+  // true and `age / Infinity` is 0, so `0.5^0 = 1` would silently disable age
+  // decay entirely — even a very stale observation would keep full recency.
+  // Same fail-safe discipline as the clamped seasonDecay / continuityFloor /
+  // maxSeasonOffset knobs above: a bad config degrades toward 0, never to 1.
   const halfLife = config.halfLifeDaysByClass[inputs.featureClass];
   const age = Number.isFinite(inputs.ageDays) ? Math.max(0, inputs.ageDays) : Infinity;
   const recency =
-    halfLife > 0 && Number.isFinite(age) ? Math.pow(0.5, age / halfLife) : 0;
+    Number.isFinite(halfLife) && halfLife > 0 && Number.isFinite(age)
+      ? Math.pow(0.5, age / halfLife)
+      : 0;
 
   // Clamp the CONFIGURED floor to [0,1] — an experiment passing a non-finite or
   // out-of-range floor must not break the advertised [0,1] weight invariant
