@@ -16,7 +16,7 @@ Script: `server/mlb/pregamePowerRadar/hrProbabilityV2/scripts/auditSavantFields.
 | Run | Env | Result |
 |---|---|---|
 | 2026-08-02, this sandbox | agent-proxied egress | **HTTP 403 from `baseballsavant.mlb.com` → INCONCLUSIVE.** The agent proxy is non-selective and Savant is not in its no-proxy allowlist; Savant rejects the proxied request. |
-| 2026-08-04, this sandbox (PR7 pre-gate re-run) | agent-proxied egress | **HTTP 403 again → still INCONCLUSIVE.** Re-ran `auditSavantFields.ts` (player 592450, 2025-04-01..15). Proxy `__agentproxy/status`: `selective:false`, Savant not in `noProxy`, `recentRelayFailures:[]` — i.e. an application-level block by Savant, not a TLS/proxy fault. The five location fields therefore remain **UNVERIFIED**; the spike must be run in the production/Railway environment (where `fetchBaseballSavantData` succeeds daily) before PR7 can be authorized. |
+| 2026-08-04, this sandbox (PR7 pre-gate re-run) | agent-proxied egress | **HTTP 403 again → still INCONCLUSIVE.** Re-ran `auditSavantFields.ts` (player 592450, 2025-04-01..15). Proxy `__agentproxy/status`: `selective:false`, Savant not in `noProxy`, `recentRelayFailures:[]`. The 403 came back through the proxy with no relay failure observed; **whether the block originates at Savant or at an intermediary cannot be proven from this environment.** Either way, the five location fields remain **UNVERIFIED**; the spike must be run in the production/Railway environment (where `fetchBaseballSavantData` succeeds daily) before PR7 can be authorized. |
 
 **Consequence (fail-closed):** every field whose live presence this spike could not confirm is **UNVERIFIED → UNAUTHORIZED** until the spike is re-run where Savant is reachable (the production/Railway environment, where `fetchBaseballSavantData` already succeeds daily). The spike must be re-run and its per-field coverage recorded in this table before the zone gate (PR7) or bat-speed/official-barrel features may be authorized.
 
@@ -34,9 +34,18 @@ columns below — so their presence is established by production runtime, not by
 sandbox spike. These are the columns the current parser consumes:
 
 `game_pk, game_date, player_name, pitch_type, events, description, stand, p_throws,
-launch_speed, launch_angle, estimated_ba_using_speedangle,
+launch_speed, launch_angle, launch_speed_angle, estimated_ba_using_speedangle,
 estimated_slg_using_speedangle, bb_type, hc_x, hc_y` (plus `bat_speed`/`swing_length`
 consumed by the shadow bat-tracking aggregator, coverage 2023+ only).
+
+> **Correction (2026-08-04):** `launch_speed_angle` **is** parsed by production today
+> (`dataSources.ts` reads column `launch_speed_angle` and classifies it — e.g. the
+> `toppedPct` soft-gate input, `lsa==2`). Its **presence is therefore established by
+> production runtime**, exactly like the other §2 columns; the earlier "pending spike"
+> wording below was inaccurate as to availability. What is NOT yet adopted is *using the
+> official barrel classification* (`lsa==6`) as the barrel RATE — production still uses
+> the EV≥98 & LA∈[20,35] **proxy**. That is a **modeling choice**, not a data-availability
+> gate, and is deferred to the fitting phase; it does not depend on the Savant spike.
 
 ## 3. Per-source feasibility
 
@@ -44,7 +53,7 @@ consumed by the shadow bat-tracking aggregator, coverage 2023+ only).
 |---|---|---|---|---|
 | Already used in prod | ✅ (`dataSources.ts`) | ✅ (rosters/lineups/probables/splits) | ✅ (weather) | ✅ (display only) |
 | Commercial-use / licensing for a paid product | **UNRESOLVED — SIGN-OFF REQUIRED** | UNRESOLVED — sign-off | Open-Meteo non-commercial vs commercial tier — **sign-off** | contracted (display only) |
-| Historical coverage | season CSVs date-bounded; bat_speed 2023+; `launch_speed_angle` (official barrel) 2015+ **pending spike** | current only for lineups/probables | forecasts not archived | n/a to model |
+| Historical coverage | season CSVs date-bounded; bat_speed 2023+; `launch_speed_angle` **present & parsed in prod today** (official-barrel-rate *adoption* is a deferred modeling choice, not an availability gate) | current only for lineups/probables | forecasts not archived | n/a to model |
 | Cadence vs 6am-ET slate build | daily (prod cache 4h) | daily | hourly | n/a |
 | Endpoint/rate limits, bulk allowance | **no per-card calls** (slate-level, cached) — verify bulk quota | existing usage | existing usage | quota-managed |
 | Cost at slate volume | reuses already-fetched prod responses → no new spend | existing | existing | n/a |
@@ -77,10 +86,16 @@ These are frozen HERE (before any Test set) and copied into `plateHrV2GateSpec` 
 - Identity/context: `game_pk, game_date, player_name, batter, pitcher, events, description`
 - Handedness: `stand, p_throws`
 - Pitch type: `pitch_type` (exact code)
-- Contact quality: `launch_speed, launch_angle, estimated_ba_using_speedangle,
-  estimated_slg_using_speedangle, estimated_woba_using_speedangle, bb_type, hc_x, hc_y`
+- Contact quality: `launch_speed, launch_angle, launch_speed_angle,
+  estimated_ba_using_speedangle, estimated_slg_using_speedangle,
+  estimated_woba_using_speedangle, bb_type, hc_x, hc_y`
   (PR4.1: `estimated_woba_using_speedangle` authorized here — production already
-  reads it as `xwOBASeason`; used as an xwOBA-on-contact statistic, never as P(HR|BBE))
+  reads it as `xwOBASeason`; used as an xwOBA-on-contact statistic, never as P(HR|BBE).
+  2026-08-04: `launch_speed_angle` authorized here — production already parses it
+  (§2). Its official-barrel classification `lsa==6` may be *adopted* as the barrel
+  rate at the fitting phase; until then Upgrade 1 uses the EV≥98 & LA∈[20,35]
+  **proxy**, labeled a proxy, never "official barrel". This is a modeling choice,
+  not a data-availability gate.)
 
 **AUTHORIZED-CONDITIONAL** (present in prod but coverage-limited — capture allowed, use gated):
 
@@ -88,8 +103,6 @@ These are frozen HERE (before any Test set) and copied into `plateHrV2GateSpec` 
 
 **UNAUTHORIZED — pending re-run of the §1 spike against live Savant (fail-closed):**
 
-- Official barrel: `launch_speed_angle` → until verified, Upgrade 1 uses the existing
-  **EV≥98 & LA∈[20,35] barrel proxy** (labeled a proxy, never "official barrel").
 - Pitch **location / zone**: `plate_x, plate_z, zone, sz_top, sz_bot` → **PR7 (Upgrade 2A)
   is NO-GO** until all five are confirmed present and ≥ 90% populated. No proxy may be
   labeled as zone modeling.
@@ -98,7 +111,7 @@ These are frozen HERE (before any Test set) and copied into `plateHrV2GateSpec` 
 
 | Item | Decision |
 |---|---|
-| PR3 exact-pitch sufficient stats (Upgrade 1) | **GO** — from AUTHORIZED fields; barrel via proxy until `launch_speed_angle` verified. |
+| PR3 exact-pitch sufficient stats (Upgrade 1) | **GO** — from AUTHORIZED fields. `launch_speed_angle` is present & parsed today; barrel uses the EV/LA **proxy** by modeling choice (official `lsa==6` adoption deferred to fitting), not a data gap. |
 | PR5 recent-contact windows (Upgrade 2B) | **GO** — from AUTHORIZED contact-quality fields + `contact_events`. |
 | PR7 pitch×zone (Upgrade 2A) | **NO-GO (deferred)** — location fields UNVERIFIED (§1). Re-run spike in prod; revisit. |
 | Bat-speed feature | **CONDITIONAL GO** — 2023+ only, sample-gated, no-op otherwise. |
