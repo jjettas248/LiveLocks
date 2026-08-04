@@ -13,7 +13,12 @@
 import type { SignalDriver } from "./signalDrivers";
 
 // ── Vocabularies ──────────────────────────────────────────────────────
-export type Sport = "mlb" | "nba" | "ncaab";
+// `nfl` is a CONTRACT-ONLY member (PR2, migration plan C3). It exists so the
+// type system can carry NFL through shared contracts; NFL is NOT operational —
+// there is no NFL ingestion, provider adapter, projection/calibration/signal
+// logic, entitlement, or route yet (later PRs). No tier grants NFL access, and
+// every existing MLB/NBA/NCAAB behavior is preserved exactly.
+export type Sport = "mlb" | "nba" | "ncaab" | "nfl";
 
 export type LifecycleState =
   | "watch"   // surfaced but not yet bettable; building evidence
