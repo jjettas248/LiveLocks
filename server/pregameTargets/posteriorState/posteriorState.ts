@@ -91,6 +91,37 @@ export function posteriorIncludesGame(state: PosteriorState, gameId: string): bo
   return false;
 }
 
+/**
+ * Remove a single game's contribution from a season's sufficient statistics
+ * (subtract its sums, drop it from `byGame`/`gameIds`, decrement `count`).
+ * Returns the reduced season, or `null` when the season is left completely
+ * empty (no games and no gameless folds) so the caller can delete the key and
+ * keep serialization free of zeroed phantom seasons.
+ */
+function removeGameFromSeason(
+  s: SeasonSufficientStats,
+  gameId: string,
+  old: GameContribution,
+): SeasonSufficientStats | null {
+  const byGame: Record<string, GameContribution> = { ...s.byGame };
+  delete byGame[gameId];
+  const gameIds = Object.keys(byGame).sort();
+  const count = s.count - 1;
+  if (count <= 0 && s.gamelessCount === 0) return null;
+  const sortedByGame: Record<string, GameContribution> = {};
+  for (const k of gameIds) sortedByGame[k] = byGame[k];
+  return {
+    sumW: s.sumW - old.w,
+    sumWX: s.sumWX - old.wx,
+    sumWX2: s.sumWX2 - old.wx2,
+    sumW2: s.sumW2 - old.w2,
+    count,
+    gameIds,
+    byGame: sortedByGame,
+    gamelessCount: s.gamelessCount,
+  };
+}
+
 export interface UpdatePosteriorOptions {
   /**
    * Canonical id of the game being predicted. An observation drawn from this
@@ -114,6 +145,13 @@ export interface UpdatePosteriorOptions {
  * true no-op (delta 0); a corrected value moves the posterior. Game count is
  * unchanged on a correction. A gameless observation is purely additive (it can
  * neither be de-duplicated nor corrected). Deterministic; keys kept sorted.
+ *
+ * A game is folded into AT MOST ONE season. If a correction also fixes the
+ * season label (a backfill re-assigning the same canonical game to a different
+ * season), the stale contribution is first REMOVED from its old season before
+ * the corrected row is applied to the new one — otherwise `combineSeasonWindow`
+ * could include both seasons and double-count the same game (keeping the stale
+ * value alongside the corrected one).
  */
 export function updatePosterior(
   state: PosteriorState,
@@ -127,7 +165,26 @@ export function updatePosterior(
     return state; // no self-update
   }
 
-  const prev = state.bySeason[obs.season] ?? emptySeasonStats();
+  // Work against an editable clone of bySeason: a cross-season correction below
+  // may modify TWO seasons (the old one loses the game, the new one gains it).
+  const bySeasonNext: Record<number, SeasonSufficientStats> = { ...state.bySeason };
+
+  // Cross-season relocation: if this game is already folded under a DIFFERENT
+  // season, strip its stale contribution from that season first so it survives
+  // in exactly one season (the corrected one) and can never be double-counted.
+  if (obs.gameId != null) {
+    for (const key of Object.keys(bySeasonNext)) {
+      const seasonNum = Number(key);
+      if (seasonNum === obs.season) continue;
+      const stale = bySeasonNext[seasonNum].byGame[obs.gameId];
+      if (stale === undefined) continue;
+      const reduced = removeGameFromSeason(bySeasonNext[seasonNum], obs.gameId, stale);
+      if (reduced === null) delete bySeasonNext[seasonNum];
+      else bySeasonNext[seasonNum] = reduced;
+    }
+  }
+
+  const prev = bySeasonNext[obs.season] ?? emptySeasonStats();
   const w = obs.weight;
   const x = obs.value;
   const contribution: GameContribution = { w, wx: w * x, wx2: w * x * x, w2: w * w };
@@ -184,7 +241,7 @@ export function updatePosterior(
 
   return {
     ...state,
-    bySeason: { ...state.bySeason, [obs.season]: nextSeason },
+    bySeason: { ...bySeasonNext, [obs.season]: nextSeason },
   };
 }
 

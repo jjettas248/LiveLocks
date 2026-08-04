@@ -135,7 +135,7 @@ const origin: ReplayOrigin = {
 // ── Stored rows are detached from caller mutation (append-only immutability) ─
 {
   const store = createInMemoryAsOfFeatureStore();
-  const mutable = feat({ featureKey: "mut", knownAt: beforeT, value: 0.5, sourceId: "sm", derivedFromGameIds: ["g1"] });
+  const mutable = feat({ featureKey: "mut", knownAt: beforeT, value: 0.5, sourceId: "sm", derivedFromGameIds: ["nba:game:1"] });
   store.write(mutable);
   const o: ReplayOrigin = { ...origin, featureKeys: ["mut"], targetGameId: undefined };
   const before = serializeReplayResult(replayOrigin(store, o));

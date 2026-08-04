@@ -22,7 +22,7 @@
 // derivation from these instants must still go through the ET date helpers.
 
 import type { PregameEntityKind, PregameSport } from "./canonicalEntities";
-import { isoInstantMs, parseCanonicalId } from "./canonicalEntities";
+import { buildCanonicalId, isoInstantMs, parseCanonicalId } from "./canonicalEntities";
 
 /**
  * The observability state of a feature value. `missing` and `observed_zero` are
@@ -122,15 +122,33 @@ export function isStructurallyValidFeatureRow(row: AsOfFeatureRow): boolean {
   if (parsedId.sport !== row.sport) return false;
   if (parsedId.kind !== row.entityKind) return false;
 
-  // Provenance, when present, must be an ARRAY OF STRINGS. A persisted/provider
-  // row could carry `{}` or a JSON string in this jsonb-backed field; the type
-  // annotation is not a runtime guarantee. A malformed value must fail here so
-  // the same-game guard never runs `.includes` on a non-array. `null` (the
-  // nullable DB column's "no provenance recorded") is treated the same as an
-  // absent value — `!= null` skips both null and undefined.
+  // Provenance, when present, must be an ARRAY OF NORMALIZED CANONICAL `game`
+  // IDS — not merely an array of strings. A persisted/provider row could carry
+  // `{}` or a JSON string in this jsonb-backed field (the type annotation is not
+  // a runtime guarantee), so a non-array must fail here or the same-game guard
+  // would run `.includes` on a non-array. `null` (the nullable DB column's "no
+  // provenance recorded") is treated the same as absent — `!= null` skips both.
+  //
+  // Each entry must additionally be a canonical `game` id in its NORMALIZED form
+  // (same sport, `game` kind, trimmed native id). The leakage firewall detects a
+  // self-update via an EXACT `includes(targetGameId)` match, so a non-canonical
+  // or un-normalized entry (a bare native id, a wrong kind, or `"nba:game:X "`
+  // with trailing whitespace) would pass a string-only check yet silently evade
+  // that match — letting target-game data into the input. Requiring the exact
+  // canonical form here closes that gap: a malformed provenance entry is
+  // `structural_invalid` and dropped, never a false-negative self-update.
   if (row.derivedFromGameIds != null) {
     if (!Array.isArray(row.derivedFromGameIds)) return false;
-    if (!row.derivedFromGameIds.every((g) => typeof g === "string")) return false;
+    for (const g of row.derivedFromGameIds) {
+      if (typeof g !== "string") return false;
+      const parsedGame = parseCanonicalId(g);
+      if (!parsedGame) return false;
+      if (parsedGame.kind !== "game") return false;
+      if (parsedGame.sport !== row.sport) return false;
+      // Reject any non-normalized form (e.g. a trailing-space native id): the
+      // firewall's exact match only recognizes the canonical, trimmed string.
+      if (g !== buildCanonicalId(parsedGame.sport, parsedGame.kind, parsedGame.nativeId)) return false;
+    }
   }
 
   // `observed_zero` means a GENUINELY MEASURED zero — it must carry exactly 0.

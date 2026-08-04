@@ -85,6 +85,34 @@ function seed() {
   ok(effectiveSampleSize(combineSeasonWindow(st, S)) === 1, "still one effective observation after a weight correction");
 }
 
+// ── Cross-season CORRECTION: a game re-labeled to a new season is relocated ──
+{
+  let st = seed();
+  // Fold the same canonical game under the WRONG season first.
+  st = updatePosterior(st, { value: 10, weight: 1, season: 2025, gameId: "gX" });
+  // A backfill correction fixes both the value AND the season label.
+  st = updatePosterior(st, { value: 4, weight: 1, season: 2026, gameId: "gX" });
+  // The game must now live in exactly one season (the corrected 2026), never both.
+  ok(st.bySeason[2025] === undefined, "the stale 2025 season is removed once its only game relocates");
+  ok(st.bySeason[2026]?.byGame["gX"] !== undefined, "the game is present under the corrected 2026 season");
+  ok(posteriorIncludesGame(st, "gX"), "lineage still includes the relocated game");
+  // A window spanning both seasons must see the game ONCE, at the corrected value.
+  const win = combineSeasonWindow(st, 2026); // [2024,2025,2026]
+  ok(win.count === 1, "the relocated game is counted exactly once across the window (no double-count)");
+  ok(approx(posteriorMean(win), 4), "the window sees the corrected value, not the stale one");
+  ok(win.seasonsIncluded.join(",") === "2026", "only the corrected season contributes");
+
+  // If the old season also held OTHER folds, only the relocated game leaves it.
+  let st2 = seed();
+  st2 = updatePosterior(st2, { value: 10, weight: 1, season: 2025, gameId: "gMove" });
+  st2 = updatePosterior(st2, { value: 8, weight: 1, season: 2025, gameId: "gStay" });
+  st2 = updatePosterior(st2, { value: 4, weight: 1, season: 2026, gameId: "gMove" });
+  ok(st2.bySeason[2025]?.byGame["gStay"] !== undefined && st2.bySeason[2025]?.byGame["gMove"] === undefined, "only the relocated game leaves the old season; a co-resident game stays");
+  ok(st2.bySeason[2025]?.count === 1, "old season count drops by exactly one on relocation");
+  const win2 = combineSeasonWindow(st2, 2026);
+  ok(win2.count === 2, "window counts the staying game and the relocated game once each");
+}
+
 // ── No self-update: the game being predicted is refused ──────────────────────
 {
   let st = seed();

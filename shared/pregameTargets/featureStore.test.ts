@@ -99,11 +99,17 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(!isStructurallyValidFeatureRow(row({ entityCanonicalId: "garbage" })), "unparseable canonical id is invalid");
   ok(!isStructurallyValidFeatureRow(row({ sourceId: "" })), "empty sourceId is invalid");
   ok(isStructurallyValidFeatureRow(row({ entityCanonicalId: "nba:team:5", entityKind: "team" })), "a consistent team identity is valid");
-  // Provenance, when present, must be an array of strings (jsonb-safe).
+  // Provenance, when present, must be an array of NORMALIZED CANONICAL game ids
+  // (jsonb-safe) — not merely strings. The firewall's exact self-update match
+  // only recognizes the canonical, trimmed form, so anything else is rejected.
   ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: {} as never })), "non-array derivedFromGameIds is invalid");
-  ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: "g1" as never })), "string derivedFromGameIds is invalid");
+  ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: "nba:game:1" as never })), "string derivedFromGameIds is invalid");
   ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: [1, 2] as never })), "array of non-strings is invalid");
-  ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: ["g1", "g2"] })), "array of strings is valid");
+  ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: ["g1", "g2"] })), "bare (non-canonical) game ids are invalid");
+  ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: ["nba:player:1"] })), "a non-game canonical id in provenance is invalid");
+  ok(!isStructurallyValidFeatureRow(row({ derivedFromGameIds: ["nba:game:1 "] })), "an un-normalized (trailing-space) game id is invalid — the firewall's exact match would miss it");
+  ok(!isStructurallyValidFeatureRow(row({ sport: "nba", derivedFromGameIds: ["mlb:game:1" as never] })), "a cross-sport provenance game id is invalid");
+  ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: ["nba:game:1", "nba:game:2"] })), "array of normalized canonical game ids is valid");
   ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: [] })), "empty provenance array is valid");
   ok(isStructurallyValidFeatureRow(row()), "absent derivedFromGameIds is valid");
   ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: null as never })), "null provenance (nullable DB column round-trip) is treated as absent → valid");
