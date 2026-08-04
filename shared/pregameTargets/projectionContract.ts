@@ -80,25 +80,71 @@ export interface BlindProjection {
 }
 
 /**
- * Price / EV keys that must NEVER appear on a blind projection object. The type
- * already forbids them at compile time; this list backs a RUNTIME guard for
- * untyped data crossing the boundary (a persisted row, a provider payload) so a
- * price/EV leak into the projection core is caught rather than trusted.
+ * Price / EV keys that must NEVER appear on a blind projection object, at ANY
+ * depth. The type already forbids them at compile time; this list backs a
+ * RUNTIME guard for untyped data crossing the boundary (a persisted row, a
+ * provider payload) so a price/EV leak into the projection core is caught rather
+ * than trusted. Covers aliased/spelled-out forms of odds, line, price, edge, EV,
+ * implied probability, sportsbook, and payout; matching is CASE-INSENSITIVE and
+ * separator-insensitive (see `normalizeProjectionKey`), so `Odds`, `american_odds`,
+ * and `americanOdds` all collapse to the same forbidden token.
  */
 export const FORBIDDEN_PROJECTION_KEYS: readonly string[] = [
-  "odds",
-  "americanOdds",
+  // odds
+  "odds", "americanOdds", "decimalOdds", "fractionalOdds", "moneyline",
+  // line
+  "line", "closingLine", "openingLine", "postedLine",
+  // price
   "price",
-  "ev",
-  "expectedValue",
-  "edge",
-  "edgeGap",
-  "bookImplied",
-  "impliedProb",
-  "line",
-  "sportsbook",
-  "clv",
+  // edge
+  "edge", "edgeGap", "edgePct", "modelEdge",
+  // expected value
+  "ev", "expectedValue",
+  // implied probability
+  "impliedProb", "impliedProbability", "impliedOdds", "bookImplied",
+  // sportsbook
+  "sportsbook", "book", "bookmaker",
+  // payout / stake
+  "payout", "stake", "returns",
+  // vig / closing-line value
+  "vig", "juice", "clv",
 ];
+
+/**
+ * Normalize a key for forbidden-key matching: lowercase and strip every
+ * non-alphanumeric character, so case and snake/camel/kebab separators all
+ * collapse (`American_Odds` → `americanodds`). EXACT normalized equality is used
+ * (never substring), so a legitimate field like `confidenceMarginPp`
+ * (→ `confidencemarginpp`) is never caught by the token `margin`/`edge`/etc.
+ */
+export function normalizeProjectionKey(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+const FORBIDDEN_PROJECTION_KEYS_NORMALIZED: ReadonlySet<string> = new Set(
+  FORBIDDEN_PROJECTION_KEYS.map(normalizeProjectionKey),
+);
+
+/**
+ * Deep scan: does `value` (or anything nested inside it — plain objects and
+ * arrays, at any depth) carry a forbidden pricing/EV key? Cycle-safe (a shared
+ * `seen` set) and total (never throws). Only KEYS are inspected — values are
+ * traversed only to reach nested objects, never matched — so a price hidden as
+ * `{ meta: { americanOdds: -110 } }` or `{ legs: [{ odds: 1 }] }` is still caught.
+ */
+function containsForbiddenPricingKey(value: unknown, seen: WeakSet<object>): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if (seen.has(value as object)) return false;
+  seen.add(value as object);
+  if (Array.isArray(value)) {
+    return value.some((v) => containsForbiddenPricingKey(v, seen));
+  }
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (FORBIDDEN_PROJECTION_KEYS_NORMALIZED.has(normalizeProjectionKey(k))) return true;
+    if (containsForbiddenPricingKey(v, seen)) return true;
+  }
+  return false;
+}
 
 export type ProjectionBlindnessViolation =
   | "carries_price_or_ev_field" // a forbidden price/EV key is present
@@ -115,7 +161,10 @@ export type ProjectionBlindnessViolation =
 export function checkProjectionBlindness(obj: Record<string, unknown>): ProjectionBlindnessViolation[] {
   const violations: ProjectionBlindnessViolation[] = [];
 
-  if (FORBIDDEN_PROJECTION_KEYS.some((k) => Object.prototype.hasOwnProperty.call(obj, k))) {
+  // Deep, case-insensitive scan — a forbidden pricing/EV key at ANY depth (a
+  // nested object, an array element) and in ANY spelling (case / separator /
+  // alias) leaks price into the projection core and must be rejected.
+  if (containsForbiddenPricingKey(obj, new WeakSet())) {
     violations.push("carries_price_or_ev_field");
   }
 

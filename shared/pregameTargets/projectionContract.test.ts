@@ -69,15 +69,53 @@ function blind(over: Partial<BlindProjection> = {}): BlindProjection {
 // ── Blindness guard: no price/EV field may appear on a projection ────────────
 {
   ok(isBlindProjection(blind() as unknown as Record<string, unknown>), "a well-formed blind projection passes");
-  // Every forbidden key is individually rejected.
+  // Every forbidden key (incl. aliases + payout) is individually rejected.
   for (const key of FORBIDDEN_PROJECTION_KEYS) {
     const tainted = { ...blind(), [key]: 1 } as unknown as Record<string, unknown>;
     const v = checkProjectionBlindness(tainted);
     ok(v.includes("carries_price_or_ev_field"), `a projection carrying "${key}" is rejected (price/EV leak)`);
   }
-  // A real edge/EV smuggling attempt trips it.
-  ok(!isBlindProjection({ ...blind(), edgeGap: 3.2 } as unknown as Record<string, unknown>), "edgeGap present → not blind");
-  ok(!isBlindProjection({ ...blind(), americanOdds: -120 } as unknown as Record<string, unknown>), "americanOdds present → not blind");
+  // Coverage spot-check across every family the guard must catch.
+  for (const key of ["odds", "line", "price", "edge", "ev", "impliedProbability", "sportsbook", "payout"]) {
+    ok(!isBlindProjection({ ...blind(), [key]: 1 } as unknown as Record<string, unknown>), `family present → not blind: ${key}`);
+  }
+}
+
+// ── Guard is CASE-INSENSITIVE and separator-insensitive ──────────────────────
+{
+  for (const key of ["Odds", "ODDS", "American_Odds", "american-odds", "Sportsbook", "EV", "Implied_Probability", "PayOut"]) {
+    ok(!isBlindProjection({ ...blind(), [key]: 1 } as unknown as Record<string, unknown>), `case/separator variant rejected: ${key}`);
+  }
+}
+
+// ── Guard recurses into NESTED objects and arrays (any depth) ────────────────
+{
+  ok(!isBlindProjection({ ...blind(), meta: { americanOdds: -110 } } as unknown as Record<string, unknown>), "nested object with americanOdds → not blind");
+  ok(!isBlindProjection({ ...blind(), a: { b: { c: { line: 5.5 } } } } as unknown as Record<string, unknown>), "deeply nested line → not blind");
+  ok(!isBlindProjection({ ...blind(), legs: [{ side: "over" }, { price: 100 }] } as unknown as Record<string, unknown>), "array element carrying price → not blind");
+  // A legitimate NESTED non-pricing object must still pass (no false positive).
+  ok(isBlindProjection({ ...blind(), debug: { note: "ok", steps: [{ label: "shrink" }] } } as unknown as Record<string, unknown>), "nested non-pricing metadata is fine (no false positive)");
+  // `confidenceMarginPp` must not be caught by the token "margin" (exact match).
+  ok(isBlindProjection(blind() as unknown as Record<string, unknown>), "confidenceMarginPp is not a forbidden key (exact normalized match, not substring)");
+}
+
+// ── Guard is cycle-safe (never throws / hangs on a cyclic object) ────────────
+{
+  const cyclic: Record<string, unknown> = { ...blind() };
+  cyclic.self = cyclic; // introduce a cycle
+  let threw = false;
+  let result = false;
+  try {
+    result = isBlindProjection(cyclic);
+  } catch {
+    threw = true;
+  }
+  ok(!threw, "a cyclic object does not throw or hang the guard");
+  ok(result, "a cyclic but otherwise-clean projection is still blind");
+  const cyclicTainted: Record<string, unknown> = { ...blind(), nested: {} as Record<string, unknown> };
+  (cyclicTainted.nested as Record<string, unknown>).loop = cyclicTainted.nested;
+  (cyclicTainted.nested as Record<string, unknown>).odds = -110;
+  ok(!isBlindProjection(cyclicTainted), "a cycle does not hide a nested forbidden key");
 }
 
 // ── Probability + margin integrity ───────────────────────────────────────────
