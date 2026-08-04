@@ -125,8 +125,10 @@ export function isStructurallyValidFeatureRow(row: AsOfFeatureRow): boolean {
   // Provenance, when present, must be an ARRAY OF STRINGS. A persisted/provider
   // row could carry `{}` or a JSON string in this jsonb-backed field; the type
   // annotation is not a runtime guarantee. A malformed value must fail here so
-  // the same-game guard never runs `.includes` on a non-array.
-  if (row.derivedFromGameIds !== undefined) {
+  // the same-game guard never runs `.includes` on a non-array. `null` (the
+  // nullable DB column's "no provenance recorded") is treated the same as an
+  // absent value — `!= null` skips both null and undefined.
+  if (row.derivedFromGameIds != null) {
     if (!Array.isArray(row.derivedFromGameIds)) return false;
     if (!row.derivedFromGameIds.every((g) => typeof g === "string")) return false;
   }

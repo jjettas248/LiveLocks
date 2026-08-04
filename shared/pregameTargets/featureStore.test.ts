@@ -105,6 +105,7 @@ function row(over: Partial<AsOfFeatureRow> = {}): AsOfFeatureRow {
   ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: ["g1", "g2"] })), "array of strings is valid");
   ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: [] })), "empty provenance array is valid");
   ok(isStructurallyValidFeatureRow(row()), "absent derivedFromGameIds is valid");
+  ok(isStructurallyValidFeatureRow(row({ derivedFromGameIds: null as never })), "null provenance (nullable DB column round-trip) is treated as absent → valid");
   ok(Number.isFinite(instantMs("2026-01-10T05:00:00.000Z")), "ISO instant with Z parses to finite ms");
   ok(Number.isFinite(instantMs("2026-01-10T05:00:00-05:00")), "ISO instant with explicit offset parses");
   ok(!Number.isFinite(instantMs("garbage")), "garbage instant → NaN");
