@@ -230,6 +230,13 @@ export function resolveCanonicalEntity(
 
   const matches = directory.filter(
     (e) =>
+      // Guard `typeof e.nativeId === "string"` FIRST: `filter` evaluates every
+      // candidate, so a single corrupt directory row with a non-string nativeId
+      // (a jsonb `null`/number) would otherwise throw in `.trim()` /
+      // `buildCanonicalId` and abort resolution — even when another valid row
+      // would have matched — violating the resolver's fail-closed contract. A
+      // malformed row is simply skipped (never matched).
+      typeof e.nativeId === "string" &&
       e.sport === parsed.sport &&
       e.kind === parsed.kind &&
       // Compare native ids in their NORMALIZED (trimmed) form — the same

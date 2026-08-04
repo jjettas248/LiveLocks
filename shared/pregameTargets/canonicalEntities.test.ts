@@ -112,6 +112,31 @@ const dir: EntityDirectoryEntry[] = [
   ok(r2.ok && r2.entity.canonicalId === "nba:player:1", "resolved canonicalId always equals the request, never a mismatched row's id");
 }
 
+// ── a corrupt directory row (non-string nativeId) never aborts resolution ────
+{
+  // A jsonb-backed directory could hand back a null / numeric nativeId; the
+  // resolver must SKIP it (fail closed), never throw in trim()/buildCanonicalId.
+  const corruptOnly: EntityDirectoryEntry[] = [
+    { sport: "nba", kind: "player", nativeId: null as never, canonicalId: "nba:player:1", activeFrom: null, activeTo: null },
+  ];
+  let threw = false;
+  let rc: ReturnType<typeof resolveCanonicalEntity> | undefined;
+  try {
+    rc = resolveCanonicalEntity("nba:player:1", corruptOnly, asOf);
+  } catch {
+    threw = true;
+  }
+  ok(!threw, "a non-string nativeId in the directory does not throw during resolution");
+  ok(!!rc && !rc.ok && rc.reason === "unknown_id", "a corrupt-only directory fails closed → unknown_id");
+  // A corrupt row alongside a valid one must not prevent the valid match.
+  const corruptPlusValid: EntityDirectoryEntry[] = [
+    { sport: "nba", kind: "player", nativeId: 1 as never, canonicalId: "nba:player:1", activeFrom: null, activeTo: null },
+    { sport: "nba", kind: "player", nativeId: "1", canonicalId: "nba:player:1", activeFrom: null, activeTo: null },
+  ];
+  const rv = resolveCanonicalEntity("nba:player:1", corruptPlusValid, asOf);
+  ok(rv.ok && rv.entity.canonicalId === "nba:player:1", "a corrupt row does not abort resolution — the valid row still matches");
+}
+
 // ── offsetless instants are rejected (timezone-independent cutoff) ──────────
 {
   const r = resolveCanonicalEntity("nba:player:1", dir, "2026-01-15T00:00:00"); // no Z/offset
