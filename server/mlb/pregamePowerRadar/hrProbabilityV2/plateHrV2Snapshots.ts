@@ -33,6 +33,11 @@ import {
   type RecentContactFormInputs,
   type RecentContactFormEvidencePayload,
 } from "./recentContactForm";
+import {
+  recomputeStarterBullpenProjectionFromEvidence,
+  STARTER_BULLPEN_PROVIDERS,
+  type StarterBullpenPaPathEvidencePayload,
+} from "./starterBullpenPaPath";
 
 export const EVIDENCE_KINDS = [
   "historical_stat",
@@ -44,6 +49,10 @@ export const EVIDENCE_KINDS = [
   // recentContactForm leaf is reproducibly derived from. Point-in-time rule is
   // identical to historical_stat (dataThroughAt < predictionAsOf ≤ firstPitch).
   "contact_events",
+  // PR6.2: the as-of starter/bullpen PA-path sources + the derived projection they
+  // are reproducibly derived from. A pregame projection knowable at prediction time
+  // → point-in-time rule identical to lineup/probable (availableAt ≤ predictionAsOf).
+  "starter_bullpen",
 ] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
@@ -395,6 +404,74 @@ function validateContactEventsPayload(payload: unknown): { ok: boolean; reasons:
   return { ok: reasons.length === 0, reasons };
 }
 
+const SB_TOP_KEYS = new Set(["sources", "projection"]);
+const SB_SOURCE_KEYS = new Set(["starterWorkload", "opener", "projectedPaBasis", "bullpenComposition", "bullpenVulnerability"]);
+const SB_SUBKEYS: Record<string, Set<string>> = {
+  starterWorkload: new Set(["starterId", "avgBattersFacedPerStart", "avgInningsPerStart"]),
+  opener: new Set(["isOpener", "avgOutsRecordedPerStart"]),
+  projectedPaBasis: new Set(["battingOrderSlot", "expectedTotalPa"]),
+  bullpenComposition: new Set(["relieversExpected", "availabilityNote"]),
+  bullpenVulnerability: new Set(["bullpenHrPer9", "bullpenBarrelAllowedPct", "bullpenSample"]),
+};
+const SB_PROJECTION_KEYS = new Set([
+  "projectedPaVsStarter", "projectedPaVsBullpen", "isOpenerLikely",
+  "bullpenHrPer9", "bullpenBarrelAllowedPct", "confidence", "missingReasons",
+]);
+
+/**
+ * STRICT validation of a starter_bullpen evidence payload (PR6.2): CLOSED top /
+ * source / projection fields; the projection must carry usable exposure (both
+ * segment PAs present — else there is nothing to content-address); and the stored
+ * projection MUST exactly re-derive from its own raw sources
+ * (`recomputeStarterBullpenProjectionFromEvidence`) — a forged projection cannot
+ * survive. Runs at BOTH write and strict read.
+ */
+function validateStarterBullpenPayload(payload: unknown): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (!isPlainObject(payload)) return { ok: false, reasons: ["payload_not_object"] };
+  for (const k of Object.keys(payload)) if (!SB_TOP_KEYS.has(k)) reasons.push(`unexpected_top_field:${k}`);
+
+  const sources = payload.sources;
+  if (!isPlainObject(sources)) reasons.push("sources_missing");
+  else {
+    for (const k of Object.keys(sources)) {
+      if (!SB_SOURCE_KEYS.has(k)) { reasons.push(`unexpected_source_field:${k}`); continue; }
+      const sub = sources[k];
+      if (sub == null) continue;
+      if (!isPlainObject(sub)) { reasons.push(`source_not_object:${k}`); continue; }
+      const allowed = SB_SUBKEYS[k];
+      for (const sk of Object.keys(sub)) if (!allowed.has(sk)) reasons.push(`unexpected_source_subfield:${k}.${sk}`);
+    }
+  }
+
+  const projection = payload.projection;
+  if (!isPlainObject(projection)) reasons.push("projection_missing");
+  else {
+    for (const k of Object.keys(projection)) if (!SB_PROJECTION_KEYS.has(k)) reasons.push(`unexpected_projection_field:${k}`);
+    if (!numOrNullInRange(projection.projectedPaVsStarter, 0, 6) || projection.projectedPaVsStarter == null)
+      reasons.push("projection_no_starter_exposure");
+    if (!numOrNullInRange(projection.projectedPaVsBullpen, 0, 6) || projection.projectedPaVsBullpen == null)
+      reasons.push("projection_no_bullpen_exposure");
+    if (!Array.isArray(projection.missingReasons)) reasons.push("projection_missingReasons_not_array");
+  }
+
+  // Self-consistency: the stored projection must re-derive from its own sources.
+  if (reasons.length === 0) {
+    try {
+      const p = payload as unknown as StarterBullpenPaPathEvidencePayload;
+      const rederived = recomputeStarterBullpenProjectionFromEvidence(p);
+      if (canonicalHash(rederived) !== canonicalHash(p.projection)) {
+        reasons.push("projection_not_rederivable_from_sources");
+      }
+    } catch {
+      reasons.push("projection_recompute_failed");
+    }
+  }
+
+  try { canonicalJson(payload); } catch { reasons.push("payload_noncanonical"); }
+  return { ok: reasons.length === 0, reasons };
+}
+
 /** Evidence-kind-aware payload validation used at BOTH write and strict read. */
 export function validateSourcePayload(kind: EvidenceKind, payload: unknown): { ok: boolean; reasons: string[] } {
   if (kind === "historical_stat") {
@@ -402,6 +479,7 @@ export function validateSourcePayload(kind: EvidenceKind, payload: unknown): { o
     return { ok: r.ok, reasons: r.reasons };
   }
   if (kind === "contact_events") return validateContactEventsPayload(payload);
+  if (kind === "starter_bullpen") return validateStarterBullpenPayload(payload);
   return validateGenericPayload(payload);
 }
 
@@ -647,7 +725,8 @@ export function isSourceEvidenceEligible(
       return { eligible: true, reason: "ok" };
     }
     case "lineup":
-    case "probable": {
+    case "probable":
+    case "starter_bullpen": {
       if (!predictionBeforeFirstPitch) return { eligible: false, reason: "prediction_after_first_pitch" };
       return { eligible: true, reason: "ok" };
     }
@@ -797,6 +876,7 @@ export function evaluatePredictionRowIntegrity(
   if (ids.some((v, i) => v !== sorted[i])) reasons.push("source_ids_not_sorted");
 
   const contactEventsSources: StoredSourceEvidence[] = [];
+  const starterBullpenSources: StoredSourceEvidence[] = [];
   for (const id of ids) {
     const raw = sourceRows.get(id);
     if (raw === undefined) { reasons.push(`missing_source_evidence:${id}`); continue; }
@@ -804,6 +884,7 @@ export function evaluatePredictionRowIntegrity(
     if (!sp.success) { reasons.push(`source_shape_invalid:${id}`); continue; }
     const src = sp.data;
     if (src.evidenceKind === "contact_events") contactEventsSources.push(src);
+    if (src.evidenceKind === "starter_bullpen") starterBullpenSources.push(src);
 
     // Triple identity: map key === stored id === recomputed id.
     if (src.sourceSnapshotId !== id) reasons.push(`source_stored_id_mismatch:${id}`);
@@ -886,6 +967,55 @@ export function evaluatePredictionRowIntegrity(
     }
   }
 
+  // PR6.2: a prediction whose starterBullpen derived group carries usable exposure
+  // (both projected segment PAs present) must be reproducible from a single
+  // content-addressed, batter-bound starter_bullpen source; a no-exposure group must
+  // carry no such evidence. Applies to BOTH V1 and V2 (starterBullpen is in both).
+  if (projection.ok) {
+    const grp = extractStarterBullpenGroup(prediction.derivedFeatures);
+    if (grp == null) {
+      reasons.push("starter_bullpen_group_unreadable");
+    } else {
+      const hasExposure = grp.projectedPaVsStarter != null && grp.projectedPaVsBullpen != null;
+      if (!hasExposure) {
+        if (starterBullpenSources.length > 0) reasons.push("starter_bullpen_unexpected_evidence");
+      } else if (starterBullpenSources.length === 0) {
+        reasons.push("starter_bullpen_evidence_missing");
+      } else if (starterBullpenSources.length > 1) {
+        reasons.push("starter_bullpen_evidence_duplicate");
+      } else {
+        const src = starterBullpenSources[0];
+        const payload = src.authorizedPayload as StarterBullpenPaPathEvidencePayload | undefined;
+        if (src.entityType !== "batter") reasons.push("starter_bullpen_entity_type_mismatch");
+        if (src.entityId !== prediction.batterId) reasons.push("starter_bullpen_batter_mismatch");
+        if (!STARTER_BULLPEN_PROVIDERS.has(src.provider)) reasons.push("starter_bullpen_provider_unauthorized");
+        if (src.schemaVersion !== prediction.featureVersion) reasons.push("starter_bullpen_schema_version_mismatch");
+        if (!isPlainObject(payload) || !isPlainObject(payload.projection)) {
+          reasons.push("starter_bullpen_payload_missing");
+        } else {
+          const pp = payload.projection as Record<string, unknown>;
+          // The stored group's exposure/vulnerability fields must equal the payload's.
+          if (
+            !sameNullableNum(grp.projectedPaVsStarter, pp.projectedPaVsStarter) ||
+            !sameNullableNum(grp.projectedPaVsBullpen, pp.projectedPaVsBullpen) ||
+            !sameNullableNum(grp.bullpenHrPer9, pp.bullpenHrPer9) ||
+            !sameNullableNum(grp.bullpenBarrelAllowedPct, pp.bullpenBarrelAllowedPct)
+          ) {
+            reasons.push("starter_bullpen_group_evidence_mismatch");
+          }
+          // Re-derive the projection from the payload's own raw sources and require
+          // EXACT canonical equality with the stored projection.
+          try {
+            const rederived = recomputeStarterBullpenProjectionFromEvidence(payload);
+            if (canonicalHash(rederived) !== canonicalHash(payload.projection)) {
+              reasons.push("starter_bullpen_not_rederivable");
+            }
+          } catch { reasons.push("starter_bullpen_recompute_failed"); }
+        }
+      }
+    }
+  }
+
   let envHash: string | null = null;
   try { envHash = computePredictionEnvelopeHash(prediction); }
   catch { reasons.push("prediction_features_noncanonical"); }
@@ -913,6 +1043,35 @@ function extractRecentContactFormLeaf(derivedFeatures: unknown): RecentContactFo
   // A NaN means a non-numeric/non-null stored field — treat as unreadable.
   if (Object.values(leaf).some((v) => typeof v === "number" && Number.isNaN(v))) return null;
   return leaf;
+}
+
+/** Exposure/vulnerability fields of the stored starterBullpen derived group (PR6.2). */
+interface StoredStarterBullpenGroup {
+  projectedPaVsStarter: number | null;
+  projectedPaVsBullpen: number | null;
+  bullpenHrPer9: number | null;
+  bullpenBarrelAllowedPct: number | null;
+}
+function extractStarterBullpenGroup(derivedFeatures: unknown): StoredStarterBullpenGroup | null {
+  if (!isPlainObject(derivedFeatures)) return null;
+  const g = derivedFeatures.starterBullpen;
+  if (!isPlainObject(g)) return null;
+  const f = (k: string): number | null => {
+    const v = g[k];
+    return v === null ? null : typeof v === "number" && Number.isFinite(v) ? v : NaN;
+  };
+  const grp: StoredStarterBullpenGroup = {
+    projectedPaVsStarter: f("projectedPaVsStarter"),
+    projectedPaVsBullpen: f("projectedPaVsBullpen"),
+    bullpenHrPer9: f("bullpenHrPer9"),
+    bullpenBarrelAllowedPct: f("bullpenBarrelAllowedPct"),
+  };
+  if (Object.values(grp).some((v) => typeof v === "number" && Number.isNaN(v))) return null;
+  return grp;
+}
+function sameNullableNum(a: number | null, b: unknown): boolean {
+  if (a === null) return b === null || b === undefined;
+  return typeof b === "number" && Number.isFinite(b) && a === b;
 }
 
 export interface TrainingReadOutcome {

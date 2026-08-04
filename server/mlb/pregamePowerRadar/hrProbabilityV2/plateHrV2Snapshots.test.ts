@@ -30,6 +30,8 @@ import {
 import { assemblePlateHrV2FeatureSnapshot } from "./plateHrV2FeatureBuilder";
 import { PLATE_HR_V2_FEATURES_V1, PLATE_HR_V2_FEATURES_V2 } from "./plateHrV2FeatureContract";
 import { buildRecentContactFormEvidence } from "./recentContactFormEvidence";
+import { buildStarterBullpenPaPathEvidence } from "./starterBullpenPaPathEvidence";
+import type { StarterBullpenPaPathSources } from "./starterBullpenPaPath";
 
 let passed = 0;
 let failed = 0;
@@ -719,6 +721,85 @@ ok(
   }).success,
   "predictionSnapshotSchema accepts a well-formed PR4.3 row",
 );
+
+// ── PR6.2: starter_bullpen evidence read-time binding to the prediction ────────
+{
+  const SB_SOURCES: StarterBullpenPaPathSources = {
+    starterWorkload: { starterId: "660271", avgBattersFacedPerStart: 21, avgInningsPerStart: 5.1 },
+    opener: { isOpener: false, avgOutsRecordedPerStart: 15 },
+    projectedPaBasis: { battingOrderSlot: 3, expectedTotalPa: 4.2 },
+    bullpenComposition: { relieversExpected: 4, availabilityNote: null },
+    bullpenVulnerability: { bullpenHrPer9: 1.4, bullpenBarrelAllowedPct: 9, bullpenSample: 300 },
+  };
+  const built = buildStarterBullpenPaPathEvidence({
+    batterId: "b1", sources: SB_SOURCES,
+    retrievalAtMs: PREDICTION_MS - 3 * 3600_000, // available before the prediction (no lookahead)
+    schemaVersion: PLATE_HR_V2_FEATURES_V2,
+  });
+  ok(built.evidence != null, "sb: evidence built for a usable-exposure projection");
+  const desc = built.evidence!;
+  const proj = built.projection;
+
+  // Turn the descriptor into a stored source via the shared mkSource harness.
+  const sbSource = mkSource({
+    provider: desc.provider, entityType: desc.entityType, entityId: desc.entityId,
+    evidenceKind: desc.evidenceKind, dataThroughAt: desc.dataThroughAt, availableAt: desc.availableAt,
+    fetchedAt: desc.fetchedAt, availabilitySource: desc.availabilitySource, validForAt: desc.validForAt,
+    reconstructed: desc.reconstructed, provenanceIncomplete: desc.provenanceIncomplete,
+    schemaVersion: desc.schemaVersion, authorizedPayload: desc.authorizedPayload,
+  });
+  // A prediction whose starterBullpen derived group matches the projection.
+  const sbGroup = {
+    starterConfirmed: true,
+    projectedPaVsStarter: proj.projectedPaVsStarter,
+    projectedPaVsBullpen: proj.projectedPaVsBullpen,
+    bullpenHrPer9: proj.bullpenHrPer9,
+    bullpenBarrelAllowedPct: proj.bullpenBarrelAllowedPct,
+    extra: {},
+  };
+  const withExposure = buildProjection({ starterBullpen: sbGroup });
+  const rows = new Map<string, SourceEvidenceSnapshot>([[sbSource.sourceSnapshotId, sbSource]]);
+  const valid = mkPrediction({ derivedFeatures: withExposure }, [sbSource.sourceSnapshotId]);
+  ok(evaluatePredictionRowIntegrity(valid, rows).readable, "sb: exposure group + bound evidence → readable");
+
+  const reasons = (p: PredictionSnapshot, m = rows) => evaluatePredictionRowIntegrity(p, m).reasons;
+
+  // Exposure present but NO starter_bullpen source → rejected.
+  const noSrc = mkPrediction({ derivedFeatures: withExposure }, []);
+  ok(reasons(noSrc, new Map()).some((r) => r === "starter_bullpen_evidence_missing"), "sb: exposure without evidence rejected");
+
+  // No-exposure group but a starter_bullpen source present → rejected.
+  const neutralPred = mkPrediction({ derivedFeatures: buildProjection() }, [sbSource.sourceSnapshotId]);
+  ok(reasons(neutralPred).some((r) => r === "starter_bullpen_unexpected_evidence"), "sb: no-exposure group + evidence rejected");
+
+  // Wrong batter (coherently re-hashed source for a different batter) → rejected.
+  {
+    const otherBatter = buildStarterBullpenPaPathEvidence({ batterId: "OTHER", sources: SB_SOURCES, retrievalAtMs: PREDICTION_MS - 3 * 3600_000, schemaVersion: PLATE_HR_V2_FEATURES_V2 }).evidence!;
+    const wrong = mkSource({ provider: otherBatter.provider, entityType: otherBatter.entityType, entityId: "OTHER", evidenceKind: otherBatter.evidenceKind, dataThroughAt: otherBatter.dataThroughAt, availableAt: otherBatter.availableAt, fetchedAt: otherBatter.fetchedAt, availabilitySource: otherBatter.availabilitySource, validForAt: otherBatter.validForAt, reconstructed: otherBatter.reconstructed, provenanceIncomplete: otherBatter.provenanceIncomplete, schemaVersion: otherBatter.schemaVersion, authorizedPayload: otherBatter.authorizedPayload });
+    const m = new Map([[wrong.sourceSnapshotId, wrong]]);
+    const p = mkPrediction({ derivedFeatures: withExposure }, [wrong.sourceSnapshotId]);
+    ok(reasons(p, m).some((r) => r === "starter_bullpen_batter_mismatch"), "sb: evidence for a different batter rejected");
+  }
+
+  // Unauthorized provider → rejected.
+  {
+    const bad = mkSource({ provider: "sketchy_provider", entityType: "batter", entityId: "b1", evidenceKind: "starter_bullpen", dataThroughAt: desc.dataThroughAt, availableAt: desc.availableAt, fetchedAt: desc.fetchedAt, availabilitySource: desc.availabilitySource, validForAt: desc.validForAt, reconstructed: false, provenanceIncomplete: false, schemaVersion: PLATE_HR_V2_FEATURES_V2, authorizedPayload: desc.authorizedPayload });
+    const m = new Map([[bad.sourceSnapshotId, bad]]);
+    const p = mkPrediction({ derivedFeatures: withExposure }, [bad.sourceSnapshotId]);
+    ok(reasons(p, m).some((r) => r === "starter_bullpen_provider_unauthorized"), "sb: unauthorized provider rejected");
+  }
+
+  // Stored group projection disagreeing with the bound evidence → rejected.
+  {
+    const tampered = buildProjection({ starterBullpen: { ...sbGroup, projectedPaVsBullpen: 2.9 } });
+    const p = mkPrediction({ derivedFeatures: tampered }, [sbSource.sourceSnapshotId]);
+    ok(reasons(p).some((r) => r === "starter_bullpen_group_evidence_mismatch"), "sb: group ≠ evidence projection rejected");
+  }
+
+  // Forged payload (projection not re-derivable from its own sources) → rejected at payload validation.
+  ok(!validateSourcePayload("starter_bullpen", { ...(desc.authorizedPayload as any), projection: { ...(desc.authorizedPayload as any).projection, projectedPaVsStarter: 6 } }).ok,
+    "sb: forged (non-re-derivable) payload rejected");
+}
 
 console.log(`\nplateHrV2Snapshots.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

@@ -106,6 +106,8 @@ import {
 import { assemblePlateHrV2EvidenceDescriptors } from "./hrProbabilityV2/plateHrV2SnapshotCapture";
 import { PLATE_HR_V2_FEATURES_CURRENT } from "./hrProbabilityV2/plateHrV2FeatureContract";
 import { buildRecentContactFormEvidence } from "./hrProbabilityV2/recentContactFormEvidence";
+import { buildStarterBullpenPaPathEvidence } from "./hrProbabilityV2/starterBullpenPaPathEvidence";
+import type { StarterBullpenPaPathSources } from "./hrProbabilityV2/starterBullpenPaPath";
 
 let isPregamePowerRadarBuildRunning = false;
 
@@ -1300,6 +1302,33 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
             });
             if (recentFormBuilt.evidence) plateHrV2Evidence.push(recentFormBuilt.evidence);
 
+            // PR6.2: as-of starter/bullpen PA-path evidence + derived projection.
+            // FAIL-CLOSED and NO-BACKFILL: we assemble only the sources genuinely
+            // available at build time. Starter workload/removal, opener class, a
+            // NON-market projected-PA basis, and bullpen composition/vulnerability
+            // are NOT fetched by the pregame radar yet, so they are honestly null —
+            // the derivation then yields no exposure, no evidence is content-addressed,
+            // and the starterBullpen projection stays null → missing_pa_path downstream.
+            // No generic defaults, no odds inputs. When the live workload/bullpen
+            // fetchers land, they flow through this same contract unchanged.
+            const starterBullpenSources: StarterBullpenPaPathSources = {
+              starterWorkload: opposingPitcher?.pitcherId
+                ? { starterId: String(opposingPitcher.pitcherId), avgBattersFacedPerStart: null, avgInningsPerStart: null }
+                : null,
+              opener: null,
+              projectedPaBasis: { battingOrderSlot: slot.battingOrderSlot, expectedTotalPa: null },
+              bullpenComposition: null,
+              bullpenVulnerability: null,
+            };
+            const starterBullpenBuilt = buildStarterBullpenPaPathEvidence({
+              batterId: player.playerId,
+              sources: starterBullpenSources,
+              retrievalAtMs: capturedAtMs,
+              schemaVersion: PLATE_HR_V2_FEATURES_CURRENT,
+            });
+            if (starterBullpenBuilt.evidence) plateHrV2Evidence.push(starterBullpenBuilt.evidence);
+            const sbProjection = starterBullpenBuilt.projection;
+
             const capturedRow = capturePlateHrV2Candidate({
               sessionDate,
               gameId: game.gameId,
@@ -1391,11 +1420,17 @@ export async function buildPregamePowerRadar(): Promise<PregamePowerSnapshot | n
                 lineupConfirmed: lineupStatus === "posted",
               },
               starterBullpen: {
+                // PR6.2: derived from the as-of source bundle above (fail-closed —
+                // all-null today until the workload/bullpen fetchers land, so the
+                // PA-path stays unavailable → missing_pa_path, never fabricated).
+                // The opener signal is captured in the content-addressed evidence
+                // payload (projection.isOpenerLikely), not this frozen-group field —
+                // the derived group schema is strict and has no isOpenerLikely key.
                 starterConfirmed: !!opposingPitcher,
-                projectedPaVsStarter: null,
-                projectedPaVsBullpen: null,
-                bullpenHrPer9: null,
-                bullpenBarrelAllowedPct: null,
+                projectedPaVsStarter: sbProjection.projectedPaVsStarter,
+                projectedPaVsBullpen: sbProjection.projectedPaVsBullpen,
+                bullpenHrPer9: sbProjection.bullpenHrPer9,
+                bullpenBarrelAllowedPct: sbProjection.bullpenBarrelAllowedPct,
               },
               market: {
                 hrOddsAvailable: false,
