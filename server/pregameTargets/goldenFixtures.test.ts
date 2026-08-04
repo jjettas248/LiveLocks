@@ -69,14 +69,31 @@ const RECORD = process.env.GOLDEN_RECORD === "1";
 
 type CaseMap = Record<string, unknown>;
 
+// Fixture creation happens ONLY in RECORD mode. In VERIFY mode a missing
+// fixture is a FAILURE, not a silent re-create — otherwise a fixture that is
+// deleted, renamed, or omitted from a commit would let the advertised verify
+// command exit 0 without ever comparing that group to a committed baseline.
+// This decision is a pure function so it can be regression-tested directly.
+type FixtureAction = "record" | "missing_is_failure" | "compare";
+function resolveFixtureAction(record: boolean, fileExists: boolean): FixtureAction {
+  if (record) return "record";
+  if (!fileExists) return "missing_is_failure";
+  return "compare";
+}
+
 /** Verify a group's cases against its committed golden JSON (or record it). */
 function checkGroup(group: string, cases: CaseMap): void {
   const path = `${FIXTURE_DIR}${group}.json`;
   const actual = canonicalize(cases);
-  if (RECORD || !existsSync(path)) {
+  const action = resolveFixtureAction(RECORD, existsSync(path));
+  if (action === "record") {
     if (!existsSync(FIXTURE_DIR)) mkdirSync(FIXTURE_DIR, { recursive: true });
     writeFileSync(path, JSON.stringify(actual, null, 2) + "\n", "utf8");
     console.log(`● recorded ${group}.json (${Object.keys(cases).length} cases)`);
+    return;
+  }
+  if (action === "missing_is_failure") {
+    ok(false, `${group}: missing committed golden fixture (${group}.json) — run GOLDEN_RECORD=1 to create it`);
     return;
   }
   const expected = JSON.parse(readFileSync(path, "utf8"));
@@ -574,6 +591,13 @@ async function main(): Promise<void> {
   const once = JSON.stringify(canonicalize(nbaComputeProbabilityCases()));
   const twice = JSON.stringify(canonicalize(nbaComputeProbabilityCases()));
   ok(once === twice, "computeProbability output is deterministic across runs");
+
+  // Fixture-resolution self-check: a missing fixture must FAIL verification, and
+  // creation must be confined to RECORD mode (locks the two behaviors above).
+  ok(resolveFixtureAction(true, false) === "record", "RECORD mode creates a fixture even when absent");
+  ok(resolveFixtureAction(true, true) === "record", "RECORD mode overwrites an existing fixture");
+  ok(resolveFixtureAction(false, false) === "missing_is_failure", "VERIFY mode: a missing fixture is a failure");
+  ok(resolveFixtureAction(false, true) === "compare", "VERIFY mode: a present fixture is compared to baseline");
 
   const s = summary();
   const mode = RECORD ? "RECORD" : "VERIFY";

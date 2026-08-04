@@ -45,7 +45,7 @@
     "plays": [
       {
         "confidence": "low",
-        "createdAt": "<volatile>",
+        "createdAt": 1000,
         "derivedLine": false,
         "edge": 3,
         "gameId": "GAME_FIXTURE_1",
@@ -90,7 +90,7 @@
     "plays": [
       {
         "confidence": "high",
-        "createdAt": "<volatile>",
+        "createdAt": 1000,
         "derivedLine": false,
         "edge": 6,
         "gameId": "GAME_FIXTURE_1",
@@ -131,7 +131,7 @@
     "plays": [
       {
         "confidence": "high",
-        "createdAt": "<volatile>",
+        "createdAt": 1000,
         "derivedLine": false,
         "edge": 6,
         "gameId": "GAME_FIXTURE_1",
@@ -149,7 +149,7 @@
       },
       {
         "confidence": "high",
-        "createdAt": "<volatile>",
+        "createdAt": 1000,
         "derivedLine": false,
         "edge": 9,
         "gameId": "GAME_FIXTURE_1",
@@ -167,7 +167,7 @@
       },
       {
         "confidence": "medium",
-        "createdAt": "<volatile>",
+        "createdAt": 1000,
         "derivedLine": false,
         "edge": 5,
         "gameId": "GAME_FIXTURE_1",
@@ -208,7 +208,7 @@
     "plays": [
       {
         "confidence": "high",
-        "createdAt": "<volatile>",
+        "createdAt": 1000,
         "derivedLine": false,
         "edge": 6,
         "gameId": "GAME_FIXTURE_1",

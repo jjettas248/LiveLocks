@@ -43,7 +43,7 @@ network / live data.
 | Floating-point precision | **[COVERED]** | Numbers recorded EXACTLY (no rounding) in every group, so precision drift fails the guard |
 | Null behavior | **[COVERED]** | `missing_assist_rates`, `filters_invalid` (null line/prob/edge), Mound grading null-final / null-line / null-direction |
 | Deterministic ordering | **[COVERED]** | `nbaEngineWrapper.json` → `ordering_multi`; `buildResponse`/`buildMoundResponse` sort by `score10` |
-| Canonical timestamps | **[COVERED]** | `canonicalize.ts` normalizes `timestamp/dataFreshness/createdAt/generatedAt/settledAt`; `Date` → ISO string |
+| Canonical timestamps | **[COVERED]** | `canonicalize.ts` masks ONLY wall-clock stamps (`timestamp`/`dataFreshness` from `processNBAEngine`); caller-provided deterministic timestamps (pinned candidate `createdAt`, the `generatedAt` argument, `generatedAt` from a frozen row `updatedAt`) are **verified as real values, not masked**, so dropping/corrupting them fails the guard; `Date` → ISO string |
 | Ledger mapping | **[COVERED]** | Plate/Mound `signalToRow`/`rowToSignal` round-trips (above) |
 | DB round-trip (through a real database) | **[NEEDS-EXTERNAL]** | `loadPregameSnapshotFromDb` / `loadMoundSnapshotFromDb` + `storage.upsert*` issue real SQL. The **pure mapping** either side of the DB is COVERED; the DB I/O itself needs Postgres (a `*.pg-integration.test.ts`, PR2). |
 | Live grading feeds | **[NEEDS-EXTERNAL]** | `gradePregameOutcomes` / `gradeMoundOutcomes` read live box-score/play-by-play + storage. Only the pure outcome-derivation math is frozen (`mlbMoundGrading.json`). |

@@ -14,14 +14,26 @@
 //     stamps with Date.now()) are replaced by the sentinel "<volatile>" so the
 //     baseline is credential-, network-, and clock-independent. Every such
 //     field is named explicitly — nothing is guessed.
+//
+// SCOPE OF MASKING (narrow on purpose): only fields that the covered code paths
+// stamp from the WALL CLOCK are masked. A timestamp the fixture supplies
+// deterministically — a pinned candidate `createdAt`, the fixed `generatedAt`
+// argument threaded into buildResponse/buildMoundResponse, or a `generatedAt`
+// derived from a frozen row `updatedAt` — is NOT masked, so a regression that
+// drops, ignores, or corrupts that caller-provided timestamp still trips the
+// guard. Masking by key name is only safe because, in every boundary covered
+// here, these two keys are ALWAYS wall-clock and never deterministic:
+//   - `timestamp`     → processNBAEngine top-level stamp (Date.now())
+//   - `dataFreshness` → processNBAEngine top-level stamp (Date.now())
+// If a future fixture introduces a key that is wall-clock in one place and
+// deterministic in another, switch to path-aware masking rather than widening
+// this set (which would silently weaken coverage — the very defect this scoping
+// prevents).
 
-/** Fields the current code stamps from Date.now(); normalized to a sentinel. */
+/** Fields the covered code paths stamp from Date.now(); normalized to a sentinel. */
 export const VOLATILE_KEYS: ReadonlySet<string> = new Set([
   "timestamp",
   "dataFreshness",
-  "createdAt",
-  "generatedAt",
-  "settledAt",
 ]);
 
 export const VOLATILE_SENTINEL = "<volatile>";

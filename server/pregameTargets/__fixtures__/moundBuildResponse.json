@@ -16,7 +16,7 @@
       "weatherCoverage": 1
     },
     "gamesScanned": 3,
-    "generatedAt": "<volatile>",
+    "generatedAt": "2026-08-03T18:30:00.000Z",
     "signals": [
       {
         "becameLiveFire": false,
@@ -80,7 +80,7 @@
         "gameDate": "2026-08-03",
         "gameId": "GAME1",
         "gameStatus": "final",
-        "generatedAt": "<volatile>",
+        "generatedAt": "2026-08-03T18:30:00.000Z",
         "hasMarketLine": false,
         "isOfficialPlay": false,
         "isPregameTarget": true,
@@ -208,7 +208,7 @@
         "gameDate": "2026-08-03",
         "gameId": "GAME2",
         "gameStatus": "scheduled",
-        "generatedAt": "<volatile>",
+        "generatedAt": "2026-08-03T18:30:00.000Z",
         "hasMarketLine": false,
         "isOfficialPlay": false,
         "isPregameTarget": true,
@@ -296,7 +296,7 @@
       "weatherCoverage": 1
     },
     "gamesScanned": 3,
-    "generatedAt": "<volatile>",
+    "generatedAt": "2026-08-03T18:30:00.000Z",
     "signals": [
       {
         "becameLiveFire": false,
@@ -360,7 +360,7 @@
         "gameDate": "2026-08-03",
         "gameId": "GAME1",
         "gameStatus": "final",
-        "generatedAt": "<volatile>",
+        "generatedAt": "2026-08-03T18:30:00.000Z",
         "hasMarketLine": false,
         "isOfficialPlay": false,
         "isPregameTarget": true,
