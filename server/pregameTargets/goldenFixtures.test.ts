@@ -69,7 +69,7 @@ import { buildResponse } from "../mlb/pregamePowerRadar/diagnostics";
 import { buildMoundResponse } from "../mlb/pregame/mound/diagnostics";
 import { deriveWinAttribution } from "../mlb/pregamePowerRadar/winAttribution";
 import { canonicalize, ok, eqStable, summary } from "./__fixtures__/canonicalize";
-import { makePlateRow, makeMoundRow, FROZEN_COUNTERS } from "./__fixtures__/signalFactories";
+import { makePlateRow, makeMoundRow, FROZEN_PLATE_COUNTERS, FROZEN_MOUND_COUNTERS } from "./__fixtures__/signalFactories";
 
 const FIXTURE_DIR = fileURLToPath(new URL("./__fixtures__/", import.meta.url));
 const RECORD = process.env.GOLDEN_RECORD === "1";
@@ -595,11 +595,11 @@ async function main(): Promise<void> {
     {
       public_only: buildResponse(
         "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-        plateAscending, FROZEN_COUNTERS, false,
+        plateAscending, FROZEN_PLATE_COUNTERS, false,
       ),
       include_suppressed: buildResponse(
         "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-        plateAscending, FROZEN_COUNTERS, true,
+        plateAscending, FROZEN_PLATE_COUNTERS, true,
       ),
     },
   );
@@ -629,11 +629,11 @@ async function main(): Promise<void> {
     {
       public_only: buildMoundResponse(
         "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-        moundAscending, FROZEN_COUNTERS, false, false,
+        moundAscending, FROZEN_MOUND_COUNTERS, false, false,
       ),
       include_research: buildMoundResponse(
         "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-        moundAscending, FROZEN_COUNTERS, true, true,
+        moundAscending, FROZEN_MOUND_COUNTERS, true, true,
       ),
     },
   );
@@ -671,7 +671,7 @@ async function main(): Promise<void> {
   // happened to be pre-sorted).
   const plateOrder = buildResponse(
     "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-    plateAscending, FROZEN_COUNTERS, true,
+    plateAscending, FROZEN_PLATE_COUNTERS, true,
   ).signals.map((s) => Number(s.score10));
   ok(
     plateOrder.length === 2 && plateOrder[0] > plateOrder[1],
@@ -679,7 +679,7 @@ async function main(): Promise<void> {
   );
   const moundOrder = buildMoundResponse(
     "2026-08-03", "build_fixed_1", "2026-08-03T18:30:00.000Z", "rebuilt",
-    moundAscending, FROZEN_COUNTERS, true, true,
+    moundAscending, FROZEN_MOUND_COUNTERS, true, true,
   ).signals.map((s) => Number(s.score10));
   ok(
     moundOrder.length === 2 && moundOrder[0] > moundOrder[1],

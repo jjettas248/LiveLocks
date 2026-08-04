@@ -6,6 +6,7 @@
       "lineupCoverage": 1,
       "pitcherCoverage": 1,
       "publicSignals": 1,
+      "starterCoverage": 1,
       "suppressedSignals": 1,
       "topSuppressionReasons": [
         {
@@ -13,6 +14,7 @@
           "reason": "starter_not_confirmed"
         }
       ],
+      "totalPitchersEvaluated": 9,
       "weatherCoverage": 1
     },
     "gamesScanned": 3,
@@ -286,6 +288,7 @@
       "lineupCoverage": 1,
       "pitcherCoverage": 1,
       "publicSignals": 1,
+      "starterCoverage": 1,
       "suppressedSignals": 1,
       "topSuppressionReasons": [
         {
@@ -293,6 +296,7 @@
           "reason": "starter_not_confirmed"
         }
       ],
+      "totalPitchersEvaluated": 9,
       "weatherCoverage": 1
     },
     "gamesScanned": 3,

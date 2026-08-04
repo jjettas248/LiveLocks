@@ -16,6 +16,8 @@ import type {
 } from "../../../shared/schema";
 import type { PregamePowerDiagnostics } from "../../mlb/pregamePowerRadar/types";
 import type { MoundDiagnostics } from "../../mlb/pregame/mound/types";
+import type { CoverageCounters } from "../../mlb/pregamePowerRadar/diagnostics";
+import type { MoundCoverageCounters } from "../../mlb/pregame/mound/diagnostics";
 
 /** Fixed instants — no wall clock anywhere in these fixtures. */
 export const FROZEN_CREATED = new Date("2026-08-03T15:00:00.000Z");
@@ -100,6 +102,12 @@ export function makePlateRow(over: Partial<PregamePowerRadarSignalRow> = {}): Pr
     drivers: [
       { key: "power_iso", label: "Elite ISO", direction: "positive", weight: 80, tier: "ELITE" },
       { key: "pitcher_vuln", label: "Vulnerable Arm", direction: "positive", weight: 60 },
+      // ISO evidence that is DISPLAY-GATED: `displayEligible: false` means the
+      // chip must stay hidden even though the driver still counts as evidence.
+      // Locks that the false state survives persistence mapping + response
+      // serialization — a regression dropping the flag would re-expose the chip
+      // (the client renders whenever it is absent/true).
+      { key: "power_iso_gated", label: "ISO (gated)", direction: "positive", weight: 20, tier: "AVERAGE", displayEligible: false },
     ],
     warnings: [],
     diagnostics: plateDiagnostics(),
@@ -215,12 +223,26 @@ export function makeMoundRow(over: Partial<MlbMoundRadarSignalRow> = {}): MlbMou
   };
 }
 
-/** Coverage counters (shape shared by both response builders' signatures). */
-export const FROZEN_COUNTERS = {
+// Coverage counters are SEPARATELY TYPED per builder — the Plate and Mound
+// response contracts differ (Mound requires `pitchersEvaluated`/`starterCoverage`,
+// Plate requires `battersEvaluated`/`batterCoverage`). Typing each to its own
+// interface makes the full contract compile-enforced here (this file is
+// tsc-checked), so a Mound fixture can never silently omit a required counter
+// field and drop it from the golden output.
+export const FROZEN_PLATE_COUNTERS: CoverageCounters = {
   gamesScanned: 3,
   battersEvaluated: 12,
   lineupCoverage: 1,
   weatherCoverage: 1,
   batterCoverage: 1,
   pitcherCoverage: 1,
+};
+
+export const FROZEN_MOUND_COUNTERS: MoundCoverageCounters = {
+  gamesScanned: 3,
+  pitchersEvaluated: 9,
+  starterCoverage: 1,
+  weatherCoverage: 1,
+  pitcherCoverage: 1,
+  lineupCoverage: 1,
 };

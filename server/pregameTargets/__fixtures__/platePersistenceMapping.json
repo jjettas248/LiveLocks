@@ -67,6 +67,14 @@
         "key": "pitcher_vuln",
         "label": "Vulnerable Arm",
         "weight": 60
+      },
+      {
+        "direction": "positive",
+        "displayEligible": false,
+        "key": "power_iso_gated",
+        "label": "ISO (gated)",
+        "tier": "AVERAGE",
+        "weight": 20
       }
     ],
     "engine": "pregame_power_radar",
@@ -198,6 +206,14 @@
         "key": "pitcher_vuln",
         "label": "Vulnerable Arm",
         "weight": 60
+      },
+      {
+        "direction": "positive",
+        "displayEligible": false,
+        "key": "power_iso_gated",
+        "label": "ISO (gated)",
+        "tier": "AVERAGE",
+        "weight": 20
       }
     ],
     "everAttackEnvironmentSuppressed": false,
