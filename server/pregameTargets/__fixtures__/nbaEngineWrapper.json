@@ -1,0 +1,230 @@
+{
+  "empty": {
+    "confidence": "low",
+    "diagnostics": {
+      "confidenceBreakdown": {
+        "high": 0,
+        "low": 0,
+        "medium": 0
+      },
+      "dataFreshness": "<volatile>",
+      "edgeThresholdUsed": 3,
+      "fallbackTriggered": true,
+      "reasonsFilteredOut": [],
+      "regressionApplied": true,
+      "totalEvaluated": 0,
+      "totalFiltered": 0,
+      "totalPassed": 0
+    },
+    "engine": "NBA",
+    "mode": "fallback",
+    "plays": [],
+    "timestamp": "<volatile>"
+  },
+  "fallback_low_edge": {
+    "confidence": "low",
+    "diagnostics": {
+      "confidenceBreakdown": {
+        "high": 0,
+        "low": 1,
+        "medium": 0
+      },
+      "dataFreshness": "<volatile>",
+      "edgeThresholdUsed": 3,
+      "fallbackTriggered": true,
+      "reasonsFilteredOut": [
+        "Fixture Player: edge 3 below NBA minimum 5"
+      ],
+      "regressionApplied": true,
+      "totalEvaluated": 1,
+      "totalFiltered": 0,
+      "totalPassed": 1
+    },
+    "engine": "NBA",
+    "mode": "fallback",
+    "plays": [
+      {
+        "confidence": "low",
+        "createdAt": 1000,
+        "derivedLine": false,
+        "edge": 3,
+        "gameId": "GAME_FIXTURE_1",
+        "id": "c6",
+        "line": 24.5,
+        "lineSource": "sportsbook",
+        "market": "points",
+        "playerId": "1001",
+        "playerName": "Fixture Player",
+        "probability": 60,
+        "projection": 27.1,
+        "recommendedSide": "OVER",
+        "sportsbook": "consensus",
+        "team": "AAA"
+      }
+    ],
+    "timestamp": "<volatile>"
+  },
+  "filters_invalid": {
+    "confidence": "high",
+    "diagnostics": {
+      "confidenceBreakdown": {
+        "high": 1,
+        "low": 0,
+        "medium": 0
+      },
+      "dataFreshness": "<volatile>",
+      "edgeThresholdUsed": 5,
+      "fallbackTriggered": false,
+      "reasonsFilteredOut": [
+        "Candidate 0: invalid data (missing line/prob/edge)",
+        "Candidate 1: invalid data (missing line/prob/edge)",
+        "Candidate 2: invalid data (missing line/prob/edge)"
+      ],
+      "regressionApplied": true,
+      "totalEvaluated": 4,
+      "totalFiltered": 3,
+      "totalPassed": 1
+    },
+    "engine": "NBA",
+    "mode": "strict",
+    "plays": [
+      {
+        "confidence": "high",
+        "createdAt": 1000,
+        "derivedLine": false,
+        "edge": 6,
+        "gameId": "GAME_FIXTURE_1",
+        "id": "c5",
+        "line": 24.5,
+        "lineSource": "sportsbook",
+        "market": "points",
+        "playerId": "1001",
+        "playerName": "Fixture Player",
+        "probability": 78,
+        "projection": 27.1,
+        "recommendedSide": "OVER",
+        "sportsbook": "consensus",
+        "team": "AAA"
+      }
+    ],
+    "timestamp": "<volatile>"
+  },
+  "ordering_multi": {
+    "confidence": "high",
+    "diagnostics": {
+      "confidenceBreakdown": {
+        "high": 2,
+        "low": 0,
+        "medium": 1
+      },
+      "dataFreshness": "<volatile>",
+      "edgeThresholdUsed": 5,
+      "fallbackTriggered": false,
+      "reasonsFilteredOut": [],
+      "regressionApplied": true,
+      "totalEvaluated": 3,
+      "totalFiltered": 0,
+      "totalPassed": 3
+    },
+    "engine": "NBA",
+    "mode": "strict",
+    "plays": [
+      {
+        "confidence": "high",
+        "createdAt": 1000,
+        "derivedLine": false,
+        "edge": 6,
+        "gameId": "GAME_FIXTURE_1",
+        "id": "cA",
+        "line": 24.5,
+        "lineSource": "sportsbook",
+        "market": "points",
+        "playerId": "1001",
+        "playerName": "Fixture Player",
+        "probability": 78,
+        "projection": 27.1,
+        "recommendedSide": "OVER",
+        "sportsbook": "consensus",
+        "team": "AAA"
+      },
+      {
+        "confidence": "high",
+        "createdAt": 1000,
+        "derivedLine": false,
+        "edge": 9,
+        "gameId": "GAME_FIXTURE_1",
+        "id": "cB",
+        "line": 24.5,
+        "lineSource": "sportsbook",
+        "market": "points",
+        "playerId": "1001",
+        "playerName": "Fixture Player",
+        "probability": 80,
+        "projection": 27.1,
+        "recommendedSide": "OVER",
+        "sportsbook": "consensus",
+        "team": "AAA"
+      },
+      {
+        "confidence": "medium",
+        "createdAt": 1000,
+        "derivedLine": false,
+        "edge": 5,
+        "gameId": "GAME_FIXTURE_1",
+        "id": "cC",
+        "line": 24.5,
+        "lineSource": "sportsbook",
+        "market": "points",
+        "playerId": "1001",
+        "playerName": "Fixture Player",
+        "probability": 72,
+        "projection": 27.1,
+        "recommendedSide": "OVER",
+        "sportsbook": "consensus",
+        "team": "AAA"
+      }
+    ],
+    "timestamp": "<volatile>"
+  },
+  "strict_pass": {
+    "confidence": "high",
+    "diagnostics": {
+      "confidenceBreakdown": {
+        "high": 1,
+        "low": 0,
+        "medium": 0
+      },
+      "dataFreshness": "<volatile>",
+      "edgeThresholdUsed": 5,
+      "fallbackTriggered": false,
+      "reasonsFilteredOut": [],
+      "regressionApplied": true,
+      "totalEvaluated": 1,
+      "totalFiltered": 0,
+      "totalPassed": 1
+    },
+    "engine": "NBA",
+    "mode": "strict",
+    "plays": [
+      {
+        "confidence": "high",
+        "createdAt": 1000,
+        "derivedLine": false,
+        "edge": 6,
+        "gameId": "GAME_FIXTURE_1",
+        "id": "c1",
+        "line": 24.5,
+        "lineSource": "sportsbook",
+        "market": "points",
+        "playerId": "1001",
+        "playerName": "Fixture Player",
+        "probability": 78,
+        "projection": 27.1,
+        "recommendedSide": "OVER",
+        "sportsbook": "consensus",
+        "team": "AAA"
+      }
+    ],
+    "timestamp": "<volatile>"
+  }
+}

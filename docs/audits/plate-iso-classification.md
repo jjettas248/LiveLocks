@@ -95,13 +95,19 @@ Synthetic fixtures cannot prove selectivity on the real hitter distribution.
 when Elite prevalence exceeds the cap:
 
 ```
-npx tsx scripts/plateIsoPopulationAudit.ts <export.json> [--max-elite-pct 25] [--json]
+npx tsx scripts/plateIsoPopulationAudit.ts <export.json> [--max-elite-pct 25] [--min-population 30] [--min-valid-pct 50] [--json]
 ```
 
 The export is a JSON array of `{ ab, slg, avg | iso, split?, source? }` rows (AB is
 the ISO denominator). Wire this into CI or run it in an authorized environment
 with a real Stats API / DB export before deploying an ISO-classifier change. It
 imports only the pure classifier — no engine, bus, or storage access.
+
+The gate **only certifies on a real, mostly-valid population**: an empty export, a
+population below `--min-population`, or one where fewer than `--min-valid-pct` of
+rows produce a usable assessment **fails** (exit 1) rather than silently passing on
+zero evidence. Elite prevalence over `--max-elite-pct` also fails. No export → exit
+2 (unexecuted).
 
 **Status: real-population validation remains UNEXECUTED in the build sandbox** —
 the live Stats API is blocked by the proxy and no `DATABASE_URL` is configured, so

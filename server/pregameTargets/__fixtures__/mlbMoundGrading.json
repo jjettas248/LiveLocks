@@ -1,0 +1,111 @@
+{
+  "correction_after": {
+    "lineFrozenAt": "2026-08-03T18:00:00.000Z",
+    "lineSnapshotType": "final_pregame",
+    "lineSource": "draftkings",
+    "marketOutcome": "cashed",
+    "marketUnavailableReason": null,
+    "recommendedSide": "OVER",
+    "sportsbookLine": 6.5
+  },
+  "correction_before": {
+    "lineFrozenAt": "2026-08-03T18:00:00.000Z",
+    "lineSnapshotType": "final_pregame",
+    "lineSource": "draftkings",
+    "marketOutcome": "missed",
+    "marketUnavailableReason": null,
+    "recommendedSide": "OVER",
+    "sportsbookLine": 6.5
+  },
+  "label_confirmed": "confirmed",
+  "label_null": null,
+  "label_tie_push": "push",
+  "market_cashed": {
+    "lineFrozenAt": "2026-08-03T18:00:00.000Z",
+    "lineSnapshotType": "final_pregame",
+    "lineSource": "draftkings",
+    "marketOutcome": "cashed",
+    "marketUnavailableReason": null,
+    "recommendedSide": "OVER",
+    "sportsbookLine": 6.5
+  },
+  "market_dnp_null_actual": {
+    "lineFrozenAt": null,
+    "lineSnapshotType": null,
+    "lineSource": null,
+    "marketOutcome": "unavailable",
+    "marketUnavailableReason": "no_final_stat",
+    "recommendedSide": "OVER",
+    "sportsbookLine": 6.5
+  },
+  "market_missed": {
+    "lineFrozenAt": "2026-08-03T18:00:00.000Z",
+    "lineSnapshotType": "final_pregame",
+    "lineSource": "draftkings",
+    "marketOutcome": "missed",
+    "marketUnavailableReason": null,
+    "recommendedSide": "OVER",
+    "sportsbookLine": 6.5
+  },
+  "market_no_line": {
+    "lineFrozenAt": null,
+    "lineSnapshotType": null,
+    "lineSource": null,
+    "marketOutcome": "unavailable",
+    "marketUnavailableReason": "no_line_posted",
+    "recommendedSide": "OVER",
+    "sportsbookLine": null
+  },
+  "market_no_source": {
+    "lineFrozenAt": null,
+    "lineSnapshotType": null,
+    "lineSource": null,
+    "marketOutcome": "unavailable",
+    "marketUnavailableReason": "market_has_no_line_source",
+    "recommendedSide": "OVER",
+    "sportsbookLine": null
+  },
+  "market_null_direction": {
+    "lineFrozenAt": null,
+    "lineSnapshotType": null,
+    "lineSource": null,
+    "marketOutcome": "unavailable",
+    "marketUnavailableReason": "no_edge",
+    "recommendedSide": null,
+    "sportsbookLine": 6.5
+  },
+  "market_push": {
+    "lineFrozenAt": "2026-08-03T18:00:00.000Z",
+    "lineSnapshotType": "final_pregame",
+    "lineSource": null,
+    "marketOutcome": "push",
+    "marketUnavailableReason": null,
+    "recommendedSide": "OVER",
+    "sportsbookLine": 7
+  },
+  "model_dnp_null_final": {
+    "outcome": "mound_calibration_miss",
+    "seasonBaselineValue": 6,
+    "userVisible": false
+  },
+  "model_fade_cash": {
+    "outcome": "mound_fade_win",
+    "seasonBaselineValue": 6,
+    "userVisible": true
+  },
+  "model_follow_cash": {
+    "outcome": "mound_win",
+    "seasonBaselineValue": 6,
+    "userVisible": true
+  },
+  "model_follow_miss": {
+    "outcome": "mound_calibration_miss",
+    "seasonBaselineValue": 6,
+    "userVisible": false
+  },
+  "model_missing_baseline": {
+    "outcome": "mound_calibration_miss",
+    "seasonBaselineValue": null,
+    "userVisible": false
+  }
+}

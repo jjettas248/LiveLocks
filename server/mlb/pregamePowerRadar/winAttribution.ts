@@ -150,10 +150,12 @@ function parkWeatherBoostLabel(signal: PregamePowerSignal): string | null {
 function pregameDriverDigest(drivers: PowerDriver[]): PregameRadarWinItem["pregameDrivers"] {
   // Display-only gate (server/mlb/pregamePowerRadar/types.ts's PowerDriver.
   // displayEligible, stamped by the canonical ISO classifier — see
-  // isoAssessment.ts): the win card is a presentation surface, so the same
-  // per-instance gate the client/diagnostics use hides ineligible chips here
-  // too. This never affects attribution — outcome/userVisible are decided
-  // upstream from the full, unfiltered signal.
+  // isoAssessment.ts): the win card is a presentation surface. Without this,
+  // an ordinary/thin-sample/UNAVAILABLE ISO assessment (displayEligible=false
+  // on the card) still reappears as an "Isolated Power" chip on the public win
+  // card, since PregameWinCard.tsx renders this digest verbatim. This never
+  // affects attribution — outcome/userVisible are decided upstream from the
+  // full, unfiltered signal.
   return drivers
     .filter((d) => d.direction === "positive" && d.displayEligible !== false)
     .slice(0, 5)

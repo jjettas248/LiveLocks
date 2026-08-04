@@ -1,0 +1,8 @@
+{
+  "fade_outs_market": "fade",
+  "fade_track_with_baseline": "fade",
+  "follow_elite": "follow",
+  "follow_strong": "follow",
+  "null_strong_low_coverage": null,
+  "null_track_no_baseline": null
+}
