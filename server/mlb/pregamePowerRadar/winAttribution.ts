@@ -149,7 +149,10 @@ function parkWeatherBoostLabel(signal: PregamePowerSignal): string | null {
 
 function pregameDriverDigest(drivers: PowerDriver[]): PregameRadarWinItem["pregameDrivers"] {
   return drivers
-    .filter((d) => d.direction === "positive")
+    // Honor the server-stamped display gate here too: a driver hidden on the live
+    // card (e.g. an ordinary/thin/unavailable ISO assessment stamped
+    // `displayEligible:false`) must not reappear as a chip on the public win card.
+    .filter((d) => d.direction === "positive" && d.displayEligible !== false)
     .slice(0, 5)
     .map((d) => ({ key: d.key, label: d.label, direction: d.direction }));
 }

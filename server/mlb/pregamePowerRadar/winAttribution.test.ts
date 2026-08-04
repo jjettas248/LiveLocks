@@ -178,6 +178,26 @@ ok(firstItem?.parkWeatherBoost === "HR Carry", "win item carries park/weather bo
 ok((firstItem?.pregameDrivers.length ?? 0) === 2, "win item carries only positive drivers");
 ok(firstItem?.pregameRank === 1, "win item carries rank");
 
+// Display gate must apply to the public win card too: a positive driver stamped
+// displayEligible:false (e.g. an ordinary/thin/unavailable ISO assessment) must
+// NOT reappear as a chip on the win card.
+const gatedSig = {
+  ...makeSignal({
+    signalId: "s-gated",
+    score10: 8.0,
+    outcome: { hitHr: true, outcome: "pregame_win", userVisible: true, hrInning: 3, hrHalf: "top", plateAppearanceNumber: 2, firstAbPregameWin: false, resolvedAt: "2026-06-29T20:30:00Z" },
+  }),
+  drivers: [
+    { key: "power_iso", label: "Isolated Power", direction: "positive", displayEligible: false, tier: "AVERAGE" },
+    { key: "power_barrel", label: "High Barrel Rate", direction: "positive" },
+    { key: "power_iso_elite", label: "Elite Isolated Power", direction: "positive", displayEligible: true, tier: "ELITE" },
+  ],
+} as PregamePowerSignal;
+const gatedItem = buildPregameRadarWinItem(gatedSig, 1);
+ok(gatedItem?.pregameDrivers.every((d) => !(d.key === "power_iso")) ?? false, "win-card digest excludes displayEligible:false ISO driver");
+ok((gatedItem?.pregameDrivers.length ?? 0) === 2, "win-card digest keeps only display-eligible positive drivers");
+ok(gatedItem?.pregameDrivers.some((d) => d.key === "power_iso_elite") ?? false, "win-card digest keeps the display-eligible Elite ISO driver");
+
 const laterSig = makeSignal({
   signalId: "s-later",
   score10: 7.5,
