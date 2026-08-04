@@ -104,6 +104,74 @@ export function isIntegerLine(line: number): boolean {
   return Number.isFinite(line) && Number.isInteger(line);
 }
 
+export type MlbFinalizedTier = "watch" | "lean" | "strong" | "elite";
+
+/**
+ * The finalizer-owned user-facing tier. signalScore is NOT an input — the tier
+ * is a pure function of (lane, calibration semantics, candidate probability).
+ * HARD CAP: a non-official lane OR a raw_provisional (uncalibrated) official
+ * signal can NEVER render Elite or Strong — it is capped at "lean". Only a
+ * calibrated (outcome_calibrated) official signal can reach Strong/Elite, via
+ * calibrated-probability bands.
+ */
+export function deriveFinalizedTier(args: {
+  lane: MlbLane;
+  semantics: ProbabilitySemantics;
+  candidateProbabilityPct: number;
+}): MlbFinalizedTier {
+  const p = Number.isFinite(args.candidateProbabilityPct) ? args.candidateProbabilityPct : 0;
+  const capped = args.lane !== "official" || args.semantics !== "outcome_calibrated";
+  if (capped) {
+    // watch / shadow / provisional-official — never Elite/Strong.
+    return p >= 57 ? "lean" : "watch";
+  }
+  if (p >= 70) return "elite";
+  if (p >= 63) return "strong";
+  if (p >= 57) return "lean";
+  return "watch";
+}
+
+/**
+ * The canonical ordering for OFFICIAL MLB candidates. signalScore, opportunity
+ * score, and HIGH_PROB_BYPASS are NOT inputs. Order:
+ *   1. candidate probability (desc)
+ *   2. no-vig model edge in pp (desc; null sorts last)
+ *   3. evidence freshness — smaller odds observation age first (null last)
+ *   4. data quality (full > partial > degraded)
+ * Returns <0 if `a` ranks ahead of `b`.
+ */
+export interface MlbOfficialRankKey {
+  candidateProbabilityPct: number;
+  modelEdgePctPoints: number | null;
+  oddsAgeMs: number | null;
+  dataQualityRank: number; // higher is better
+}
+
+export function compareMlbOfficialRank(a: MlbOfficialRankKey, b: MlbOfficialRankKey): number {
+  const pa = Number.isFinite(a.candidateProbabilityPct) ? a.candidateProbabilityPct : -Infinity;
+  const pb = Number.isFinite(b.candidateProbabilityPct) ? b.candidateProbabilityPct : -Infinity;
+  if (pa !== pb) return pb - pa;
+
+  const ea = a.modelEdgePctPoints == null ? -Infinity : a.modelEdgePctPoints;
+  const eb = b.modelEdgePctPoints == null ? -Infinity : b.modelEdgePctPoints;
+  if (ea !== eb) return eb - ea;
+
+  const fa = a.oddsAgeMs == null ? Infinity : a.oddsAgeMs;
+  const fb = b.oddsAgeMs == null ? Infinity : b.oddsAgeMs;
+  if (fa !== fb) return fa - fb;
+
+  return (b.dataQualityRank ?? 0) - (a.dataQualityRank ?? 0);
+}
+
+export function dataQualityRank(q: string | null | undefined): number {
+  switch (q) {
+    case "full": return 3;
+    case "partial": return 2;
+    case "degraded": return 1;
+    default: return 0;
+  }
+}
+
 export function evaluateMlbProductionLane(
   input: MlbProductionLaneInput,
   policy: MlbLivePolicy = getMlbLivePolicy(),

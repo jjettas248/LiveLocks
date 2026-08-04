@@ -20,7 +20,9 @@ import {
 } from "./mlbOfficialEligibility";
 import {
   evaluateMlbProductionLane,
+  deriveFinalizedTier,
   type MlbProductionLaneResult,
+  type MlbFinalizedTier,
 } from "./mlbProductionLane";
 import type { MlbLane } from "./productionPolicy";
 import { MLB_EDGE_VERSION } from "./oddsProbability";
@@ -71,6 +73,10 @@ export interface MlbFinalizedSignal {
   calibratedCandidateProbability: number | null;
   lineIsInteger: boolean;
   inningBand: string;
+  // Finalizer-owned user-facing tier — a pure function of lane + calibration
+  // semantics + candidate probability, NEVER signalScore. Non-official or
+  // provisional signals are hard-capped below Strong/Elite.
+  finalizedTier: MlbFinalizedTier;
   version: string;
 }
 
@@ -226,6 +232,16 @@ export function finalizeMlbSignal(sig: MLBQualifiedSignal): MlbFinalizedSignal {
   const officialEligibility = evaluateMlbOfficialEligibility(sig);
   const { classification, reasons } = classify(sig, isBettable, officialEligibility);
   const laneInfo = computeLane(sig, officialEligibility.eligible);
+  // Finalizer-owned tier. HR keeps its own lifecycle tier (signalScore never
+  // set HR tiers), so only non-HR markets get the capped production tier.
+  const finalizedTier: MlbFinalizedTier =
+    sig.market === "home_runs"
+      ? ((sig.signalTier as MlbFinalizedTier) ?? "watch")
+      : deriveFinalizedTier({
+          lane: laneInfo.lane,
+          semantics: laneInfo.outcomeProbabilitySemantics,
+          candidateProbabilityPct: sig.engineProbability,
+        });
 
   return {
     signalId: sig.id,
@@ -253,6 +269,7 @@ export function finalizeMlbSignal(sig: MLBQualifiedSignal): MlbFinalizedSignal {
     calibratedCandidateProbability: laneInfo.calibratedCandidateProbability,
     lineIsInteger: laneInfo.lineIsInteger,
     inningBand: laneInfo.inningBand,
+    finalizedTier,
     version: MLB_FINALIZATION_VERSION,
   };
 }
@@ -295,5 +312,14 @@ export function stampMlbSignalFinalization(signals: MLBQualifiedSignal[], nowMs:
     sig.calibratedCandidateProbability = finalized.calibratedCandidateProbability;
     sig.lineIsInteger = finalized.lineIsInteger;
     sig.inningBand = finalized.inningBand;
+    // Finalizer-owned tier becomes the authoritative user-facing signalTier for
+    // non-HR markets — this is what removes signalScore's authority over the
+    // rendered tier. A non-official or provisional signal can never carry a
+    // Strong/Elite signalTier past this point, no matter its signalScore. HR
+    // markets keep their own lifecycle tier untouched.
+    sig.finalizedTier = finalized.finalizedTier;
+    if (sig.market !== "home_runs") {
+      sig.signalTier = finalized.finalizedTier;
+    }
   }
 }

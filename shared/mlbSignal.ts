@@ -15,6 +15,17 @@ export interface MLBSignal {
   calibratedProbabilityUnder?: number | null;
   edge: number | null;
   evPct: number | null;
+  // ── MLB Live Edge safety-core (Stage A) — canonical no-vig edge + lane +
+  // freshness on the wire. Public surfaces rank/label off these, never
+  // signalScore. `modelEdgePctPoints` is the canonical model edge (pp);
+  // `edgeVersion` distinguishes canonical from legacy rows.
+  modelEdgePctPoints?: number | null;
+  noVigBookProbability?: number | null;
+  edgeVersion?: string | null;
+  lane?: string | null;
+  oddsAgeMs?: number | null;
+  finalizedTier?: "watch" | "lean" | "strong" | "elite" | null;
+  outcomeProbabilitySemantics?: "raw_provisional" | "outcome_calibrated" | null;
   recommendedSide: string;
   signalScore: number;
   confidenceTier: string;

@@ -822,6 +822,9 @@ export interface MLBQualifiedSignal {
   calibratedCandidateProbability?: number | null; // null until a real calibrator exists
   lineIsInteger?: boolean | null;
   inningBand?: string | null;
+  // Finalizer-owned user-facing tier (never signalScore-derived). Capped below
+  // Strong/Elite for non-official/provisional signals.
+  finalizedTier?: import("./mlbProductionLane").MlbFinalizedTier | null;
 
   pitcherAnalysis?: {
     stuff: number;

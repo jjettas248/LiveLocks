@@ -607,12 +607,19 @@ export function scoreUnderSignal(
   const price = computePriceValidationComponent(output.edge, output.overOdds, output.underOdds);
   const eventBoost = computeEventBoostComponent(input, output);
 
+  // MLB Live Edge safety-core (Stage A A5) — fixed a double-count: `live`
+  // (computeLiveContextComponent) was previously weighted twice
+  // (0.15 * live + 0.12 * live = 0.27 * live), inflating one piece of evidence
+  // into ~a quarter of the score, while `eventBoost` was computed (line above)
+  // but silently dropped from the total. Now each component is counted once and
+  // eventBoost takes the freed 0.12 weight (mirroring scoreBatterOverSignal,
+  // which also carries eventBoost). Weights still sum to 1.0.
   const baseTotal = Math.round(
     0.22 * prob +
     0.18 * proj +
     0.15 * matchup +
     0.15 * live +
-    0.12 * live +
+    0.12 * eventBoost +
     0.08 * form +
     0.05 * opportunity +
     0.05 * price

@@ -23,6 +23,10 @@ interface SignalForFamily {
   edge?: number;
   evPct?: number;
   signalScore: number;
+  // MLB Live Edge safety-core (Stage A A5) — flagship selection is now driven
+  // by candidate probability (engineProbability), never signalScore.
+  engineProbability?: number;
+  modelEdgePctPoints?: number | null;
 }
 
 function getMarketFamilies(market: MLBMarket): string[] {
@@ -71,13 +75,18 @@ export function applyFamilySuppression<T extends SignalForFamily>(
         continue;
       }
 
+      // MLB Live Edge safety-core (Stage A A5) — flagship selection is
+      // signalScore-free. The family flagship is the sibling with the highest
+      // candidate probability (engineProbability); canonical no-vig model edge
+      // (falling back to the legacy edge only when no-vig is not yet computed)
+      // is the tiebreak. signalScore/evPct no longer choose the flagship.
       const sorted = [...familyMembers].sort((a, b) => {
-        const aIsBatterOver = a.side === "OVER" && !["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(a.market);
-        const bIsBatterOver = b.side === "OVER" && !["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"].includes(b.market);
-        if (aIsBatterOver || bIsBatterOver) {
-          return (b.signalScore ?? 0) - (a.signalScore ?? 0);
-        }
-        return Math.abs(b.edge ?? b.evPct ?? 0) - Math.abs(a.edge ?? a.evPct ?? 0);
+        const pa = Number.isFinite(a.engineProbability as number) ? (a.engineProbability as number) : -Infinity;
+        const pb = Number.isFinite(b.engineProbability as number) ? (b.engineProbability as number) : -Infinity;
+        if (pa !== pb) return pb - pa;
+        const ea = a.modelEdgePctPoints ?? (a.edge != null ? Math.abs(a.edge) : -Infinity);
+        const eb = b.modelEdgePctPoints ?? (b.edge != null ? Math.abs(b.edge) : -Infinity);
+        return eb - ea;
       });
 
       for (let i = 0; i < sorted.length; i++) {

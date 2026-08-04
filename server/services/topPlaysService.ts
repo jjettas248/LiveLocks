@@ -24,6 +24,12 @@ export type TopPlayItem = {
   signalTier?: "watch" | "lean" | "strong" | "elite";
   updatedAt: string;
   signalScore?: number | null;
+  // MLB Live Edge safety-core (Stage A A6) — canonical no-vig edge + freshness
+  // + lane. MLB ranking uses these (candidate probability → no-vig edge →
+  // freshness); signalScore is NOT a ranking input for MLB.
+  modelEdgePctPoints?: number | null;
+  oddsAgeMs?: number | null;
+  lane?: string | null;
   timingContext?: string | null;
   batterArchetype?: string | null;
   pitcherArchetype?: string | null;
@@ -87,6 +93,15 @@ const MARKET_STABILITY: Record<string, number> = {
 };
 
 function computeRankScore(play: TopPlayItem): number {
+  // ── MLB Live Edge safety-core (Stage A A6) — MLB ranking is signalScore-free.
+  // Candidate probability dominates; canonical no-vig edge (pp) is the tiebreak.
+  // Evidence freshness (oddsAgeMs) is applied as a finer tiebreak in
+  // sortByRank. signalScore/HIGH_PROB_BYPASS have NO ordering authority here.
+  if (play.sport === "MLB") {
+    const probPart = (Number.isFinite(play.probability) ? play.probability : 0) / 100;
+    const edgePart = Math.max(0, play.modelEdgePctPoints ?? 0) / 100;
+    return probPart + 0.25 * edgePart;
+  }
   const edgePart = Math.abs(play.edge);
   const tierPart = TIER_WEIGHT[play.confidenceTier] ?? 0.50;
   const stability = MARKET_STABILITY[play.market ?? ""] ?? 0.70;
@@ -216,6 +231,9 @@ function buildAllQualifiedPlays(
       signalTier: isCanonical ? canonicalTier : undefined,
       updatedAt: sig.updatedAt ?? new Date().toISOString(),
       signalScore: sig.signalScore ?? null,
+      modelEdgePctPoints: sig.modelEdgePctPoints ?? null,
+      oddsAgeMs: sig.oddsAgeMs ?? null,
+      lane: sig.lane ?? null,
       timingContext: sig.timingContext ?? null,
       batterArchetype: sig.batterArchetype ?? null,
       pitcherArchetype: sig.pitcherArchetype ?? null,
@@ -234,7 +252,14 @@ function sortByRank(plays: TopPlayItem[]): TopPlayItem[] {
     const aRank = computeRankScore(a);
     const bRank = computeRankScore(b);
     if (Math.abs(bRank - aRank) > 0.01) return bRank - aRank;
-    return b.probability - a.probability;
+    if (b.probability !== a.probability) return b.probability - a.probability;
+    // MLB evidence-freshness tiebreak — fresher odds observation first.
+    if (a.sport === "MLB" && b.sport === "MLB") {
+      const fa = a.oddsAgeMs == null ? Infinity : a.oddsAgeMs;
+      const fb = b.oddsAgeMs == null ? Infinity : b.oddsAgeMs;
+      if (fa !== fb) return fa - fb;
+    }
+    return 0;
   });
 }
 
