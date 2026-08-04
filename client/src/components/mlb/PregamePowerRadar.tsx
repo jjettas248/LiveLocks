@@ -23,7 +23,6 @@ import {
   getPlateDriverDisplayPriority,
   type PlateTagTone,
 } from "@/lib/mlb/plateTagPresentation";
-import { isDisplaySuppressedDriverKey } from "@shared/plateDisplaySuppression";
 
 type Tier = "track" | "watch" | "power_watch" | "strong" | "elite" | "nuclear";
 type Market = "home_runs" | "total_bases" | "hits" | "rbi" | "hrr";
@@ -33,6 +32,10 @@ interface PowerDriver {
   label: string;
   direction: "positive" | "negative" | "neutral";
   evidence?: string;
+  // Server-stamped display gate. `false` = do not render this chip (it may still
+  // count as evidence server-side). Read verbatim — never recompute.
+  displayEligible?: boolean;
+  tier?: string;
 }
 
 type SetupLabel = "Elite" | "Strong" | "Solid" | "Watch";
@@ -463,20 +466,14 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   // keeps a qualifying pull metric from being crowded off by the cap WITHOUT
   // reordering or dropping any other driver. The remaining chips keep their
   // existing order and 4-cap; overflow is surfaced as "+N more".
-  // Display-layer suppression (shared/plateDisplaySuppression.ts): explicitly
-  // filter suppressed keys (e.g. power_iso) here as defense-in-depth, independent
-  // of the server also stripping them. This never affects score/tier/qualification
-  // (all server-stamped); it only removes the chip from the card.
-  const positiveDriversAll = s.drivers.filter(
-    (d) => d.direction === "positive" && d.key !== "power_pullair" && !isDisplaySuppressedDriverKey(d.key),
-  );
+  const positiveDriversAll = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair" && d.displayEligible !== false);
   const positives = positiveDriversAll
     .slice()
     .sort((a, b) => priority(a) - priority(b))
     .slice(0, 4);
   const hiddenPositiveCount = Math.max(0, positiveDriversAll.length - positives.length);
   const negatives = s.drivers
-    .filter((d) => d.direction === "negative" && !isDisplaySuppressedDriverKey(d.key))
+    .filter((d) => d.direction === "negative")
     .slice()
     .sort((a, b) => priority(a) - priority(b))
     .slice(0, 4);
@@ -499,12 +496,17 @@ function PregameCard({ signal: s }: { signal: PregameSignal }) {
   const showPullRate = pullDriver != null && pullRateValue != null;
 
   // Market-aware final state — server-stamped outcomes only; the card never
-  // derives win/loss. A cashed-HR celebration shows ONLY when HR is the primary
-  // angle. A Total-Bases-primary card shows its final TB count instead (TB has
-  // no stored line → never a cash/miss). HR-primary misses show a plain factual
-  // "No HR" — shown, not erased.
+  // derives win/loss. A home run is a cash on ANY card: the green HOMERED
+  // celebration fires whenever the server confirms outcomes.hitHr, regardless
+  // of whether Home Runs or Total Bases was the primary angle. A power target
+  // who goes deep has hit, and the card must settle green — the server already
+  // grades every such HR as a pregame_win (see deriveWinAttribution), so gating
+  // the celebration on isHrPrimary was silently dropping real HRs off the
+  // Total-Bases-primary cards. HR-primary misses still show a plain factual
+  // "No HR" — shown, not erased. A Total-Bases-primary card still surfaces its
+  // final TB count for the extra-base context beyond the HR.
   const isHrPrimary = s.primaryMarket === "home_runs";
-  const hitHr = isHrPrimary && s.outcomes?.hitHr === true;
+  const hitHr = s.outcomes?.hitHr === true;
   const noHr = isHrPrimary && s.outcomes != null && s.outcomes.hitHr === false;
   const finalTotalBases = !isHrPrimary && s.outcomes != null ? (s.outcomes.totalBases ?? null) : null;
   const cashedColor = "#10b981";
@@ -962,9 +964,7 @@ function PregameExpandedDetail({ signal: s }: { signal: PregameSignal }) {
   // Exclude power_pullair — raw pull rate is shown truthfully as "Pull Rate" in
   // the compact value + the Core Power Profile below; it must never render via
   // its server driver label "Pull-Side Power" (not a true pulled-air metric).
-  const allPositives = s.drivers.filter(
-    (d) => d.direction === "positive" && d.key !== "power_pullair" && !isDisplaySuppressedDriverKey(d.key),
-  );
+  const allPositives = s.drivers.filter((d) => d.direction === "positive" && d.key !== "power_pullair" && d.displayEligible !== false);
   const coverage = coverageLabel(diag.dataCoverageScore);
   const components = COMPONENT_LABELS
     .map(({ key, label }) => ({ label, value: diag[key] as number | null | undefined }))

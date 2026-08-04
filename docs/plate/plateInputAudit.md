@@ -78,20 +78,25 @@ xslgContactSum (per qualityBBE) · xHrQualitySum (per qualityBBE)
 11. Qualification depends on `positiveDriverCount≥2` (`plateDriverUniverse.ts`).
 12. Market can influence surfacing order.
 
-## PR0 change (this PR)
+## PR0 change (superseded)
 
-`power_iso` is **suppressed from presentation only**. The internal `PowerDriver` is
-still produced by `batterPowerProfile.ts` and still counted by `countPositiveDrivers`
-(it is a member of `JUL20_POSITIVE_DRIVER_KEYS`, `plateDriverUniverse.ts:39`), so
-**champion `score10`/tier/`positiveDriverCount`/qualification/publication are
-byte-identical**. Only the surfaced driver/tag lists exclude it — server serialization
-(`diagnostics.ts::buildResponse`), the public win digest
-(`winAttribution.ts::pregameDriverDigest`), and the client card
-(`PregamePowerRadar.tsx`) — via the shared predicate
-`shared/plateDisplaySuppression.ts::isDisplaySuppressedDriverKey`. A fitted, selective
-Elite-ISO threshold ships later with the calibrated model. This is the
-**PR0-adjusted champion contract** (the rollback target for the calibrated release).
+PR0 originally shipped a blunt fix: `power_iso` was **unconditionally suppressed from
+presentation** for every hitter via a shared key-based predicate
+(`shared/plateDisplaySuppression.ts::isDisplaySuppressedDriverKey`), pending a fitted,
+selective threshold.
 
-Tests:
-- `server/mlb/pregamePowerRadar/eliteIsoDisplaySuppression.test.ts` (isolation + presentation)
-- `client/src/lib/mlb/plateDisplaySuppression.test.ts` (client filter predicate)
+That threshold shipped ahead of the rest of this plan, in a separate PR
+("fix(mlb-plate): repair universal 'Elite Isolated Power' tag — canonical true-ISO
+classification", merged to `main` before this branch's own selective threshold work
+reached it). It replaced PR0's blanket key-based suppression with a canonical,
+reliability-gated true-ISO classifier (`isoAssessment.ts`) that stamps a per-instance
+`PowerDriver.displayEligible` flag — so the tag now correctly renders for genuine
+elite-ISO hitters instead of being hidden for everyone. `champion score10/tier/
+positiveDriverCount/qualification/publication` remain byte-identical, same as PR0's
+original guarantee.
+
+This branch has been updated to drop PR0's now-superseded blanket-suppression module
+and its call sites (`diagnostics.ts::buildResponse`,
+`winAttribution.ts::pregameDriverDigest`, `PregamePowerRadar.tsx`) in favor of reading
+`displayEligible` directly, so only one Elite-ISO display gate exists in the codebase.
+`shared/plateDisplaySuppression.ts` and its two isolation tests no longer exist.

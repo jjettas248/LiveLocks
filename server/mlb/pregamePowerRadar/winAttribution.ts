@@ -23,7 +23,6 @@ import {
   FIRST_AB_PREGAME_WIN_COPY,
 } from "../../../shared/pregameRadarWin";
 import { formatPlainDateLabel } from "../../../shared/dateLabel";
-import { isDisplaySuppressedDriverKey } from "../../../shared/plateDisplaySuppression";
 import { toEtDateKey, toEtTimeLabel } from "../../utils/dateUtils";
 
 /** Minimal AB shape (subset of dataPullService priorABResults). */
@@ -149,12 +148,14 @@ function parkWeatherBoostLabel(signal: PregamePowerSignal): string | null {
 }
 
 function pregameDriverDigest(drivers: PowerDriver[]): PregameRadarWinItem["pregameDrivers"] {
-  // Display-only suppression (shared/plateDisplaySuppression.ts): the win card is
-  // a presentation surface, so display-suppressed keys (e.g. power_iso) are hidden
-  // here too. This never affects attribution — outcome/userVisible are decided
+  // Display-only gate (server/mlb/pregamePowerRadar/types.ts's PowerDriver.
+  // displayEligible, stamped by the canonical ISO classifier — see
+  // isoAssessment.ts): the win card is a presentation surface, so the same
+  // per-instance gate the client/diagnostics use hides ineligible chips here
+  // too. This never affects attribution — outcome/userVisible are decided
   // upstream from the full, unfiltered signal.
   return drivers
-    .filter((d) => d.direction === "positive" && !isDisplaySuppressedDriverKey(d.key))
+    .filter((d) => d.direction === "positive" && d.displayEligible !== false)
     .slice(0, 5)
     .map((d) => ({ key: d.key, label: d.label, direction: d.direction }));
 }

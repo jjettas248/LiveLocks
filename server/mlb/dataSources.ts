@@ -32,7 +32,13 @@ export interface BaseballSavantData {
   flyBallPercent: number | null;    // % BIP that are fly balls (bb_type="fly_ball")
   hrFBRatio: number | null;         // home runs / fly balls (%)
   xwOBASeason: number | null;       // avg expected wOBA across all BIP this season
-  xISOSeason: number | null;        // expected isolated power (xSLG − xBA)
+  // ON-CONTACT expected-power PROXY: xSLGcon − xBAcon, where xSLGcon/xBAcon are
+  // means of estimated_slg/ba_using_speedangle over BATTED BALLS ONLY (non-contact
+  // PAs skipped). ≈0.20–0.30 — systematically ~50% above TRUE per-PA isolated
+  // power (SLG − AVG, league ≈0.14). Kept as a score input (the champion's
+  // backtested composite consumes it) but it is NOT isolated power; the Plate ISO
+  // display tag uses true split ISO instead. Do not treat this as measured ISO.
+  xISOSeason: number | null;
   sweetSpotPercent: number | null;  // % BIP with launch angle 8–32°
   // Batter pull rate — % of BIP hit to the pull side (spray angle from hc_x/hc_y,
   // sign-adjusted for batter stand). Null when hit-coordinate data is unavailable.

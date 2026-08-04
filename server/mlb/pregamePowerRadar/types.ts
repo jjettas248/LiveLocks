@@ -61,6 +61,16 @@ export interface PowerDriver {
   evidence?: string;
   /** Optional 0-100 contribution weight for analytics/sorting. */
   weight?: number;
+  /**
+   * Optional server-stamped display gate. When `false`, the client must NOT
+   * render this chip (the driver may still count as evidence — e.g. `power_iso`
+   * stays counted for the champion's driver universe regardless of this flag).
+   * Absent/`true` renders normally. Additive: no new driver KEY, so the driver
+   * universe / hygiene contract is unaffected.
+   */
+  displayEligible?: boolean;
+  /** Optional server-stamped classification tier (e.g. the ISO tier). Display/analytics only. */
+  tier?: string;
 }
 
 /**
