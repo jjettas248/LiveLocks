@@ -15,10 +15,12 @@ import { logit } from "./normalizeStats";
 import { shrinkRate, STABILIZATION_K } from "./shrinkRates";
 import {
   buildPregameHrPerPa,
+  buildSegmentedHrPerPa,
   LEAGUE_HR_PER_PA,
 } from "./buildPregameHrPerPa";
 import { estimatePregamePaDistribution } from "./estimatePregamePaDistribution";
-import { gameHrProbability } from "./gameHrProbability";
+import { estimatePregamePaPath } from "./estimatePregamePaPath";
+import { gameHrProbability, jointGameHrProbability } from "./gameHrProbability";
 import { calibratePregameHrProbability } from "./calibratePregameHrProbability";
 import { rankPregameCandidate } from "./rankPregameCandidatesV2";
 
@@ -38,6 +40,28 @@ export function runPregameMathModel(inputs: PregameMathInputs): PregameMathModel
   const cal = calibratePregameHrProbability(build.shrunkHrPerPa);
   const calibratedHrPerPa = cal.calibrated;
   const calibratedGameHrProbability = gameHrProbability(calibratedHrPerPa, distribution);
+
+  // ── PR6: corrected starter/bullpen joint PA-path probability ──────────────
+  // Segmented per-PA rates (p_s vs starter, p_b vs bullpen) + a joint (n_s, n_b)
+  // PA-path. The joint game probability is the corrected authority; the legacy
+  // single-path value above is retained as a diagnostic. Exposure is applied
+  // exactly once (in the PA-path), never also inside the per-PA rate.
+  const segmented = buildSegmentedHrPerPa(inputs);
+  const paPath = estimatePregamePaPath({
+    battingOrderSlot: inputs.lineupOpportunity?.battingOrderSlot,
+    teamImpliedRuns: inputs.lineupOpportunity?.teamImpliedRuns,
+    starterBullpen: inputs.starterBullpen,
+  });
+  const jointGameProb = jointGameHrProbability(
+    segmented.starterHrPerPa,
+    segmented.bullpenHrPerPa,
+    paPath,
+  );
+  // Calibrate each segment rate (identity passthrough until PR8) then recompute
+  // the joint so the calibration seam stays consistent with the legacy path.
+  const calStarter = calibratePregameHrProbability(segmented.starterHrPerPa).calibrated;
+  const calBullpen = calibratePregameHrProbability(segmented.bullpenHrPerPa).calibrated;
+  const calibratedJointGameProb = jointGameHrProbability(calStarter, calBullpen, paPath);
 
   // ── Baselines + lifts ────────────────────────────────────────────────────
   const playerSeasonShrunk = shrinkRate(
@@ -131,6 +155,13 @@ export function runPregameMathModel(inputs: PregameMathInputs): PregameMathModel
     rawGameHrProbability: round(rawGameHrProbability, 4),
     calibratedGameHrProbability: round(calibratedGameHrProbability, 4),
 
+    starterHrPerPa: round(segmented.starterHrPerPa, 4),
+    bullpenHrPerPa: round(segmented.bullpenHrPerPa, 4),
+    projectedStarterPA: round(paPath.starterMean, 2),
+    projectedBullpenPA: round(paPath.bullpenMean, 2),
+    jointGameHrProbability: round(jointGameProb, 4),
+    calibratedJointGameHrProbability: round(calibratedJointGameProb, 4),
+
     playerBaselineGameHrProbability: round(playerBaselineGameHrProbability, 4),
     slateBaselineGameHrProbability: round(slateBaselineGameHrProbability, 4),
     marketImpliedHrProbability: round(marketImpliedHrProbability, 4),
@@ -164,6 +195,18 @@ export function runPregameMathModel(inputs: PregameMathInputs): PregameMathModel
         shrinkWeight: t.shrinkWeight != null ? round(t.shrinkWeight, 3) : null,
       })),
       suppressorPenalty: round(build.suppressorPenalty, 3),
+      // PR6 joint starter/bullpen path.
+      jointPath: {
+        starterHrPerPa: round(segmented.starterHrPerPa, 4),
+        bullpenHrPerPa: round(segmented.bullpenHrPerPa, 4),
+        starterOpponentLogOdds: round(segmented.starterOpponentLogOdds, 3),
+        bullpenOpponentLogOdds: round(segmented.bullpenOpponentLogOdds, 3),
+        recentFormLogOdds: round(segmented.recentFormLogOdds, 3),
+        bullpenVulnerabilityAvailable: segmented.bullpenVulnerabilityAvailable,
+        projectedStarterPA: round(paPath.starterMean, 2),
+        projectedBullpenPA: round(paPath.bullpenMean, 2),
+        allStarter: paPath.allStarter,
+      },
     },
     calibrationDiagnostics: cal.diagnostics,
     missingDataWarnings,

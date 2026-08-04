@@ -9,6 +9,10 @@
 //
 // Usage weighting is the key idea: damage vs a pitch the pitcher rarely throws
 // matters less than damage vs his bread-and-butter offering.
+//
+// PR6 role: this is the STARTER pitch-mix term. In the segmented builder it is a
+// starter-only opponent term — it enters p_s (vs the starter) and must NEVER enter
+// p_b (vs the bullpen), whose arsenal is a different, unmodeled distribution.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type { PitchTypeInteractionInputs, LogOddsTerm } from "./mathTypes";

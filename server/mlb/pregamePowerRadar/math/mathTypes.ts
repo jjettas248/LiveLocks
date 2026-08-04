@@ -68,6 +68,34 @@ export interface BatTrackingInputs {
   swingSample: number | null;
 }
 
+/**
+ * B2. Stabilized recent-contact form (PR5 shadow features) → a batter-INTRINSIC
+ * log-odds term. Every field is a stabilized, reliability-blended aggregate over
+ * the most-recent BBE window (see hrProbabilityV2/recentContactForm.ts) — NOT a
+ * raw streak. It carries NO home-run count or HR/FB (that can never contribute;
+ * mirrors the PR5 leakage boundary), so recent power form enters only through
+ * measured contact quality (EV / EV90 / air% / barrel%).
+ *
+ * This term applies to EVERY PA segment (starter AND bullpen) because it is a
+ * property of the hitter, not the opponent. All fields are nullable and additive:
+ * absent → no-op (0 contribution). It is intentionally NOT populated by
+ * `toPregameMathInputs` (the shadow feature stays out of the production frozen
+ * math path per the isolation guarantee); it is exercised through the segmented
+ * builder + its property tests, and any future explicit wiring is later work.
+ */
+export interface RecentContactFormTermInputs {
+  /** Stabilized recent barrel% on contact (0–100). */
+  recentFormBarrelPct: number | null;
+  /** Stabilized recent average exit velocity (mph). */
+  recentFormAvgEv: number | null;
+  /** Stabilized recent 90th-percentile exit velocity (mph). */
+  recentFormEv90: number | null;
+  /** Stabilized recent air-ball% (LA ≥ 10°), 0–100. */
+  recentFormAirPct: number | null;
+  /** Effective BBE backing the window (reliability weight; shrinks a thin window toward no-op). */
+  effectiveBbe: number | null;
+}
+
 /** E. Pitcher HR vulnerability (season + handedness split; pre-game only). */
 export interface PitcherVulnerabilityInputs {
   pitcherKnown: boolean;
@@ -153,6 +181,13 @@ export interface StarterBullpenPathInputs {
   projectedPaVsBullpen: number | null;
   bullpenHrPer9: number | null;
   bullpenBarrelAllowedPct: number | null;
+  /**
+   * Opener/bulk-pitcher signal (PR6, optional). When true, the starter is
+   * expected to face the batter very few times (short leash) so PA mass shifts
+   * to the bullpen path. Widens the starter-faced-PA spread when the split is
+   * uncertain. Absent → no effect (the projected-PA split alone drives the path).
+   */
+  isOpenerLikely?: boolean | null;
 }
 
 /** O. Market confirmation — confirm/rank only, never creates a candidate. */
@@ -185,8 +220,71 @@ export interface PregameMathInputs {
   starterBullpen: StarterBullpenPathInputs;
   market: MarketConfirmationInputs;
   availability: AvailabilitySuppressorInputs;
+  /**
+   * B2. Stabilized recent-contact form (PR6, optional). Additive batter-intrinsic
+   * term consumed by the segmented builder. Optional so existing fixtures and the
+   * production frozen path (`toPregameMathInputs`, which deliberately omits it)
+   * compile unchanged; absent → no-op.
+   */
+  recentContactForm?: RecentContactFormTermInputs | null;
   /** Slate-wide baseline HR/game probability for lift comparison (slate prior, no leakage). */
   slateBaselineGameHrProbability: number | null;
+}
+
+// ── PR6: starter/bullpen joint PA-path contracts ─────────────────────────────
+
+/**
+ * Per-segment HR-per-PA rates. `starterHrPerPa` (p_s) folds in the starter
+ * opponent terms (pitcher vulnerability, starter pitch-mix, starter zone);
+ * `bullpenHrPerPa` (p_b) folds in ONLY the expected-bullpen vulnerability.
+ * BOTH share the hitter / recent-form / park terms. This is the §10
+ * per-segment decomposition — starter-only terms never enter p_b, and
+ * hitter/form/park always enter p_b.
+ */
+export interface SegmentedHrPerPaResult {
+  /** p_s — per-PA HR probability vs the starter (post shrink + suppressor). */
+  starterHrPerPa: number;
+  /** p_b — per-PA HR probability vs the bullpen (post shrink + suppressor). */
+  bullpenHrPerPa: number;
+
+  /** β0 + Hitter + RecentForm + ParkWeather (pre-suppressor, shared by both segments). */
+  sharedLogit: number;
+  /** Starter opponent log-odds (pitcher + starter pitch-mix + starter zone). */
+  starterOpponentLogOdds: number;
+  /** Bullpen opponent log-odds (expected-bullpen vulnerability only). */
+  bullpenOpponentLogOdds: number;
+  /** Recent-contact-form log-odds contribution (batter-intrinsic; enters both). */
+  recentFormLogOdds: number;
+
+  /** True iff real bullpen-vulnerability data was present (else p_b uses a neutral opponent). */
+  bullpenVulnerabilityAvailable: boolean;
+
+  terms: LogOddsTerm[];
+  suppressors: string[];
+  suppressorPenalty: number;
+  confidenceFactor: number;
+  /** [0,1] coverage of the starter-segment core families (batter + starter). */
+  starterCoreCoverage: number;
+  /** [0,1] coverage of the bullpen-segment core families (batter + bullpen). */
+  bullpenCoreCoverage: number;
+  effectiveSample: number;
+}
+
+/**
+ * Joint distribution over (PA vs starter = n_s, PA vs bullpen = n_b). Keys are
+ * `"${n_s}:${n_b}"` and the values sum to 1. The batter's PA are sequential, so
+ * for a given total N the starter is faced first (n_s) then the bullpen (n_b).
+ */
+export interface PaPathJointDistribution {
+  joint: Record<string, number>;
+  /** E[N_s] — expected PA vs the starter. */
+  starterMean: number;
+  /** E[N_b] — expected PA vs the bullpen. */
+  bullpenMean: number;
+  /** E[N_s + N_b] — expected total PA. */
+  totalMean: number;
+  /** True when the whole game routes to the starter path (no bullpen exposure modeled). */
+  allStarter: boolean;
 }
 
 /** A single additive log-odds term contributed by one component. */
@@ -222,6 +320,24 @@ export interface PregameMathModelResult {
 
   rawGameHrProbability: number | null;
   calibratedGameHrProbability: number | null;
+
+  // ── PR6: corrected starter/bullpen joint PA-path (additive) ────────────────
+  /** p_s — per-PA HR probability vs the starter (null when unmodeled). */
+  starterHrPerPa: number | null;
+  /** p_b — per-PA HR probability vs the bullpen (null when unmodeled). */
+  bullpenHrPerPa: number | null;
+  /** E[PA vs starter] under the joint path. */
+  projectedStarterPA: number | null;
+  /** E[PA vs bullpen] under the joint path. */
+  projectedBullpenPA: number | null;
+  /**
+   * Corrected game HR probability from the JOINT (n_s, n_b) expectation:
+   * 1 − Σ P(n_s,n_b)·(1−p_s)^{n_s}·(1−p_b)^{n_b}. This is the PR6 authority; the
+   * legacy single-path `calibratedGameHrProbability` is retained as a diagnostic.
+   */
+  jointGameHrProbability: number | null;
+  /** Calibrated joint game HR probability (identity passthrough until PR8). */
+  calibratedJointGameHrProbability: number | null;
 
   playerBaselineGameHrProbability: number | null;
   slateBaselineGameHrProbability: number | null;
