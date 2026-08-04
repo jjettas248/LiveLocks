@@ -1,0 +1,13 @@
+{
+  "boundary_600_stale": false,
+  "fresh_just_under_599": true,
+  "fresh_typical_60": true,
+  "fresh_zero": true,
+  "negative_finite_is_fresh": true,
+  "stale_601": false,
+  "stale_far_3600": false,
+  "unknown_infinity": false,
+  "unknown_nan": false,
+  "unknown_null": false,
+  "unknown_undefined": false
+}
