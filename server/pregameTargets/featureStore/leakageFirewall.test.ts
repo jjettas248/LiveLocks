@@ -67,6 +67,13 @@ const ctx = (over: Partial<LeakageContext> = {}): LeakageContext => ({ predictio
     "provenance without the target game is safe",
   );
   ok(isLeakageSafe(row(), ctx({ targetGameId: "nba:game:TARGET" })), "no provenance recorded → not self_update");
+  // A non-normalized context target id must still match normalized provenance —
+  // a whitespace variant can't be used to sneak the target game's feature in.
+  const rWs = checkFeatureLeakage(
+    row({ derivedFromGameIds: ["nba:game:A", "nba:game:TARGET"] }),
+    ctx({ targetGameId: "nba:game:TARGET " }),
+  );
+  ok(!rWs.ok && rWs.violations.includes("same_game_self_update"), "a whitespaced targetGameId still matches normalized provenance → self_update");
 }
 
 // ── outcome_in_input ─────────────────────────────────────────────────────────

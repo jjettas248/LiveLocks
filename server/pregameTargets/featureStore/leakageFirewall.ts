@@ -10,6 +10,7 @@
 // reading is dropped from the input set (and surfaces as `missing`), never
 // silently coerced. All comparisons are absolute-instant (epoch ms) comparisons.
 
+import { normalizeGameKey } from "../../../shared/pregameTargets/canonicalEntities";
 import {
   type AsOfFeatureRow,
   instantMs,
@@ -71,13 +72,16 @@ export function checkFeatureLeakage(
 
   // Guard with Array.isArray: the same-game check runs independently of the
   // structural check above, so it must never throw (or apply string-substring
-  // semantics) on a malformed, non-array `derivedFromGameIds`.
-  if (
-    ctx.targetGameId != null &&
-    Array.isArray(row.derivedFromGameIds) &&
-    row.derivedFromGameIds.includes(ctx.targetGameId)
-  ) {
-    violations.push("same_game_self_update");
+  // semantics) on a malformed, non-array `derivedFromGameIds`. Normalize BOTH
+  // the context target id and each provenance entry before the membership test:
+  // an incidental format variant (e.g. `"nba:game:TARGET "`) on either side must
+  // never let a self-update slip through the exact match, mirroring
+  // `updatePosterior`'s normalized key comparison.
+  if (ctx.targetGameId != null && Array.isArray(row.derivedFromGameIds)) {
+    const target = normalizeGameKey(ctx.targetGameId);
+    if (row.derivedFromGameIds.some((g) => normalizeGameKey(g) === target)) {
+      violations.push("same_game_self_update");
+    }
   }
 
   if (ctx.outcomeFeatureKeys?.has(row.featureKey)) {

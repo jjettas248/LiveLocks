@@ -17,28 +17,9 @@
 // Nothing here contacts a database; persistence of these states is a separate
 // layer. Values are plain numbers; instants/season are the caller's concern.
 
-import { buildCanonicalId, parseCanonicalId } from "../../../shared/pregameTargets/canonicalEntities";
+import { normalizeGameKey } from "../../../shared/pregameTargets/canonicalEntities";
 
 export const POSTERIOR_STATE_VERSION = 1;
-
-/**
- * Normalize a game lineage key. When the key is a canonical `game` id it is
- * returned in its NORMALIZED form (same normalization `buildCanonicalId`
- * applies — the native id is trimmed), so format variants like
- * `"nba:game:X "` collapse to the same key. This matters at two safety points:
- * the self-update comparison against `excludeGameId` (a non-normalized key would
- * miss the exact match and fold the target game in) and the correction/dedupe
- * lookups (a variant key would be treated as a distinct game and double-count).
- * A non-canonical key (the primitive is format-agnostic and canonical structure
- * is enforced upstream at the feature-store layer) is passed through trimmed.
- */
-function normalizeGameKey(id: string): string {
-  const parsed = parseCanonicalId(id);
-  if (parsed && parsed.kind === "game") {
-    return buildCanonicalId(parsed.sport, parsed.kind, parsed.nativeId);
-  }
-  return id.trim();
-}
 
 /** One game's contribution to a season's sufficient statistics. */
 export interface GameContribution {

@@ -90,6 +90,24 @@ export function isPregameEntityKind(v: unknown): v is PregameEntityKind {
   return typeof v === "string" && (PREGAME_ENTITY_KINDS as readonly string[]).includes(v);
 }
 
+/**
+ * Normalize a `game` lineage/match key to its canonical form (the native id
+ * trimmed, exactly as `buildCanonicalId` does), so incidental format variants
+ * like `"nba:game:X "` collapse to the same key. A non-canonical or non-`game`
+ * key is passed through trimmed — callers (posterior lineage, the firewall's
+ * self-update membership check) use it as an OPAQUE match key, and canonical
+ * structure is separately enforced at the feature-store contract. Normalizing
+ * both sides of a comparison guarantees a whitespace variant can never evade a
+ * self-update / dedupe match.
+ */
+export function normalizeGameKey(id: string): string {
+  const parsed = parseCanonicalId(id);
+  if (parsed && parsed.kind === "game") {
+    return buildCanonicalId(parsed.sport, parsed.kind, parsed.nativeId);
+  }
+  return id.trim();
+}
+
 // An instant must be a full ISO-8601 date-time with an EXPLICIT timezone
 // designator (Z or ±HH:MM / ±HHMM). `Date.parse` silently interprets an
 // offsetless datetime in the process-local timezone, which would make the
