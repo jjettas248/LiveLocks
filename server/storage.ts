@@ -79,6 +79,15 @@ import {
   moundV2ShadowJobs,
   type MoundV2ShadowJobRow,
   type InsertMoundV2ShadowJob,
+  pregameRawSourceSnapshots,
+  type PregameRawSourceSnapshotRow,
+  type InsertPregameRawSourceSnapshot,
+  pregameFeatureSnapshots,
+  type PregameFeatureSnapshotRow,
+  type InsertPregameFeatureSnapshot,
+  pregamePosteriorStates,
+  type PregamePosteriorStateRow,
+  type InsertPregamePosteriorState,
   type Player,
   type InsertPlayer,
   type TeamDefense,
@@ -521,6 +530,28 @@ export interface IStorage {
     settlementResult: MlbSettlementResult,
     settledAt: Date,
   ): Promise<MlbRecommendationEpisodeRow | null>;
+
+  // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
+  // Immutable raw source snapshots and append-only as-of feature readings; no
+  // product writes to these yet. The as-of read enforces known_at <= predictionAt.
+  createPregameRawSourceSnapshot(row: InsertPregameRawSourceSnapshot): Promise<PregameRawSourceSnapshotRow>;
+  getPregameRawSourceSnapshot(snapshotId: string): Promise<PregameRawSourceSnapshotRow | null>;
+  createPregameFeatureSnapshot(row: InsertPregameFeatureSnapshot): Promise<PregameFeatureSnapshotRow>;
+  /** As-of read: the single most recent reading with known_at <= predictionAt, or null. */
+  getPregameFeatureAsOf(query: {
+    sport: string;
+    entityCanonicalId: string;
+    featureKey: string;
+    featureVersion?: string;
+    predictionAt: Date;
+  }): Promise<PregameFeatureSnapshotRow | null>;
+  /** Upsert the single posterior state for (entity, feature, version). */
+  upsertPregamePosteriorState(row: InsertPregamePosteriorState): Promise<PregamePosteriorStateRow>;
+  getPregamePosteriorState(
+    entityCanonicalId: string,
+    featureKey: string,
+    featureVersion: string,
+  ): Promise<PregamePosteriorStateRow | null>;
 
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
   // Creation is INSERT-only with ON CONFLICT DO NOTHING — a repeated
@@ -4171,6 +4202,134 @@ export class DatabaseStorage implements IStorage {
       .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
       .returning();
     return updated ?? null;
+  }
+
+  // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
+  async createPregameRawSourceSnapshot(
+    row: InsertPregameRawSourceSnapshot,
+  ): Promise<PregameRawSourceSnapshotRow> {
+    // Idempotent capture: a re-fetch of the SAME source with unchanged content
+    // (same source_kind + source_key + content_hash) is a no-op, not an error —
+    // a routine unchanged polling response must never abort an ingestion batch.
+    const [inserted] = await db
+      .insert(pregameRawSourceSnapshots)
+      .values(row)
+      .onConflictDoNothing({
+        target: [
+          pregameRawSourceSnapshots.sourceKind,
+          pregameRawSourceSnapshots.sourceKey,
+          pregameRawSourceSnapshots.contentHash,
+        ],
+      })
+      .returning();
+    if (inserted) return inserted;
+    // Conflict → return the already-captured snapshot for this source+content.
+    const existing = await db
+      .select()
+      .from(pregameRawSourceSnapshots)
+      .where(
+        and(
+          eq(pregameRawSourceSnapshots.sourceKind, row.sourceKind),
+          eq(pregameRawSourceSnapshots.sourceKey, row.sourceKey),
+          eq(pregameRawSourceSnapshots.contentHash, row.contentHash),
+        ),
+      )
+      .limit(1);
+    return existing[0];
+  }
+
+  async getPregameRawSourceSnapshot(snapshotId: string): Promise<PregameRawSourceSnapshotRow | null> {
+    const rows = await db
+      .select()
+      .from(pregameRawSourceSnapshots)
+      .where(eq(pregameRawSourceSnapshots.snapshotId, snapshotId))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async createPregameFeatureSnapshot(
+    row: InsertPregameFeatureSnapshot,
+  ): Promise<PregameFeatureSnapshotRow> {
+    const [inserted] = await db.insert(pregameFeatureSnapshots).values(row).returning();
+    return inserted;
+  }
+
+  // NOTE: the returned row is the raw Drizzle shape (Date instants, numeric-as-string).
+  // Callers feeding it into the shared feature-store contract / leakage firewall MUST
+  // normalize it first via asOfRowFromPersisted() in shared/pregameTargets/featureStore.ts.
+  async getPregameFeatureAsOf(query: {
+    sport: string;
+    entityCanonicalId: string;
+    featureKey: string;
+    featureVersion?: string;
+    predictionAt: Date;
+  }): Promise<PregameFeatureSnapshotRow | null> {
+    // As-of read: only readings whose known_at <= predictionAt are eligible; pick
+    // the most recent, breaking ties deterministically (valid_at, then source_id)
+    // to match the in-memory store's read semantics exactly.
+    const conditions = [
+      eq(pregameFeatureSnapshots.sport, query.sport),
+      eq(pregameFeatureSnapshots.entityCanonicalId, query.entityCanonicalId),
+      eq(pregameFeatureSnapshots.featureKey, query.featureKey),
+      lte(pregameFeatureSnapshots.knownAt, query.predictionAt),
+    ];
+    if (query.featureVersion != null) {
+      conditions.push(eq(pregameFeatureSnapshots.featureVersion, query.featureVersion));
+    }
+    const rows = await db
+      .select()
+      .from(pregameFeatureSnapshots)
+      .where(and(...conditions))
+      .orderBy(
+        desc(pregameFeatureSnapshots.knownAt),
+        desc(pregameFeatureSnapshots.validAt),
+        desc(pregameFeatureSnapshots.sourceId),
+        desc(pregameFeatureSnapshots.featureVersion),
+      )
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  async upsertPregamePosteriorState(
+    row: InsertPregamePosteriorState,
+  ): Promise<PregamePosteriorStateRow> {
+    const [upserted] = await db
+      .insert(pregamePosteriorStates)
+      .values(row)
+      .onConflictDoUpdate({
+        target: [
+          pregamePosteriorStates.entityCanonicalId,
+          pregamePosteriorStates.featureKey,
+          pregamePosteriorStates.featureVersion,
+        ],
+        set: {
+          sport: row.sport,
+          stateVersion: row.stateVersion,
+          bySeason: row.bySeason,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return upserted;
+  }
+
+  async getPregamePosteriorState(
+    entityCanonicalId: string,
+    featureKey: string,
+    featureVersion: string,
+  ): Promise<PregamePosteriorStateRow | null> {
+    const rows = await db
+      .select()
+      .from(pregamePosteriorStates)
+      .where(
+        and(
+          eq(pregamePosteriorStates.entityCanonicalId, entityCanonicalId),
+          eq(pregamePosteriorStates.featureKey, featureKey),
+          eq(pregamePosteriorStates.featureVersion, featureVersion),
+        ),
+      )
+      .limit(1);
+    return rows[0] ?? null;
   }
 
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──

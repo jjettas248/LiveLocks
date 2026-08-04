@@ -1906,3 +1906,110 @@ export const moundV2ShadowJobs = pgTable("mound_v2_shadow_jobs", {
 export const insertMoundV2ShadowJobSchema = createInsertSchema(moundV2ShadowJobs).omit({ createdAt: true });
 export type MoundV2ShadowJobRow = typeof moundV2ShadowJobs.$inferSelect;
 export type InsertMoundV2ShadowJob = z.infer<typeof insertMoundV2ShadowJobSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pregame Targets — temporal data foundation (PR1). Three ADDITIVE tables that
+// underpin as-of feature reconstruction; no existing table is touched. Nothing
+// writes to these yet (no build loop until a later PR) — the schema + bootstrap
+// exist so the foundation is durable and testable now. See
+// docs/pregame-targets/ and server/pregameTargets/.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Immutable raw provider snapshot, captured with its known-at (arrival) instant. */
+export const pregameRawSourceSnapshots = pgTable("pregame_raw_source_snapshots", {
+  snapshotId: text("snapshot_id").primaryKey(),
+  sport: text("sport").notNull(),
+  /** Provider/source family, e.g. "nba_stats_playergamelog". */
+  sourceKind: text("source_kind").notNull(),
+  /** Provider request key / params (identifies WHAT was fetched). */
+  sourceKey: text("source_key").notNull(),
+  // Absolute instants — timezone-aware so a round trip can never shift them and
+  // change the knownAt <= predictionAt cutoff (Postgres `timestamptz`).
+  /** Event time — when the underlying facts became true. */
+  validAt: timestamp("valid_at", { withTimezone: true }).notNull(),
+  /** Observation time — when this payload was fetched / could be known. */
+  knownAt: timestamp("known_at", { withTimezone: true }).notNull(),
+  /** Raw response, stored verbatim and never mutated (a correction is a new row). */
+  payload: jsonb("payload").notNull(),
+  /** Content hash of the payload — dedupe / idempotent capture. */
+  contentHash: text("content_hash").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  sportKindIdx: index("pregame_raw_source_snapshots_sport_kind_idx").on(table.sport, table.sourceKind),
+  knownAtIdx: index("pregame_raw_source_snapshots_known_at_idx").on(table.knownAt),
+  sourceKeyIdx: index("pregame_raw_source_snapshots_source_key_idx").on(table.sourceKey),
+  // Uniqueness is scoped to the REQUESTED SOURCE, not the payload alone: two
+  // different source_key requests can legitimately return the same payload
+  // (commonly an empty response), and each is a distinct capture. Only a genuine
+  // re-fetch of the SAME source with an unchanged payload dedupes.
+  sourceContentIdx: uniqueIndex("pregame_raw_source_snapshots_source_content_uidx").on(
+    table.sourceKind,
+    table.sourceKey,
+    table.contentHash,
+  ),
+}));
+
+export const insertPregameRawSourceSnapshotSchema = createInsertSchema(pregameRawSourceSnapshots).omit({ createdAt: true });
+export type PregameRawSourceSnapshotRow = typeof pregameRawSourceSnapshots.$inferSelect;
+export type InsertPregameRawSourceSnapshot = z.infer<typeof insertPregameRawSourceSnapshotSchema>;
+
+/** A single as-of feature reading (persisted AsOfFeatureRow). Append-only. */
+export const pregameFeatureSnapshots = pgTable("pregame_feature_snapshots", {
+  featureRowId: text("feature_row_id").primaryKey(),
+  sport: text("sport").notNull(),
+  entityCanonicalId: text("entity_canonical_id").notNull(),
+  entityKind: text("entity_kind").notNull(),
+  featureKey: text("feature_key").notNull(),
+  featureVersion: text("feature_version").notNull(),
+  season: integer("season").notNull(),
+  // Timezone-aware absolute instants (see raw-snapshot note above).
+  validAt: timestamp("valid_at", { withTimezone: true }).notNull(),
+  knownAt: timestamp("known_at", { withTimezone: true }).notNull(),
+  /** observed | observed_zero | not_applicable | missing | stale | disagreement | imputed */
+  state: text("state").notNull(),
+  /** Finite reading for value-bearing states; NULL otherwise (never 0-for-missing). */
+  value: numeric("value"),
+  /** Raw source snapshot id this reading was derived from. */
+  sourceId: text("source_id").notNull(),
+  /** Canonical game ids that contributed (provenance / self-update guard). */
+  derivedFromGameIds: jsonb("derived_from_game_ids"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  // Primary as-of read path: by entity+feature, most-recent knownAt <= predictionAt.
+  entityFeatureKnownAtIdx: index("pregame_feature_snapshots_entity_feature_known_at_idx").on(
+    table.entityCanonicalId,
+    table.featureKey,
+    table.knownAt,
+  ),
+  sportFeatureIdx: index("pregame_feature_snapshots_sport_feature_idx").on(table.sport, table.featureKey),
+  seasonIdx: index("pregame_feature_snapshots_season_idx").on(table.season),
+}));
+
+export const insertPregameFeatureSnapshotSchema = createInsertSchema(pregameFeatureSnapshots).omit({ createdAt: true });
+export type PregameFeatureSnapshotRow = typeof pregameFeatureSnapshots.$inferSelect;
+export type InsertPregameFeatureSnapshot = z.infer<typeof insertPregameFeatureSnapshotSchema>;
+
+/** Posterior sufficient-statistics state, one per entity+feature+version. */
+export const pregamePosteriorStates = pgTable("pregame_posterior_states", {
+  posteriorId: text("posterior_id").primaryKey(),
+  sport: text("sport").notNull(),
+  entityCanonicalId: text("entity_canonical_id").notNull(),
+  featureKey: text("feature_key").notNull(),
+  featureVersion: text("feature_version").notNull(),
+  stateVersion: integer("state_version").notNull(),
+  /** Record<season, SeasonSufficientStats> — the per-season sufficient stats. */
+  bySeason: jsonb("by_season").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+}, (table) => ({
+  entityFeatureVersionUidx: uniqueIndex("pregame_posterior_states_entity_feature_version_uidx").on(
+    table.entityCanonicalId,
+    table.featureKey,
+    table.featureVersion,
+  ),
+  sportFeatureIdx: index("pregame_posterior_states_sport_feature_idx").on(table.sport, table.featureKey),
+}));
+
+export const insertPregamePosteriorStateSchema = createInsertSchema(pregamePosteriorStates).omit({ createdAt: true });
+export type PregamePosteriorStateRow = typeof pregamePosteriorStates.$inferSelect;
+export type InsertPregamePosteriorState = z.infer<typeof insertPregamePosteriorStateSchema>;

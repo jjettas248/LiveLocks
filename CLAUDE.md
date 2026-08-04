@@ -105,6 +105,13 @@ npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliationSweep.integration
 npx tsx server/mlb/pregame/mound/v2/moundV2ShadowReconciliationWiring.test.ts # Mound V2 reconciliation structural proof: zero reachability from buildMlbMoundRadar.ts, syncGameBoxScore called from exactly one file, zero sportsbook/odds imports
 npx tsx server/utils/mlbPreviewAccess.test.ts          # MLB free-preview consume-key resolution: gameId always wins, gameId-less routes/resources key independently (never a shared flat key), denylist for raw odds/calculation routes
 npx tsx server/mlbAccessControlGate.integration.test.ts # MLB access-control gate against a REAL app+DB: no cross-route budget sharing, denylisted raw-odds/calc routes always require paid access, per-resource (player) keying, real concurrent-request atomicity, admin/paid bypass unaffected
+npx tsx shared/pregameTargets/featureStore.test.ts        # Pregame Targets PR1 — AsOfFeatureRow contract: 7-state enum, value-bearing vs null states, missing != observed_zero, structural validity
+npx tsx shared/pregameTargets/canonicalEntities.test.ts   # Pregame Targets PR1 — canonical id build/parse + fail-closed resolution (unknown/malformed/ambiguous), half-open trade-window handoff
+npx tsx server/pregameTargets/featureStore/leakageFirewall.test.ts # Pregame Targets PR1 — leakage firewall: future knownAt, knownAt<validAt, same-game self-update, outcome-in-input, structural/malformed; partition; missing vs observed_zero preserved
+npx tsx server/pregameTargets/posteriorState/recencyWeights.test.ts # Pregame Targets PR1 — §5B weight product: season decay (current>prior-1>prior-2, rollover→0), role decays faster than skill, continuity floor, fail-safe clamping
+npx tsx server/pregameTargets/posteriorState/posteriorState.test.ts # Pregame Targets PR1 — posterior sufficient stats: ESS=(Σw)²/Σw², weighted mean/variance, idempotent lineage, no-self-update, rolling-window rollover, ESS-boundary prior shrinkage
+npx tsx server/pregameTargets/replay/liveReplayParity.test.ts # Pregame Targets PR1 — live vs replay byte-identical reconstruction via the shared as-of read path; monotonic corrections; deterministic tie-break
+npx tsx server/dbMigrations/pregameTargetsFoundationPersistence.test.ts # Pregame Targets PR1 — foundation schema bootstrap: idempotence, IF-NOT-EXISTS-only, required indexes by name, no destructive SQL, failure propagates
 ```
 
 Railway runs the configured start command on each deploy; for local development run `npm run dev` and restart the dev server after server changes.
