@@ -32,7 +32,14 @@ import { fileURLToPath } from "node:url";
 // to pass that import guard — NO database is contacted, no credential is read,
 // and the result stays fully deterministic. Persistence is imported dynamically
 // (below, in main) so this assignment runs before that import evaluates.
-process.env.DATABASE_URL ??= "postgres://fixture:fixture@240.0.0.1:1/fixture";
+//
+// Use a FALSY-aware assignment (not `??=`) that mirrors db.ts's own
+// `if (!process.env.DATABASE_URL)` guard: a CI job that exports DATABASE_URL as
+// an empty string would survive `??=` (empty string is neither null nor
+// undefined) and then be rejected by that guard, breaking the credential-free run.
+if (!process.env.DATABASE_URL) {
+  process.env.DATABASE_URL = "postgres://fixture:fixture@240.0.0.1:1/fixture";
+}
 
 import { finalizeNbaProbability, deriveFreshOdds, type FinalizerContext } from "../nba/probabilityFinalizer";
 import { computeProbability, type EngineInput } from "../nba/probabilityEngine";
