@@ -502,6 +502,17 @@ function buildBaseMLBSignal(
     calibratedProbabilityUnder: calibProbUnder,
     edge: suppressPublicPricing ? null : (raw ? Math.round(raw.edge * 100) / 100 : null),
     evPct: suppressPublicPricing ? null : (raw ? Math.round((raw.evPct ?? 0) * 100) / 100 : null),
+    // ── MLB Live Edge safety-core (Stage A A6) — canonical no-vig fields on the
+    // wire so public surfaces rank/label off them, not signalScore. lane is the
+    // authoritative official/watch/shadow classification; oddsAgeMs is the
+    // evidence-freshness tiebreak for official ordering.
+    modelEdgePctPoints: qs.modelEdgePctPoints ?? null,
+    noVigBookProbability: suppressPublicPricing ? null : (qs.noVigBookProbability ?? null),
+    edgeVersion: qs.edgeVersion ?? null,
+    lane: qs.lane ?? null,
+    oddsAgeMs: qs.oddsAgeMs ?? null,
+    finalizedTier: qs.finalizedTier ?? null,
+    outcomeProbabilitySemantics: qs.outcomeProbabilitySemantics ?? null,
     recommendedSide: qs.side,
     signalScore: qs.signalScore ?? 0,
     confidenceTier: qs.confidenceTier ?? "WATCHLIST",

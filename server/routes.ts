@@ -39,6 +39,7 @@ import { sendPushToUser } from "./pushDelivery";
 import { checkAndSendAlerts } from "./alertManager";
 import { autoResolveAlerts, autoSettlePersistedPlays } from "./analyticsResolver";
 import { getROIMetrics } from "./services/roiEngine";
+import { analyticsEdgePp } from "./analytics/mlbEdgeVersion";
 import { syncMinutesProjections } from "./services/minutesProjectionService";
 import { calculateMLBPropEdge, canShowSignal, hasRealOdds } from "./mlb/markets";
 import { normalizeMlbMarketKey } from "./mlb/normalizeMarketKey";
@@ -2915,6 +2916,16 @@ export async function registerRoutes(
           continue;
         }
 
+        // ── MLB Live Edge safety-core (Stage A part 2) — the production-lane
+        // gate, identical to autoPersistMLBSignals. Official persistence
+        // requires lane === "official" (innings 1-3, shadow markets, missing
+        // no-vig price, uncalibrated non-hits markets, etc. never qualify).
+        // Fail-closed: unstamped/undefined lane is non-official.
+        if (qs.lane !== "official") {
+          console.log(`[MLB_ROUTE_PERSIST_SAFETY] non_official_lane player=${qs.playerName} market=${qs.market} lane=${qs.lane ?? "unstamped"} reasons=${(qs.laneReasons ?? []).join(",")}`);
+          continue;
+        }
+
         const dir = qs.side === "OVER" ? "over" : "under";
         // [MLB Canonical Probability v1] Reject persistence rather than fall back
         // to signalScore. The orchestrator's primary persistence path will retry.
@@ -2935,7 +2946,13 @@ export async function registerRoutes(
           line: qs.line,
           projection: qs.projection,
           probability: validProb,
-          edge: qs.evPct ?? 0,
+          // Stage A part 2 — canonical no-vig edge replaces evPct=prob-50 (see
+          // autoPersistMLBSignals). Legacy edge_gap left null for MLB.
+          modelEdgePctPoints: qs.modelEdgePctPoints ?? null,
+          noVigBookProbability: qs.noVigBookProbability ?? null,
+          edgeVersion: qs.edgeVersion ?? null,
+          probabilitySemantics: qs.outcomeProbabilitySemantics ?? null,
+          lane: qs.lane ?? null,
           sportsbook: qs.sportsbook,
           derivedLine: false,
           createdAt: qs.engineGeneratedAt ?? Date.now(),
@@ -9568,8 +9585,15 @@ export function registerPerformanceRoutes(app: Express): void {
         ? Math.round((primaryHits / primaryDecided) * 1000) / 10
         : 0;
 
-      const avgEdge = plays.length > 0
-        ? Math.round(plays.reduce((s, p) => s + (Number(p.edgeGap) || Number(p.modelEdge) || 0), 0) / plays.length * 10) / 10
+      // MLB Live Edge safety-core (Stage A A6) — sport-aware canonical edge:
+      // MLB rows use no-vig model_edge gated on edge_version="novig_v1" (legacy
+      // segregated out), NBA/NCAAB keep edge_gap. Averaged only over rows that
+      // have a canonical edge, so legacy MLB prob-50 values never leak in.
+      const edgeContribs = plays
+        .map((p) => analyticsEdgePp(p))
+        .filter((v): v is number => v != null);
+      const avgEdge = edgeContribs.length > 0
+        ? Math.round(edgeContribs.reduce((s, v) => s + v, 0) / edgeContribs.length * 10) / 10
         : 0;
       const avgProb = plays.length > 0
         ? Math.round(plays.reduce((s, p) => s + (Number(p.prob) || 0), 0) / plays.length * 10) / 10
@@ -9813,8 +9837,13 @@ export function registerCalibrationRoutes(app: Express): void {
       const winRate = nonPushes > 0 ? Math.round((wins / nonPushes) * 1000) / 10 : 0;
       const pushRate = totalPlays > 0 ? Math.round((pushes / totalPlays) * 1000) / 10 : 0;
 
-      const playsWithEdge = plays.filter((p: PersistedPlay) => p.edgeGap != null);
-      const edgeValues = playsWithEdge.map((p: PersistedPlay) => Number(p.edgeGap));
+      // MLB Live Edge safety-core (Stage A A6) — MLB edge analytics use the
+      // canonical no-vig model edge gated on edge_version="novig_v1"; legacy
+      // MLB rows (edge_gap=prob-50, no edge_version) are SEGREGATED out. NBA/
+      // NCAAB keep edge_gap. (analyticsEdgePp is sport-aware.)
+      const edgeValues = plays
+        .map((p: PersistedPlay) => analyticsEdgePp(p))
+        .filter((v): v is number => v != null);
       const probValues = plays.map((p: PersistedPlay) => Number(p.prob ?? 0));
       const avgEdge = edgeValues.length > 0
         ? Math.round(edgeValues.reduce((a: number, b: number) => a + b, 0) / edgeValues.length * 10) / 10

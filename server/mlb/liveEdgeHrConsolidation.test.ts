@@ -283,7 +283,15 @@ const BASELINES: ExpectedBaseline[] = [
   { market: "hits", side: "OVER", total: 52, confidenceTier: "WATCHLIST", signalTier: "watch", hasFollowFadeTag: false, displaySide: "OVER", displayGrade: "Watch", isBettable: false, isWatchOnly: true },
   { market: "total_bases", side: "OVER", total: 52, confidenceTier: "WATCHLIST", signalTier: "watch", hasFollowFadeTag: false, displaySide: "OVER", displayGrade: "Watch", isBettable: false, isWatchOnly: true },
   { market: "batter_strikeouts", side: "OVER", total: 52, confidenceTier: "WATCHLIST", signalTier: "watch", hasFollowFadeTag: false, displaySide: "OVER", displayGrade: "Watch", isBettable: false, isWatchOnly: true },
-  { market: "pitcher_strikeouts", side: "OVER", total: 63, confidenceTier: "SOLID", signalTier: "lean", hasFollowFadeTag: true, displaySide: "OVER", displayGrade: "B", isBettable: true, isWatchOnly: false },
+  // MLB Live Edge safety-core (Stage A A5) — the pitcher-OVER family fix
+  // (getMarketFamily no longer routes pitcher OVER through the UNDER family)
+  // deliberately moves pitcher_strikeouts/OVER OFF scoreUnderSignal and onto the
+  // direction-neutral generic computeSignalScore. That is the whole point of the
+  // repair — an OVER thesis must not inherit UNDER (fatigue/removal-risk) scoring
+  // semantics. The resulting total is lower here, landing this fixture in the
+  // watch band (consistent with the other generic-scored OVER markets above).
+  // Contract deliberately changed by the spec; documented per the build rules.
+  { market: "pitcher_strikeouts", side: "OVER", total: 54, confidenceTier: "WATCHLIST", signalTier: "watch", hasFollowFadeTag: false, displaySide: "OVER", displayGrade: "Watch", isBettable: false, isWatchOnly: true },
   { market: "pitcher_outs", side: "UNDER", total: 56, confidenceTier: "SOLID", signalTier: "lean", hasFollowFadeTag: true, displaySide: "UNDER", displayGrade: "B", isBettable: true, isWatchOnly: false },
   { market: "hits_allowed", side: "UNDER", total: 60, confidenceTier: "SOLID", signalTier: "lean", hasFollowFadeTag: true, displaySide: "UNDER", displayGrade: "B", isBettable: true, isWatchOnly: false },
   { market: "walks_allowed", side: "UNDER", total: 60, confidenceTier: "SOLID", signalTier: "lean", hasFollowFadeTag: true, displaySide: "UNDER", displayGrade: "B", isBettable: true, isWatchOnly: false },

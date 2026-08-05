@@ -61,7 +61,10 @@ export interface TrackableSignal {
   line: number;
   projection: number;
   probability: number;
-  edge: number;
+  // Legacy book-relative edge → `edge_gap` column (NBA/NCAAB). Optional: MLB no
+  // longer populates it (see modelEdgePctPoints below), so new MLB rows leave
+  // `edge_gap` null instead of the old invalid prob-50 value.
+  edge?: number;
   sportsbook: string | null;
   derivedLine: boolean;
   createdAt: number;
@@ -90,6 +93,16 @@ export interface TrackableSignal {
   dataQuality?: string | null;
   currentStatKnown?: boolean | null;
   calibrationVersion?: string | null;
+  // ── MLB Live Edge safety-core (Stage A part 2) — canonical no-vig edge +
+  // lane provenance. MLB-only. `modelEdgePctPoints` (percentage points) is the
+  // canonical model edge and lands in the `model_edge` column; the legacy
+  // `edge`→`edge_gap` mapping is left empty for MLB (it carried the invalid
+  // prob-50 value before this change).
+  modelEdgePctPoints?: number | null;
+  noVigBookProbability?: number | null;
+  edgeVersion?: string | null;
+  probabilitySemantics?: string | null;
+  lane?: string | null;
 }
 
 export async function trackPlay(
@@ -219,6 +232,13 @@ export async function trackPlay(
     engineProb: signal.probability,
     bookImplied: undefined,
     edgeGap: signal.edge,
+    // Canonical no-vig model edge (percentage points) lands in model_edge,
+    // tagged with edgeVersion so analytics can filter canonical vs legacy rows.
+    // For MLB this overrides the diagnostics-derived modelEdge below.
+    edgeVersion: signal.edgeVersion ?? undefined,
+    noVigBookProbability: signal.noVigBookProbability ?? undefined,
+    probabilitySemantics: signal.probabilitySemantics ?? undefined,
+    lane: signal.lane ?? undefined,
     projection: signal.projection,
     sportsbook: signal.sportsbook,
     derivedLine: signal.derivedLine,
@@ -253,7 +273,7 @@ export async function trackPlay(
     finalProbOver: d?.finalProbOver,
     finalProbUnder: d?.finalProbUnder,
     displayConfidence: d?.displayConfidence,
-    modelEdge: d?.modelEdge,
+    modelEdge: signal.modelEdgePctPoints ?? d?.modelEdge,
     minutesExpected: d?.minutesExpected,
     minutesVariance: d?.minutesVariance,
     marketType: d?.marketType,

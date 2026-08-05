@@ -3,15 +3,24 @@ import { EXPERIMENTAL_MARKETS } from "./types";
 import { getPitchFamily } from "./pitchTypeNormalizer";
 import { isBarrel } from "./statcastXBA";
 
-export type MarketFamily = "batter_over" | "under" | "hr_radar";
+// MLB Live Edge safety-core (Stage A part 2) — direction-correct market
+// families. A pitcher OVER (e.g. pitcher_strikeouts OVER) must NOT be routed
+// through the UNDER family: an OVER thesis is helped by the same fatigue/
+// removal-risk evidence that hurts an UNDER, so tagging it "under" inverted its
+// directional treatment. `pitcher_over` gives it its own honest family.
+export type MarketFamily = "batter_over" | "under" | "pitcher_over" | "hr_radar";
 
 const BATTER_OVER_MARKETS: MLBMarket[] = ["hits", "total_bases", "home_runs", "hrr", "batter_strikeouts"];
+const PITCHER_FAMILY_MARKETS: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"];
 
 export function getMarketFamily(market: MLBMarket, side: string): MarketFamily | null {
   if (BATTER_OVER_MARKETS.includes(market)) return "batter_over";
+  if (PITCHER_FAMILY_MARKETS.includes(market)) {
+    // Route by side: pitcher OVER gets its own family, pitcher UNDER stays in
+    // the generic under family. Never collapse a pitcher OVER into "under".
+    return side === "OVER" ? "pitcher_over" : "under";
+  }
   if (side === "UNDER") return "under";
-  const pitcherMarkets: MLBMarket[] = ["pitcher_strikeouts", "pitcher_outs", "hits_allowed", "walks_allowed", "hr_allowed"];
-  if (pitcherMarkets.includes(market)) return "under";
   return null;
 }
 
@@ -598,12 +607,23 @@ export function scoreUnderSignal(
   const price = computePriceValidationComponent(output.edge, output.overOdds, output.underOdds);
   const eventBoost = computeEventBoostComponent(input, output);
 
+  // MLB Live Edge safety-core (Stage A A5) — duplicate-contribution audit.
+  // `live` (computeLiveContextComponent) previously appeared as TWO separate
+  // terms (0.15 * live + 0.12 * live), a latent double-count hazard: a future
+  // edit could change one weight and not the other, and it reads as if two
+  // independent pieces of evidence exist when there is only one. Consolidated
+  // into a SINGLE 0.27 * live contribution — behavior-preserving (0.15 + 0.12 =
+  // 0.27), so no score/tier/fixture shifts. Reducing live's 0.27 weight (higher
+  // than the sibling scorer's 0.25 lei) is a genuine re-weighting that would
+  // move tiers, so it is a CALIBRATION decision — deferred to Stage C with
+  // forward-validation evidence, never guessed here. (eventBoost is computed
+  // above and used in the returned breakdown; leaving it out of the total is
+  // unchanged prior behavior, pending that same calibration pass.)
   const baseTotal = Math.round(
     0.22 * prob +
     0.18 * proj +
     0.15 * matchup +
-    0.15 * live +
-    0.12 * live +
+    0.27 * live +
     0.08 * form +
     0.05 * opportunity +
     0.05 * price

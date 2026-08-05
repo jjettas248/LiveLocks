@@ -18,7 +18,12 @@ import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 // ── Locked baseline version ────────────────────────────────────────────────
 // Bump this string only when MLB engine behavior changes intentionally.
 // The boot log line carries this value so prod logs are self-describing.
-export const MLB_GOLDMASTER_VERSION = "mlb-goldmaster-v26-2026-07-hr-live-edge-unified-lane";
+// v27 (Stage A safety-core): production-lane authority now gates official
+// persistence (innings 1-3 + damaged markets watch/shadow-only), canonical
+// no-vig model edge replaces evPct=prob-50, and signalScore no longer promotes
+// official plays. [MLB_DRIFT_WARNING] noise from this intentional re-baseline is
+// expected, not a regression — see docs/agents/mlb-goldmaster-prd.md.
+export const MLB_GOLDMASTER_VERSION = "mlb-goldmaster-v27-2026-08-safety-core-production-lane";
 
 // Rolling drift snapshot ring buffer.
 const MAX_SNAPSHOTS = 50;
