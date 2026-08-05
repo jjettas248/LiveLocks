@@ -113,7 +113,9 @@ these five fields, each verified present at **98.4% (250/254)** in the productio
 No sixth location field is authorized; no proxy may be substituted for a missing value or
 labeled as zone modeling. Zone-cell eligibility still applies the §4 sample floor
 (`bbeCount_{p,z} ≥ 8`, adjacent-zone smoothing, else pool). **Capture/modeling use of these
-fields for any user-facing surface remains gated on the commercial-licensing sign-off (§7).**
+fields for any user-facing surface remains gated on the Baseball Savant/Statcast commercial-use
+authorization (§8.2) — the source these five fields actually come from. Open-Meteo is not a
+dependency of the zone upgrade (§8.1).**
 
 **AUTHORIZED-CONDITIONAL** (present in prod but coverage-limited — capture allowed, use gated):
 
@@ -125,45 +127,76 @@ fields for any user-facing surface remains gated on the commercial-licensing sig
 |---|---|
 | PR3 exact-pitch sufficient stats (Upgrade 1) | **GO** — from AUTHORIZED fields. `launch_speed_angle` is present & parsed today; barrel uses the EV/LA **proxy** by modeling choice (official `lsa==6` adoption deferred to fitting), not a data gap. |
 | PR5 recent-contact windows (Upgrade 2B) | **GO** — from AUTHORIZED contact-quality fields + `contact_events`. |
-| PR7 pitch×zone (Upgrade 2A) | **DATA GATE: GO / LICENSING: BLOCKED** — all five location fields VERIFIED present at 98.4% in the 2026-08-05 production spike (§1), clearing the ≥90% threshold; authorized-field list frozen (§5). PR7 implementation remains **blocked** until the commercial-licensing sign-off (§7) is checked. No proxy. |
+| PR7 pitch×zone (Upgrade 2A) | **ZONE DATA GATE: GO / BASEBALL SAVANT-STATCAST LICENSING: BLOCKED** — all five location fields VERIFIED present at 98.4% in the 2026-08-05 production spike (§1), clearing the ≥90% threshold; authorized-field list frozen (§5). PR7 is blocked **specifically** because its own data source — Baseball Savant/Statcast — lacks commercial-use authorization (§8.2). **Open-Meteo is NOT a PR7 dependency** (PR7 imports no weather features) and does not gate it (§8.1). No proxy. |
 | Bat-speed feature | **CONDITIONAL GO** — 2023+ only, sample-gated, no-op otherwise. |
 | Any user-facing promotion (PR11) | **BLOCKED on commercial-licensing sign-off** (§7). |
 
 ## 7. SIGN-OFF (human)
 
-- [ ] **Commercial-use / licensing reviewed for Baseball Savant (and Open-Meteo tier) — UNRESOLVED. This is the sole remaining PR7 blocker.** approver, date:
+- [ ] **Baseball Savant/Statcast commercial-use authorization — UNRESOLVED. This is the sole remaining PR7 blocker (§8.2), because Statcast is PR7's actual data source.** approver, date:
+- [ ] **Open-Meteo commercial-use compliance — UNRESOLVED, but tracked as a SEPARATE production-compliance repair (§8.1), NOT a PR7 gate. It blocks PR7 only if a future PR7 revision imports weather features.** approver, date:
 - [x] §1 spike re-run against live Savant; per-field coverage recorded above — Railway production shell, 2026-08-05 (post-merge `aedf22d`; all five location fields 98.4%, `ZONE GATE: GO`).
 - [x] Authorized-field list (§5) and coverage thresholds (§4) confirmed frozen — 2026-08-05 (five zone fields frozen in §5; §4 thresholds unchanged).
 
-**PR7 status: `DATA GATE: GO / LICENSING: BLOCKED`.** The data/coverage gate is satisfied and
-the authorized-field list is frozen, but the commercial-licensing box above is unchecked. Until
-that box is checked, work proceeds **shadow-only** (research tables, no user-facing probability),
-consistent with the existing `PLATE_HR_V2_FORWARD_CAPTURE_ENABLED`-gated posture. No PR7
-implementation, no fetcher wiring, no `starterBullpen` use in PR8 fitting, no champion/public change.
+**PR7 status: `ZONE DATA GATE: GO / BASEBALL SAVANT-STATCAST LICENSING: BLOCKED`.** The data/coverage
+gate is satisfied and the authorized-field list is frozen, but the Baseball Savant/Statcast
+commercial-use box above is unchecked. Until it is checked, work proceeds **shadow-only** (research
+tables, no user-facing probability), consistent with the existing
+`PLATE_HR_V2_FORWARD_CAPTURE_ENABLED`-gated posture. No PR7 implementation, no zone capture,
+no `starterBullpen` use in PR8 fitting, no champion/public change. **Fetcher wiring is a separate
+authorization decision and is not bundled into this licensing resolution.**
 
 ## 8. Commercial-licensing record (substantive — not a checkbox)
 
 The §7 licensing block is a **substantive legal/business determination**, not a repository
-formality. The two data sources below require resolution before PR7 (or any user-facing V2
-promotion) is authorized. Each subsection states what is currently true in the code and what the
-approval record must contain.
+formality. It is **two independent tracks**, not one combined gate:
 
-### 8.1 Open-Meteo
+- **§8.2 Baseball Savant/Statcast** is **PR7's gate** — Statcast is the source of the five
+  verified pitch-location fields PR7 consumes.
+- **§8.1 Open-Meteo** is a **separate production-compliance repair** for the existing weather
+  pipeline. It is **NOT a PR7 dependency** (PR7 imports no weather features) and must not be
+  bundled into the PR7 gate. It would only touch PR7 if a future PR7 revision imported weather.
+
+Each subsection states what is currently true in the code and what the approval record must contain.
+
+### 8.1 Open-Meteo — separate production-compliance repair (NOT a PR7 gate)
+
+**Scope note:** this is an existing-production weather-pipeline compliance item, tracked
+**independently** of PR7. PR7 (the pitch×zone upgrade) imports **no** weather features, so
+Open-Meteo does not gate it. It is recorded here because the licensing review surfaced it, not
+because it blocks the zone work.
 
 **Current code posture (verified 2026-08-05):** `server/mlb/dataPullService.ts::syncOpenMeteoWeather`
 calls **`https://api.open-meteo.com/v1/forecast`** — the **free endpoint, with no customer API
 key** (`User-Agent: LiveLocks/1.0`). It is **not** the paid `customer-api.open-meteo.com` endpoint.
+The production MLB engine calls this endpoint on the live and pregame paths (e.g.
+`liveGameOrchestrator.ts`, `buildPregamePowerRadar.ts`), so the endpoint **is** actively used in
+production today.
 
 **Constraint:** Open-Meteo's free API is expressly limited to **non-commercial use**; a
 subscription-based product is commercial use and requires a **paid commercial plan** on the
 customer endpoint (API key). Open-Meteo data is **CC BY 4.0**, so **attribution is also required
 wherever the weather data is displayed**.
 
-**Determination:** as it stands, LiveLocks uses the non-commercial endpoint → **Open-Meteo
-commercial use is NOT currently satisfied.** To clear this, either (a) migrate to
-`customer-api.open-meteo.com` under a paid commercial plan + add the required CC BY 4.0
-attribution, or (b) confirm weather is **NOT USED** by any PR7/V2 user-facing surface. The
-sign-off must record: **plan, endpoint, account owner, attribution location, and permitted APIs.**
+**Open-Meteo pipeline status:**
+
+```
+CURRENT ENDPOINT: api.open-meteo.com
+COMMERCIAL PLAN/KEY: ABSENT
+STATUS: COMMERCIAL USE BLOCKED
+```
+
+**Remediation (separate production-compliance repair — pick one):**
+
+1. Move to the paid `customer-api.open-meteo.com` endpoint with a **secret-managed API key**
+   (Railway env var, never hardcoded) and the required **CC BY 4.0 attribution** wherever weather
+   is displayed; or
+2. **Disable Open-Meteo ingestion in commercial production** until (1) is complete.
+
+**Do not mark Open-Meteo "NOT USED"** merely because PR7 does not consume it — the existing
+production engine still calls the endpoint elsewhere, so the compliance obligation stands
+regardless of PR7. The sign-off for this track must record: **plan, endpoint, account owner,
+attribution location, and permitted APIs.**
 
 ### 8.2 Baseball Savant / MLB (Statcast)
 
@@ -183,14 +216,26 @@ source**. An internal checkbox is **not** sufficient. If MLB permission cannot b
 - Use inside a paid betting-analytics product.
 - Written MLB authorization, licensed-vendor agreement, or counsel's documented basis for proceeding.
 
-### 8.3 PR7 authorization rule (all lines required)
+**Actual next decision for the Statcast dependency (choose exactly one, then document it):**
 
-PR7 becomes authorized **only** after this record is completed and committed:
+1. **Obtain written MLB authorization**; or
+2. **Have qualified counsel document a defensible commercial-use basis**; or
+3. **Replace Savant ingestion with a commercially licensed provider** that supplies the five
+   required pitch-location fields (`plate_x, plate_z, zone, sz_top, sz_bot`).
+
+Until one of these is documented, keep: **PR7 blocked, zone capture disabled, no proxy fields,
+no PR8 fitting using zone features, champion and public paths unchanged.**
+
+### 8.3 PR7 authorization rule (zone upgrade)
+
+PR7 (the zone-location upgrade using the five verified Savant fields) becomes authorized **only**
+after this record is completed and committed. Open-Meteo is **not** a line item here — it is not a
+PR7 dependency (§8.1):
 
 ```
 ZONE DATA GATE: GO
-OPEN-METEO COMMERCIAL USE: APPROVED OR NOT USED
-BASEBALL SAVANT/STATCAST USE: APPROVED
+BASEBALL SAVANT / STATCAST LICENSING: APPROVED
+OPEN-METEO: NOT A PR7 DEPENDENCY, unless PR7 imports weather features
 APPROVER:
 DATE:
 EVIDENCE/AGREEMENT REFERENCE:
@@ -200,13 +245,15 @@ EVIDENCE/AGREEMENT REFERENCE:
 
 ```
 ZONE DATA GATE: GO
-OPEN-METEO COMMERCIAL USE: NOT RESOLVED (code is on the free non-commercial endpoint — §8.1)
-BASEBALL SAVANT/STATCAST USE: NOT RESOLVED (no written MLB permission / licensed source on file — §8.2)
+BASEBALL SAVANT / STATCAST LICENSING: BLOCKED (no written MLB permission / licensed source on file — §8.2)
+OPEN-METEO: NOT A PR7 DEPENDENCY, unless PR7 imports weather features (separate compliance repair — §8.1)
 APPROVER: —
 DATE: —
 EVIDENCE/AGREEMENT REFERENCE: —
 ```
 
-Until every line reads its authorized value: **PR7 remains blocked, no zone proxy is allowed, the
-five zone fields are NOT enabled in production capture, and PR8 / champion selection / public
-behavior remain unchanged.**
+Until the Baseball Savant/Statcast line reads `APPROVED`: **PR7 remains blocked, zone capture is
+disabled, no proxy fields are allowed, PR8 fitting does not use zone features, and champion /
+public paths remain unchanged.** Open-Meteo (§8.1) is tracked and remediated on its own separate
+production-compliance track. **Fetcher wiring is a separate authorization decision and is not
+bundled into either licensing resolution.**
