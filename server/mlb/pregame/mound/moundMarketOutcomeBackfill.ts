@@ -60,11 +60,13 @@ export function planMoundMarketOutcomeBackfill(rows: MoundMarketOutcomeBackfillR
   for (const row of rows) {
     if (row.alreadyHasMarketOutcome) continue;
 
-    const frozenLine =
-      row.primaryMarket === "pitcher_strikeouts"
-        ? row.finalPregameSnapshot?.champion.postedLine.strikeouts ?? null
-        : row.finalPregameSnapshot?.champion.postedLine.outs ?? null;
-    const actual = row.primaryMarket === "pitcher_strikeouts" ? row.finalStrikeouts : row.finalOutsRecorded;
+    // Strikeouts is the sole settlement market — see
+    // moundOutcomeAttribution.ts's header comment. row.primaryMarket (Best
+    // Angle at original grading time) is display-only and never selects the
+    // backfill input.
+    const settlementMarket = "pitcher_strikeouts" as const;
+    const frozenLine = row.finalPregameSnapshot?.champion.postedLine.strikeouts ?? null;
+    const actual = row.finalStrikeouts;
 
     // The sportsbook side comes from the FROZEN pregame recommendation
     // (projection vs. posted line), exactly as the prospective grading path
@@ -74,7 +76,7 @@ export function planMoundMarketOutcomeBackfill(rows: MoundMarketOutcomeBackfillR
     // a real posted line?" A Follow can legitimately be an UNDER and vice
     // versa, so inferring one from the other would backfill historical rows
     // with sides no user was ever shown.
-    const recommendation = deriveFrozenMoundMarketRecommendation(row.primaryMarket, row.finalPregameSnapshot);
+    const recommendation = deriveFrozenMoundMarketRecommendation(settlementMarket, row.finalPregameSnapshot);
     const marketSettlementDirection: MoundDirection =
       recommendation.side === "OVER" ? "follow" : recommendation.side === "UNDER" ? "fade" : null;
 

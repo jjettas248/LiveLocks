@@ -104,9 +104,36 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
   ok(plan[0].patch.lineSource === null, "lineSource honestly stays null for a pre-capture row — never fabricated");
 }
 
-// ── A row with no resolvable frozen line (pitcher_outs — no fetch path exists) → left untouched ──
+// ── Settlement is always strikeouts, never Best Angle: an Outs-Best-Angle row
+// with a real captured K line + final K count is now backfillable, unlike
+// the old outs-branch behavior which could never resolve a market result ──
 {
-  const signal = sig({ primaryMarket: "pitcher_outs" });
+  const signal = sig({
+    primaryMarket: "pitcher_outs",
+    marketEdgeContext: { line: 5.5, oddsUpdatedAt: "2026-07-01T18:00:00Z", sportsbook: "DraftKings" },
+    matchupAdjustedStrikeouts: 7.2, // frozen K projection above the 5.5 K line → OVER
+  });
+  const finalPregameSnapshot = buildMoundEvaluationSnapshot(signal, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T18:00:00Z", 9, 6);
+
+  const rows: MoundMarketOutcomeBackfillRow[] = [
+    {
+      signalId: "row-outs-best-angle-k-line",
+      primaryMarket: "pitcher_outs",
+      moundDirection: "follow",
+      finalStrikeouts: 7,
+      finalOutsRecorded: 18,
+      alreadyHasMarketOutcome: false,
+      finalPregameSnapshot,
+    },
+  ];
+  const plan = planMoundMarketOutcomeBackfill(rows);
+  ok(plan.length === 1, "an Outs-Best-Angle row with a real captured K line is now backfillable — settlement is always strikeouts, never Best Angle");
+  ok(plan[0].patch.marketOutcome === "cashed", "resolves the K market outcome (7 over 5.5), even though Best Angle was pitcher_outs");
+}
+
+// ── A row with no resolvable frozen strikeouts line at all → left untouched ──
+{
+  const signal = sig({ primaryMarket: "pitcher_outs" }); // no marketEdgeContext → no K line ever captured
   const finalPregameSnapshot = buildMoundEvaluationSnapshot(signal, { holistic: 1, byMarket: {} }, "b1", 1, "2026-07-01T18:00:00Z", 9, 6);
 
   const rows: MoundMarketOutcomeBackfillRow[] = [
@@ -121,7 +148,7 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
     },
   ];
   const plan = planMoundMarketOutcomeBackfill(rows);
-  ok(plan.length === 0, "pitcher_outs has no fetch path — nothing provable, never fabricated, row left untouched");
+  ok(plan.length === 0, "no captured strikeouts line and no final K count → nothing provable, never fabricated, row left untouched");
 }
 
 // ── A row with no finalPregameSnapshot at all (legacy row, predates instrumentation) → left untouched ──

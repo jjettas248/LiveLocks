@@ -249,11 +249,8 @@ function sig(over: Partial<MoundSignal>): MoundSignal {
   const finalStrikeouts = 5; // clears the live baseline (5) but NOT the frozen one (6)
 
   const publicOutcome = deriveMoundOutcome({
-    primaryMarket: "pitcher_strikeouts",
     finalStrikeouts,
-    finalOutsRecorded: null,
     seasonKPer9: (liveRefetchedBaseline * 9) / 6, // reverse the projectedStrikeoutsFromKPer9 math for a clean baseline of 5
-    seasonAvgInningsPerStart: null,
     wasPubliclyFlagged: true,
     moundDirection: "follow",
   });

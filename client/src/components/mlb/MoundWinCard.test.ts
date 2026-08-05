@@ -34,8 +34,8 @@ assert(
   "no rendered <Stat label=...> string contains the word 'Cashed'",
   labelMatches.every((l) => !/cashed/i.test(l)),
 );
-assert("MoundRadarRecord's confirmed-count label reads 'Pitcher Reads Confirmed'", labelMatches.includes("Pitcher Reads Confirmed"));
-assert("MoundRadarFadeRecord's confirmed-count label reads 'Fade Reads Confirmed' — distinct from the Follow label, not a copy-paste duplicate", labelMatches.includes("Fade Reads Confirmed"));
+assert("MoundRadarRecord's confirmed-count label reads 'K Reads Confirmed'", labelMatches.includes("K Reads Confirmed"));
+assert("MoundRadarFadeRecord's confirmed-count label reads 'K Fade Reads Confirmed' — distinct from the Follow label, not a copy-paste duplicate", labelMatches.includes("K Fade Reads Confirmed"));
 
 console.log(`\nMoundWinCard.test: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

@@ -37,12 +37,10 @@ ok(projectedStrikeoutsFromKPer9(undefined) === null, "undefined kPer9 → null p
 for (const kPer9 of [6.5, 8.0, 9.0, 9.87, 11.2]) {
   const displayedProjection = projectedStrikeoutsFromKPer9(kPer9);
   const { seasonBaselineValue } = deriveMoundOutcome({
-    primaryMarket: "pitcher_strikeouts",
     finalStrikeouts: null,
-    finalOutsRecorded: null,
     seasonKPer9: kPer9,
-    seasonAvgInningsPerStart: null,
     wasPubliclyFlagged: true,
+    moundDirection: "follow",
   });
   ok(
     displayedProjection === seasonBaselineValue,

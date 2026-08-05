@@ -159,7 +159,6 @@ export function buildMoundResponse(
     ...s,
     settlementView: buildMoundSettlementView(
       s.outcomes,
-      s.primaryMarket,
       s.moundDirection,
       s.everPubliclyFlagged,
       s.everPubliclyFlaggedFade,

@@ -117,7 +117,7 @@ const baseFlags: MoundScoringFlags = {
   const inputs: MoundDirectionInputs = {
     tier: "strong", pitcherSkillScore: 7.5, dataCoverageScore: 0.95,
     opposingLineupConfirmed: true, pitcherSeasonStatsAvailable: true,
-    primaryMarket: "pitcher_strikeouts", seasonKPer9: 9.8, seasonAvgInningsPerStart: 5.9,
+    seasonKPer9: 9.8,
   };
   const directionWithCheapContext = computeMoundDirection(inputs);
   const directionWithJuicyContext = computeMoundDirection(inputs);
