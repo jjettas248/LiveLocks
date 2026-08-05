@@ -485,7 +485,9 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
   const resultLabel = isPubliclyGraded
     ? moundResultLabel(marketOutcome, s.settlementView?.modelOutcome ?? null, s.settlementView?.recommendedSide ?? null, lane)
     : null;
-  const finalStatUnit: "Ks" | "Outs" = s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs";
+  // Settlement is always strikeouts, regardless of this card's Best Angle
+  // badge (s.primaryMarket) — see moundOutcomeAttribution.ts's header comment.
+  const finalStatUnit: "Ks" = "Ks";
   const finalStatLabel = isPubliclyGraded ? moundFinalStatLabel(s.settlementView?.finalStat ?? null, finalStatUnit) : null;
   const cashedColor = "#10b981";
   const missedColor = "#ef4444";
@@ -743,8 +745,10 @@ function SettlementRow({ signal: s }: { signal: MoundSignal }) {
 
   const settlement = s.settlementView;
   const marketOutcome = settlement?.marketOutcome ?? "unavailable";
-  const marketLabel = MARKET_LABEL[s.primaryMarket];
-  const unit = s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs";
+  // Settlement is always strikeouts, regardless of this card's Best Angle
+  // badge (s.primaryMarket) — see moundOutcomeAttribution.ts's header comment.
+  const marketLabel = MARKET_LABEL.pitcher_strikeouts;
+  const unit = "Ks";
 
   if (marketOutcome !== "unavailable") {
     const sideLabel = settlement?.recommendedSide === "UNDER" ? "Under" : "Over";
@@ -1094,7 +1098,7 @@ function MoundExpandedDetail({ signal: s }: { signal: MoundSignal }) {
             <div className="flex items-center justify-between gap-2 text-[10px]">
               <span className="text-muted-foreground">Engine Baseline</span>
               <span className="font-semibold">
-                {s.settlementView.modelBaseline} {s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs"}
+                {s.settlementView.modelBaseline} Ks
               </span>
             </div>
           )}
@@ -1102,7 +1106,7 @@ function MoundExpandedDetail({ signal: s }: { signal: MoundSignal }) {
             <div className="flex items-center justify-between gap-2 text-[10px]">
               <span className="text-muted-foreground">Final Result</span>
               <span className="font-semibold">
-                {s.settlementView.finalStat} {s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs"}
+                {s.settlementView.finalStat} Ks
               </span>
             </div>
           )}
@@ -1126,14 +1130,14 @@ function MoundExpandedDetail({ signal: s }: { signal: MoundSignal }) {
             <span className="font-semibold">
               {s.settlementView.recommendedSide === "UNDER" ? "Under" : "Over"}
               {s.settlementView.sportsbookLine != null ? ` ${s.settlementView.sportsbookLine}` : ""}
-              {" "}{s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs"}
+              {" "}Ks
             </span>
           </div>
           {s.settlementView.finalStat != null && (
             <div className="flex items-center justify-between gap-2 text-[10px]">
               <span className="text-muted-foreground">Final Result</span>
               <span className="font-semibold">
-                {s.settlementView.finalStat} {s.primaryMarket === "pitcher_strikeouts" ? "Ks" : "Outs"}
+                {s.settlementView.finalStat} Ks
               </span>
             </div>
           )}

@@ -467,9 +467,7 @@ export async function buildMlbMoundRadar(): Promise<MoundRadarSnapshot | null> {
           dataCoverageScore: scoring.dataCoverageScore,
           opposingLineupConfirmed,
           pitcherSeasonStatsAvailable: seasonStats != null,
-          primaryMarket: marketTags.primaryMarket,
           seasonKPer9: seasonStats?.kPer9 ?? null,
-          seasonAvgInningsPerStart: avgInningsPerStart,
         });
 
         console.log(

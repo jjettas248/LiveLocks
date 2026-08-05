@@ -3,11 +3,14 @@
 //
 // Settlement rule (locked product decision — season baseline, no sportsbook
 // line involved, mirrors Plate's no-market-line philosophy):
-//   • A `pitcher_strikeouts` target is a `mound_win` when final game
-//     strikeouts meet/beat the pitcher's season K/9-implied per-start rate
-//     (K/9 * 6/9 innings, matching recentForm.ts's per-start expectation).
-//   • A `pitcher_outs` target is a `mound_win` when final game outs recorded
-//     meet/beat the pitcher's season average outs-per-start.
+//   • Official win/loss is ALWAYS graded on strikeouts, regardless of which
+//     market a card's Best Angle badge (primaryMarket) highlights. A
+//     `mound_win` is final game strikeouts meeting/beating the pitcher's
+//     season K/9-implied per-start rate (K/9 * 6/9 innings, matching
+//     recentForm.ts's per-start expectation).
+//   • Pitcher Outs is display-only workload context (the "Best Angle" badge
+//     and Pitcher Outs setup badge on the card) — it never produces its own
+//     call and never feeds the win record. See marketTagger.ts.
 //   • Anything that doesn't clear the bar (or lacks the data to verify) is a
 //     `mound_calibration_miss` — internal only, never a public loss.
 //   • A target that clears the bar but was NOT publicly flagged is recorded
@@ -33,14 +36,11 @@ import {
 } from "../../../../shared/moundRadarWin";
 import { formatPlainDateLabel } from "../../../../shared/dateLabel";
 import { toEtDateKey, toEtTimeLabel } from "../../../utils/dateUtils";
-import { round1, projectedStrikeoutsFromKPer9 } from "./scoreUtils";
+import { projectedStrikeoutsFromKPer9 } from "./scoreUtils";
 
 export interface MoundOutcomeAttributionInput {
-  primaryMarket: "pitcher_strikeouts" | "pitcher_outs";
   finalStrikeouts: number | null;
-  finalOutsRecorded: number | null;
   seasonKPer9: number | null;
-  seasonAvgInningsPerStart: number | null;
   wasPubliclyFlagged: boolean;
   /** Direction stamped at build time (moundDirection.ts) — read as-is, never recomputed here. "follow"/null keeps the original Over-only rule unchanged; "fade" flips the comparison. */
   moundDirection: MoundDirection;
@@ -100,17 +100,14 @@ export function resolveMoundSettlementDirection(input: MoundSettlementDirectionI
   return input.moundDirection;
 }
 
-/** Season-baseline per-start expectation for the given primary market. */
+/** Season-baseline per-start strikeout expectation — the sole settlement market. */
 function seasonBaseline(input: MoundOutcomeAttributionInput): number | null {
-  if (input.primaryMarket === "pitcher_strikeouts") {
-    return projectedStrikeoutsFromKPer9(input.seasonKPer9);
-  }
-  return input.seasonAvgInningsPerStart != null ? round1(input.seasonAvgInningsPerStart * 3) : null;
+  return projectedStrikeoutsFromKPer9(input.seasonKPer9);
 }
 
 export function deriveMoundOutcome(input: MoundOutcomeAttributionInput): MoundOutcomeAttributionResult {
   const baseline = seasonBaseline(input);
-  const actual = input.primaryMarket === "pitcher_strikeouts" ? input.finalStrikeouts : input.finalOutsRecorded;
+  const actual = input.finalStrikeouts;
 
   if (baseline == null || actual == null) {
     return { outcome: "mound_calibration_miss", userVisible: false, seasonBaselineValue: baseline };
@@ -144,11 +141,11 @@ export interface FrozenLineInput {
 
 export interface MoundMarketOutcomeInput {
   moundDirection: MoundDirection;
-  /** The frozen postedLine reading for this signal's primaryMarket (strikeouts or outs) — never refetched, never a live line. */
+  /** The frozen postedLine.strikeouts reading — the sole settlement market — never refetched, never a live line. */
   frozenLine: FrozenLineInput | null;
   /** When the frozen snapshot itself was taken (finalPregameSnapshot.frozenAt) — always strictly pregame. */
   lineFrozenAt: string | null;
-  /** Final actual stat for the signal's primaryMarket (finalStrikeouts or finalOutsRecorded). */
+  /** Final actual strikeouts. */
   actual: number | null;
 }
 
@@ -306,12 +303,14 @@ export interface MoundSettlementView {
 
 export function buildMoundSettlementView(
   outcomes: MoundOutcome | null | undefined,
-  primaryMarket: "pitcher_strikeouts" | "pitcher_outs",
   moundDirection: MoundDirection,
   everPubliclyFlagged: boolean,
   everPubliclyFlaggedFade: boolean,
 ): MoundSettlementView {
-  const finalStat = primaryMarket === "pitcher_strikeouts" ? outcomes?.finalStrikeouts ?? null : outcomes?.finalOutsRecorded ?? null;
+  // Strikeouts is the sole settlement market — see this file's header
+  // comment. Pitcher Outs (whatever a card's Best Angle badge says) never
+  // supplies finalStat here.
+  const finalStat = outcomes?.finalStrikeouts ?? null;
   // Durable public exposure decides the model read, not the recomputable
   // column — see resolveMoundSettlementDirection. This is what stops a card
   // publicly surfaced as a Follow from being labelled with Fade wording after
@@ -337,17 +336,11 @@ export function buildMoundSettlementView(
     (settlementDirection === "fade" ? "UNDER" : settlementDirection === "follow" ? "OVER" : null);
 
   const marketOutcome: MoundMarketOutcome = outcomes?.marketOutcome ?? "unavailable";
-  // A row that never ran the market-settlement pass carries no reason. For
-  // pitcher_outs that absence is still fully explained — no odds feed exists
-  // for the market at all (postedLine.outs is stamped "no_data_source" at
-  // every freeze), so no bet could ever have been offered on it and this is
-  // not an integrity gap. For pitcher_strikeouts, where a real line source
-  // does exist, an unstamped row IS the finding.
+  // A row that never ran the market-settlement pass carries no reason. Since
+  // strikeouts is the only settlement market and a real line source exists
+  // for it, an unstamped row IS the finding.
   const marketUnavailableReason: MoundMarketUnavailableReason | null =
-    marketOutcome !== "unavailable"
-      ? null
-      : outcomes?.marketUnavailableReason ??
-        (primaryMarket === "pitcher_outs" ? "market_has_no_line_source" : "not_stamped");
+    marketOutcome !== "unavailable" ? null : outcomes?.marketUnavailableReason ?? "not_stamped";
 
   return {
     modelOutcome: deriveModelOutcomeLabel(finalStat, outcomes?.seasonBaselineValue ?? null, settlementDirection),

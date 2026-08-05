@@ -23,9 +23,7 @@ function baseInputs(overrides: Partial<MoundDirectionInputs> = {}): MoundDirecti
     dataCoverageScore: 0,
     opposingLineupConfirmed: false,
     pitcherSeasonStatsAvailable: false,
-    primaryMarket: "pitcher_strikeouts",
     seasonKPer9: null,
-    seasonAvgInningsPerStart: null,
     ...overrides,
   };
 }
@@ -33,7 +31,7 @@ function baseInputs(overrides: Partial<MoundDirectionInputs> = {}): MoundDirecti
 // ── Fade: track tier with real pitcher-skill data AND a gradeable settlement baseline ──
 ok(
   computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: 4.0, seasonKPer9: 8.0 })) === "fade",
-  "track tier + real pitcherSkillScore + season K/9 (Ks market) → fade",
+  "track tier + real pitcherSkillScore + season K/9 → fade",
 );
 ok(
   computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: null, seasonKPer9: 8.0 })) === null,
@@ -46,20 +44,8 @@ ok(
 // calibration_miss — a Fade Candidate shown for this pitcher could never
 // actually be graded as a cash.
 ok(
-  computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: 5.0, seasonKPer9: null, primaryMarket: "pitcher_strikeouts" })) === null,
-  "track tier + Savant-only pitcherSkillScore (no season K/9) on the Ks market → null, never an ungradeable Fade",
-);
-ok(
-  computeMoundDirection(
-    baseInputs({ tier: "track", pitcherSkillScore: 5.0, primaryMarket: "pitcher_outs", seasonKPer9: null, seasonAvgInningsPerStart: null }),
-  ) === null,
-  "track tier on the Outs market with no seasonAvgInningsPerStart → null, never an ungradeable Fade",
-);
-ok(
-  computeMoundDirection(
-    baseInputs({ tier: "track", pitcherSkillScore: 5.0, primaryMarket: "pitcher_outs", seasonKPer9: null, seasonAvgInningsPerStart: 6.0 }),
-  ) === "fade",
-  "track tier on the Outs market WITH seasonAvgInningsPerStart (even though seasonKPer9 is null) → fade — the Outs baseline doesn't need K/9",
+  computeMoundDirection(baseInputs({ tier: "track", pitcherSkillScore: 5.0, seasonKPer9: null })) === null,
+  "track tier + Savant-only pitcherSkillScore (no season K/9) → null, never an ungradeable Fade — grading is always strikeouts-based, so there is no outs-baseline fallback regardless of Best Angle",
 );
 
 // ── Follow: strong/elite/nuclear tier clearing the full data-quality bar ────

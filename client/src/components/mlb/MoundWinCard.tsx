@@ -8,6 +8,10 @@
 // final stat vs. their own season rate), so their labels read "Reads
 // Confirmed", never "Cashed" (locked product rule — no public Mound surface
 // may use "Cashed" for a baseline-graded outcome).
+//
+// Labelled "K Wins"/"K Fades" — win/loss is always graded on strikeouts
+// over/under (moundOutcomeAttribution.ts), never pitcher outs, so every
+// count here is a strikeouts call regardless of a card's Best Angle badge.
 
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -43,9 +47,9 @@ function slateDateET(): string {
 }
 
 /**
- * Mound Radar Record banner — "{wins} Wins Today · {confirmed} Pitcher
- * Reads Confirmed · {flagged} Flagged Before First Pitch". Hidden until
- * there is something to show (no zero-state shouting "0 wins").
+ * K Wins Today banner — "{wins} Wins Today · {confirmed} K Reads
+ * Confirmed · {flagged} Flagged Before First Pitch". Hidden until there is
+ * something to show (no zero-state shouting "0 wins").
  */
 export function MoundRadarRecord() {
   const { data } = useQuery<MoundRadarPublicStats>({
@@ -61,13 +65,13 @@ export function MoundRadarRecord() {
     <Card className="p-3 bg-emerald-500/10 border-emerald-400/30" data-testid="mound-radar-record">
       <div className="flex items-center gap-2 mb-1.5">
         <Trophy className="w-4 h-4 text-emerald-300" />
-        <span className="text-sm font-bold text-emerald-200">Mound Radar Record</span>
+        <span className="text-sm font-bold text-emerald-200">K Wins Today</span>
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
         <Stat value={data.moundWinsToday} label="Wins Today" testid="mound-record-wins-today" />
         <Stat
           value={data.pitcherPropsCashedToday}
-          label="Pitcher Reads Confirmed"
+          label="K Reads Confirmed"
           testid="mound-record-props-cashed-today"
         />
         <Stat
@@ -82,7 +86,7 @@ export function MoundRadarRecord() {
 }
 
 /**
- * "Fades Today" — fully separate from Mound Radar Record above (a cashed
+ * "K Fades Today" — fully separate from K Wins Today above (a cashed
  * Fade is the opposite bet from a cashed Follow/Over, so it never shares a
  * counter with it). Hidden until there is something to show.
  */
@@ -100,13 +104,13 @@ export function MoundRadarFadeRecord() {
     <Card className="p-3 bg-rose-500/10 border-rose-400/30" data-testid="mound-radar-fade-record">
       <div className="flex items-center gap-2 mb-1.5">
         <Trophy className="w-4 h-4 text-rose-300" />
-        <span className="text-sm font-bold text-rose-200">Fades Today</span>
+        <span className="text-sm font-bold text-rose-200">K Fades Today</span>
       </div>
       <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
         <Stat value={data.moundFadeWinsToday} label="Fade Wins Today" testid="mound-record-fade-wins-today" accent="rose" />
         <Stat
           value={data.fadePropsCashedToday}
-          label="Fade Reads Confirmed"
+          label="K Fade Reads Confirmed"
           testid="mound-record-fade-props-cashed-today"
           accent="rose"
         />

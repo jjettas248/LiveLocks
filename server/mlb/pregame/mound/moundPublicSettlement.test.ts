@@ -76,20 +76,17 @@ function snapshotWithKLine(line: number | null, projection: number | null, lineU
 }
 
 /**
- * Mirrors moundShadowOutcomes.ts's stampMarketOutcome adaptation exactly: the
- * sportsbook side comes from the FROZEN pregame recommendation, and the
- * signal's Follow/Fade model read is never passed into market settlement.
+ * Mirrors moundShadowOutcomes.ts's stampMarketOutcome adaptation exactly:
+ * strikeouts is the sole settlement market, the sportsbook side comes from
+ * the FROZEN pregame recommendation, and the signal's Follow/Fade model
+ * read is never passed into market settlement.
  */
 function settleMarket(
-  primaryMarket: "pitcher_strikeouts" | "pitcher_outs",
   snapshot: MoundEvaluationSnapshot | null,
   actual: number | null,
 ) {
-  const frozenLine =
-    primaryMarket === "pitcher_strikeouts"
-      ? snapshot?.champion.postedLine.strikeouts ?? null
-      : snapshot?.champion.postedLine.outs ?? null;
-  const recommendation = deriveFrozenMoundMarketRecommendation(primaryMarket, snapshot);
+  const frozenLine = snapshot?.champion.postedLine.strikeouts ?? null;
+  const recommendation = deriveFrozenMoundMarketRecommendation("pitcher_strikeouts", snapshot);
   const marketSettlementDirection: MoundDirection =
     recommendation.side === "OVER" ? "follow" : recommendation.side === "UNDER" ? "fade" : null;
   return deriveMoundMarketOutcome({
@@ -104,27 +101,27 @@ function settleMarket(
 {
   // Projection 7.2 vs line 5.5 → margin +1.7 → OVER recommended.
   const over = snapshotWithKLine(5.5, 7.2);
-  ok(settleMarket("pitcher_strikeouts", over, 6).marketOutcome === "cashed", "OVER 5.5, final 6 → cashed");
-  ok(settleMarket("pitcher_strikeouts", over, 5).marketOutcome === "missed", "OVER 5.5, final 5 → missed");
-  ok(settleMarket("pitcher_strikeouts", over, 6).sportsbookLine === 5.5, "cashed OVER grades against the frozen 5.5, never the 5.4 engine baseline");
-  ok(settleMarket("pitcher_strikeouts", over, 6).lineSource === "draftkings", "sportsbook provenance survives settlement");
+  ok(settleMarket(over, 6).marketOutcome === "cashed", "OVER 5.5, final 6 → cashed");
+  ok(settleMarket(over, 5).marketOutcome === "missed", "OVER 5.5, final 5 → missed");
+  ok(settleMarket(over, 6).sportsbookLine === 5.5, "cashed OVER grades against the frozen 5.5, never the 5.4 engine baseline");
+  ok(settleMarket(over, 6).lineSource === "draftkings", "sportsbook provenance survives settlement");
 }
 
 // ── Public UNDER: opposite comparison, same frozen line ──────────────────────
 {
   // Projection 4.0 vs line 5.5 → margin -1.5 → UNDER recommended.
   const under = snapshotWithKLine(5.5, 4.0);
-  ok(settleMarket("pitcher_strikeouts", under, 5).recommendedSide === "UNDER", "frozen projection below the line → UNDER side");
-  ok(settleMarket("pitcher_strikeouts", under, 5).marketOutcome === "cashed", "UNDER 5.5, final 5 → cashed");
-  ok(settleMarket("pitcher_strikeouts", under, 6).marketOutcome === "missed", "UNDER 5.5, final 6 → missed");
+  ok(settleMarket(under, 5).recommendedSide === "UNDER", "frozen projection below the line → UNDER side");
+  ok(settleMarket(under, 5).marketOutcome === "cashed", "UNDER 5.5, final 5 → cashed");
+  ok(settleMarket(under, 6).marketOutcome === "missed", "UNDER 5.5, final 6 → missed");
 }
 
 // ── Push: integer line matched exactly ──────────────────────────────────────
 {
   const integerLine = snapshotWithKLine(6, 7.5);
-  ok(settleMarket("pitcher_strikeouts", integerLine, 6).marketOutcome === "push", "OVER 6, final 6 → push");
+  ok(settleMarket(integerLine, 6).marketOutcome === "push", "OVER 6, final 6 → push");
   const integerUnder = snapshotWithKLine(6, 4.5);
-  ok(settleMarket("pitcher_strikeouts", integerUnder, 6).marketOutcome === "push", "UNDER 6, final 6 → push (side-independent)");
+  ok(settleMarket(integerUnder, 6).marketOutcome === "push", "UNDER 6, final 6 → push (side-independent)");
 }
 
 // ── Follow/Fade is NEVER remapped onto the sportsbook side ──────────────────
@@ -133,13 +130,12 @@ function settleMarket(
   // line (5.5), so the sportsbook recommendation is UNDER. Settlement must
   // use UNDER — a Follow read does not mean "Over".
   const snapshot = snapshotWithKLine(5.5, 4.0);
-  const market = settleMarket("pitcher_strikeouts", snapshot, 5);
+  const market = settleMarket(snapshot, 5);
   ok(market.recommendedSide === "UNDER", "Follow model read + below-the-line projection → UNDER official side (never Follow⇒OVER)");
   ok(market.marketOutcome === "cashed", "Follow model read still settles as a cashed UNDER");
 
   const view = buildMoundSettlementView(
     { finalStrikeouts: 5, seasonBaselineValue: 5.4, ...market } as MoundOutcome,
-    "pitcher_strikeouts",
     "follow",
     true,
     false,
@@ -171,17 +167,13 @@ function settleMarket(
 // ── No synthetic settlement: a missing line never borrows the baseline ──────
 {
   const noLine = snapshotWithKLine(null, 7.2);
-  const result = settleMarket("pitcher_strikeouts", noLine, 6);
+  const result = settleMarket(noLine, 6);
   ok(result.marketOutcome === "unavailable", "no posted line → unavailable, never graded against the engine baseline");
   ok(result.sportsbookLine === null, "no line is reported as null, never the 5.4 engine baseline");
   ok(result.marketUnavailableReason === "no_line_posted", "the missing component is named");
 
-  const noSnapshot = settleMarket("pitcher_strikeouts", null, 6);
+  const noSnapshot = settleMarket(null, 6);
   ok(noSnapshot.marketUnavailableReason === "no_pregame_snapshot", "a missing frozen snapshot is reported as such");
-
-  const outs = settleMarket("pitcher_outs", snapshotWithKLine(5.5, 7.2), 16);
-  ok(outs.marketOutcome === "unavailable", "pitcher_outs never cross-substitutes the strikeout line");
-  ok(outs.marketUnavailableReason === "market_has_no_line_source", "pitcher_outs is reported as having no line source at all");
 }
 
 // ── Lane precedence ─────────────────────────────────────────────────────────
@@ -212,7 +204,7 @@ function settleMarket(
   // outcomes.userVisible is the transient field: deriveMoundOutcome stamps it
   // false whenever the BASELINE comparison misses, even for a card whose
   // MARKET bet cashed. The settlement view must ignore it entirely.
-  const market = settleMarket("pitcher_strikeouts", snapshotWithKLine(5.5, 7.2), 6);
+  const market = settleMarket(snapshotWithKLine(5.5, 7.2), 6);
   const outcomes: MoundOutcome = {
     finalStrikeouts: 6,
     seasonBaselineValue: 8.0, // baseline missed…
@@ -220,7 +212,7 @@ function settleMarket(
     userVisible: false, // …so the transient visibility flag is false
     ...market, // …but the real frozen bet cashed
   };
-  const view = buildMoundSettlementView(outcomes, "pitcher_strikeouts", "follow", true, false);
+  const view = buildMoundSettlementView(outcomes, "follow", true, false);
   ok(view.isPublicRecommendation === true, "durable everPubliclyFlagged decides public status, not outcomes.userVisible");
   ok(view.marketOutcome === "cashed", "the frozen bet still settles as cashed while userVisible is false");
   ok(view.settlementLane === "market", "…and lands in the market lane");
@@ -230,8 +222,7 @@ function settleMarket(
 // ── Non-public pitcher: model review, never Cashed ──────────────────────────
 {
   const view = buildMoundSettlementView(
-    { finalOutsRecorded: 16, seasonBaselineValue: 15.9, outcome: "mound_win", userVisible: false },
-    "pitcher_outs",
+    { finalStrikeouts: 8, seasonBaselineValue: 6.0, outcome: "mound_win", userVisible: false },
     "follow",
     false, // never publicly flagged
     false,
@@ -251,7 +242,7 @@ function settleMarket(
 // requires score10 >= 5.5 and strong/elite/nuclear tier), then rebuilt after
 // the game with degraded inputs — score below the publish bar, tier "track",
 // so computeMoundDirection returns "fade". With the raw column driving
-// settlement, 16 outs against a 15.9 baseline graded as a FAILED FADE and
+// settlement, 8 Ks against a 6.0 baseline graded as a FAILED FADE and
 // rendered "Performed Above Baseline" on a card that had actually won.
 // ═══════════════════════════════════════════════════════════════════════════
 {
@@ -263,38 +254,34 @@ function settleMarket(
   ok(resolved === "follow", "durable Follow exposure outranks a post-hoc 'fade' recomputation");
 
   const attribution = deriveMoundOutcome({
-    primaryMarket: "pitcher_outs",
-    finalStrikeouts: null,
-    finalOutsRecorded: 16,
-    seasonKPer9: null,
-    seasonAvgInningsPerStart: 5.3, // baseline = 15.9 outs
+    finalStrikeouts: 8,
+    seasonKPer9: 9.0, // baseline = 6.0
     wasPubliclyFlagged: true,
     moundDirection: resolved,
   });
-  ok(attribution.seasonBaselineValue === 15.9, `baseline is 15.9 outs (got ${attribution.seasonBaselineValue})`);
-  ok(attribution.outcome === "mound_win", "16 outs vs a 15.9 baseline under the Follow rule → mound_win");
+  ok(attribution.seasonBaselineValue === 6.0, `baseline is 6.0 (got ${attribution.seasonBaselineValue})`);
+  ok(attribution.outcome === "mound_win", "8 Ks vs a 6.0 baseline under the Follow rule → mound_win");
   ok(attribution.userVisible === true, "…and it counts publicly");
 
   const view = buildMoundSettlementView(
     {
-      finalOutsRecorded: 16,
-      seasonBaselineValue: 15.9,
+      finalStrikeouts: 8,
+      seasonBaselineValue: 6.0,
       outcome: attribution.outcome,
       userVisible: attribution.userVisible,
       settledDirection: resolved,
       marketOutcome: "unavailable",
-      marketUnavailableReason: "market_has_no_line_source",
+      marketUnavailableReason: "no_line_posted", // a real line source exists for strikeouts, but no book posted this one
     },
-    "pitcher_outs",
     "fade", // the corrupted column, as persisted
     true,
     true,
   );
   ok(view.settlementDirection === "follow", "the settlement view grades under Follow despite the 'fade' column");
   ok(view.recommendedSide === "OVER", "the model-lane wording is Follow-sided, not Fade-sided");
-  ok(view.modelOutcome === "confirmed", "16 > 15.9 under a Follow read is a confirmation, not a miss");
+  ok(view.modelOutcome === "confirmed", "8 > 6 under a Follow read is a confirmation, not a miss");
   ok(view.isPublicRecommendation === true, "public status survives the final-state transition");
-  ok(view.settlementLane === "model_review", "pitcher_outs has no odds feed, so this is honestly a model read");
+  ok(view.settlementLane === "model_review", "no book posted a line this game, so this is honestly a model read");
   ok(view.marketOutcome !== "cashed", "…and is never fabricated into a Cashed off the engine baseline");
 }
 
@@ -309,7 +296,6 @@ function settleMarket(
 
   const view = buildMoundSettlementView(
     { finalStrikeouts: 4, seasonBaselineValue: 6.0, marketOutcome: "unavailable", marketUnavailableReason: "no_line_posted" },
-    "pitcher_strikeouts",
     "fade",
     false,
     true,
@@ -323,7 +309,6 @@ function settleMarket(
 {
   const view = buildMoundSettlementView(
     { finalStrikeouts: 7, seasonBaselineValue: 5.4 }, // no market fields at all
-    "pitcher_strikeouts",
     "follow",
     true,
     false,
@@ -333,36 +318,29 @@ function settleMarket(
   ok(view.marketOutcome === "unavailable", "…and is never fabricated into a result");
 }
 
-// ── An unstamped pitcher_outs row is explained, not flagged ────────────────
-{
-  const view = buildMoundSettlementView(
-    { finalOutsRecorded: 16, seasonBaselineValue: 15.9 },
-    "pitcher_outs",
-    "follow",
-    true,
-    false,
-  );
-  ok(view.marketUnavailableReason === "market_has_no_line_source", "an unstamped outs row is explained by the absent odds feed");
-  ok(view.settlementLane === "model_review", "…so it is not reported as an integrity gap");
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // PRIMARY-MARKET DRIFT REGRESSION (production regression fixture, COL vs MIL).
 //
-// computeMarketTags (marketTagger.ts) recomputes primaryMarket every build
-// cycle from live pitcherSkill/opponentKProfile/workloadScore — exactly like
-// moundDirection. Unlike moundDirection, primaryMarket carried NO
-// carry-forward pin, so a post-first-pitch rebuild with degraded data could
-// silently swap a publicly-flagged pitcher off the REAL-ODDS strikeout
-// market onto the Outs market — which has no sportsbook line source at all
-// (postedLine.outs is permanently "no_data_source") — permanently losing a
-// real Cashed/Missed/Push to the model-review baseline fallback ("Performed
-// Above Baseline"/"Performed Below Baseline"). carryForwardMoundGradedState
-// (moundGradedStateCarry.ts) now pins primaryMarket the same way it already
-// pinned moundDirection. This is a regression fixture, not a hardcoded
-// player — it reproduces the failure SHAPE (a real strikeout-market
-// recommendation silently regraded against the odds-less Outs market),
-// not any specific stored row.
+// computeMarketTags (marketTagger.ts) recomputes primaryMarket ("Best Angle")
+// every build cycle from live pitcherSkill/opponentKProfile/workloadScore —
+// exactly like moundDirection. Historically this mattered for settlement: a
+// post-first-pitch rebuild with degraded data could silently swap a
+// publicly-flagged pitcher's Best Angle off the REAL-ODDS strikeout market
+// onto the Outs market — which has no sportsbook line source at all — and
+// since settlement used to key off primaryMarket, that swap permanently lost
+// a real Cashed/Missed/Push to the model-review baseline fallback ("Performed
+// Above Baseline"/"Performed Below Baseline").
+//
+// Settlement is now ALWAYS strikeouts (moundOutcomeAttribution.ts's header
+// comment) — it no longer reads primaryMarket at all — so this entire bug
+// class is structurally impossible, not merely guarded against. This suite
+// keeps two things: (1) carryForwardMoundGradedState (moundGradedStateCarry.ts)
+// still pins primaryMarket for BEST ANGLE BADGE display consistency (a
+// genuinely separate, still-real concern), and (2) a demonstration that even
+// an unpinned/drifted Best Angle badge has zero effect on the real settlement
+// result, because grading never consults it. This is a regression fixture,
+// not a hardcoded player — it reproduces the failure SHAPE, not any specific
+// stored row.
 // ═══════════════════════════════════════════════════════════════════════════
 {
   function moundSignalFixture(over: Partial<MoundSignal>): MoundSignal {
@@ -463,13 +441,13 @@ function settleMarket(
   });
 
   carryForwardMoundGradedState(freshRebuild, prev);
-  ok(freshRebuild.primaryMarket === "pitcher_strikeouts", "the fix pins primaryMarket — the real-odds strikeout market survives the post-game rebuild");
-  ok(freshRebuild.everPubliclyFlaggedFade === true, "the durable Fade flag still carries forward independently of the market pin");
+  ok(freshRebuild.primaryMarket === "pitcher_strikeouts", "the Best Angle badge is still pinned by carryForwardMoundGradedState for display consistency");
+  ok(freshRebuild.everPubliclyFlaggedFade === true, "the durable Fade flag still carries forward independently of the Best Angle pin");
 
-  // ── WITH the fix: grading against the pinned (real) strikeout market ──────
+  // ── Grading against the real strikeout market, using the pinned Best Angle ──
   {
     const finalStrikeouts = 5; // beats the frozen UNDER 5.5 recommendation
-    const recommendation = deriveFrozenMoundMarketRecommendation(freshRebuild.primaryMarket, frozenSnapshot);
+    const recommendation = deriveFrozenMoundMarketRecommendation("pitcher_strikeouts", frozenSnapshot);
     ok(recommendation.side === "UNDER", "the frozen recommendation is UNDER 5.5 — the real bet the user saw");
 
     const market = deriveMoundMarketOutcome({
@@ -478,57 +456,44 @@ function settleMarket(
       lineFrozenAt: frozenSnapshot.frozenAt,
       actual: finalStrikeouts,
     });
-    ok(market.marketOutcome === "cashed", "final 5 Ks vs a frozen UNDER 5.5 → cashed — the real settlement, preserved by the fix");
+    ok(market.marketOutcome === "cashed", "final 5 Ks vs a frozen UNDER 5.5 → cashed — the real settlement");
 
     const view = buildMoundSettlementView(
       { finalStrikeouts, seasonBaselineValue: 6.0, ...market } as MoundOutcome,
-      freshRebuild.primaryMarket,
       freshRebuild.moundDirection,
       freshRebuild.everPubliclyFlagged,
       freshRebuild.everPubliclyFlaggedFade,
     );
-    ok(view.settlementLane === "market", "the fixed card settles in the market lane, not model_review");
-    ok(view.marketOutcome === "cashed", "the fixed card renders Cashed");
+    ok(view.settlementLane === "market", "the card settles in the market lane, not model_review");
+    ok(view.marketOutcome === "cashed", "the card renders Cashed");
   }
 
-  // ── CONTRAST — grading as it would have run WITHOUT the fix (primaryMarket
-  // left drifted to Outs) reproduces the exact reported production symptom:
-  // "Best Angle: Pitcher Outs", "Engine Baseline: 15.9 Outs", and
-  // "Performed Above Baseline" instead of the real Cashed settlement above. ──
+  // ── Settlement is invariant to Best Angle: even a card whose badge still
+  // reads "Pitcher Outs" (imagine the carry-forward pin never ran) grades
+  // identically, because deriveMoundMarketOutcome/buildMoundSettlementView
+  // never accept a market argument at all — there is no branch left to drift.
+  // This is what makes the historical bug class structurally impossible now,
+  // not merely guarded against by the pin. ──
   {
-    const driftedMarket = "pitcher_outs" as const;
-    const finalOutsRecorded = 16;
-    const seasonBaselineValue = 15.9; // seasonAvgInningsPerStart 5.3 * 3
-
-    const recommendation = deriveFrozenMoundMarketRecommendation(driftedMarket, frozenSnapshot);
-    ok(recommendation.side === null, "pitcher_outs never has a real frozen line — no side was ever recommended on it");
-
+    const driftedBadgeSignal = { ...freshRebuild, primaryMarket: "pitcher_outs" as const };
+    const finalStrikeouts = 5;
+    const recommendation = deriveFrozenMoundMarketRecommendation("pitcher_strikeouts", frozenSnapshot);
     const market = deriveMoundMarketOutcome({
-      moundDirection: null,
-      frozenLine: frozenSnapshot.champion.postedLine.outs,
+      moundDirection: recommendation.side === "UNDER" ? "fade" : "follow",
+      frozenLine: frozenSnapshot.champion.postedLine.strikeouts,
       lineFrozenAt: frozenSnapshot.frozenAt,
-      actual: finalOutsRecorded,
+      actual: finalStrikeouts,
     });
-    ok(market.marketOutcome === "unavailable", "grading against the drifted Outs market finds no line — unavailable");
+    ok(market.marketOutcome === "cashed", "grading is unaffected by driftedBadgeSignal.primaryMarket — it was never read");
 
     const view = buildMoundSettlementView(
-      { finalOutsRecorded, seasonBaselineValue, ...market } as MoundOutcome,
-      driftedMarket,
-      "fade",
-      false,
-      true, // everPubliclyFlaggedFade — this WAS a public recommendation
+      { finalStrikeouts, seasonBaselineValue: 6.0, ...market } as MoundOutcome,
+      driftedBadgeSignal.moundDirection,
+      driftedBadgeSignal.everPubliclyFlagged,
+      driftedBadgeSignal.everPubliclyFlaggedFade,
     );
-    ok(view.settlementLane === "model_review", "without the fix, the real recommendation is lost to the model-review lane");
-    ok(view.isPublicRecommendation === true, "…even though it was genuinely a public recommendation");
-    ok(view.modelOutcome === "not_confirmed", "16 outs beats the 15.9 baseline while flagged as a Fade — the fade call reads as not confirmed");
-    ok(view.recommendedSide === "UNDER", "…and the wording renders Fade-sided");
-    // baselineOnlyLabel(modelOutcome="not_confirmed", recommendedSide="UNDER")
-    // resolves to isFade=true → "Performed Above Baseline" (client/src/lib/mlb/moundSettlementLabels.ts)
-    // — the exact reported label, produced here only by the unfixed drift path.
-    ok(
-      view.modelOutcome === "not_confirmed" && view.recommendedSide === "UNDER",
-      "reproduces the exact production symptom: 'Performed Above Baseline' instead of Cashed",
-    );
+    ok(view.settlementLane === "market", "still the market lane, regardless of the (unused) Best Angle badge value");
+    ok(view.marketOutcome === "cashed", "still renders Cashed — the real production symptom this suite protects against is now impossible");
   }
 }
 

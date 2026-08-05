@@ -21,7 +21,6 @@ import {
   resolveMoundSettlementDirection,
   resolveMoundSettlementLane,
 } from "./moundOutcomeAttribution";
-import { computeAvgInningsPerStart } from "./scoreUtils";
 import { computeMoundGradingMeasurements } from "./evaluationSnapshot";
 import { deriveFrozenMoundMarketRecommendation } from "./marketRecommendation";
 import type { MoundOutcome, MoundSignal, MoundEvaluationSnapshot } from "./types";
@@ -46,13 +45,13 @@ function stampMarketOutcome(
   finalPregameSnapshot: MoundEvaluationSnapshot | null,
   isPublicRecommendation: boolean,
 ): MoundOutcome {
-  const primaryMarket = signal.primaryMarket;
-  const frozenLine =
-    primaryMarket === "pitcher_strikeouts"
-      ? finalPregameSnapshot?.champion.postedLine.strikeouts ?? null
-      : finalPregameSnapshot?.champion.postedLine.outs ?? null;
-  const actual = primaryMarket === "pitcher_strikeouts" ? outcome.finalStrikeouts ?? null : outcome.finalOutsRecorded ?? null;
-  const recommendation = deriveFrozenMoundMarketRecommendation(primaryMarket, finalPregameSnapshot);
+  // Strikeouts is the sole settlement market, regardless of this card's Best
+  // Angle badge (signal.primaryMarket) — see moundOutcomeAttribution.ts's
+  // header comment.
+  const settlementMarket = "pitcher_strikeouts" as const;
+  const frozenLine = finalPregameSnapshot?.champion.postedLine.strikeouts ?? null;
+  const actual = outcome.finalStrikeouts ?? null;
+  const recommendation = deriveFrozenMoundMarketRecommendation(settlementMarket, finalPregameSnapshot);
 
   // deriveMoundMarketOutcome's input type predates the separation and names the
   // side carrier `moundDirection`. Adapt the frozen MARKET side only; never pass
@@ -70,9 +69,11 @@ function stampMarketOutcome(
   const lane = resolveMoundSettlementLane(market.marketOutcome, market.marketUnavailableReason, isPublicRecommendation);
 
   // Bounded: one line per graded signal, at stamp time — never per render.
+  // bestAngle is logged alongside the fixed settlement market so admins can
+  // still see when a K-graded result came from an Outs-Best-Angle card.
   console.log(
     `[MOUND_SETTLEMENT] ${signal.signalId} pitcher=${signal.pitcherId} game=${signal.gameId} ` +
-      `market=${primaryMarket} public=${isPublicRecommendation} lane=${lane} ` +
+      `market=${settlementMarket} bestAngle=${signal.primaryMarket} public=${isPublicRecommendation} lane=${lane} ` +
       `officialSide=${market.recommendedSide ?? "none"} frozenLine=${market.sportsbookLine ?? "none"} ` +
       `finalStat=${actual ?? "none"} outcome=${market.marketOutcome} reason=${market.marketUnavailableReason ?? "none"}`,
   );
@@ -82,7 +83,7 @@ function stampMarketOutcome(
       `[MOUND_SETTLEMENT_INTEGRITY] ${signal.signalId} pitcher=${signal.pitcherId} game=${signal.gameId} ` +
         `publicRecommendation=true reason=${market.marketUnavailableReason} ` +
         `missingSide=${market.recommendedSide == null} missingLine=${market.sportsbookLine == null} ` +
-        `missingSnapshot=${finalPregameSnapshot == null} market=${primaryMarket}`,
+        `missingSnapshot=${finalPregameSnapshot == null} market=${settlementMarket}`,
     );
   }
 
@@ -112,7 +113,6 @@ function stampMarketOutcome(
 function resolveMoundOutcome(
   signal: MoundSignal,
   seasonKPer9: number | null,
-  seasonAvgInningsPerStart: number | null,
   everPubliclyFlagged: boolean,
   everPubliclyFlaggedFade: boolean,
 ): MoundOutcome | null {
@@ -133,12 +133,12 @@ function resolveMoundOutcome(
   });
   const wasPubliclyFlagged = settlementDirection === "fade" ? everPubliclyFlaggedFade : everPubliclyFlagged;
 
+  // Strikeouts is the sole official settlement market — see
+  // moundOutcomeAttribution.ts's header comment. signal.primaryMarket (Best
+  // Angle) is display-only and never selects the grading input here.
   const attribution = deriveMoundOutcome({
-    primaryMarket: signal.primaryMarket,
     finalStrikeouts: line.strikeOuts,
-    finalOutsRecorded: line.outsRecorded,
     seasonKPer9,
-    seasonAvgInningsPerStart,
     wasPubliclyFlagged,
     moundDirection: settlementDirection,
   });
@@ -339,9 +339,8 @@ export async function gradeMoundOutcomes(): Promise<{ graded: number; refreshed:
 
     const { mlbPlayerCache } = await import("../../dataPullService");
     const seasonStats = mlbPlayerCache.pitcherSeasonStats[signal.pitcherId] ?? null;
-    const seasonAvgInningsPerStart = computeAvgInningsPerStart(seasonStats?.gamesStarted, seasonStats?.inningsPitched);
 
-    const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, seasonAvgInningsPerStart, everPubliclyFlagged, everPubliclyFlaggedFade);
+    const outcome = resolveMoundOutcome(signal, seasonStats?.kPer9 ?? null, everPubliclyFlagged, everPubliclyFlaggedFade);
     if (!outcome) continue;
 
     if (needsDirectionRepair) {
