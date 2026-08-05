@@ -115,5 +115,32 @@ const REALISTIC: NbaJointInputs = {
   ok(throws(() => buildNbaJoint({ ...REALISTIC, assists: { mean: 5, variance: 0 } })), "throws on non-positive variance");
 }
 
+// ── Partial availability: joint builds over the present subset only ─────────
+{
+  // Only points + rebounds present (assists unavailable upstream).
+  const partial = buildNbaJoint({
+    points: { mean: 20, variance: 50 },
+    rebounds: { mean: 9, variance: 18 },
+  });
+  ok(partial.presentStats.length === 2, "partial joint has 2 present stats");
+  ok(partial.presentStats.includes("points") && partial.presentStats.includes("rebounds"), "present = pts+reb");
+  ok(!partial.presentStats.includes("assists"), "assists absent from partial joint");
+  ok(jointIsWellFormed(partial), "partial joint well-formed");
+  ok(isNormalized(marginalPmf(partial, "points")), "present-stat marginal available");
+  ok(throws(() => marginalPmf(partial, "assists")), "absent-stat marginal throws");
+  const m = jointMoments(partial);
+  ok(m.means.assists === undefined, "no moment for absent stat");
+  ok(m.covariances["points|rebounds"] > 0, "present-pair covariance still positive");
+  ok(Object.keys(m.covariances).length === 1, "only the present pair has a covariance");
+
+  // Single stat present → degenerate-but-valid joint (no covariance).
+  const single = buildNbaJoint({ assists: { mean: 6, variance: 12 } });
+  ok(single.presentStats.length === 1 && jointIsWellFormed(single), "single-stat joint well-formed");
+  ok(Object.keys(jointMoments(single).covariances).length === 0, "single-stat joint has no covariances");
+
+  // Zero present → throws (fail closed).
+  ok(throws(() => buildNbaJoint({})), "empty joint inputs throw");
+}
+
 console.log(`\npointsReboundsAssistsJoint.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
