@@ -140,3 +140,73 @@ the authorized-field list is frozen, but the commercial-licensing box above is u
 that box is checked, work proceeds **shadow-only** (research tables, no user-facing probability),
 consistent with the existing `PLATE_HR_V2_FORWARD_CAPTURE_ENABLED`-gated posture. No PR7
 implementation, no fetcher wiring, no `starterBullpen` use in PR8 fitting, no champion/public change.
+
+## 8. Commercial-licensing record (substantive — not a checkbox)
+
+The §7 licensing block is a **substantive legal/business determination**, not a repository
+formality. The two data sources below require resolution before PR7 (or any user-facing V2
+promotion) is authorized. Each subsection states what is currently true in the code and what the
+approval record must contain.
+
+### 8.1 Open-Meteo
+
+**Current code posture (verified 2026-08-05):** `server/mlb/dataPullService.ts::syncOpenMeteoWeather`
+calls **`https://api.open-meteo.com/v1/forecast`** — the **free endpoint, with no customer API
+key** (`User-Agent: LiveLocks/1.0`). It is **not** the paid `customer-api.open-meteo.com` endpoint.
+
+**Constraint:** Open-Meteo's free API is expressly limited to **non-commercial use**; a
+subscription-based product is commercial use and requires a **paid commercial plan** on the
+customer endpoint (API key). Open-Meteo data is **CC BY 4.0**, so **attribution is also required
+wherever the weather data is displayed**.
+
+**Determination:** as it stands, LiveLocks uses the non-commercial endpoint → **Open-Meteo
+commercial use is NOT currently satisfied.** To clear this, either (a) migrate to
+`customer-api.open-meteo.com` under a paid commercial plan + add the required CC BY 4.0
+attribution, or (b) confirm weather is **NOT USED** by any PR7/V2 user-facing surface. The
+sign-off must record: **plan, endpoint, account owner, attribution location, and permitted APIs.**
+
+### 8.2 Baseball Savant / MLB (Statcast)
+
+**Constraint:** MLB's current terms limit ordinary use to **personal, non-commercial use without
+written permission** and **prohibit automated scripts** used to collect information from MLB
+Digital Properties. A paid product's **recurring Baseball Savant CSV ingestion** therefore needs
+qualified legal review and likely **written MLB permission** or a **properly licensed replacement
+source**. An internal checkbox is **not** sufficient. If MLB permission cannot be secured, use a
+**commercially licensed baseball-data provider** — do not reinterpret the public-site terms.
+
+**Approval record must identify:**
+
+- Exact Statcast/Search CSV endpoint.
+- Automated request frequency.
+- Data retained and retention period.
+- Whether raw data is redistributed or only transformed model output is shown.
+- Use inside a paid betting-analytics product.
+- Written MLB authorization, licensed-vendor agreement, or counsel's documented basis for proceeding.
+
+### 8.3 PR7 authorization rule (all lines required)
+
+PR7 becomes authorized **only** after this record is completed and committed:
+
+```
+ZONE DATA GATE: GO
+OPEN-METEO COMMERCIAL USE: APPROVED OR NOT USED
+BASEBALL SAVANT/STATCAST USE: APPROVED
+APPROVER:
+DATE:
+EVIDENCE/AGREEMENT REFERENCE:
+```
+
+**Current record (2026-08-05):**
+
+```
+ZONE DATA GATE: GO
+OPEN-METEO COMMERCIAL USE: NOT RESOLVED (code is on the free non-commercial endpoint — §8.1)
+BASEBALL SAVANT/STATCAST USE: NOT RESOLVED (no written MLB permission / licensed source on file — §8.2)
+APPROVER: —
+DATE: —
+EVIDENCE/AGREEMENT REFERENCE: —
+```
+
+Until every line reads its authorized value: **PR7 remains blocked, no zone proxy is allowed, the
+five zone fields are NOT enabled in production capture, and PR8 / champion selection / public
+behavior remain unchanged.**
