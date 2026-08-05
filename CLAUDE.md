@@ -54,6 +54,7 @@ npx tsx server/mlb/pregamePowerRadar/isoPopulationAuditGate.test.ts       # Pre-
 npx tsx server/mlb/pregamePowerRadar/winAttribution.test.ts  # Pregame Radar Win Attribution (pregame_win public vs calibration_miss internal; first-AB label; daily-log grouping)
 npx tsx server/mlb/pregamePowerRadar/calibrationStats.test.ts # Pregame Radar public stats (wins-only) vs admin calibration (full denominator: byTier/byScoreBand/byDriver + conversion rates)
 npx tsx server/mlb/pregamePowerRadar/gradedStatePreservation.test.ts # Pregame Radar graded-state carry across snapshot rebuilds + wrong-slate snapshot refusal + lineup-dropout carry-forward
+npx tsx server/mlb/pregamePowerRadar/finalBoxScoreOutcome.test.ts # Pregame Radar restart-proof grading fallback (on-demand FINAL box score when the in-memory cache has no line): HR still settles as pregame_win, public/internal split, miss→calibration_miss, absent batter→null, exact TB
 npx tsx server/mlb/pregame/mound/moundGradedStatePreservation.test.ts # Mound Radar graded-state carry across snapshot rebuilds + wrong-slate snapshot refusal + starter-drop carry-forward
 npx tsx server/mlb/pregame/mound/contactRisk.test.ts # Mound Radar Hit/HR Susceptible High/Low tag (informational-only, zero effect on score10/tier)
 npx tsx server/mlb/pregame/mound/matchupAdjustedKs.test.ts # Mound Radar Matchup Adj. Ks enrichment + avgInningsPerStart swingman-inflation regression
