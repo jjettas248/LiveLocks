@@ -21,6 +21,8 @@ import { mlbGameCache } from "../dataPullService";
 import { getSnapshot, commitGradedSignal } from "./pregamePowerRadarStore";
 import { deriveWinAttribution } from "./winAttribution";
 import { classifyTotalBasesOutcome } from "./totalBasesOutcome";
+import { fetchMlbBoxScore, buildMlbPlayerStats } from "../../services/gradePersistedPlays";
+import { resolveOutcomeFromFinalBoxScore } from "./finalBoxScoreOutcome";
 import type { PregameOutcome, PregamePowerSignal } from "./types";
 import type { PregameCalibrationRecord } from "../../../shared/pregameRadarWin";
 
@@ -210,6 +212,30 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
     // leave canonicalHits empty
   }
 
+  // Per-tick, per-game memo of on-demand FINAL box scores. The authoritative
+  // settle below hits each game at most once per grading cycle regardless of
+  // how many ungraded targets it holds; `null` caches "fetched but not final /
+  // not available" so a not-yet-final game isn't re-fetched for every batter
+  // this tick. Consulted only for a target the live cache can't already CASH
+  // (no line, or a final game showing no HR) — a healthy in-progress slate with
+  // no HRs yet still waits on the live cache, incurring no extra fetches.
+  const finalBoxByGame = new Map<string, ReturnType<typeof buildMlbPlayerStats> | null>();
+  const getFinalPlayerStats = async (
+    gameId: string,
+  ): Promise<ReturnType<typeof buildMlbPlayerStats> | null> => {
+    if (finalBoxByGame.has(gameId)) return finalBoxByGame.get(gameId)!;
+    let stats: ReturnType<typeof buildMlbPlayerStats> | null = null;
+    try {
+      const box = await fetchMlbBoxScore(gameId);
+      stats = box ? buildMlbPlayerStats(box) : null;
+    } catch (err: any) {
+      console.warn(`[PREGAME_RADAR_GRADE_FETCH] ${gameId} on-demand box fetch failed: ${err?.message}`);
+      stats = null;
+    }
+    finalBoxByGame.set(gameId, stats);
+    return stats;
+  };
+
   for (const original of Array.from(snapshot.signals.values())) {
     let changed = false;
     const draft: PregamePowerSignal = { ...original };
@@ -238,8 +264,44 @@ export async function gradePregameOutcomes(): Promise<{ bridged: number; graded:
     // needs the game to be over — you can't call "no HR" while the batter
     // still has plate appearances left.
     if (draft.status !== "graded") {
-      const outcome = resolveOutcome(draft, canonicalHits.get(`${draft.gameId}|${draft.batterId}`));
-      if (outcome && (outcome.hitHr === true || draft.gameStatus === "final")) {
+      const canonicalHit = canonicalHits.get(`${draft.gameId}|${draft.batterId}`);
+      const inMemory = resolveOutcome(draft, canonicalHit);
+      let outcome: PregameOutcome | null = null;
+
+      // THE RULE: a home run is always a cash. To make that unbreakable, the
+      // in-memory (live-polled) box score may only ever CASH a target — it is
+      // never allowed to record a miss. That cache is populated only by the
+      // live orchestrator and is wiped on every redeploy, so a cold or stale
+      // line showing hr=0 must never be trusted to say "no HR" — doing so would
+      // settle a real home run as a loss.
+      if (inMemory?.hitHr === true) {
+        // A HR is confirmed by the live box score — cash it immediately, no
+        // need to wait for the game to end.
+        outcome = inMemory;
+      } else if (!inMemory || draft.gameStatus === "final") {
+        // Either the live cache has NO line for this batter (a game the live
+        // path never synced, or a redeploy wiped the cache) OR the game is
+        // final and the live cache shows no HR. In both cases only the
+        // AUTHORITATIVE final box score — fetched on demand, non-null solely
+        // once the game is truly final — may settle this target. It can never
+        // miss a HR that happened, so it is the only source allowed to record
+        // a miss. A game still in progress (or a transient fetch outage)
+        // returns null here → wait for a later tick; a real HR keeps its cash
+        // pending rather than being mis-settled as a loss.
+        const finalStats = await getFinalPlayerStats(draft.gameId);
+        if (finalStats) {
+          outcome = resolveOutcomeFromFinalBoxScore(draft, finalStats, canonicalHit);
+          if (outcome) {
+            console.log(
+              `[PREGAME_POWER_RADAR_GRADE_FINAL] ${draft.signalId} settled from authoritative FINAL box score hr=${outcome.hitHr} (live cache ${inMemory ? "showed no HR" : "had no line"})`,
+            );
+          }
+        }
+      }
+      // else: live cache has a line, shows no HR, game not final → wait. A
+      // later live poll cashes the HR the instant it lands.
+
+      if (outcome) {
         draft.outcomes = outcome;
         draft.status = "graded";
         changed = true;
