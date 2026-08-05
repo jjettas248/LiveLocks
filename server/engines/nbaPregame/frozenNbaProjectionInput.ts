@@ -29,7 +29,7 @@
 
 import { createHash } from "node:crypto";
 import { FORBIDDEN_PROJECTION_KEYS, normalizeProjectionKey } from "../../../shared/pregameTargets/projectionContract";
-import type { NbaBaseStat, NbaMarketKey, NbaJointStat } from "./markets";
+import type { NbaBaseStat, NbaMarketKey } from "./markets";
 import type { StatPosteriorReason } from "./statPosterior";
 
 export const NBA_PREGAME_MODEL_VERSION = "nba_pregame_projection_v1";
@@ -74,7 +74,13 @@ export interface FrozenNbaProjectionInput {
 
   // PMF-altering modeling inputs --------------------------------------------
   latentStrength: number;
-  maxCount: Record<NbaJointStat, number>;
+  /**
+   * ONE canonical truncation-caps object over ALL FOUR base stats — including the
+   * standalone three_pointers_made cap. Every cap alters an emitted PMF, so every
+   * cap is part of the semantic (hashed) input. (Combo caps are derived from these
+   * component caps, so they need no separate entry.)
+   */
+  truncationCaps: Record<NbaBaseStat, number>;
   stats: FrozenStatInput[];
   minutes: FrozenMinutesInput;
 }
@@ -83,16 +89,20 @@ export interface FrozenNbaProjectionInput {
 
 /**
  * Deterministic, key-sorted stringify with EXPLICIT handling of JSON-lossy
- * values. Distinct sentinels for undefined / NaN / ±Infinity (JSON.stringify maps
- * every one of these to `null` or drops it — a silent collision); -0 normalized to
- * 0. Object keys are sorted so serialization is insertion-order-independent.
+ * values. undefined / NaN / ±Infinity are encoded as BAREWORD tokens
+ * (`@undefined`, `@NaN`, `@Infinity`, `@-Infinity`) — never quoted. Because every
+ * real string is emitted via JSON.stringify (always surrounded by `"`), a bareword
+ * token can never collide with a legitimate string identity: the string
+ * `"@NaN"` serializes to `"\"@NaN\""` (quoted), distinct from the numeric NaN's
+ * `@NaN` (bareword). `-0` is normalized to `0` explicitly. Object keys are sorted
+ * so serialization is insertion-order-independent.
  */
 export function stableStringify(value: unknown): string {
-  if (value === undefined) return '"__undefined__"';
+  if (value === undefined) return "@undefined";
   if (typeof value === "number") {
-    if (Number.isNaN(value)) return '"__NaN__"';
-    if (value === Infinity) return '"__Infinity__"';
-    if (value === -Infinity) return '"__-Infinity__"';
+    if (Number.isNaN(value)) return "@NaN";
+    if (value === Infinity) return "@Infinity";
+    if (value === -Infinity) return "@-Infinity";
     if (Object.is(value, -0)) return "0"; // explicit: -0 and +0 serialize identically
     return JSON.stringify(value);
   }
@@ -117,7 +127,7 @@ function semanticView(input: SemanticInput): SemanticInput {
     gameCanonicalId: input.gameCanonicalId,
     season: input.season,
     latentStrength: input.latentStrength,
-    maxCount: input.maxCount,
+    truncationCaps: input.truncationCaps,
     stats: input.stats,
     minutes: input.minutes,
   };
@@ -196,7 +206,8 @@ export interface BuildFrozenNbaInputArgs {
   gameCanonicalId: string;
   season: number;
   latentStrength: number;
-  maxCount: Record<NbaJointStat, number>;
+  /** Canonical truncation caps for all four base stats (incl. standalone threes). */
+  truncationCaps: Record<NbaBaseStat, number>;
   stats: FrozenStatInput[];
   minutes: FrozenMinutesInput;
   modelVersion?: string;
@@ -217,7 +228,7 @@ export function buildFrozenNbaProjectionInput(args: BuildFrozenNbaInputArgs): Re
     gameCanonicalId: args.gameCanonicalId,
     season: args.season,
     latentStrength: args.latentStrength,
-    maxCount: args.maxCount,
+    truncationCaps: args.truncationCaps,
     stats: args.stats,
     minutes: args.minutes,
   };

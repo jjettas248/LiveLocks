@@ -57,23 +57,35 @@ const baseArgs = (over: Partial<BuildFrozenNbaInputArgs> = {}): BuildFrozenNbaIn
   gameCanonicalId: "nba:game:401",
   season: 2026,
   latentStrength: 0.02,
-  maxCount: { points: 80, rebounds: 40, assists: 30 },
+  truncationCaps: { points: 80, rebounds: 40, assists: 30, three_pointers_made: 15 },
   stats: STATS,
   minutes: MINUTES,
   ...over,
 });
 
-// ── stableStringify: explicit lossy-value handling ─────────────────────────
+// ── stableStringify: explicit lossy-value handling (bareword sentinels) ─────
 {
-  ok(stableStringify(undefined) === '"__undefined__"', "undefined → sentinel");
-  ok(stableStringify(NaN) === '"__NaN__"', "NaN → sentinel");
-  ok(stableStringify(Infinity) === '"__Infinity__"', "Infinity → sentinel");
-  ok(stableStringify(-Infinity) === '"__-Infinity__"', "-Infinity → sentinel");
+  ok(stableStringify(undefined) === "@undefined", "undefined → bareword sentinel");
+  ok(stableStringify(NaN) === "@NaN", "NaN → bareword sentinel");
+  ok(stableStringify(Infinity) === "@Infinity", "Infinity → bareword sentinel");
+  ok(stableStringify(-Infinity) === "@-Infinity", "-Infinity → bareword sentinel");
   ok(stableStringify(-0) === "0", "-0 normalized to 0");
   ok(stableStringify(0) === "0", "+0 is 0");
   // NaN, Infinity, undefined, null all serialize DISTINCTLY (no collision).
   const forms = new Set([stableStringify(NaN), stableStringify(Infinity), stableStringify(-Infinity), stableStringify(undefined), stableStringify(null)]);
   ok(forms.size === 5, "NaN/Inf/-Inf/undefined/null serialize to 5 distinct forms");
+  // HARDENING: a special-value token can NEVER collide with a legitimate string
+  // identity — the string is always quoted, the token never is.
+  ok(stableStringify(NaN) !== stableStringify("@NaN"), "NaN token != the string \"@NaN\"");
+  ok(stableStringify(NaN) !== stableStringify("__NaN__"), "NaN token != the string \"__NaN__\"");
+  ok(stableStringify(undefined) !== stableStringify("@undefined"), "undefined token != the string \"@undefined\"");
+  ok(stableStringify(Infinity) !== stableStringify("@Infinity"), "Infinity token != the string \"@Infinity\"");
+  ok(stableStringify(null) !== stableStringify("null"), "null != the string \"null\"");
+  // A value carrying the sentinel STRING hashes differently from the special number.
+  ok(
+    stableStringify({ v: NaN }) !== stableStringify({ v: "@NaN" }),
+    "object with NaN differs from object with the string \"@NaN\"",
+  );
   // Key ordering is deterministic.
   ok(stableStringify({ b: 1, a: 2 }) === stableStringify({ a: 2, b: 1 }), "object key order does not matter");
 }
@@ -89,6 +101,11 @@ const baseArgs = (over: Partial<BuildFrozenNbaInputArgs> = {}): BuildFrozenNbaIn
   ok(a.featureHash !== c.featureHash, "latentStrength change moves the feature hash");
   const d = buildFrozenNbaProjectionInput(baseArgs({ minutes: { ...MINUTES, expectedMinutes: 33 } }));
   ok(a.featureHash !== d.featureHash, "minutes change moves the feature hash");
+  // The standalone threes cap is a PMF-altering input and MUST be hashed.
+  const e = buildFrozenNbaProjectionInput(baseArgs({ truncationCaps: { points: 80, rebounds: 40, assists: 30, three_pointers_made: 20 } }));
+  ok(a.featureHash !== e.featureHash, "changing the threes truncation cap moves the feature hash");
+  const jointCapChange = buildFrozenNbaProjectionInput(baseArgs({ truncationCaps: { points: 90, rebounds: 40, assists: 30, three_pointers_made: 15 } }));
+  ok(a.featureHash !== jointCapChange.featureHash, "changing a joint truncation cap moves the feature hash");
 }
 
 // ── Byte-identical semantic input → byte-identical serialization + hash ─────

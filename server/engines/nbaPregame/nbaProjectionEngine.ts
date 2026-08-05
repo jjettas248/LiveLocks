@@ -36,7 +36,7 @@ import {
   type JointComponentMoments,
 } from "./joint/pointsReboundsAssistsJoint";
 import { negativeBinomialPmf, normalizePmf, isNormalized, meanOfPmf, varianceOfPmf } from "./math/pmf";
-import { bridgeStatPosterior, type StatPosteriorResult } from "./statPosterior";
+import { bridgeStatPosterior, type StatPosteriorResult, type StatPosteriorReason } from "./statPosterior";
 import type { PosteriorState, Prior } from "../../pregameTargets/posteriorState/posteriorState";
 import type { PlayerMinutesDistribution } from "./minutes/teamMinutesAllocator";
 import {
@@ -113,18 +113,33 @@ function unavailableMarket(market: NbaMarketKey, reason: string): NbaMarketProje
   return { market, available: false, reason, pmf: null, mean: null, variance: null };
 }
 
-/** Build an available market projection from a normalized PMF (validates finiteness of moments). */
-function availableMarket(market: NbaMarketKey, pmf: number[]): NbaMarketProjection {
+/**
+ * Build an available market projection from a normalized PMF (validates finiteness
+ * of moments). The `reason` carries the bridge availability state through to the
+ * output — an available market may still be `prior_dominant` (projected from a
+ * low-ESS prior), and that state must survive to the emitted output AND the
+ * projection hash, not be flattened to a bare "available".
+ */
+function availableMarket(market: NbaMarketKey, pmf: number[], reason: StatPosteriorReason): NbaMarketProjection {
   const mp: NbaMarketProjection = {
     market,
     available: true,
-    reason: "available",
+    reason,
     pmf,
     mean: meanOfPmf(pmf),
     variance: varianceOfPmf(pmf),
   };
   assertMarketProjectionValid(mp);
   return mp;
+}
+
+/**
+ * A combo's availability reason: `prior_dominant` if ANY required component is
+ * prior-dominant, otherwise `available`. So a combo built partly from a low-ESS
+ * prior is not over-stated as a fully data-driven projection.
+ */
+function comboReason(componentReasons: StatPosteriorReason[]): StatPosteriorReason {
+  return componentReasons.some((r) => r === "prior_dominant") ? "prior_dominant" : "available";
 }
 
 /**
@@ -177,7 +192,7 @@ export function computeNbaProjection(input: NbaProjectionEngineInput): NbaProjec
         markets.push(unavailableMarket(key, r.reason));
       } else {
         const pmf = normalizePmf(negativeBinomialPmf(r.moments.mean, r.moments.variance, threesCap), threesCap);
-        markets.push(availableMarket(key, pmf));
+        markets.push(availableMarket(key, pmf, r.reason));
       }
       continue;
     }
@@ -190,7 +205,7 @@ export function computeNbaProjection(input: NbaProjectionEngineInput): NbaProjec
         markets.push(unavailableMarket(key, r.reason));
       } else {
         const cap = jointMaxCount[stat];
-        markets.push(availableMarket(key, normalizePmf(marginalPmf(joint, stat), cap)));
+        markets.push(availableMarket(key, normalizePmf(marginalPmf(joint, stat), cap), r.reason));
       }
       continue;
     }
@@ -209,7 +224,8 @@ export function computeNbaProjection(input: NbaProjectionEngineInput): NbaProjec
       markets.push(unavailableMarket(key, reason));
     } else {
       const comboCap = components.reduce((acc, c) => acc + jointMaxCount[c], 0);
-      markets.push(availableMarket(key, normalizePmf(comboPmf(joint, components), comboCap)));
+      const reason = comboReason(components.map((c) => bridge[c].reason));
+      markets.push(availableMarket(key, normalizePmf(comboPmf(joint, components), comboCap), reason));
     }
   }
 
@@ -230,7 +246,14 @@ export function computeNbaProjection(input: NbaProjectionEngineInput): NbaProjec
     gameCanonicalId: input.gameCanonicalId,
     season: input.season,
     latentStrength: latentStrength ?? 0.02,
-    maxCount: jointMaxCount,
+    // ONE canonical caps object over all four base stats — the standalone threes
+    // cap alters the threes PMF and MUST be part of the hashed input.
+    truncationCaps: {
+      points: jointMaxCount.points,
+      rebounds: jointMaxCount.rebounds,
+      assists: jointMaxCount.assists,
+      three_pointers_made: threesCap,
+    },
     stats: statInputs,
     minutes: input.minutes
       ? {

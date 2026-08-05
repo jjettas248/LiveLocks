@@ -204,5 +204,72 @@ function fullInput(over: Partial<NbaProjectionEngineInput> = {}): NbaProjectionE
   ok(NBA_MARKET_REGISTRY.three_pointers_made.kind === "base", "threes is a base market (not a combo)");
 }
 
+// ── prior_dominant reason is PROPAGATED to available market outputs ─────────
+{
+  // 1-game posteriors → ESS≈1 < minEss → every bridge is prior_dominant but still
+  // projects. The emitted market reason must reflect prior_dominant, not "available".
+  const lowEss = computeNbaProjection(fullInput({
+    posteriors: {
+      points: ratePosterior("points", 1, 0.6),
+      rebounds: ratePosterior("rebounds", 1, 0.25),
+      assists: ratePosterior("assists", 1, 0.18),
+      three_pointers_made: ratePosterior("threes", 1, 0.07),
+    },
+  }));
+  ok(marketProjection(lowEss, "points")!.available, "low-ESS points still projects (available=true)");
+  ok(marketProjection(lowEss, "points")!.reason === "prior_dominant", "base market carries prior_dominant reason");
+  ok(marketProjection(lowEss, "three_pointers_made")!.reason === "prior_dominant", "standalone threes carries prior_dominant");
+  ok(marketProjection(lowEss, "pra")!.reason === "prior_dominant", "combo carries prior_dominant when a component is prior-dominant");
+  // The high-ESS baseline emits "available".
+  ok(marketProjection(computeNbaProjection(fullInput()), "points")!.reason === "available", "high-ESS base market reason = available");
+}
+
+// ── Combo reason = prior_dominant if ANY component is prior-dominant ─────────
+{
+  // points high-ESS (available), rebounds low-ESS (prior_dominant): pts_reb combo
+  // must be prior_dominant; a pure-available combo (none) stays available.
+  const mixed = computeNbaProjection(fullInput({
+    posteriors: {
+      points: ratePosterior("points", 20, 0.6),
+      rebounds: ratePosterior("rebounds", 1, 0.25),
+      assists: ratePosterior("assists", 20, 0.18),
+      three_pointers_made: ratePosterior("threes", 20, 0.07),
+    },
+  }));
+  ok(marketProjection(mixed, "points")!.reason === "available", "points available (high ESS)");
+  ok(marketProjection(mixed, "rebounds")!.reason === "prior_dominant", "rebounds prior_dominant (low ESS)");
+  ok(marketProjection(mixed, "pts_reb")!.reason === "prior_dominant", "pts_reb prior_dominant (one component is)");
+  ok(marketProjection(mixed, "pts_ast")!.reason === "available", "pts_ast available (both components available)");
+}
+
+// ── Reason state feeds the projection hash (provenance faithfully encoded) ───
+{
+  const highEss = computeNbaProjection(fullInput());
+  const lowEss = computeNbaProjection(fullInput({
+    posteriors: {
+      points: ratePosterior("points", 1, 0.6),
+      rebounds: ratePosterior("rebounds", 1, 0.25),
+      assists: ratePosterior("assists", 1, 0.18),
+      three_pointers_made: ratePosterior("threes", 1, 0.07),
+    },
+  }));
+  // Different data → different everything, but crucially the emitted reason states
+  // differ and are part of the hashed output.
+  ok(highEss.projectionHash !== lowEss.projectionHash, "reason/data differences move the projection hash");
+}
+
+// ── threesMaxCount is a PMF-altering input → moves BOTH hashes ───────────────
+{
+  const a = computeNbaProjection(fullInput({ threesMaxCount: 15 }));
+  const b = computeNbaProjection(fullInput({ threesMaxCount: 20 }));
+  ok(a.featureHash !== b.featureHash, "changing threesMaxCount moves the feature hash");
+  ok(a.projectionHash !== b.projectionHash, "changing threesMaxCount moves the projection hash");
+  // The threes PMF length actually changes with the cap (proves it altered the PMF).
+  ok(marketProjection(b, "three_pointers_made")!.pmf!.length === 21, "threes PMF length tracks threesMaxCount");
+  // Identical caps reproduce both hashes exactly.
+  const c = computeNbaProjection(fullInput({ threesMaxCount: 15 }));
+  ok(a.featureHash === c.featureHash && a.projectionHash === c.projectionHash, "identical caps reproduce both hashes");
+}
+
 console.log(`\nnbaProjectionEngine.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

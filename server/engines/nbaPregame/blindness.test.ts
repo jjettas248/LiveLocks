@@ -72,7 +72,7 @@ const leaksPriceOrEv = (obj: Record<string, unknown>) => checkProjectionBlindnes
     gameCanonicalId: "nba:game:401",
     season: SEASON,
     latentStrength: 0.02,
-    maxCount: { points: 80, rebounds: 40, assists: 30 },
+    truncationCaps: { points: 80, rebounds: 40, assists: 30, three_pointers_made: 15 },
     stats: [{ stat: "points", reason: "available", projected: true, ess: 20, rateMean: 0.6, rateVariance: 0.02, moments: { mean: 21, variance: 40 } }],
     minutes: { playerId: "p0", support: [{ minutes: 34, prob: 1 }], expectedMinutes: 34, dnpProbability: 0 },
   });
