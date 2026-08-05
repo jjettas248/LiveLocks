@@ -130,20 +130,35 @@ export function allocateTeamMinutes(input: TeamMinutesInput): TeamMinutesAllocat
   const minuteBudget = REGULATION_TEAM_MINUTES + OT_TEAM_MINUTES_PER_PERIOD * expectedOtPeriods;
 
   const plays = input.players.map((p) => p.playProbability);
-  const weights = input.players.map((p) => p.otParticipation ?? p.projectedMinutesIfActive);
-  if (plays.every((pi, i) => pi <= 0 || weights[i] <= 0)) {
+  const regWeights = input.players.map((p) => p.projectedMinutesIfActive);
+  if (input.players.every((p) => p.playProbability <= 0 || p.projectedMinutesIfActive <= 0)) {
     throw new Error("teamMinutes: no allocatable active minutes (fail closed)");
   }
 
-  // Water-fill the conserved budget at EACH overtime count present in the OT
-  // distribution. conditionalMeans[n][i] is player i's expected minutes WHEN
-  // ACTIVE at overtime count n; by construction Σ_i π_i·conditionalMeans[n][i] =
-  // 240 + 25·n exactly, or the roster is infeasible and this throws (fail closed).
+  // TWO-STAGE, so overtime is ADDITIVE and never rewrites the regulation role
+  // model (otParticipation is an OVERTIME weight, not a regulation weight):
+  //
+  //   Stage 1 — allocate the 240 REGULATION minutes from projectedMinutesIfActive
+  //             (cap 48). These regulation conditional means are independent of
+  //             otParticipation entirely.
+  //   Stage 2 — for each overtime count n>0, START from the regulation means and
+  //             water-fill ONLY the incremental 25·n overtime minutes using
+  //             otParticipation ?? projectedMinutesIfActive, capped by each
+  //             player's remaining headroom (48+5n − regMean), failing closed if
+  //             the increment cannot be absorbed.
+  //
+  // So Σ_i π_i·conditionalMeans[n][i] = 240 + 25·n at every n by construction, and
+  // changing otParticipation with no OT mass changes nothing.
+  const regulationMeans = waterFillConditionalMeans(plays, regWeights, REGULATION_TEAM_MINUTES, REGULATION_PLAYER_MAX);
+  const otWeights = input.players.map((p) => p.otParticipation ?? p.projectedMinutesIfActive);
+
   const conditionalMeans: (number[] | null)[] = otProbs.map((qn, n) => {
     if (qn <= 0) return null;
-    const cap = REGULATION_PLAYER_MAX + OT_PLAYER_MINUTES_PER_PERIOD * n;
-    const budget = REGULATION_TEAM_MINUTES + OT_TEAM_MINUTES_PER_PERIOD * n;
-    return waterFillConditionalMeans(plays, weights, budget, cap);
+    if (n === 0) return regulationMeans;
+    const capN = REGULATION_PLAYER_MAX + OT_PLAYER_MINUTES_PER_PERIOD * n;
+    const headroom = regulationMeans.map((m) => capN - m); // ≥ 5n ≥ 0 (regMean ≤ 48)
+    const increment = waterFillCapped(plays, otWeights, OT_TEAM_MINUTES_PER_PERIOD * n, headroom);
+    return regulationMeans.map((m, i) => m + increment[i]);
   });
 
   const players: PlayerMinutesDistribution[] = input.players.map((p, i) => {
@@ -190,30 +205,30 @@ export function allocateTeamMinutes(input: TeamMinutesInput): TeamMinutesAllocat
 }
 
 /**
- * Water-filling allocation of `budget` player-minutes across the roster under a
- * per-player physical `cap`, honoring the conservation constraint
- * Σ_i plays_i · μ_i = budget with 0 ≤ μ_i ≤ cap. Each player's uncapped share is
- * proportional to its weight (μ_i = λ·weight_i); players that would exceed the cap
- * are pinned at the cap and their residual is redistributed to the rest, repeated
- * until the budget is placed. THROWS (fail closed) when the roster cannot
- * physically absorb the budget — Σ (plays_i · cap) over positive-weight players is
- * below it — so an infeasible one-player or low-availability roster never returns
- * a silently non-conserved allocation.
+ * Water-filling allocation of `budget` player-minutes across the roster under
+ * PER-PLAYER caps, honoring the conservation constraint Σ_i plays_i · μ_i = budget
+ * with 0 ≤ μ_i ≤ caps_i. Each player's uncapped share is proportional to its
+ * weight (μ_i = λ·weight_i); players that would exceed their cap are pinned at the
+ * cap and their residual is redistributed to the rest, repeated until the budget
+ * is placed. A zero-weight player receives 0 (no share). THROWS (fail closed) when
+ * the roster cannot absorb the budget — Σ (plays_i · caps_i) over positive-weight
+ * players is below it — so an infeasible allocation never returns non-conserved.
  */
-export function waterFillConditionalMeans(
+export function waterFillCapped(
   plays: number[],
   weights: number[],
   budget: number,
-  cap: number,
+  caps: number[],
 ): number[] {
   const n = plays.length;
   const mu = new Array(n).fill(0);
+  if (budget <= CONSERVATION_TOLERANCE) return mu; // nothing to allocate (e.g. a 0-minute increment)
   const active = new Set<number>();
   let capacity = 0;
   for (let i = 0; i < n; i++) {
-    if (plays[i] > 0 && weights[i] > 0) {
+    if (plays[i] > 0 && weights[i] > 0 && caps[i] > 0) {
       active.add(i);
-      capacity += plays[i] * cap;
+      capacity += plays[i] * caps[i];
     }
   }
   if (capacity < budget - CONSERVATION_TOLERANCE) {
@@ -228,7 +243,7 @@ export function waterFillConditionalMeans(
     if (denom <= 0) break;
     const lambda = remaining / denom;
     const newlyCapped: number[] = [];
-    for (const i of pool) if (lambda * weights[i] >= cap) newlyCapped.push(i);
+    for (const i of pool) if (lambda * weights[i] >= caps[i]) newlyCapped.push(i);
     if (newlyCapped.length === 0) {
       for (const i of pool) mu[i] = lambda * weights[i];
       remaining = 0;
@@ -236,8 +251,8 @@ export function waterFillConditionalMeans(
       break;
     }
     for (const i of newlyCapped) {
-      mu[i] = cap;
-      remaining -= plays[i] * cap;
+      mu[i] = caps[i];
+      remaining -= plays[i] * caps[i];
       active.delete(i);
     }
   }
@@ -245,6 +260,16 @@ export function waterFillConditionalMeans(
     throw new Error(`teamMinutes: infeasible — ${remaining} minutes unallocatable (fail closed)`);
   }
   return mu;
+}
+
+/** Scalar-cap convenience wrapper over waterFillCapped (uniform per-player cap). */
+export function waterFillConditionalMeans(
+  plays: number[],
+  weights: number[],
+  budget: number,
+  cap: number,
+): number[] {
+  return waterFillCapped(plays, weights, budget, new Array(plays.length).fill(cap));
 }
 
 /** Convenience: the single-player minutes distribution for a given id (or null). */

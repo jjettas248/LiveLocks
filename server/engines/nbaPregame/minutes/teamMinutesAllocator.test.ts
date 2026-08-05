@@ -230,5 +230,96 @@ const ROSTER: TeamMinutesInput = {
   ok(CONSERVATION_TOLERANCE < 1e-3, "conservation tolerance is tight");
 }
 
+// ── otParticipation is OVERTIME-only: no OT mass ⇒ it changes nothing ────────
+{
+  const rosterA: TeamMinutesInput = {
+    players: [
+      { playerId: "a", playProbability: 1, projectedMinutesIfActive: 34 },
+      { playerId: "b", playProbability: 1, projectedMinutesIfActive: 30 },
+      { playerId: "c", playProbability: 1, projectedMinutesIfActive: 28 },
+      { playerId: "d", playProbability: 1, projectedMinutesIfActive: 26 },
+      { playerId: "e", playProbability: 1, projectedMinutesIfActive: 24 },
+      { playerId: "f", playProbability: 1, projectedMinutesIfActive: 22 },
+      { playerId: "g", playProbability: 1, projectedMinutesIfActive: 20 },
+      { playerId: "h", playProbability: 1, projectedMinutesIfActive: 18 },
+      { playerId: "i", playProbability: 1, projectedMinutesIfActive: 14 },
+    ],
+  };
+  // Same roster, but with wildly different otParticipation on every player.
+  const rosterB: TeamMinutesInput = {
+    players: rosterA.players.map((p, idx) => ({ ...p, otParticipation: idx === 0 ? 0 : idx * 3 })),
+  };
+  const a = allocateTeamMinutes(rosterA); // no OT mass (default [1])
+  const b = allocateTeamMinutes(rosterB);
+  ok(JSON.stringify(a.players) === JSON.stringify(b.players), "with no OT mass, otParticipation changes NOTHING (regulation is otParticipation-independent)");
+}
+
+// ── A player with projectedMinutes>0 but otParticipation:0 KEEPS regulation ──
+{
+  const alloc = allocateTeamMinutes({
+    players: [
+      { playerId: "starter", playProbability: 1, projectedMinutesIfActive: 34, otParticipation: 0 },
+      { playerId: "b", playProbability: 1, projectedMinutesIfActive: 32 },
+      { playerId: "c", playProbability: 1, projectedMinutesIfActive: 30 },
+      { playerId: "d", playProbability: 1, projectedMinutesIfActive: 28 },
+      { playerId: "e", playProbability: 1, projectedMinutesIfActive: 26 },
+      { playerId: "f", playProbability: 1, projectedMinutesIfActive: 24 },
+      { playerId: "g", playProbability: 1, projectedMinutesIfActive: 22 },
+      { playerId: "h", playProbability: 1, projectedMinutesIfActive: 20 },
+    ],
+  });
+  const starter = playerMinutes(alloc, "starter")!;
+  ok(starter.expectedMinutes > 30, "otParticipation:0 player still gets its full regulation role (not zeroed)");
+}
+
+// ── Under OT: zero-OT player keeps regulation baseline, no lift; increment ────
+//    redistributes to eligible players; team conservation still holds. ────────
+{
+  const players = [
+    { playerId: "noOt", playProbability: 1, projectedMinutesIfActive: 30, otParticipation: 0 },
+    { playerId: "s1", playProbability: 1, projectedMinutesIfActive: 34 },
+    { playerId: "s2", playProbability: 1, projectedMinutesIfActive: 32 },
+    { playerId: "r1", playProbability: 1, projectedMinutesIfActive: 28 },
+    { playerId: "r2", playProbability: 1, projectedMinutesIfActive: 26 },
+    { playerId: "r3", playProbability: 1, projectedMinutesIfActive: 24 },
+    { playerId: "r4", playProbability: 1, projectedMinutesIfActive: 22 },
+    { playerId: "r5", playProbability: 1, projectedMinutesIfActive: 14 },
+  ];
+  const noOtMass = allocateTeamMinutes({ players });
+  const withOt = allocateTeamMinutes({ players, otPeriodProbabilities: [0.6, 0.3, 0.1] });
+  const noOtPlayerBase = playerMinutes(noOtMass, "noOt")!.expectedMinutes;
+  const noOtPlayerWithOt = playerMinutes(withOt, "noOt")!.expectedMinutes;
+  // Zero-OT player: identical regulation baseline, no lift from OT mass.
+  ok(approx(noOtPlayerBase, noOtPlayerWithOt, 1e-6), "zero-OT-participation player gets NO OT lift (same regulation baseline)");
+  // An eligible player DOES gain from OT.
+  const s1Base = playerMinutes(noOtMass, "s1")!.expectedMinutes;
+  const s1WithOt = playerMinutes(withOt, "s1")!.expectedMinutes;
+  ok(s1WithOt > s1Base, "an eligible player absorbs the redistributed OT increment");
+  // Team conservation still holds with a zero-OT player present.
+  ok(approx(withOt.expectedTeamMinutes, withOt.minuteBudget, 1e-6), "team conservation holds with a zero-OT player");
+}
+
+// ── otParticipation reshapes ONLY the OT increment, not regulation ──────────
+{
+  const players = [
+    { playerId: "a", playProbability: 1, projectedMinutesIfActive: 30 },
+    { playerId: "b", playProbability: 1, projectedMinutesIfActive: 30 },
+    { playerId: "c", playProbability: 1, projectedMinutesIfActive: 30 },
+    { playerId: "d", playProbability: 1, projectedMinutesIfActive: 30 },
+    { playerId: "e", playProbability: 1, projectedMinutesIfActive: 30 },
+    { playerId: "f", playProbability: 1, projectedMinutesIfActive: 30 },
+    { playerId: "g", playProbability: 1, projectedMinutesIfActive: 30 },
+    { playerId: "h", playProbability: 1, projectedMinutesIfActive: 30 },
+  ];
+  const flat = allocateTeamMinutes({ players, otPeriodProbabilities: [0.5, 0.5] });
+  const skewed = allocateTeamMinutes({
+    players: players.map((p, i) => ({ ...p, otParticipation: i === 0 ? 100 : 1 })),
+    otPeriodProbabilities: [0.5, 0.5],
+  });
+  // Player a (heavy OT weight) gains MORE OT than in the flat case; total still conserved.
+  ok(playerMinutes(skewed, "a")!.expectedMinutes > playerMinutes(flat, "a")!.expectedMinutes, "high otParticipation → more OT increment");
+  ok(approx(skewed.expectedTeamMinutes, skewed.minuteBudget, 1e-6), "skewed OT weights still conserve the team budget");
+}
+
 console.log(`\nteamMinutesAllocator.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
