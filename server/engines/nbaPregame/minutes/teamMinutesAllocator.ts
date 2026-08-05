@@ -77,6 +77,9 @@ const REGULATION_PLAYER_MAX = 48;
 const DEFAULT_SPREAD_FRACTION = 0.18;
 const MIN_ACTIVE_SPREAD = 1.5;
 
+/** Absolute tolerance for the team-minute conservation postcondition. */
+export const CONSERVATION_TOLERANCE = 1e-6;
+
 /** Mean-preserving 3-point discretization of active role variance. */
 const ROLE_SPREAD_POINTS = [-1, 0, 1] as const;
 const ROLE_SPREAD_WEIGHTS = [0.25, 0.5, 0.25] as const;
@@ -125,26 +128,26 @@ export function allocateTeamMinutes(input: TeamMinutesInput): TeamMinutesAllocat
   const otProbs = normalizeOtProbabilities(input.otPeriodProbabilities);
   const expectedOtPeriods = otProbs.reduce((acc, q, n) => acc + q * n, 0);
   const minuteBudget = REGULATION_TEAM_MINUTES + OT_TEAM_MINUTES_PER_PERIOD * expectedOtPeriods;
-  const maxOt = otProbs.length - 1;
 
-  // Active-weighted raw regulation minutes; scale so Σ π_i r_i = 240 exactly.
-  const rawWeighted = input.players.map((p) => p.playProbability * p.projectedMinutesIfActive);
-  const rawSum = rawWeighted.reduce((a, b) => a + b, 0);
-  if (rawSum <= 0) throw new Error("teamMinutes: no allocatable active minutes (fail closed)");
-  const alpha = REGULATION_TEAM_MINUTES / rawSum;
+  const plays = input.players.map((p) => p.playProbability);
+  const weights = input.players.map((p) => p.otParticipation ?? p.projectedMinutesIfActive);
+  if (plays.every((pi, i) => pi <= 0 || weights[i] <= 0)) {
+    throw new Error("teamMinutes: no allocatable active minutes (fail closed)");
+  }
 
-  // Overtime-participation shares s_i normalized so Σ π_i s_i = 1 (⇒ the 25·n OT
-  // minutes are conserved per overtime count, and hence in expectation).
-  const otWeights = input.players.map((p) => p.otParticipation ?? p.projectedMinutesIfActive);
-  const otWeightedSum = input.players.reduce((acc, p, i) => acc + p.playProbability * otWeights[i], 0);
-  const otShareDenom = otWeightedSum > 0 ? otWeightedSum : 1;
+  // Water-fill the conserved budget at EACH overtime count present in the OT
+  // distribution. conditionalMeans[n][i] is player i's expected minutes WHEN
+  // ACTIVE at overtime count n; by construction Σ_i π_i·conditionalMeans[n][i] =
+  // 240 + 25·n exactly, or the roster is infeasible and this throws (fail closed).
+  const conditionalMeans: (number[] | null)[] = otProbs.map((qn, n) => {
+    if (qn <= 0) return null;
+    const cap = REGULATION_PLAYER_MAX + OT_PLAYER_MINUTES_PER_PERIOD * n;
+    const budget = REGULATION_TEAM_MINUTES + OT_TEAM_MINUTES_PER_PERIOD * n;
+    return waterFillConditionalMeans(plays, weights, budget, cap);
+  });
 
   const players: PlayerMinutesDistribution[] = input.players.map((p, i) => {
     const pi = p.playProbability;
-    const rI = p.projectedMinutesIfActive * alpha; // scaled regulation mean (if active)
-    const sI = otWeightedSum > 0 ? otWeights[i] / otShareDenom : 0; // OT share
-    const spread = Math.max(MIN_ACTIVE_SPREAD, p.minutesSpread ?? DEFAULT_SPREAD_FRACTION * rI);
-
     const support: MinutesSupportPoint[] = [];
     const dnpProbability = 1 - pi;
     if (dnpProbability > 0) {
@@ -152,16 +155,14 @@ export function allocateTeamMinutes(input: TeamMinutesInput): TeamMinutesAllocat
     }
     for (let n = 0; n < otProbs.length; n++) {
       const qn = otProbs[n];
-      if (qn <= 0) continue;
-      // OT extra = this player's share (s_i) of the team's 25·n overtime
-      // minutes, so Σ π_i·(s_i·25·n) = 25·n conserves the team total. The
-      // per-player 5-min-per-period figure bounds the PHYSICAL max, not the mean.
-      const condMean = Math.min(rI + sI * OT_TEAM_MINUTES_PER_PERIOD * n, REGULATION_PLAYER_MAX + OT_PLAYER_MINUTES_PER_PERIOD * n);
+      const means = conditionalMeans[n];
+      if (qn <= 0 || means === null) continue;
+      const condMean = means[i];
       const physicalMax = REGULATION_PLAYER_MAX + OT_PLAYER_MINUTES_PER_PERIOD * n;
-      // Shrink the spread SYMMETRICALLY so both extreme points stay within
-      // [0, physicalMax]. A symmetric ±spread with weights 0.25/0.5/0.25 has mean
-      // exactly condMean — preserving it (rather than clamping an out-of-range
-      // point) is what keeps team-minute conservation EXACT at the boundaries.
+      const spread = Math.max(MIN_ACTIVE_SPREAD, p.minutesSpread ?? DEFAULT_SPREAD_FRACTION * condMean);
+      // Symmetric ±spread (weights 0.25/0.5/0.25) has mean EXACTLY condMean;
+      // shrinking it by the headroom to [0, physicalMax] keeps it in bounds while
+      // preserving that mean — so conservation survives the role-variance layer.
       const effectiveSpread = Math.max(0, Math.min(spread, physicalMax - condMean, condMean));
       for (let d = 0; d < ROLE_SPREAD_POINTS.length; d++) {
         const minutes = condMean + ROLE_SPREAD_POINTS[d] * effectiveSpread;
@@ -175,7 +176,75 @@ export function allocateTeamMinutes(input: TeamMinutesInput): TeamMinutesAllocat
 
   const expectedTeamMinutes = players.reduce((acc, p) => acc + p.expectedMinutes, 0);
 
+  // HARD POSTCONDITION: the conserved invariant must hold on the REAL output, or
+  // the allocation is rejected. Water-filling + mean-preserving spread guarantee
+  // it for a feasible roster; this catches any regression rather than silently
+  // returning a non-conserved allocation.
+  if (Math.abs(expectedTeamMinutes - minuteBudget) > CONSERVATION_TOLERANCE) {
+    throw new Error(
+      `teamMinutes: conservation violated — Σ E[minutes] ${expectedTeamMinutes} != budget ${minuteBudget}`,
+    );
+  }
+
   return { players, expectedTeamMinutes, expectedOtPeriods, minuteBudget, otPeriodProbabilities: otProbs };
+}
+
+/**
+ * Water-filling allocation of `budget` player-minutes across the roster under a
+ * per-player physical `cap`, honoring the conservation constraint
+ * Σ_i plays_i · μ_i = budget with 0 ≤ μ_i ≤ cap. Each player's uncapped share is
+ * proportional to its weight (μ_i = λ·weight_i); players that would exceed the cap
+ * are pinned at the cap and their residual is redistributed to the rest, repeated
+ * until the budget is placed. THROWS (fail closed) when the roster cannot
+ * physically absorb the budget — Σ (plays_i · cap) over positive-weight players is
+ * below it — so an infeasible one-player or low-availability roster never returns
+ * a silently non-conserved allocation.
+ */
+export function waterFillConditionalMeans(
+  plays: number[],
+  weights: number[],
+  budget: number,
+  cap: number,
+): number[] {
+  const n = plays.length;
+  const mu = new Array(n).fill(0);
+  const active = new Set<number>();
+  let capacity = 0;
+  for (let i = 0; i < n; i++) {
+    if (plays[i] > 0 && weights[i] > 0) {
+      active.add(i);
+      capacity += plays[i] * cap;
+    }
+  }
+  if (capacity < budget - CONSERVATION_TOLERANCE) {
+    throw new Error(`teamMinutes: infeasible roster — capacity ${capacity} < budget ${budget} (fail closed)`);
+  }
+  let remaining = budget;
+  // Iterative water-filling: at most `active.size` rounds (one player caps per round).
+  for (let guard = 0; guard <= n && active.size > 0; guard++) {
+    const pool = Array.from(active);
+    let denom = 0;
+    for (const i of pool) denom += plays[i] * weights[i];
+    if (denom <= 0) break;
+    const lambda = remaining / denom;
+    const newlyCapped: number[] = [];
+    for (const i of pool) if (lambda * weights[i] >= cap) newlyCapped.push(i);
+    if (newlyCapped.length === 0) {
+      for (const i of pool) mu[i] = lambda * weights[i];
+      remaining = 0;
+      active.clear();
+      break;
+    }
+    for (const i of newlyCapped) {
+      mu[i] = cap;
+      remaining -= plays[i] * cap;
+      active.delete(i);
+    }
+  }
+  if (remaining > CONSERVATION_TOLERANCE) {
+    throw new Error(`teamMinutes: infeasible — ${remaining} minutes unallocatable (fail closed)`);
+  }
+  return mu;
 }
 
 /** Convenience: the single-player minutes distribution for a given id (or null). */

@@ -5,6 +5,8 @@
 import {
   allocateTeamMinutes,
   playerMinutes,
+  waterFillConditionalMeans,
+  CONSERVATION_TOLERANCE,
   REGULATION_TEAM_MINUTES,
   OT_TEAM_MINUTES_PER_PERIOD,
   REGULATION_PLAYER_MAX,
@@ -138,6 +140,94 @@ const ROSTER: TeamMinutesInput = {
     throws(() => allocateTeamMinutes({ ...ROSTER, otPeriodProbabilities: [0, 0] })),
     "throws when OT probabilities sum to zero",
   );
+}
+
+// ── Water-filling conserves under player caps + hard postcondition ──────────
+{
+  // A roster whose top players would blow past 48 min under naive scaling: the
+  // budget must still be conserved (excess water-fills to the rest), never clipped
+  // away. Two stars + thin bench.
+  const alloc = allocateTeamMinutes({
+    players: [
+      { playerId: "s1", playProbability: 1, projectedMinutesIfActive: 60 },
+      { playerId: "s2", playProbability: 1, projectedMinutesIfActive: 58 },
+      { playerId: "r1", playProbability: 1, projectedMinutesIfActive: 30 },
+      { playerId: "r2", playProbability: 1, projectedMinutesIfActive: 28 },
+      { playerId: "r3", playProbability: 1, projectedMinutesIfActive: 26 },
+      { playerId: "r4", playProbability: 1, projectedMinutesIfActive: 24 },
+    ],
+  });
+  ok(approx(alloc.expectedTeamMinutes, 240, 1e-6), "water-fill conserves 240 despite cap pressure");
+  for (const p of alloc.players) {
+    ok(p.support.every((s) => s.minutes <= REGULATION_PLAYER_MAX + 1e-9), `${p.playerId} respects the 48-min cap`);
+  }
+  // The two stars are pinned at the cap (their desired share exceeds 48).
+  const s1 = playerMinutes(alloc, "s1")!;
+  ok(Math.max(...s1.support.map((s) => s.minutes)) <= REGULATION_PLAYER_MAX + 1e-9, "capped star never exceeds 48");
+}
+
+// ── Infeasible one-player roster → throws (fail closed, never non-conserved) ─
+{
+  ok(
+    throws(() => allocateTeamMinutes({ players: [{ playerId: "solo", playProbability: 1, projectedMinutesIfActive: 40 }] })),
+    "one-player roster (capacity 48 < 240) throws instead of returning 48",
+  );
+  // Two players also cannot physically cover 240 (2·48 = 96 < 240).
+  ok(
+    throws(() => allocateTeamMinutes({ players: [
+      { playerId: "a", playProbability: 1, projectedMinutesIfActive: 40 },
+      { playerId: "b", playProbability: 1, projectedMinutesIfActive: 40 },
+    ] })),
+    "two-player roster (capacity 96 < 240) throws",
+  );
+}
+
+// ── Low aggregate availability → throws (capacity below budget) ─────────────
+{
+  // 9 players each only 10% likely to play: Σ π·cap = 9·0.1·48 = 43.2 < 240.
+  ok(
+    throws(() => allocateTeamMinutes({
+      players: Array.from({ length: 9 }, (_, i) => ({ playerId: `p${i}`, playProbability: 0.1, projectedMinutesIfActive: 25 })),
+    })),
+    "low aggregate availability (capacity < budget) throws",
+  );
+  // A borderline-feasible roster still conserves exactly.
+  const feasible = allocateTeamMinutes({
+    players: Array.from({ length: 9 }, (_, i) => ({ playerId: `p${i}`, playProbability: 0.9, projectedMinutesIfActive: [30, 30, 28, 28, 26, 24, 22, 12, 10][i] })),
+  });
+  ok(approx(feasible.expectedTeamMinutes, feasible.minuteBudget, 1e-6), "feasible reduced-availability roster conserves");
+}
+
+// ── OT cap pressure → conserves at every OT count (or throws) ───────────────
+{
+  const alloc = allocateTeamMinutes({
+    players: [
+      { playerId: "s1", playProbability: 1, projectedMinutesIfActive: 52 },
+      { playerId: "s2", playProbability: 1, projectedMinutesIfActive: 50 },
+      { playerId: "r1", playProbability: 1, projectedMinutesIfActive: 30 },
+      { playerId: "r2", playProbability: 1, projectedMinutesIfActive: 28 },
+      { playerId: "r3", playProbability: 1, projectedMinutesIfActive: 26 },
+      { playerId: "r4", playProbability: 1, projectedMinutesIfActive: 24 },
+    ],
+    otPeriodProbabilities: [0.6, 0.3, 0.1],
+  });
+  ok(approx(alloc.expectedTeamMinutes, alloc.minuteBudget, 1e-6), "OT cap-pressure roster conserves 240+25·E[OT]");
+  const maxOt = 2;
+  const physicalMax = REGULATION_PLAYER_MAX + OT_PLAYER_MINUTES_PER_PERIOD * maxOt; // 58
+  for (const p of alloc.players) {
+    ok(p.support.every((s) => s.minutes <= physicalMax + 1e-9), `${p.playerId} within OT physical max`);
+  }
+}
+
+// ── waterFillConditionalMeans: direct unit behavior ─────────────────────────
+{
+  // Uncapped: μ_i = λ·w_i with Σ π_i μ_i = budget.
+  const mu = waterFillConditionalMeans([1, 1, 1], [30, 20, 10], 240 / 4, 48); // budget 60
+  ok(approx(mu[0] + mu[1] + mu[2], 60, 1e-9), "water-fill Σμ = budget (π=1)");
+  ok(approx(mu[0] / mu[1], 30 / 20, 1e-9), "uncapped shares proportional to weight");
+  // Infeasible throws.
+  ok(throws(() => waterFillConditionalMeans([1], [30], 240, 48)), "single-player water-fill infeasible throws");
+  ok(CONSERVATION_TOLERANCE < 1e-3, "conservation tolerance is tight");
 }
 
 console.log(`\nteamMinutesAllocator.test: ${passed} passed, ${failed} failed`);
