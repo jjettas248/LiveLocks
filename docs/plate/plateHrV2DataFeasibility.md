@@ -17,8 +17,9 @@ Script: `server/mlb/pregamePowerRadar/hrProbabilityV2/scripts/auditSavantFields.
 |---|---|---|
 | 2026-08-02, this sandbox | agent-proxied egress | **HTTP 403 from `baseballsavant.mlb.com` → INCONCLUSIVE.** The agent proxy is non-selective and Savant is not in its no-proxy allowlist; Savant rejects the proxied request. |
 | 2026-08-04, this sandbox (PR7 pre-gate re-run) | agent-proxied egress | **HTTP 403 again → still INCONCLUSIVE.** Re-ran `auditSavantFields.ts` (player 592450, 2025-04-01..15). Proxy `__agentproxy/status`: `selective:false`, Savant not in `noProxy`, `recentRelayFailures:[]`. The 403 came back through the proxy with no relay failure observed; **whether the block originates at Savant or at an intermediary cannot be proven from this environment.** Either way, the five location fields remain **UNVERIFIED**; the spike must be run in the production/Railway environment (where `fetchBaseballSavantData` succeeds daily) before PR7 can be authorized. |
+| **2026-08-05, Railway production shell** (post-merge `aedf22d`) | **production egress (Savant reachable)** | **`ZONE GATE: GO` — VERIFIED.** Ran `auditSavantFields.ts --player 592450 --type batter --season 2025 --from 2025-04-01 --to 2025-04-15`. **254 rows, 119 columns.** All five location fields present and populated at **98.4% (250/254)** each: `plate_x` 98.4%, `plate_z` 98.4%, `zone` 98.4%, `sz_top` 98.4%, `sz_bot` 98.4%. All ≥ 90% coverage threshold → zone fields are now **VERIFIED PRESENT**. Reproducible in production. |
 
-**Consequence (fail-closed):** every field whose live presence this spike could not confirm is **UNVERIFIED → UNAUTHORIZED** until the spike is re-run where Savant is reachable (the production/Railway environment, where `fetchBaseballSavantData` already succeeds daily). The spike must be re-run and its per-field coverage recorded in this table before the zone gate (PR7) or bat-speed/official-barrel features may be authorized.
+**Consequence (RESOLVED, 2026-08-05):** the §1 spike has now been re-run in the production/Railway environment where Savant is reachable. All five location fields (`plate_x, plate_z, zone, sz_top, sz_bot`) are confirmed present at 98.4% coverage — clearing the ≥90% fail-closed threshold — so they move from **UNVERIFIED → VERIFIED** (see §5). The **data** gate for PR7 is satisfied; user-facing promotion remains separately blocked on the commercial-licensing sign-off (§7).
 
 Re-run command (production env):
 ```
@@ -76,7 +77,8 @@ These are frozen HERE (before any Test set) and copied into `plateHrV2GateSpec` 
   `qualityBbeCount / bbeCount ≥ 0.90` (else revert to pitch-mean/prior). See plan §8.2.
 - **Pitcher usage** `u_p` computed over the last `N = 5` starts (recency horizon).
 - **Zone cell** (if PR7 authorized): eligible when `bbeCount_{p,z} ≥ 8` with adjacent-zone
-  smoothing; else pool. **Not active until the zone spike passes.**
+  smoothing; else pool. **Zone spike PASSED 2026-08-05 (§1); data gate satisfied. Activation
+  still gated on PR7 authorization + commercial-licensing sign-off (§7).**
 - **Bat speed**: used only for 2023+ players with ≥ 40 competitive swings; absent → no-op.
 
 ## 5. Authorized-field list for PR3 capture (FROZEN)
@@ -97,15 +99,25 @@ These are frozen HERE (before any Test set) and copied into `plateHrV2GateSpec` 
   **proxy**, labeled a proxy, never "official barrel". This is a modeling choice,
   not a data-availability gate.)
 
+**AUTHORIZED — pitch location / zone (FROZEN 2026-08-05 by the production §1 spike).**
+The zone data gate is **satisfied**. The authorized location-field list is frozen to exactly
+these five fields, each verified present at **98.4% (250/254)** in the production spike
+(≥ 90% threshold cleared):
+
+- `plate_x`
+- `plate_z`
+- `zone`
+- `sz_top`
+- `sz_bot`
+
+No sixth location field is authorized; no proxy may be substituted for a missing value or
+labeled as zone modeling. Zone-cell eligibility still applies the §4 sample floor
+(`bbeCount_{p,z} ≥ 8`, adjacent-zone smoothing, else pool). **Capture/modeling use of these
+fields for any user-facing surface remains gated on the commercial-licensing sign-off (§7).**
+
 **AUTHORIZED-CONDITIONAL** (present in prod but coverage-limited — capture allowed, use gated):
 
 - `bat_speed, swing_length` — 2023+ only; feature no-ops below the swing-sample floor.
-
-**UNAUTHORIZED — pending re-run of the §1 spike against live Savant (fail-closed):**
-
-- Pitch **location / zone**: `plate_x, plate_z, zone, sz_top, sz_bot` → **PR7 (Upgrade 2A)
-  is NO-GO** until all five are confirmed present and ≥ 90% populated. No proxy may be
-  labeled as zone modeling.
 
 ## 6. Go/No-Go decisions
 
@@ -113,15 +125,18 @@ These are frozen HERE (before any Test set) and copied into `plateHrV2GateSpec` 
 |---|---|
 | PR3 exact-pitch sufficient stats (Upgrade 1) | **GO** — from AUTHORIZED fields. `launch_speed_angle` is present & parsed today; barrel uses the EV/LA **proxy** by modeling choice (official `lsa==6` adoption deferred to fitting), not a data gap. |
 | PR5 recent-contact windows (Upgrade 2B) | **GO** — from AUTHORIZED contact-quality fields + `contact_events`. |
-| PR7 pitch×zone (Upgrade 2A) | **NO-GO (deferred)** — location fields UNVERIFIED (§1). Re-run spike in prod; revisit. |
+| PR7 pitch×zone (Upgrade 2A) | **DATA GATE: GO / LICENSING: BLOCKED** — all five location fields VERIFIED present at 98.4% in the 2026-08-05 production spike (§1), clearing the ≥90% threshold; authorized-field list frozen (§5). PR7 implementation remains **blocked** until the commercial-licensing sign-off (§7) is checked. No proxy. |
 | Bat-speed feature | **CONDITIONAL GO** — 2023+ only, sample-gated, no-op otherwise. |
 | Any user-facing promotion (PR11) | **BLOCKED on commercial-licensing sign-off** (§7). |
 
 ## 7. SIGN-OFF (human)
 
-- [ ] Commercial-use / licensing reviewed for Baseball Savant (and Open-Meteo tier) — approver, date:
-- [ ] §1 spike re-run against live Savant; per-field coverage recorded above — approver, date:
-- [ ] Authorized-field list (§5) and coverage thresholds (§4) confirmed frozen — approver, date:
+- [ ] **Commercial-use / licensing reviewed for Baseball Savant (and Open-Meteo tier) — UNRESOLVED. This is the sole remaining PR7 blocker.** approver, date:
+- [x] §1 spike re-run against live Savant; per-field coverage recorded above — Railway production shell, 2026-08-05 (post-merge `aedf22d`; all five location fields 98.4%, `ZONE GATE: GO`).
+- [x] Authorized-field list (§5) and coverage thresholds (§4) confirmed frozen — 2026-08-05 (five zone fields frozen in §5; §4 thresholds unchanged).
 
-Until the first box is checked, work proceeds **shadow-only** (research tables, no user-facing
-probability), consistent with the existing `PLATE_HR_V2_FORWARD_CAPTURE_ENABLED`-gated posture.
+**PR7 status: `DATA GATE: GO / LICENSING: BLOCKED`.** The data/coverage gate is satisfied and
+the authorized-field list is frozen, but the commercial-licensing box above is unchecked. Until
+that box is checked, work proceeds **shadow-only** (research tables, no user-facing probability),
+consistent with the existing `PLATE_HR_V2_FORWARD_CAPTURE_ENABLED`-gated posture. No PR7
+implementation, no fetcher wiring, no `starterBullpen` use in PR8 fitting, no champion/public change.
