@@ -31,13 +31,23 @@ import {
 const DISABLED_CONTEXT: PlateCompositionContext = { signals: [], state: "disabled", generatedAt: null, buildId: null };
 const UNEXPECTED_FAILURE_CONTEXT: PlateCompositionContext = { signals: [], state: "load_error", generatedAt: null, buildId: null };
 
+const MAX_FAILURE_MESSAGE_LENGTH = 200;
+
+/** Never logs a raw Error object or its stack — a bounded, capped message only. */
+function boundedErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.slice(0, MAX_FAILURE_MESSAGE_LENGTH);
+}
+
 /**
  * Builds the canonical Mound response exactly as buildMoundResponse always
  * has, then composes cross-radar Plate suggestions on top — failing closed
  * to empty suggestions (never a thrown/500 Mound route) on any composition
- * error. Emits exactly one bounded [MOUND_PLATE_COMPOSITION] diagnostic log
- * per call — never one per signal/batter, and never a second, separate log
- * for the same failure (loadPregameCompositionContext.ts never logs itself).
+ * error. Emits EXACTLY ONE bounded [MOUND_PLATE_COMPOSITION] diagnostic log
+ * per call, on every path (success, disabled, missing, date_mismatch,
+ * load_error, and an unexpected composition exception) — never a second,
+ * separate console.warn/console.error for the same event, and never a raw
+ * Error object or unbounded stack.
  */
 export async function composeMoundResponseWithPlateTargets(
   route: string,
@@ -70,12 +80,11 @@ export async function composeMoundResponseWithPlateTargets(
       : DISABLED_CONTEXT;
 
     const enriched = enrichMoundResponseWithPlateTargets(moundResponse, plateContext.signals);
-    logComposition(route, enabled, plateContext, enriched);
+    logComposition(route, enabled, plateContext, enriched, "none", null);
     return enriched;
   } catch (error) {
-    console.warn("[MOUND_PLATE_COMPOSITION_FAILED]", error);
     const fallback = enrichMoundResponseWithPlateTargets(moundResponse, []);
-    logComposition(route, enabled, UNEXPECTED_FAILURE_CONTEXT, fallback);
+    logComposition(route, enabled, UNEXPECTED_FAILURE_CONTEXT, fallback, "unexpected_composition_error", boundedErrorMessage(error));
     return fallback;
   }
 }
@@ -85,6 +94,8 @@ function logComposition(
   enabled: boolean,
   plateContext: PlateCompositionContext,
   resp: MoundResponseWithPlateTargets,
+  failureKind: "none" | "unexpected_composition_error",
+  failureMessage: string | null,
 ): void {
   const eligibleMoundCount = resp.signals.filter(isMoundCompositionEligible).length;
   const matchedMoundCount = resp.signals.filter((s) => s.plateTargetSuggestions.length > 0).length;
@@ -98,5 +109,7 @@ function logComposition(
     eligibleMoundCount,
     matchedMoundCount,
     suggestionCount,
+    failureKind,
+    failureMessage,
   }));
 }

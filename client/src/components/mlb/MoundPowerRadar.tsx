@@ -762,10 +762,15 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
                 <li
                   key={t.batterId}
                   data-testid={`mound-plate-suggestion-${slug}-${t.batterId}`}
-                  className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20 max-w-[220px]"
+                  className="flex flex-col gap-0.5 text-[10px] px-2 py-1 rounded-md bg-amber-500/10 border border-amber-500/20 max-w-full sm:max-w-[220px] overflow-hidden"
                 >
-                  <span className="truncate">{t.batterName}</span>
-                  <span className="text-amber-300/70 shrink-0">
+                  {/* Two lines, not one inline-flex row: a name+details row
+                      fighting over one line needs min-w-0 on a flex child for
+                      truncate to work at all, and even then a long name next
+                      to "Power Watch" details can still overflow a narrow
+                      card. Each line truncates independently and safely. */}
+                  <span className="truncate text-amber-200">{t.batterName}</span>
+                  <span className="truncate text-amber-300/70">
                     ({t.team}) · {plateTargetScoreLabel(t)} · {plateTierLabel(t.plateTier)}
                   </span>
                 </li>
