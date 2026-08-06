@@ -1,0 +1,30 @@
+{
+  "case": "08_sample_floor_boundaries",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
+  "description": "Aggregate fixtures that freeze the present-vs-null boundary at each sample floor. Sequence coverage is held high (0.98) so the ONLY gating variable is the sample count. Raw counts are always preserved so PR8 can test alternative thresholds.",
+  "floors": {
+    "batterOverallPa": 150,
+    "pitcherOverallBf": 300,
+    "batterHandSplitPa": 75,
+    "pitcherHandSplitBf": 150
+  },
+  "expected": {
+    "batterOverall": [
+      {"batterId": "bpa149", "pa": 149, "pitchSequenceCoverage": 0.98, "batterRatesPresent": false, "nullReason": "below_batter_pa_floor", "rawCountsPreserved": true},
+      {"batterId": "bpa151", "pa": 151, "pitchSequenceCoverage": 0.98, "batterRatesPresent": true, "nullReason": null}
+    ],
+    "pitcherOverall": [
+      {"pitcherId": "pbf299", "bf": 299, "pitchSequenceCoverage": 0.98, "pitcherRatesPresent": false, "nullReason": "below_pitcher_bf_floor", "rawCountsPreserved": true},
+      {"pitcherId": "pbf301", "bf": 301, "pitchSequenceCoverage": 0.98, "pitcherRatesPresent": true, "nullReason": null}
+    ],
+    "batterHandSplit": [
+      {"batterId": "bsplit", "paVsL": 74, "paVsR": 76, "vsLPresent": false, "vsLNullReason": "below_hand_split_pa_floor", "vsRPresent": true, "vsRNullReason": null,
+       "note": "Only the below-floor split nulls; the other split and the overall are unaffected."}
+    ],
+    "pitcherHandSplit": [
+      {"pitcherId": "psplit", "bfVsL": 149, "bfVsR": 151, "vsLPresent": false, "vsLNullReason": "below_hand_split_bf_floor", "vsRPresent": true, "vsRNullReason": null}
+    ]
+  }
+}
