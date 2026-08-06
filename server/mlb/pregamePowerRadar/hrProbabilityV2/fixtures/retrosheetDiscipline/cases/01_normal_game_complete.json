@@ -1,0 +1,57 @@
+{
+  "case": "01_normal_game_complete",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
+  "description": "Normal modern game excerpt with complete pitch sequences. Four PAs by one batter: swinging K, walk, in-play single, foul-heavy flyout. All sequence-complete.",
+  "raw": {
+    "records": [
+      "id,ATL201904150",
+      "version,2",
+      "info,visteam,SLN",
+      "info,hometeam,ATL",
+      "info,site,ATL03",
+      "info,date,2019/04/15",
+      "start,ozunm001,\"Marcell Ozuna\",0,4,7",
+      "play,1,0,ozunm001,22,CBBFS,K",
+      "play,3,0,ozunm001,32,BCBBFB,W",
+      "play,5,0,ozunm001,11,CBX,S7",
+      "play,7,0,ozunm001,22,CBFFFX,F8"
+    ]
+  },
+  "expected": {
+    "gameId": "ATL201904150",
+    "batterId": "ozunm001",
+    "plateAppearances": [
+      {
+        "seq": "CBBFS", "pitches": ["C","B","B","F","S"], "count": {"balls": 2, "strikes": 2},
+        "balls": 2, "calledStrikes": 1, "swingingStrikes": 1, "fouls": 1, "inPlay": 0, "takenPitches": 3, "swings": 2,
+        "firstPitchStrike": true, "reachedTwoStrikes": true, "struckOut": true, "twoStrikeSurvived": false,
+        "eventCd": 3, "outcome": "K", "sequenceComplete": true
+      },
+      {
+        "seq": "BCBBFB", "pitches": ["B","C","B","B","F","B"], "count": {"balls": 3, "strikes": 2},
+        "balls": 4, "calledStrikes": 1, "swingingStrikes": 0, "fouls": 1, "inPlay": 0, "takenPitches": 5, "swings": 1,
+        "firstPitchStrike": false, "reachedTwoStrikes": true, "struckOut": false, "twoStrikeSurvived": true,
+        "eventCd": 14, "outcome": "BB", "unintentional": true, "sequenceComplete": true
+      },
+      {
+        "seq": "CBX", "pitches": ["C","B","X"], "count": {"balls": 1, "strikes": 1},
+        "balls": 1, "calledStrikes": 1, "swingingStrikes": 0, "fouls": 0, "inPlay": 1, "takenPitches": 2, "swings": 1,
+        "firstPitchStrike": true, "reachedTwoStrikes": false, "struckOut": false, "twoStrikeSurvived": null,
+        "eventCd": 20, "outcome": "single", "sequenceComplete": true
+      },
+      {
+        "seq": "CBFFFX", "pitches": ["C","B","F","F","F","X"], "count": {"balls": 1, "strikes": 2},
+        "balls": 1, "calledStrikes": 1, "swingingStrikes": 0, "fouls": 3, "inPlay": 1, "takenPitches": 2, "swings": 4,
+        "firstPitchStrike": true, "reachedTwoStrikes": true, "struckOut": false, "twoStrikeSurvived": true,
+        "eventCd": 2, "outcome": "flyout", "sequenceComplete": true
+      }
+    ],
+    "batterAggregate": {
+      "pa": 4, "codedPitchPa": 4, "pitchSequenceCoverage": 1.0, "sequenceFloorMet": true,
+      "k": 1, "bb": 1, "ibb": 0, "hbp": 0, "inPlay": 2, "pitches": 20, "swings": 8, "whiffs": 1, "contacts": 6, "fouls": 5,
+      "calledStrikes": 4, "takenPitches": 12, "firstPitchStrikes": 3, "twoStrikePa": 3, "twoStrikeK": 1, "twoStrikeSurvived": 2
+    }
+  }
+}
