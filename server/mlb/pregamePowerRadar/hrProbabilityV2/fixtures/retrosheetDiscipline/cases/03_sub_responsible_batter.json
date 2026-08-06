@@ -1,0 +1,34 @@
+{
+  "case": "03_sub_responsible_batter",
+  "description": "A batter leaves the game with two strikes (0-2) and a pinch hitter completes the strikeout. Per the Retrosheet responsible-batter rule, the strikeout is charged to the ORIGINAL batter (batra001), not the completing batter (batrb002). The PA and all its pitch outcomes attribute to the responsible batter.",
+  "raw": {
+    "records": [
+      "id,CHN201906120",
+      "info,site,CHI11",
+      "info,date,2019/06/12",
+      "start,batra001,\"Original Batter\",0,4,10",
+      "play,7,0,batra001,02,CS,NP",
+      "sub,batrb002,\"Pinch Hitter\",0,4,10",
+      "play,7,0,batrb002,22,.FBS,K"
+    ]
+  },
+  "expected": {
+    "gameId": "CHN201906120",
+    "responsibleBatterId": "batra001",
+    "completingBatterId": "batrb002",
+    "responsibleBatterRule": "two_strike_substitution_charges_original_batter",
+    "plateAppearances": [
+      {
+        "attributedToBatterId": "batra001",
+        "seq": "CS.FBS", "reassembledPitches": ["C","S","F","B","S"], "count": {"balls": 1, "strikes": 2},
+        "balls": 1, "calledStrikes": 1, "swingingStrikes": 2, "fouls": 1, "inPlay": 0, "takenPitches": 2, "swings": 3,
+        "firstPitchStrike": true, "reachedTwoStrikes": true, "struckOut": true, "twoStrikeSurvived": false,
+        "eventCd": 3, "outcome": "K", "sequenceComplete": true
+      }
+    ],
+    "attribution": {
+      "batra001": {"pa": 1, "k": 1, "pitches": 5, "swings": 3, "whiffs": 2, "fouls": 1, "calledStrikes": 1, "takenPitches": 2},
+      "batrb002": {"pa": 0, "k": 0, "note": "completing batter is charged NOTHING for this PA"}
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "manifestVersion": "pr7a_retrosheet_discipline_source_manifest_v1",
+  "featureEnvelopeVersion": "plate_hr_v2_features_v3",
+  "purpose": "Frozen source + parser identity for PR7A Retrosheet plate-discipline capture. Semantic authority + executable parser identity are pinned separately.",
+  "dataSource": {
+    "name": "Retrosheet play-by-play event files",
+    "products": ["event_files (.EVN/.EVA)", "roster_files (.ROS)", "game_info records (info/start/sub)"],
+    "commercialUse": "permitted with the required Retrosheet attribution notice; raw-data resale prohibited; derived model output permitted",
+    "attributionNotice": "The information used here was obtained free of charge from and is copyrighted by Retrosheet. Interested parties may contact Retrosheet at www.retrosheet.org.",
+    "attributionPlacements": {
+      "public": "LiveLocks Data Sources / About surface",
+      "repository": "dataset README and evidence-contract documentation",
+      "fixtures": "fixture README"
+    }
+  },
+  "semanticCrosswalk": {
+    "name": "Retrosheet Play-by-Play Crosswalk",
+    "role": "semantic authority",
+    "maps": {
+      "PITCH_SEQ_TX": "parsed pitches",
+      "BAT_LINEUP_ID": "lineup position",
+      "RESP_BAT_HAND_CD": "responsible batter handedness (switch-hitter resolved vs actual pitcher)",
+      "RESP_PIT_HAND_CD": "responsible pitcher handedness",
+      "EVENT_CD": "plate-appearance outcome"
+    }
+  },
+  "parser": {
+    "name": "Chadwick cwevent",
+    "role": "executable parser identity",
+    "parserVersion": "PENDING_PIN — set to the exact Chadwick release tag or commit SHA when Chadwick is installed in the authorized ingestion environment",
+    "parserArguments": "PENDING_PIN — record the exact frozen argument set (e.g. cwevent -y <season> -f <field-list> -x <extended-field-list>) at ingestion setup",
+    "note": "Version and arguments are pinned at ingestion setup in the authorized environment, not fabricated here. This manifest is finalized (parserVersion + parserArguments resolved) BEFORE any ingestion."
+  },
+  "seasonWindow": {
+    "trainingFloorSeason": 2000,
+    "reason": "PITCH_SEQ_TX completeness is strong from ~2000; outcome-only metrics extend earlier but v1 keeps a uniform 2000+ window.",
+    "seasonMatrix2000_2025": "PENDING_MEASUREMENT — must be produced by running the pinned parser over the licensed dataset in the authorized environment; values must never be fabricated (see contract §3.6)."
+  },
+  "floors": {
+    "pitchSequenceCoverage": 0.90,
+    "batterOverallPa": 150,
+    "pitcherOverallBf": 300,
+    "batterHandSplitPa": 75,
+    "pitcherHandSplitBf": 150,
+    "belowFloorPolicy": "affected derived rate is null with an explicit reason; raw counts always preserved"
+  },
+  "prohibitedInputs": [
+    "baseball_savant",
+    "mlb_stats_api",
+    "pybaseball",
+    "kaggle_statcast_mirrors",
+    "any pitch coordinate or zone proxy"
+  ],
+  "zoneLocation": {
+    "status": "unavailable",
+    "reason": "licensed_source_unavailable"
+  }
+}

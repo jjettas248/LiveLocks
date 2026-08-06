@@ -1,0 +1,28 @@
+{
+  "case": "07_below_coverage_gate",
+  "description": "A batter window where 8 of 10 PAs are sequence-complete → coverage 0.80 < 0.90 gate. Sequence-derived leaves degrade to null-with-reason; outcome-only leaves (kRate/bbRate from EVENT_CD) remain computable. Raw counts preserved regardless.",
+  "raw": {
+    "note": "Aggregate-level fixture. The 10 PAs are represented as counts; 2 carry empty/uncountable sequences (see case 05 grammar).",
+    "windowPaCount": 10,
+    "sequenceCompletePaCount": 8,
+    "sequenceIncompletePaCount": 2
+  },
+  "expected": {
+    "batterId": "gate001",
+    "coverage": {
+      "batterPa": 10, "codedPitchPa": 8, "pitchSequenceCoverage": 0.80,
+      "coverageFloor": 0.90, "sequenceFloorMet": false
+    },
+    "outcomeOnlyLeaves": {
+      "kRatePct": {"value": 30.0, "counts": {"k": 3, "pa": 10}, "present": true, "source": "EVENT_CD"},
+      "bbRatePct": {"value": 10.0, "counts": {"bb": 1, "ibb": 0, "pa": 10}, "present": true, "source": "EVENT_CD"},
+      "inPlayRatePct": {"value": 50.0, "counts": {"inPlayTerminal": 5, "pa": 10}, "present": true, "source": "EVENT_CD"}
+    },
+    "sequenceDerivedLeaves": {
+      "whiffRatePct": null, "contactRatePct": null, "foulStrikeRatePct": null,
+      "firstPitchStrikeRatePct": null, "twoStrikeSurvivalRatePct": null,
+      "nullReason": "below_sequence_coverage"
+    },
+    "rawCountsPreserved": true
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "case": "04_handedness_split",
+  "description": "A switch-hitter (roster bats 'B') faces a right-handed pitcher, so RESP_BAT_HAND_CD resolves to L. The PA contributes to the batter's vs-RHP split and to the pitcher's vs-LHB split. Handedness comes from resolved per-event codes, not the raw play line.",
+  "raw": {
+    "records": [
+      "id,LAN201907040",
+      "info,site,LOS03",
+      "info,date,2019/07/04",
+      "start,switb001,\"Switch Hitter\",0,2,4",
+      "roster,switb001,bats=B,throws=R",
+      "roster,pitcr001,bats=R,throws=R",
+      "play,2,0,switb001,12,CBFX,S9"
+    ]
+  },
+  "expected": {
+    "gameId": "LAN201907040",
+    "batterId": "switb001",
+    "pitcherId": "pitcr001",
+    "handednessResolution": {
+      "batterRosterBats": "B",
+      "resolvedBatterHand": "L",
+      "resolvedPitcherHand": "R",
+      "source": "RESP_BAT_HAND_CD / RESP_PIT_HAND_CD",
+      "batterSplitBucket": "vsR",
+      "pitcherSplitBucket": "vsL"
+    },
+    "plateAppearances": [
+      {
+        "seq": "CBFX", "pitches": ["C","B","F","X"], "count": {"balls": 1, "strikes": 2},
+        "balls": 1, "calledStrikes": 1, "swingingStrikes": 0, "fouls": 1, "inPlay": 1, "takenPitches": 2, "swings": 2,
+        "firstPitchStrike": true, "reachedTwoStrikes": true, "struckOut": false, "twoStrikeSurvived": true,
+        "eventCd": 20, "outcome": "single", "sequenceComplete": true
+      }
+    ],
+    "splitAttribution": {
+      "batter": {"paVsR": 1, "paVsL": 0},
+      "pitcher": {"bfVsL": 1, "bfVsR": 0}
+    }
+  }
+}

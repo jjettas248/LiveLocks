@@ -1,0 +1,37 @@
+{
+  "case": "05_missing_incomplete_seq",
+  "description": "Two PAs whose pitch sequence cannot be trusted: one has an EMPTY PITCH_SEQ_TX, one contains the uncountable token 'U'. Both FAIL sequence-completeness and are excluded from sequence-derived counts (never guessed). They still count toward batterPa (the coverage denominator), which pulls pitchSequenceCoverage down.",
+  "raw": {
+    "records": [
+      "id,NYA201908200",
+      "info,site,NYC21",
+      "info,date,2019/08/20",
+      "start,foo001,\"Empty And Unknown\",0,6,5",
+      "play,2,0,foo001,00,,63/G",
+      "play,4,0,foo001,11,CBUX,S8"
+    ]
+  },
+  "expected": {
+    "gameId": "NYA201908200",
+    "batterId": "foo001",
+    "plateAppearances": [
+      {
+        "seq": "", "pitches": [], "sequenceComplete": false, "completenessReason": "empty_sequence",
+        "eventCd": 2, "outcome": "groundout", "countsTowardBatterPa": true, "countsTowardCodedPitchPa": false,
+        "sequenceDerivedContribution": null
+      },
+      {
+        "seq": "CBUX", "pitches": ["C","B","U","X"], "sequenceComplete": false, "completenessReason": "uncountable_pitch_token",
+        "uncountableTokens": ["U"], "eventCd": 2, "outcome": "flyout",
+        "countsTowardBatterPa": true, "countsTowardCodedPitchPa": false, "sequenceDerivedContribution": null
+      }
+    ],
+    "batterAggregate": {
+      "pa": 2, "codedPitchPa": 0, "pitchSequenceCoverage": 0.0, "sequenceFloorMet": false,
+      "k": 0, "bb": 0,
+      "sequenceDerivedLeaves": null,
+      "sequenceDerivedNullReason": "below_sequence_coverage",
+      "note": "Outcome-only leaves (kRate/bbRate) remain computable from EVENT_CD; here neither event is a K or BB. Sequence-derived leaves (whiff/contact/foul/firstPitchStrike/twoStrikeSurvival) are null."
+    }
+  }
+}

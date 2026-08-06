@@ -1,9 +1,14 @@
 # PR7A — Zone-Independent Plate-Discipline Upgrade (`plateDisciplineNoLocationV1`)
 
-> **Status: PROPOSAL FOR REVIEW. No model fitting, no adapter, no fixtures written yet.**
-> Per the locked ordering, this document (the Retrosheet field-availability audit + the
-> proposed feature contract) is produced **first** and must be reviewed before any fixtures,
-> adapter, or fitting work begins. This is a design artifact only — it changes no runtime code.
+> **Status: CONDITIONALLY APPROVED — contract revised, fixtures + source manifest authorized.**
+> The audit + redundancy + contract were reviewed and conditionally approved. Per the reviewer's
+> locked architecture decision, there is **no** separate `plateDisciplineNoLocation` group — the
+> existing canonical `contactOpportunity` group is extended, with a separate `pitcherDiscipline`
+> group and an explicitly-unavailable `zoneLocation` group. This step is authorized to freeze the
+> **source/version manifest** and representative **raw + expected-normalized fixtures** only.
+> Still prohibited: ingestion, DB changes, fetch scheduling, feature-builder wiring, model fitting,
+> PR8, champion comparison, public rendering, location/zone proxies, `starterBullpen`. This doc
+> changes no runtime code.
 
 ## 0. Why PR7A exists
 
@@ -147,30 +152,38 @@ The concern: does PR7A duplicate signal already in the V2 vector? Audited group-
 | `recentContactForm` (EV/EV90/barrel) | `contact_events` | populated (PR5) | contact **quality**, post-contact | **No overlap** — PR7A is pre-contact approach. |
 | `batterPower`, `batTracking` | Savant | populated when present | power/swing mechanics | **No overlap.** |
 
-**Two decisions that follow from this:**
+**LOCKED ARCHITECTURE DECISION (reviewer, supersedes the earlier "own group" proposal).**
+Although there is no *runtime* redundancy (the group is empty), a parallel `plateDisciplineNoLocation`
+group would create *schema* redundancy — two canonical homes for K%/BB%/whiff%/contact% — violating
+the no-duplicate-system rule and complicating fitting, evidence binding, and later zone migration.
+Therefore:
 
-1. **Do NOT backfill `contactOpportunity` from Retrosheet.** Mixing a Savant-intended slot with a
-   Retrosheet source would break the one-group-one-provenance evidence-binding model and silently
-   swap a field's meaning. PR7A lands as its **own** group (`plateDisciplineNoLocation`) with
-   Retrosheet provenance; `contactOpportunity` is left exactly as-is (empty placeholder).
-2. **The forbidden/zone-dependent leaves stay null forever under Retrosheet.** `chaseRatePct` and
-   `zoneContactRatePct` require a zone — Retrosheet cannot and must not fill them. They remain in the
-   (empty) `contactOpportunity` group; PR7A neither reads nor proxies them.
+1. **`contactOpportunity` becomes the single canonical Retrosheet-backed discipline group.** PR7A
+   populates its existing non-location leaves and **extends** it with new v3 non-location fields
+   (§3.1). There is **no** `plateDisciplineNoLocation` group. K/BB/contact live in exactly one place.
+2. **The zone-dependent leaves stay `null` forever under Retrosheet.** `chaseRatePct` and
+   `zoneContactRatePct` require a zone — Retrosheet cannot and must not fill them; they remain
+   declared in `contactOpportunity` but permanently null. No proxy.
+3. **Pitcher discipline is a separate `pitcherDiscipline` group** (§3.3), because the strict flat
+   `contactOpportunity` schema mixes two actors poorly. Batter K/BB/contact are **never** duplicated
+   there.
+4. **`zoneLocation` stays a separate, explicitly-unavailable location group** (§3.5).
 
-**Net:** PR7A adds genuinely new, non-redundant signal (discipline priors, foul/two-strike/count
-behavior, aggregate whiff/contact by hand) with a distinct, attributable source — and its overlaps
-with populated V2 groups are complementary (different grain or axis), not duplicative.
+**Net:** PR7A adds genuinely new, non-redundant signal into the *existing* canonical home, with a
+distinct attributable source; overlaps with populated V2 groups (per-family whiff, HR-damage,
+contact-quality) remain complementary, not duplicative.
 
 ---
 
 ## 2. Scope boundary (what PR7A is and is not)
 
-- **Is:** a shadow, flag-gated, Retrosheet-sourced **plate-discipline prior** feature group
-  (`plateDisciplineNoLocationV1`) — pre-contact approach metrics, hand-split, plus a matching
-  pitcher-discipline sub-block, with strict provenance and fail-closed derivation.
+- **Is:** shadow, flag-gated, Retrosheet-sourced **plate-discipline priors** landed into the
+  **existing canonical `contactOpportunity` group** (extended with new v3 non-location fields) plus a
+  separate **`pitcherDiscipline`** group — pre-contact approach metrics, hand-split, with strict
+  provenance and fail-closed derivation.
 - **Is not:** any location/zone signal (preserved unavailable), any pitch-type signal (Retrosheet
-  lacks it), any contact-quality signal (Statcast), any `starterBullpen` use (excluded), and any
-  change to champion/public/`scoring.ts`/`evaluatePlateModel.ts`.
+  lacks it), any contact-quality signal (Statcast), any `starterBullpen` use (excluded), any new
+  duplicate discipline group, and any change to champion/public/`scoring.ts`/`evaluatePlateModel.ts`.
 
 Structural isolation (to be enforced by a grep + test-time check, mirroring the mound/v2 pattern):
 new PR7A files import **no** Savant/MLB-Stats data-source module and are imported by **no** champion
@@ -178,90 +191,139 @@ or public path. Capture writes only to the shadow research store.
 
 ---
 
-## 3. Proposed feature contract — `plateDisciplineNoLocationV1`
+## 3. Feature contract (LOCKED architecture) — `plate_hr_v2_features_v3`
 
-New **feature group**, additive to the V2 vector as a **new version** `plate_hr_v2_features_v3`
-(V1/V2 preserved unchanged; a single version never represents two shapes — same discipline as the
-existing V1→V2 addition). Group key: `plateDisciplineNoLocation`. Every leaf is
-`z.number().nullable()` and **required** (missing ⇒ explicit `null`, never a dropped key), `.strict()`,
-with an `extra: z.record(z.string(), z.number().nullable())` escape hatch. Sample counts are
-first-class leaves so shrinkage never borrows a wrong denominator. **No forbidden names appear.**
-
-### 3.1 Batter discipline (Retrosheet history, as-of cutoff)
-
-```
-kRatePct                    // K / PA
-bbRatePct                   // (BB − IBB) / PA   (unintentional walks)
-ibbRatePct                  // IBB / PA
-hbpRatePct                  // HBP / PA
-ballInPlayPerPaPct          // (X + Y) terminal / PA
-swingRatePct                // swings / pitches
-contactPerSwingPct          // contact swings / swings
-whiffPerSwingPct            // whiff swings / swings
-foulPerSwingPct             // foul (F/T/L/O/R) / swings
-calledStrikeRatePct         // C / taken pitches      (location-free discipline proxy)
-firstPitchSwingRatePct      // swing on pitch 1 / PA
-avgPitchesPerPa             // pitch count / PA
-threeBallReachedRatePct     // PAs reaching a 3-ball count / PA   (count progression)
-twoStrikeReachedRatePct     // PAs reaching 2 strikes / PA        (count progression)
-twoStrikeKRatePct           // K | reached 2 strikes
-twoStrikeContactPerSwingPct // contact/swing | 2-strike counts    (two-strike approach)
-twoStrikeSurvivalRatePct    // (reached 2 strikes, did NOT strike out) / reached 2 strikes
-// samples
-paSample
-pitchSample
-swingSample
-twoStrikePaSample
-```
-
-### 3.2 Batter hand-splits (top-line only, to bound cardinality)
+`plate_hr_v2_features_v3` is a **feature-envelope version, not a model/champion version.** V2
+prediction readers continue reading existing V1/V2 snapshots without reinterpretation. V3 =
+V2 shape with `contactOpportunity` populated + extended, a new `pitcherDiscipline` group, and
+`zoneLocation` reshaped to the explicit unavailable record. Every rate leaf is
+`z.number().nullable()` and **required** (missing ⇒ explicit `null`), `.strict()`. Raw counts are
+first-class leaves so PR8 can test shrinkage/alternative thresholds rather than inheriting hard-coded
+modeling assumptions. **No forbidden names.**
 
 ```
-kRatePctVsL, kRatePctVsR
-bbRatePctVsL, bbRatePctVsR
-contactPerSwingPctVsL, contactPerSwingPctVsR
-whiffPerSwingPctVsL, whiffPerSwingPctVsR
-paSampleVsL, paSampleVsR
+contactOpportunity = canonical Retrosheet-backed discipline group
+pitcherDiscipline  = separate pitcher-actor discipline group
+zoneLocation       = separate, explicitly-unavailable location group
 ```
 
-### 3.3 Pitcher discipline sub-block (conditional on pitcher known)
+### 3.1 `contactOpportunity` — canonical discipline group (batter)
 
 ```
-pitcherKnown                // boolean (z.boolean())
-pitcherKRatePct
-pitcherBbRatePct            // unintentional
-pitcherWhiffPerSwingPct
-pitcherCalledStrikeRatePct
-pitcherFirstPitchStrikeSeenRatePct   // C/S/F/T/X on pitch 1 / PA  (location-free "strike seen")
-pitcherKRatePctVsHand       // vs this batter's hand
-pitcherBbRatePctVsHand
-pitcherBfSample
-pitcherBfSampleVsHand
+contactOpportunity: {
+  // existing leaves, now populated from Retrosheet:
+  kRatePct,                    // K / PA
+  bbRatePct,                   // (BB − IBB) / PA   (unintentional)
+  whiffRatePct,                // whiff swings / swings
+  contactRatePct,              // contact swings / swings
+
+  // remain null — Retrosheet cannot support (zone-dependent), never proxied:
+  chaseRatePct: null,
+  zoneContactRatePct: null,
+
+  // new v3 non-location fields:
+  foulStrikeRatePct,           // foul strikes (F/T/L/O/R) / swings
+  firstPitchStrikeRatePct,     // strike seen on pitch 1 (C/S/F/T/X) / PA
+  twoStrikeSurvivalRatePct,    // (reached 2 strikes, not K) / reached 2 strikes
+  inPlayRatePct,               // (X + Y) terminal / PA
+
+  // required evidence-quality leaves (co-located so a rate is never read without its provenance):
+  batterPa,                    // raw PA denominator
+  codedPitchPa,                // PAs with a usable (sequence-complete) PITCH_SEQ_TX
+  pitchSequenceCoverage,       // codedPitchPa / batterPa
+  datasetVersion,              // Retrosheet dataset release id (string leaf via `extra`/typed)
+
+  // hand-splits (top-line only, to bound cardinality):
+  kRatePctVsL, kRatePctVsR,
+  bbRatePctVsL, bbRatePctVsR,
+  contactRatePctVsL, contactRatePctVsR,
+  whiffRatePctVsL, whiffRatePctVsR,
+  paVsL, paVsR,
+}
 ```
 
-### 3.4 Data-quality block (PR7A-specific)
+> Note: `datasetVersion` is a string; if the strict all-numeric leaf rule must hold for
+> `contactOpportunity`, `datasetVersion` is carried in the group's typed metadata / evidence
+> descriptor rather than as a numeric leaf. The evidence descriptor (§4) is the authoritative home
+> for `datasetVersion`, `dataThroughAt`, and `gameIds[]`; the leaf here is a convenience mirror.
+
+### 3.2 Raw counts preserved (for PR8 shrinkage tests)
+
+Every rate above is accompanied by its integer numerator/denominator in the **evidence payload**
+(§4) — e.g. `k`, `bb`, `ibb`, `hbp`, `pa`, `pitches`, `swings`, `whiffs`, `contacts`, `fouls`,
+`calledStrikes`, `takenPitches`, `inPlay`, `firstPitchStrikes`, `twoStrikePa`, `twoStrikeK`,
+`twoStrikeSurvived`, per-hand denominators. Rates are re-derivable from counts; PR8 may re-shrink.
+
+### 3.3 `pitcherDiscipline` — separate group (conditional on pitcher known)
 
 ```
-retrosheetDatasetVersion    // string — release tag / content hash of the loaded dataset
-dataThroughDate             // ISO date — last game date covered by the aggregate
-pitchSequenceCoveragePct    // share of window PAs that are sequence-complete (§1.4)
-sequenceFloorMet            // boolean — coveragePct ≥ floor (0.90 proposed)
-overallQuality              // "full" | "degraded" | "missing"
+pitcherDiscipline: {
+  pitcherKnown,                        // boolean
+  pitcherKRatePct,
+  pitcherBbRatePct,                    // unintentional
+  pitcherWhiffRatePct,                 // whiff / swings induced
+  pitcherCalledStrikeRatePct,
+  pitcherFirstPitchStrikeRatePct,      // strike seen on pitch 1 / BF
+  pitcherKRatePctVsHand,               // vs this batter's resolved hand
+  pitcherBbRatePctVsHand,
+  pitcherBf,                           // raw BF denominator
+  pitcherBfVsHand,
+}
 ```
 
-### 3.5 `zoneLocationV1` — preserved as UNAVAILABLE
+Batter K/BB/contact are **never** duplicated here.
 
-PR7A **formalizes** the location group's unavailability (today it is silently stripped). The
-contract declares a stable availability record:
+### 3.4 Floors → null-with-reason (capture-usability, NOT final modeling thresholds)
+
+Approved floors. Below a floor, the affected derived rate is `null` with an explicit reason; **raw
+counts are always preserved** so PR8 can test alternative thresholds:
 
 ```
-zoneLocationV1: { available: false, reason: "licensed_source_unavailable" }
+Pitch-sequence coverage:  ≥ 0.90     (else sequence-derived leaves null: reason "below_sequence_coverage")
+Batter overall sample:    ≥ 150 PA   (else batter rates null: reason "below_batter_pa_floor")
+Pitcher overall sample:   ≥ 300 BF   (else pitcher rates null: reason "below_pitcher_bf_floor")
+Batter handedness split:  ≥ 75 PA    per split (else that split null: reason "below_hand_split_pa_floor")
+Pitcher handedness split: ≥ 150 BF   per split (else that split null: reason "below_hand_split_bf_floor")
 ```
 
-- Added to the availability/`missingInputs` vector for every PR7A snapshot.
-- The existing `zoneLocation` derived group stays all-null and stripped from the authorized
-  projection (unchanged). No PR7A code reads, derives, or proxies any location field.
-- New reason enum value **`licensed_source_unavailable`** added alongside the existing reasons.
+Data-quality block (per snapshot): `datasetVersion`, `dataThroughDate` (ISO), `pitchSequenceCoverage`,
+`sequenceFloorMet` (bool), `overallQuality` (`full`/`degraded`/`missing`).
+
+### 3.5 `zoneLocation` — separate, explicitly UNAVAILABLE group
+
+```
+zoneLocation: {
+  status: "unavailable",
+  reason: "licensed_source_unavailable",
+  plateX: null,
+  plateZ: null,
+  zone:  null,
+  szTop: null,
+  szBot: null,
+}
+```
+
+- New reason enum value **`licensed_source_unavailable`**.
+- No PR7A code reads, derives, or proxies any location field. Stripped from the authorized projection
+  exactly as today. This is the seam a future licensed zone source would fill — kept explicit, not
+  silently dropped.
+
+### 3.6 Measured season matrix 2000–2025 (REQUIRED — evidence, not conclusion)
+
+"Strong 2000+" is a conclusion; the contract requires the **measured** matrix as its evidence. The
+matrix has one row per season with columns:
+
+```
+season | qualifyingPa | paWithUsablePitchSeq | sequenceCoveragePct
+       | unknownHandednessPct | interruptedSequencePct | playersMeetingFloors
+```
+
+> **PENDING MEASUREMENT — values must never be fabricated.** Measuring this matrix requires ingesting
+> the licensed Retrosheet dataset and running the frozen parser (§4 manifest) — which is **prohibited
+> at this stage** (no network ingestion). It must be produced by running the frozen parser over the
+> licensed dataset in the **authorized environment** (same pattern as the Railway zone audit), and
+> pasted into this section before ingestion/fitting is authorized. This document ships the matrix
+> **schema**; the numbers are a gated follow-up.
 
 ---
 
@@ -290,26 +352,68 @@ Mirrors the `starter_bullpen` / `contact_events` content-addressed evidence patt
 `dataThroughAt`, `availableAt`/`fetchedAt`, window `from`/`to`, `contentHash`, plus the attribution
 notice string.
 
+### 4.1 Authorized crosswalk + parser identity (frozen manifest)
+
+Two-part authority, frozen in `fixtures/retrosheetDiscipline/SOURCE_MANIFEST.json`:
+
+1. **Semantic authority:** the official **Retrosheet Play-by-Play Crosswalk** — maps `PITCH_SEQ_TX`
+   to parsed `pitches`, `BAT_LINEUP_ID` to lineup position, and identifies the batter/pitcher
+   handedness and event fields.
+2. **Executable parser identity:** a **pinned Chadwick `cwevent`** version/commit + exact frozen
+   arguments (the parser that turns raw event files into the coded rows the semantic crosswalk
+   describes).
+
+```
+semanticCrosswalk: Retrosheet Play-by-Play Crosswalk
+parser:            Chadwick cwevent
+parserVersion:     <release or commit SHA — pinned at ingestion setup in the authorized env>
+parserArguments:   <exact frozen arguments>
+```
+
+> `parserVersion`/`parserArguments` are pinned when Chadwick is actually installed in the authorized
+> environment; the manifest records the intended pin and is finalized before ingestion. Not
+> fabricated here.
+
+### 4.2 Required Retrosheet attribution notice
+
+Exact statement (stored in provenance now; displayed at public promotion):
+
+> "The information used here was obtained free of charge from and is copyrighted by Retrosheet.
+> Interested parties may contact Retrosheet at www.retrosheet.org."
+
+Required placements (recorded now; PR7A is shadow-only so public display activates at promotion):
+
+```
+Public attribution:     LiveLocks Data Sources / About surface
+Repository attribution: dataset README and evidence-contract documentation
+Fixture attribution:    fixture README
+```
+
 ---
 
 ## 5. Fixtures to freeze BEFORE the adapter (requirement 6)
 
 The adapter is **not** written until these representative Retrosheet normalization fixtures are
-frozen with expected normalized output. Proposed fixture set (raw `cwevent`/`PITCH_SEQ_TX` rows →
-expected parsed PA):
+frozen with expected normalized output. **Authorized fixture set** (raw Retrosheet `play,`/`sub,`
+records + expected-normalized JSON), committed under
+`server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/`:
 
-1. Clean strikeout (`CCS`), clean walk (`BBBB`), unintentional vs intentional walk (`IIII` / `V`).
-2. HBP (`H`), ball-in-play single (`BX`), foul-heavy AB (`CFFFFX`).
-3. Two-strike foul-off then K (`CSFFFS`) vs two-strike foul-off then in-play → **survival** (`CSFFX`).
-4. Switch-hitter PA (verifies `RESP_BAT_HAND_CD` vs roster `bats`).
-5. Non-pitch markers in sequence: pickoff throws + steal (`CB1.FX`, `>`, `+`, `*`) → correctly stripped.
-6. **Uncountable:** `U`/`K` present, and an empty/missing sequence → **fail sequence-complete** (excluded, not guessed).
-7. Pitchout swing/contact (`P`, `Q`, `R`, `Y`).
-8. A `cwgame` record → park ID + starting lineup slot (context crosswalk).
-9. Retrosheet-parkID → LiveLocks venue crosswalk fixture; RetrosheetID → roster crosswalk fixture.
+1. **Normal modern game, complete pitch sequences** — several sequence-complete PAs (K, BB, in-play, foul-heavy).
+2. **Interrupted PA with the Retrosheet period separator** — a PA spanning **multiple play records**;
+   the continuation record's `PITCH_SEQ_TX` begins with `.` to denote already-recorded pitches.
+   Retrosheet documents this; it must reassemble to one PA (no double-count), **not** be treated as malformed.
+3. **Substitution / pinch-hit where the responsible batter differs** — a `sub,` mid-PA; responsible-batter resolution.
+4. **Handedness-split example** — resolved `RESP_BAT_HAND_CD`/`RESP_PIT_HAND_CD` contributing to a specific split.
+5. **Missing / incomplete `PITCH_SEQ_TX`** — empty sequence or `U`/`K` present → **fails closed** (excluded, not guessed).
+6. **Unknown handedness** — hand `?` → **only the affected split** nulls; overall metrics still count.
+7. **Game below the 0.90 coverage gate** — enough incomplete PAs that sequence-derived leaves degrade to null-with-reason.
+8. **Samples immediately below and above the floors** — batter ~149 vs ~151 PA, pitcher ~299 vs ~301 BF,
+   and hand-split 74 vs 76 PA / 149 vs 151 BF → freezes the present-vs-null boundary at each floor.
 
 Each fixture freezes: swing/whiff/contact/foul classification, ball/called-strike counts, count
-progression, two-strike detection, PA outcome, and completeness verdict.
+progression, two-strike detection, PA outcome, responsible-actor + handedness resolution, and the
+completeness/floor verdict. Fixtures are **hand-authored representative data, not ingested** — no
+network, no dataset download.
 
 ---
 
@@ -326,30 +430,37 @@ progression, two-strike detection, PA outcome, and completeness verdict.
 
 ---
 
-## 7. Proposed build order (AFTER this contract is reviewed)
+## 7. Build order & current authorization
 
-1. **[this doc]** Audit + contract → **review gate**.
-2. Freeze §5 fixtures (no adapter yet).
-3. Add contract types + flags + evidence kind + `licensed_source_unavailable` reason (+ unit tests).
-4. Write the Retrosheet normalization adapter **against the frozen fixtures** (fail-closed).
-5. Wire shadow forward-capture behind both flags; leakage + re-derivability + isolation tests.
-6. **Only then**, and only on separate authorization, begin model fitting.
+1. **[done]** Audit + redundancy + contract → reviewed. **Verdict: conditionally approved.**
+2. **[AUTHORIZED — this step]** Revise the contract to remove the duplicate group; freeze the
+   source/version manifest; commit representative **raw + expected-normalized fixtures** only.
+3. **[BLOCKED — needs separate authorization]** Add contract types + flags + evidence kind +
+   `licensed_source_unavailable` reason (+ unit tests).
+4. **[BLOCKED]** Write the Retrosheet normalization adapter against the frozen fixtures (fail-closed).
+5. **[BLOCKED]** Wire shadow forward-capture behind both flags; leakage + re-derivability + isolation tests.
+6. **[BLOCKED]** Run the §3.6 season matrix in the authorized environment; then, only on separate
+   authorization, begin model fitting.
 
-**Not in PR7A:** any location/zone feature, any pitch-type feature, `starterBullpen`, champion or
-public change, and (until step 6 is separately authorized) any fitting.
+**Still prohibited (this step):** network ingestion, database changes, production fetch scheduling,
+feature-builder wiring, model fitting, PR8, champion comparison, public rendering, location/zone
+proxies, `starterBullpen` integration.
 
 ---
 
-## 8. Open questions for the reviewer
+## 8. Reviewer decisions (LOCKED)
 
-1. **Coverage floor** — is `0.90` sequence-completeness (and a minimum `paSample`, proposed 150 PA
-   for a stable discipline prior) the right bar, or stricter?
-2. **New feature version** — confirm PR7A lands as `plate_hr_v2_features_v3` inside the existing V2
-   vector (chosen for storage reuse), rather than a wholly separate table.
-3. **Live-serving context (§1.3)** — confirm park/lineup/opposing-pitcher context stays CONDITIONAL
-   (default-unavailable live) so PR7A's live path ingests nothing forbidden; or specify an
-   already-authorized non-forbidden context source.
-4. **Retrosheet ID/park crosswalks** — confirm the authorized source of the RetrosheetID→roster and
-   parkID→venue crosswalks (frozen fixtures) so even the crosswalk carries provenance.
-5. **Attribution** — confirm the exact Retrosheet notice string to store in provenance now (for the
-   eventual public-promotion obligation).
+1. **Floors (capture-usability, not final modeling thresholds):** sequence coverage ≥ 0.90; batter
+   ≥ 150 PA; pitcher ≥ 300 BF; batter hand-split ≥ 75 PA; pitcher hand-split ≥ 150 BF. Below floor ⇒
+   `null` + explicit reason; **raw counts always preserved** (§3.4). Plus the **measured 2000–2025
+   season matrix** (§3.6) — pending authorized-environment measurement, never fabricated.
+2. **Version:** `plate_hr_v2_features_v3` — a **feature-envelope** version, not a model/champion
+   version; V1/V2 readers unaffected (§3).
+3. **Park/lineup/live-pitcher context:** **NOT** added to the discipline group — those stay in their
+   own independently-sourced, independently as-of-validated families. PR7A builds **no** second
+   historical park/lineup implementation. Historical **pitcher-discipline** priors from Retrosheet are
+   allowed; current matchup/lineup/park context stays conditional on existing authorized sources.
+4. **Crosswalk:** Retrosheet Play-by-Play Crosswalk (semantic authority) + pinned Chadwick `cwevent`
+   (executable parser identity), frozen in the source manifest (§4.1).
+5. **Attribution:** exact Retrosheet notice stored now; placements = About surface / dataset README +
+   evidence-contract docs / fixture README (§4.2).
