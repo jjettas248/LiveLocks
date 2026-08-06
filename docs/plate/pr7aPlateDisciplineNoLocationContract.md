@@ -114,6 +114,53 @@ CC BY 4.0 obligation:
 > Counsel should still confirm the attribution wording and commercial terms before public
 > promotion. PR7A proceeding as **shadow-only** does not depend on that confirmation.
 
+### 1.6 Season / era coverage (which seasons support which concept)
+
+The limiting factor is **`PITCH_SEQ_TX` completeness**, not `EVENT_CD`. Per-PA *outcomes* exist
+whenever an event file exists; per-*pitch* behavior needs the sequence, which is sparse before the
+late 1980s and effectively complete from ~2000.
+
+| Concept | Requires | Reliable seasons |
+|---|---|---|
+| K%, BB%, IBB%, HBP%, balls-in-play% | `EVENT_CD` (+ PA flags) | modern era broadly; **safe 2000+** |
+| Batter/pitcher **outcome** splits (K%/BB% by opposing hand) | `EVENT_CD` + `RESP_*_HAND_CD` | modern era broadly |
+| Batting-order context | `start`/`sub` lineup records | modern era (reliable) |
+| Foul-strike behavior, swing/whiff/contact, first-pitch behavior | **`PITCH_SEQ_TX`** | ~1988+, **strong 2000+** |
+| Two-strike outcomes, count progression, two-strike survival | **`PITCH_SEQ_TX`** | ~1988+, **strong 2000+** |
+| Handedness **swing/whiff** splits (not just outcomes) | `PITCH_SEQ_TX` + hand | ~1988+, **strong 2000+** |
+
+**Recommendation:** set PR7A's **training season floor = 2000** for all sequence-derived leaves
+(guarantees the completeness floor is met at population scale). Outcome-only leaves (K%/BB%) could
+extend earlier if ever needed, but v1 keeps a single 2000+ floor for a uniform, honest window.
+This is a training-window choice; the per-batter **as-of** leakage rule (§4) is orthogonal and
+always applies.
+
+### 1.7 Redundancy analysis against existing V2 features
+
+The concern: does PR7A duplicate signal already in the V2 vector? Audited group-by-group.
+
+| Existing V2 group / leaf | Source (intended) | Currently populated? | Overlap with PR7A | Verdict |
+|---|---|---|---|---|
+| `contactOpportunity` (`kRatePct`, `bbRatePct`, `whiffRatePct`, `contactRatePct`, `zoneContactRatePct`, `chaseRatePct`) | Savant/plate-discipline | **NO — hard-coded all-null placeholder** (`buildPregamePowerRadar.ts:1446`, no producer) | **Nominal** name overlap on K%/BB%/whiff%/contact% | **No live redundancy.** PR7A is the first real discipline producer. |
+| `pitchType.*.batterWhiffPct` | Savant (per pitch-family) | populated when Savant present | PR7A whiff is **aggregate** (no pitch type) | **Complementary** — different grain; Retrosheet cannot do per-family. |
+| `pitcherVulnerability` (`hrPer9*`, `barrelAllowedPct`, `hardHitAllowedPct`) | Savant | populated when Savant present | PR7A pitcher block is **discipline** (K/BB/whiff/CS), not HR-damage | **Complementary** — different axis. |
+| `recentContactForm` (EV/EV90/barrel) | `contact_events` | populated (PR5) | contact **quality**, post-contact | **No overlap** — PR7A is pre-contact approach. |
+| `batterPower`, `batTracking` | Savant | populated when present | power/swing mechanics | **No overlap.** |
+
+**Two decisions that follow from this:**
+
+1. **Do NOT backfill `contactOpportunity` from Retrosheet.** Mixing a Savant-intended slot with a
+   Retrosheet source would break the one-group-one-provenance evidence-binding model and silently
+   swap a field's meaning. PR7A lands as its **own** group (`plateDisciplineNoLocation`) with
+   Retrosheet provenance; `contactOpportunity` is left exactly as-is (empty placeholder).
+2. **The forbidden/zone-dependent leaves stay null forever under Retrosheet.** `chaseRatePct` and
+   `zoneContactRatePct` require a zone — Retrosheet cannot and must not fill them. They remain in the
+   (empty) `contactOpportunity` group; PR7A neither reads nor proxies them.
+
+**Net:** PR7A adds genuinely new, non-redundant signal (discipline priors, foul/two-strike/count
+behavior, aggregate whiff/contact by hand) with a distinct, attributable source — and its overlaps
+with populated V2 groups are complementary (different grain or axis), not duplicative.
+
 ---
 
 ## 2. Scope boundary (what PR7A is and is not)
