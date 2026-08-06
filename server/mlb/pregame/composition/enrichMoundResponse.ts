@@ -27,17 +27,42 @@ export interface MoundResponseWithPlateTargets extends Omit<MoundRadarResponse, 
 }
 
 /**
+ * isPublicPregameSignal is Plate's canonical VISIBILITY-AND-RETENTION
+ * predicate, not a pregame-only predicate — it intentionally stays true for
+ * a signal that was publicly flagged pre-first-pitch and is now locked or
+ * graded during a live/final/suspended game (that's correct for Plate's own
+ * product, which keeps showing completed cards). This temporary cross-radar
+ * display is pregame-only, so it layers an explicit lifecycle check on top:
+ * the game must not have started, and the signal must still be in its
+ * initial active/unlocked state. A signal that's genuinely public but
+ * already locked/live/final/suspended/postponed is excluded here even
+ * though isPublicPregameSignal itself would still say "public."
+ */
+export function isPlateCompositionEligible(signal: Readonly<PregamePowerSignal>): boolean {
+  return (
+    isPublicPregameSignal(signal) &&
+    signal.status === "active" &&
+    signal.firstPitchLockEligible === true &&
+    signal.gameStatus !== "live" &&
+    signal.gameStatus !== "final" &&
+    signal.gameStatus !== "suspended" &&
+    signal.gameStatus !== "postponed"
+  );
+}
+
+/**
  * Pure. `plateSignals` may be any Plate signals (including suppressed/
- * unpublished ones) — this function is the one place that applies Plate's
- * own canonical publication gate (isPublicPregameSignal) before anything is
- * joined against a Mound card, so eligibility is never approximated with an
- * ad hoc suppressed/tier check.
+ * unpublished/live/final ones) — this function is the one place that
+ * applies both Plate's canonical publication gate AND the pregame-only
+ * lifecycle check before anything is joined against a Mound card, so
+ * eligibility is never approximated with an ad hoc suppressed/tier check
+ * and never silently widened to include live/completed games.
  */
 export function enrichMoundResponseWithPlateTargets(
   moundResponse: Readonly<MoundRadarResponse>,
   plateSignals: readonly PregamePowerSignal[],
 ): MoundResponseWithPlateTargets {
-  const eligiblePlateSignals = plateSignals.filter(isPublicPregameSignal);
+  const eligiblePlateSignals = plateSignals.filter(isPlateCompositionEligible);
 
   return {
     ...moundResponse,

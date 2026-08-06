@@ -124,6 +124,35 @@ ok(buildMoundPlateTargetSuggestions(HR_SUSCEPTIBLE, [eligiblePlateSignal()]).len
   ok(buildMoundPlateTargetSuggestions(noDriver, [eligiblePlateSignal()]).length === 0, "no contact-risk driver at all → []");
 }
 
+// ── Pregame-only lifecycle gate: cr_high is necessary but not sufficient ────
+// (a locked/graded/live/final Mound card must never surface suggestions,
+// even though the canonical Mound response intentionally retains those
+// cards after first pitch).
+ok(
+  buildMoundPlateTargetSuggestions(moundSignal({ drivers: [CR_HIGH], status: "locked" }), [eligiblePlateSignal()]).length === 0,
+  "locked Mound signal → [] (first pitch has passed)",
+);
+ok(
+  buildMoundPlateTargetSuggestions(moundSignal({ drivers: [CR_HIGH], status: "graded" }), [eligiblePlateSignal()]).length === 0,
+  "graded Mound signal → []",
+);
+ok(
+  buildMoundPlateTargetSuggestions(moundSignal({ drivers: [CR_HIGH], gameStatus: "live" }), [eligiblePlateSignal()]).length === 0,
+  "live Mound game → []",
+);
+ok(
+  buildMoundPlateTargetSuggestions(moundSignal({ drivers: [CR_HIGH], gameStatus: "final" }), [eligiblePlateSignal()]).length === 0,
+  "final Mound game → []",
+);
+ok(
+  buildMoundPlateTargetSuggestions(moundSignal({ drivers: [CR_HIGH], gameStatus: "postponed" }), [eligiblePlateSignal()]).length === 0,
+  "postponed Mound game → []",
+);
+ok(
+  buildMoundPlateTargetSuggestions(moundSignal({ drivers: [CR_HIGH], firstPitchLockEligible: false }), [eligiblePlateSignal()]).length === 0,
+  "firstPitchLockEligible=false Mound signal → []",
+);
+
 // ── 4/5/6. Requires both canonical gameId and pitcherId; excludes mismatches ─
 ok(buildMoundPlateTargetSuggestions(HR_SUSCEPTIBLE, [eligiblePlateSignal({ gameId: "wrong-game" })]).length === 0, "wrong gameId excluded");
 ok(buildMoundPlateTargetSuggestions(HR_SUSCEPTIBLE, [eligiblePlateSignal({ pitcherId: "wrong-pitcher" })]).length === 0, "wrong pitcherId excluded");
@@ -143,6 +172,22 @@ ok(buildMoundPlateTargetSuggestions(HR_SUSCEPTIBLE, [eligiblePlateSignal({ score
   ok(result.length === 1, `duplicate batterId collapses to one suggestion (got ${result.length})`);
   ok(result[0].hrScore === 9.0, "the higher-ranked (first-sorted) duplicate instance wins, not last-in-array");
 }
+
+// ── 8b. Dedup key is whitespace-normalized ───────────────────────────────────
+{
+  const bare = eligiblePlateSignal({ batterId: "123", marketScores: { home_runs: 9.0 } });
+  const padded = eligiblePlateSignal({ batterId: " 123 ", marketScores: { home_runs: 3.0 } });
+  const result = buildMoundPlateTargetSuggestions(HR_SUSCEPTIBLE, [bare, padded]);
+  ok(result.length === 1, `"123" and " 123 " are treated as the same batter after trim-normalizing the dedupe key (got ${result.length})`);
+}
+
+// ── Defensive tier guard: a "track"-tier candidate is excluded even though it
+// structurally cannot occur when the caller correctly pre-filters with
+// isPlateCompositionEligible (Plate's own gate never admits "track") ────────
+ok(
+  buildMoundPlateTargetSuggestions(HR_SUSCEPTIBLE, [eligiblePlateSignal({ tier: "track" })]).length === 0,
+  "track-tier candidate is defensively excluded at the suggestion-construction boundary",
+);
 
 // ── 9/10. Prioritizes finite HR-specific scores; sorted descending ──────────
 {

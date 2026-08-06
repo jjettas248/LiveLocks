@@ -14,27 +14,34 @@
 // snapshot it returns is reported "available" regardless of its own
 // internal staleness, exactly mirroring what every other Plate-snapshot
 // reader in this codebase already treats as current.
+//
+// Logging is centralized at the orchestration layer (composeMoundResponse.ts)
+// — this module never logs itself, so a load failure produces exactly one
+// [MOUND_PLATE_COMPOSITION] record there, not a second one here.
 
 import { peekRadarSnapshot } from "../../pregamePowerRadar/pregamePowerRadarService";
+import type { PregamePowerSnapshot } from "../../pregamePowerRadar/pregamePowerRadarStore";
 import type { PregamePowerSignal } from "../../pregamePowerRadar/types";
 
 export type PlateCompositionState =
   | "available"
   | "missing"
-  | "stale"
   | "date_mismatch"
-  | "load_error";
+  | "load_error"
+  | "disabled";
 
 export interface PlateCompositionContext {
   signals: PregamePowerSignal[];
   state: PlateCompositionState;
   generatedAt: string | null;
+  buildId: string | null;
 }
 
-const EMPTY_CONTEXT = (state: PlateCompositionState, generatedAt: string | null = null): PlateCompositionContext => ({
+const EMPTY_CONTEXT = (state: Exclude<PlateCompositionState, "available">, generatedAt: string | null = null): PlateCompositionContext => ({
   signals: [],
   state,
   generatedAt,
+  buildId: null,
 });
 
 /**
@@ -42,12 +49,18 @@ const EMPTY_CONTEXT = (state: PlateCompositionState, generatedAt: string | null 
  * and never blocking on a Plate rebuild. Returns `signals: []` whenever the
  * snapshot is absent, for a different slate day, or the read itself fails —
  * the Mound route this feeds must always get a usable context back.
+ *
+ * `snapshotAccessor` defaults to the real peekRadarSnapshot; tests inject a
+ * throwing stub to exercise the load_error path deterministically without a
+ * mocking framework (mirrors this codebase's existing injected-stub test
+ * convention, e.g. moundV2ShadowRunner.test.ts).
  */
 export async function loadPlateCompositionContext(
   expectedSlateDate: string,
+  snapshotAccessor: () => PregamePowerSnapshot | null = peekRadarSnapshot,
 ): Promise<PlateCompositionContext> {
   try {
-    const snapshot = peekRadarSnapshot();
+    const snapshot = snapshotAccessor();
     if (!snapshot) {
       return EMPTY_CONTEXT("missing");
     }
@@ -58,9 +71,9 @@ export async function loadPlateCompositionContext(
       signals: Array.from(snapshot.signals.values()),
       state: "available",
       generatedAt: snapshot.generatedAt,
+      buildId: snapshot.buildId,
     };
-  } catch (error) {
-    console.warn("[MOUND_PLATE_COMPOSITION_LOAD_FAILED]", error);
+  } catch {
     return EMPTY_CONTEXT("load_error");
   }
 }

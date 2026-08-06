@@ -141,6 +141,49 @@ function moundResponse(signals: MoundSignal[]): MoundRadarResponse {
   ok(enriched.signals[0].plateTargetSuggestions.length === 0, "a postponed-game Plate signal is excluded (isPublicPregameSignal's early-return)");
 }
 
+// ── Pregame-only lifecycle gate: isPublicPregameSignal alone is NOT enough ──
+// isPublicPregameSignal is a visibility-AND-RETENTION predicate — it stays
+// TRUE for a signal that was genuinely flagged pre-first-pitch and is now
+// locked/graded during a live/final/suspended game (correct for Plate's own
+// product). These cases construct a signal where isPublicPregameSignal
+// itself returns true via the retention branch, then prove
+// enrichMoundResponseWithPlateTargets STILL excludes it — the pregame-only
+// lifecycle check is a real, additional filter, not a no-op.
+{
+  const hrSusceptible = moundSignal({ drivers: [CR_HIGH] });
+  const resp = moundResponse([hrSusceptible]);
+
+  const lockedRetained = eligiblePlateSignal({ status: "locked", everPubliclyFlagged: true });
+  ok(
+    enrichMoundResponseWithPlateTargets(resp, [lockedRetained]).signals[0].plateTargetSuggestions.length === 0,
+    "locked Plate candidate excluded (first pitch has passed, even though isPublicPregameSignal's retention branch would say visible)",
+  );
+
+  const gradedRetained = eligiblePlateSignal({ status: "graded", everPubliclyFlagged: true });
+  ok(
+    enrichMoundResponseWithPlateTargets(resp, [gradedRetained]).signals[0].plateTargetSuggestions.length === 0,
+    "graded Plate candidate excluded",
+  );
+
+  const liveRetained = eligiblePlateSignal({ status: "locked", gameStatus: "live", everPubliclyFlagged: true });
+  ok(
+    enrichMoundResponseWithPlateTargets(resp, [liveRetained]).signals[0].plateTargetSuggestions.length === 0,
+    "live-game Plate candidate excluded (isPublicPregameSignal would retain it; pregame-only gate does not)",
+  );
+
+  const finalRetained = eligiblePlateSignal({ status: "graded", gameStatus: "final", everPubliclyFlagged: true });
+  ok(
+    enrichMoundResponseWithPlateTargets(resp, [finalRetained]).signals[0].plateTargetSuggestions.length === 0,
+    "final-game Plate candidate excluded",
+  );
+
+  const suspendedRetained = eligiblePlateSignal({ status: "locked", gameStatus: "suspended", everPubliclyFlagged: true });
+  ok(
+    enrichMoundResponseWithPlateTargets(resp, [suspendedRetained]).signals[0].plateTargetSuggestions.length === 0,
+    "suspended-game Plate candidate excluded",
+  );
+}
+
 // ── 4. Below publish-score-floor candidate is excluded ──────────────────────
 {
   const hrSusceptible = moundSignal({ drivers: [CR_HIGH] });

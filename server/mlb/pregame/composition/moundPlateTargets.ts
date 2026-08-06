@@ -7,20 +7,34 @@
 // does not fetch data, write data, calculate new HR probability, recompute
 // either radar, mutate either input, or decide Plate eligibility (that is
 // the caller's job — see enrichMoundResponse.ts, which must only pass
-// signals that already cleared Plate's own canonical publication predicate,
-// isPublicPregameSignal). Neither engine imports this module or the other
-// engine; this module imports the finished output types of both.
+// signals that already cleared Plate's own canonical publication predicate
+// AND the pregame-only lifecycle check, isPlateCompositionEligible). Neither
+// engine imports this module or the other engine; this module imports the
+// finished output types of both.
 
 import { hasHighContactRisk } from "../mound/contactRisk";
 import type { MoundSignal } from "../mound/types";
 import type { PregamePowerSignal, PregamePowerTier } from "../../pregamePowerRadar/types";
+
+/**
+ * The suggestion tier contract deliberately excludes "track" — Plate's own
+ * canonical publication gate (isPubliclyEligibleTier in
+ * platePublicationDecision.ts) never admits a "track"-tier signal, so a
+ * suggestion should never need to represent one. Guarded defensively at
+ * construction time below rather than trusted blindly.
+ */
+export type PlateSuggestionTier = Exclude<PregamePowerTier, "track">;
+
+function isPlateSuggestionTier(tier: PregamePowerTier): tier is PlateSuggestionTier {
+  return tier !== "track";
+}
 
 export interface MoundPlateTargetSuggestion {
   batterId: string;
   batterName: string;
   team: string;
   battingOrderSlot: number | null;
-  plateTier: PregamePowerTier;
+  plateTier: PlateSuggestionTier;
   plateScore10: number;
   /** The batter's HR-specific market score (marketScores.home_runs), when finite. Null when unavailable — see rankingBasis. */
   hrScore: number | null;
@@ -29,6 +43,26 @@ export interface MoundPlateTargetSuggestion {
 }
 
 const MAX_SUGGESTIONS = 3;
+
+/**
+ * Full cross-radar display eligibility for a Mound card — cr_high is
+ * necessary but not sufficient. The canonical Mound response intentionally
+ * RETAINS locked/graded cards after first pitch (that's correct for Mound's
+ * own product), but this temporary pregame-only cross-reference must not
+ * surface on a card whose game has already started or ended. Exported so
+ * the route-orchestration layer's telemetry counts against the same
+ * definition, never the narrower hasHighContactRisk alone.
+ */
+export function isMoundCompositionEligible(signal: Readonly<MoundSignal>): boolean {
+  return (
+    hasHighContactRisk(signal) &&
+    signal.status === "active" &&
+    signal.firstPitchLockEligible === true &&
+    signal.gameStatus !== "live" &&
+    signal.gameStatus !== "final" &&
+    signal.gameStatus !== "postponed"
+  );
+}
 
 function isValidNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -50,7 +84,8 @@ function isQualifyingCandidate(
     plateSignal.pitcherId === moundSignal.pitcherId &&
     isValidNonEmptyString(plateSignal.batterId) &&
     isValidNonEmptyString(plateSignal.batterName) &&
-    Number.isFinite(plateSignal.score10)
+    Number.isFinite(plateSignal.score10) &&
+    isPlateSuggestionTier(plateSignal.tier)
   );
 }
 
@@ -82,12 +117,16 @@ function rankCandidates(candidates: readonly PregamePowerSignal[]): PregamePower
 
 function toSuggestion(p: PregamePowerSignal): MoundPlateTargetSuggestion {
   const hrScore = getFiniteHrScore(p);
+  // isQualifyingCandidate already required isPlateSuggestionTier(p.tier);
+  // this cast documents that invariant at the construction site rather than
+  // re-checking it silently.
+  const plateTier = p.tier as PlateSuggestionTier;
   return {
     batterId: p.batterId,
     batterName: p.batterName,
     team: p.team,
     battingOrderSlot: p.battingOrderSlot,
-    plateTier: p.tier,
+    plateTier,
     plateScore10: p.score10,
     hrScore,
     rankingBasis: hrScore !== null ? "home_runs" : "overall_fallback",
@@ -96,21 +135,22 @@ function toSuggestion(p: PregamePowerSignal): MoundPlateTargetSuggestion {
 
 /**
  * Up to 3 Plate batters facing this exact pitcher today, deduplicated by
- * batterId and deterministically ranked. [] whenever the pitcher isn't
- * already flagged cr_high (hasHighContactRisk), or no qualifying candidates
- * exist for this game/pitcher — never throws, never mutates either input.
+ * (whitespace-normalized) batterId and deterministically ranked. [] whenever
+ * the pitcher isn't currently composition-eligible (isMoundCompositionEligible),
+ * or no qualifying candidates exist for this game/pitcher — never throws,
+ * never mutates either input.
  *
- * `eligiblePlateSignals` MUST already be filtered to Plate's own canonical
- * publication predicate by the caller (isPublicPregameSignal in
- * pregamePowerRadar/diagnostics.ts) — this function does not re-derive or
- * approximate that decision; it only joins on gameId+pitcherId, ranks,
- * dedupes, and caps.
+ * `eligiblePlateSignals` MUST already be filtered to
+ * enrichMoundResponse.ts's isPlateCompositionEligible (Plate's own canonical
+ * publication predicate PLUS the same pregame-only lifecycle check) by the
+ * caller — this function does not re-derive or approximate that decision;
+ * it only joins on gameId+pitcherId, ranks, dedupes, and caps.
  */
 export function buildMoundPlateTargetSuggestions(
   moundSignal: Readonly<MoundSignal>,
   eligiblePlateSignals: readonly PregamePowerSignal[],
 ): MoundPlateTargetSuggestion[] {
-  if (!hasHighContactRisk(moundSignal)) return [];
+  if (!isMoundCompositionEligible(moundSignal)) return [];
 
   const candidates = eligiblePlateSignals.filter((p) => isQualifyingCandidate(p, moundSignal));
   const ranked = rankCandidates(candidates);
@@ -118,9 +158,9 @@ export function buildMoundPlateTargetSuggestions(
   const deduped: PregamePowerSignal[] = [];
   const seenBatterIds = new Set<string>();
   for (const p of ranked) {
-    const batterId = String(p.batterId);
-    if (seenBatterIds.has(batterId)) continue;
-    seenBatterIds.add(batterId);
+    const batterKey = p.batterId.trim();
+    if (seenBatterIds.has(batterKey)) continue;
+    seenBatterIds.add(batterKey);
     deduped.push(p);
     if (deduped.length >= MAX_SUGGESTIONS) break;
   }
