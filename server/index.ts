@@ -1172,6 +1172,18 @@ app.use((req, res, next) => {
   setTimeout(() => gradePersistedPlays(storage).catch(console.warn), 2 * 60 * 1000);
   setInterval(() => gradePersistedPlays(storage).catch(console.warn), 3 * 60 * 1000);
 
+  // MLB Live Edge Stage B settlement sweep (research-only): grades captured
+  // all-lane predictions against the REAL final outcome (fetchMlbBoxScore
+  // read-only) and writes results back to the Stage B ledger ONLY — never
+  // persisted_plays/ROI/W-L. Never throws. First run after 4 min, then every
+  // 5 min (same cadence family as the mound-V2 grading sweep).
+  const runStageBSweep = () =>
+    import("./mlb/stageB/predictionLedgerSettlementSweep")
+      .then(({ runStageBSettlementSweepWithDefaults }) => runStageBSettlementSweepWithDefaults())
+      .catch((e) => console.warn("[MLB_STAGE_B_SETTLE_ERROR]", e?.message ?? e));
+  setTimeout(runStageBSweep, 4 * 60 * 1000);
+  setInterval(runStageBSweep, 5 * 60 * 1000);
+
   if (process.env.NODE_ENV !== "production") {
     app.get("/api/test-email", async (req: Request, res: Response) => {
       const type = req.query.type as string;

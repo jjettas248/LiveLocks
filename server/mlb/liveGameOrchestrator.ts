@@ -141,6 +141,7 @@ import { todayET, dateToET } from "../utils/dateUtils";
 import { buildHRSignal } from "./HRSignalBuilder";
 import { getPlayer } from "./rosterService";
 import { storage } from "../storage";
+import { captureAllLanesToStageB } from "./stageB/predictionLedgerCaptureService";
 import { trackPlay } from "../services/playTracker";
 import { runFullOnlyHomersScrape, getHotHitters, getLiveBallparkFactors, getBatterVsPitcherHrHistory } from "./onlyHomersService";
 // HR Radar Settlement Repair — promote previously-broken `require()` calls to
@@ -5997,6 +5998,18 @@ export class LiveGameOrchestrator {
       }
 
       autoPersistMLBSignals(gameId, qualifiedSignals);
+
+      // ── MLB Live Edge Stage B (research-only) — private all-lane capture ──
+      // Fire-and-forget, never awaited, never throws: records every FRESH
+      // finalized prediction this cycle (official/watch/shadow — home_runs
+      // excluded inside the builder) into the private Stage B ledger for a
+      // future Stage C calibrator. Reads the all-lane `allSignals` set; writes
+      // ONLY to the Stage B store — never persisted_plays/ROI/public — and can
+      // never affect this tick. Gated by MLB_PREDICTION_CAPTURE_ENABLED_DEFAULT
+      // inside the builder.
+      captureAllLanesToStageB(gameId, allSignals, {
+        appendMlbLanePredictions: (rows) => storage.appendMlbLanePredictions(rows),
+      }).catch(() => { /* never allowed to affect the tick */ });
 
       // ── LiveLocks Batch D — Orchestrator-driven bus population ────────
       // Per Batch D constraint: the bus MUST be populated from the

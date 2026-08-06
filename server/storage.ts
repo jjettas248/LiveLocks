@@ -569,6 +569,8 @@ export interface IStorage {
   settleMlbLanePrediction(predictionId: string, finalStat: number, settledAt: Date): Promise<MlbLanePrediction | null>;
   /** Voids an ungradable row (postponed/DNP/unresolvable). Returns null if id unknown. Throws if already terminal. */
   voidMlbLanePrediction(predictionId: string, voidReason: MlbLedgerVoidReason, settledAt: Date): Promise<MlbLanePrediction | null>;
+  /** Recent captured predictions (any status), newest-first, for the admin read surface. */
+  listRecentMlbLanePredictions(opts?: { capturedAfterMs?: number; limit?: number }): Promise<MlbLanePrediction[]>;
 
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
   // Immutable raw source snapshots and append-only as-of feature readings; no
@@ -4468,6 +4470,21 @@ export class DatabaseStorage implements IStorage {
       .where(eq(mlbLanePredictions.predictionId, predictionId))
       .returning();
     return updated ? mlbLanePredictionRowToDomain(updated) : null;
+  }
+
+  async listRecentMlbLanePredictions(
+    opts: { capturedAfterMs?: number; limit?: number } = {},
+  ): Promise<MlbLanePrediction[]> {
+    const limit = opts.limit ?? 5000;
+    const rows = opts.capturedAfterMs != null
+      ? await db.select().from(mlbLanePredictions)
+          .where(gte(mlbLanePredictions.capturedAt, new Date(opts.capturedAfterMs)))
+          .orderBy(desc(mlbLanePredictions.capturedAt))
+          .limit(limit)
+      : await db.select().from(mlbLanePredictions)
+          .orderBy(desc(mlbLanePredictions.capturedAt))
+          .limit(limit);
+    return rows.map(mlbLanePredictionRowToDomain);
   }
 
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
