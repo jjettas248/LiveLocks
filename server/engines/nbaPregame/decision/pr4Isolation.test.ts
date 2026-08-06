@@ -96,7 +96,7 @@ const PR4_SOURCES = [
   ok(!carriesForbiddenKey(proj), "PR3 projection is blind (no forbidden key) before decision");
   const d = evaluateFreshLine({
     projection: proj,
-    identity: { playerCanonicalId: proj.playerCanonicalId, gameCanonicalId: proj.gameCanonicalId, market: "points", modelVersion: proj.modelVersion, projectionHash: proj.projectionHash },
+    identity: { playerCanonicalId: proj.playerCanonicalId, gameCanonicalId: proj.gameCanonicalId, market: "points", modelVersion: proj.modelVersion, projectionHash: proj.projectionHash, featureHash: proj.featureHash },
     line: { line: 24.5, capturedAt: "2026-08-05T18:04:00Z", sportsbook: "book-a" },
     asOf: "2026-08-05T18:05:00Z",
   });

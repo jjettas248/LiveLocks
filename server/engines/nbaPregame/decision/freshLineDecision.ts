@@ -47,6 +47,14 @@ export interface DecisionIdentity {
   modelVersion: string;
   /** The frozen PR3 projection hash the caller believes it is deciding against. */
   projectionHash: string;
+  /**
+   * The frozen PR3 feature (input) hash. Verified explicitly in addition to the
+   * projection hash: although the projection hash cryptographically commits to the
+   * feature hash today (computeProjectionHash folds featureHash into its payload),
+   * checking both is defense-in-depth that stays correct even if the hashing
+   * scheme changes — a feature-hash mismatch can never be evaluated.
+   */
+  featureHash: string;
 }
 
 export type DecisionStatus =
@@ -134,7 +142,8 @@ export function evaluateFreshLine(args: EvaluateFreshLineArgs): FreshLineDecisio
       projection.playerCanonicalId !== identity.playerCanonicalId ||
       projection.gameCanonicalId !== identity.gameCanonicalId ||
       projection.modelVersion !== identity.modelVersion ||
-      projection.projectionHash !== identity.projectionHash
+      projection.projectionHash !== identity.projectionHash ||
+      projection.featureHash !== identity.featureHash
     ) {
       return fail(args, "identity_mismatch");
     }

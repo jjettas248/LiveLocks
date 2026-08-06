@@ -65,6 +65,7 @@ function identityFor(proj: NbaProjectionResult, market: DecisionIdentity["market
     market,
     modelVersion: proj.modelVersion,
     projectionHash: proj.projectionHash,
+    featureHash: proj.featureHash,
   };
 }
 const ASOF = "2026-08-05T18:05:00Z";
@@ -89,6 +90,7 @@ const freshLine = (line: number, capturedAt = "2026-08-05T18:04:00Z") => ({ line
     { ...identityFor(proj, "points"), gameCanonicalId: "nba:game:999" },
     { ...identityFor(proj, "points"), modelVersion: "wrong_model" },
     { ...identityFor(proj, "points"), projectionHash: "deadbeef" },
+    { ...identityFor(proj, "points"), featureHash: "deadbeef" },
   ];
   for (const [i, id] of bases.entries()) {
     const d = evaluateFreshLine({ projection: proj, identity: id, line: freshLine(24.5), asOf: ASOF });
