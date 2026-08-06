@@ -23,6 +23,16 @@ import {
 type Tier = "track" | "watch" | "strong" | "elite" | "nuclear";
 type Market = "pitcher_strikeouts" | "pitcher_outs";
 
+/** Display labels for Plate ("the Plate") tiers on cross-radar suggestion chips — never rendered as the raw snake_case value. */
+const PLATE_TIER_LABELS: Record<string, string> = {
+  track: "Track",
+  watch: "Watch",
+  power_watch: "Power Watch",
+  strong: "Strong",
+  elite: "Elite",
+  nuclear: "Nuclear",
+};
+
 interface MoundDriver {
   key: string;
   label: string;
@@ -174,6 +184,30 @@ interface MoundSignal {
   projectedStrikeouts?: number | null;
   /** Display-only enrichment (multi-year K/9 + opponent/BvP/park/recent-form) — never used for grading. */
   matchupAdjustedStrikeouts?: number | null;
+  /**
+   * Bolted on by the server-side pregame composition layer
+   * (server/mlb/pregame/composition/) AFTER the canonical Mound response is
+   * built — not part of the Mound engine's own contract. Up to 3 Plate
+   * ("the Plate") batters facing this exact pitcher today, already filtered
+   * to Plate's own canonical public-visibility predicate. [] when this
+   * pitcher isn't already flagged "Hit/HR Susceptible: High", or the
+   * composition feature is off/unavailable — never absent. Never re-derived
+   * client-side.
+   */
+  plateTargetSuggestions: MoundPlateTargetSuggestion[];
+}
+
+interface MoundPlateTargetSuggestion {
+  batterId: string;
+  batterName: string;
+  team: string;
+  battingOrderSlot: number | null;
+  plateTier: string;
+  plateScore10: number;
+  /** The batter's HR-specific market score, when reliably available. */
+  hrScore: number | null;
+  /** "home_runs" when hrScore drove this suggestion's rank; "overall_fallback" when hrScore was unavailable. Never present a fallback score as an HR score. */
+  rankingBasis: "home_runs" | "overall_fallback";
 }
 
 interface MoundRadarResponse {
@@ -705,6 +739,44 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
               {d.label}
             </span>
           ))}
+        </div>
+      )}
+
+      {/* Cross-Radar: qualifying Plate targets facing this arm, bolted on
+          server-side by the pregame composition layer AFTER the canonical
+          Mound response is built. Only present when this pitcher is already
+          flagged HR-susceptible; renders nothing when the array is empty.
+          Header + per-row copy switch based on rankingBasis so an overall
+          Plate score is never mislabeled as an HR score. */}
+      {s.plateTargetSuggestions.length > 0 && (
+        <div className="mt-2" data-testid={`mound-plate-suggestions-${slug}`}>
+          <div className="text-[10px] text-muted-foreground mb-1">
+            {s.plateTargetSuggestions.some((t) => t.rankingBasis === "home_runs")
+              ? "Plate HR Targets vs This Arm"
+              : "Plate Targets vs This Pitcher"}
+          </div>
+          <ul
+            className="flex items-start gap-1.5 flex-wrap list-none m-0 p-0"
+            aria-label={`Plate targets facing ${s.pitcherName}`}
+          >
+            {s.plateTargetSuggestions.map((t) => (
+              <li
+                key={t.batterId}
+                data-testid={`mound-plate-suggestion-${slug}-${t.batterId}`}
+                className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-300 border border-amber-500/20 max-w-[220px]"
+              >
+                <span className="truncate">{t.batterName}</span>
+                <span className="text-amber-300/70 shrink-0">
+                  ({t.team}) ·{" "}
+                  {t.rankingBasis === "home_runs"
+                    ? `HR Score ${t.hrScore!.toFixed(1)}`
+                    : `Plate Score ${t.plateScore10.toFixed(1)}`}
+                  {" · "}
+                  {PLATE_TIER_LABELS[t.plateTier] ?? t.plateTier}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       </div>
