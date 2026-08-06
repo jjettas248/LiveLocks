@@ -2,6 +2,8 @@
   "manifestVersion": "pr7a_retrosheet_discipline_source_manifest_v1",
   "status": "draft_pending_toolchain_validation",
   "statusNote": "NOT frozen. parserVersion and parserArguments are PENDING_PIN; the synthetic contract fixtures have not been validated against real Chadwick output. Advances to 'validated' only after the PR7A.0 toolchain proof demonstrates parity against real Retrosheet source.",
+  "toolchainProofRunbook": "docs/plate/pr7a0ToolchainProofRunbook.md",
+  "toolchainProofBlockedInSandbox": "www.retrosheet.org:443 is denied by the agent proxy (connect_rejected 403; not in noProxy allowlist), so PR7A.0 must run in an environment with Retrosheet access. No validation may be fabricated.",
   "featureEnvelopeVersion": "plate_hr_v2_features_v3",
   "purpose": "Draft source + parser identity for PR7A Retrosheet plate-discipline capture. Semantic authority + executable parser identity are pinned separately, and finalized only after toolchain validation.",
   "dataSource": {
