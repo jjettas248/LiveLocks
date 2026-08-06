@@ -1,14 +1,17 @@
 # PR7A — Zone-Independent Plate-Discipline Upgrade (`plateDisciplineNoLocationV1`)
 
 > **Status: CONDITIONALLY APPROVED — contract revised, fixtures + source manifest authorized.**
-> The audit + redundancy + contract were reviewed and conditionally approved. Per the reviewer's
-> locked architecture decision, there is **no** separate `plateDisciplineNoLocation` group — the
-> existing canonical `contactOpportunity` group is extended, with a separate `pitcherDiscipline`
-> group and an explicitly-unavailable `zoneLocation` group. This step is authorized to freeze the
-> **source/version manifest** and representative **raw + expected-normalized fixtures** only.
-> Still prohibited: ingestion, DB changes, fetch scheduling, feature-builder wiring, model fitting,
-> PR8, champion comparison, public rendering, location/zone proxies, `starterBullpen`. This doc
-> changes no runtime code.
+> The audit + redundancy + contract were reviewed and **approved**; the architecture is locked
+> (no separate `plateDisciplineNoLocation` group — the canonical `contactOpportunity` group is
+> extended, with a separate `pitcherDiscipline` group and an explicitly-unavailable `zoneLocation`
+> group). The committed fixtures are **synthetic raw-shape contract fixtures** — authored Retrosheet-
+> *shaped* records + expected-normalized parse, **NOT captured from Retrosheet and NOT validated
+> against real Chadwick output**. The source manifest is **draft** (`status:
+> draft_pending_toolchain_validation`); the 2000+ floor is **provisional**. The authorized next step
+> is **PR7A.0**: a narrow Retrosheet/Chadwick toolchain-parity proof (§7). Still prohibited:
+> full/multi-season ingestion, the 2000–2025 matrix job, DB changes, fetch scheduling, feature-
+> envelope TypeScript changes, evidence-kind wiring, feature-builder wiring, fitting, PR8,
+> champion/public changes. This doc changes no runtime code.
 
 ## 0. Why PR7A exists
 
@@ -134,11 +137,12 @@ late 1980s and effectively complete from ~2000.
 | Two-strike outcomes, count progression, two-strike survival | **`PITCH_SEQ_TX`** | ~1988+, **strong 2000+** |
 | Handedness **swing/whiff** splits (not just outcomes) | `PITCH_SEQ_TX` + hand | ~1988+, **strong 2000+** |
 
-**Recommendation:** set PR7A's **training season floor = 2000** for all sequence-derived leaves
-(guarantees the completeness floor is met at population scale). Outcome-only leaves (K%/BB%) could
-extend earlier if ever needed, but v1 keeps a single 2000+ floor for a uniform, honest window.
-This is a training-window choice; the per-batter **as-of** leakage rule (§4) is orthogonal and
-always applies.
+**Recommendation (PROVISIONAL — not empirically verified):** set PR7A's **training season floor =
+2000** for all sequence-derived leaves. This is a **working assumption**, believed to keep the
+completeness floor met at population scale, but it is **not proven** until the §3.6 season matrix is
+measured — the matrix confirms or corrects the floor. Outcome-only leaves (K%/BB%) could extend
+earlier if ever needed, but v1 keeps a single provisional 2000+ window. This is a training-window
+choice; the per-batter **as-of** leakage rule (§4) is orthogonal and always applies.
 
 ### 1.7 Redundancy analysis against existing V2 features
 
@@ -393,9 +397,12 @@ Fixture attribution:    fixture README
 
 ## 5. Fixtures to freeze BEFORE the adapter (requirement 6)
 
-The adapter is **not** written until these representative Retrosheet normalization fixtures are
-frozen with expected normalized output. **Authorized fixture set** (raw Retrosheet `play,`/`sub,`
-records + expected-normalized JSON), committed under
+The adapter is **not** written until these fixtures are frozen with expected normalized output.
+These are **synthetic raw-shape contract fixtures** — authored Retrosheet-*shaped* `play,`/`sub,`
+records + expected-normalized JSON, **not captured from Retrosheet and not yet validated against real
+Chadwick output** (each case carries `fixtureOrigin: synthetic`,
+`notValidatedAgainstRealRetrosheetOutput: true`). They are a normalization **specification**; real-
+output parity is proven in PR7A.0 (§7). Committed under
 `server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/`:
 
 1. **Normal modern game, complete pitch sequences** — several sequence-complete PAs (K, BB, in-play, foul-heavy).
@@ -432,19 +439,30 @@ network, no dataset download.
 
 ## 7. Build order & current authorization
 
-1. **[done]** Audit + redundancy + contract → reviewed. **Verdict: conditionally approved.**
-2. **[AUTHORIZED — this step]** Revise the contract to remove the duplicate group; freeze the
-   source/version manifest; commit representative **raw + expected-normalized fixtures** only.
-3. **[BLOCKED — needs separate authorization]** Add contract types + flags + evidence kind +
+1. **[done]** Audit + redundancy + contract → reviewed & **approved**; architecture locked.
+2. **[done]** Remove the duplicate group; commit the **synthetic raw-shape contract fixtures**; draft
+   the source manifest. Fixtures marked synthetic; manifest `draft_pending_toolchain_validation`;
+   2000+ floor provisional.
+3. **[AUTHORIZED — PR7A.0 toolchain proof, next]** Narrow Retrosheet/Chadwick compatibility proof:
+   pin an exact Chadwick release/commit; freeze the exact `cwevent` arguments; download the smallest
+   practical Retrosheet sample (1–2 named games covering a normal PA, an interrupted PA, and a
+   substitution/responsible-batter case); preserve source files unchanged; capture actual Chadwick
+   output; compare against the synthetic assumptions; correct the contract/fixtures wherever real
+   output differs; then advance the manifest `draft_pending_toolchain_validation → validated` **only**
+   after parity is demonstrated. Each captured artifact records: source URL/archive name, Retrosheet
+   dataset/version, game ID, download date, file hash, Chadwick version/commit, exact parser
+   arguments, output hash.
+4. **[BLOCKED — separate authorization]** Add contract types + flags + evidence kind +
    `licensed_source_unavailable` reason (+ unit tests).
-4. **[BLOCKED]** Write the Retrosheet normalization adapter against the frozen fixtures (fail-closed).
-5. **[BLOCKED]** Wire shadow forward-capture behind both flags; leakage + re-derivability + isolation tests.
-6. **[BLOCKED]** Run the §3.6 season matrix in the authorized environment; then, only on separate
+5. **[BLOCKED]** Write the Retrosheet normalization adapter against the validated fixtures (fail-closed).
+6. **[BLOCKED]** Wire shadow forward-capture behind both flags; leakage + re-derivability + isolation tests.
+7. **[BLOCKED]** Run the §3.6 season matrix in the authorized environment; then, only on separate
    authorization, begin model fitting.
 
-**Still prohibited (this step):** network ingestion, database changes, production fetch scheduling,
-feature-builder wiring, model fitting, PR8, champion comparison, public rendering, location/zone
-proxies, `starterBullpen` integration.
+**Still NOT authorized:** full/multi-season ingestion, the 2000–2025 matrix job, database work,
+production scheduling, feature-envelope TypeScript changes, evidence-kind wiring, feature-builder
+wiring, fitting, PR8, champion/public changes, location/zone proxies, `starterBullpen`. PR7A.0 is
+scoped to a 1–2 game toolchain-parity proof only.
 
 ---
 

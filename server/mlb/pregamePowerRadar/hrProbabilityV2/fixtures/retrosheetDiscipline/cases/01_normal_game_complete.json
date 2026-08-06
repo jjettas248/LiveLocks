@@ -1,5 +1,8 @@
 {
   "case": "01_normal_game_complete",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
   "description": "Normal modern game excerpt with complete pitch sequences. Four PAs by one batter: swinging K, walk, in-play single, foul-heavy flyout. All sequence-complete.",
   "raw": {
     "records": [

@@ -1,5 +1,8 @@
 {
   "case": "08_sample_floor_boundaries",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
   "description": "Aggregate fixtures that freeze the present-vs-null boundary at each sample floor. Sequence coverage is held high (0.98) so the ONLY gating variable is the sample count. Raw counts are always preserved so PR8 can test alternative thresholds.",
   "floors": {
     "batterOverallPa": 150,

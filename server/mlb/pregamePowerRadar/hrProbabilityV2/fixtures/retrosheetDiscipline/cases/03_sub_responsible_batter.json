@@ -1,5 +1,8 @@
 {
   "case": "03_sub_responsible_batter",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
   "description": "A batter leaves the game with two strikes (0-2) and a pinch hitter completes the strikeout. Per the Retrosheet responsible-batter rule, the strikeout is charged to the ORIGINAL batter (batra001), not the completing batter (batrb002). The PA and all its pitch outcomes attribute to the responsible batter.",
   "raw": {
     "records": [

@@ -1,7 +1,9 @@
 {
   "manifestVersion": "pr7a_retrosheet_discipline_source_manifest_v1",
+  "status": "draft_pending_toolchain_validation",
+  "statusNote": "NOT frozen. parserVersion and parserArguments are PENDING_PIN; the synthetic contract fixtures have not been validated against real Chadwick output. Advances to 'validated' only after the PR7A.0 toolchain proof demonstrates parity against real Retrosheet source.",
   "featureEnvelopeVersion": "plate_hr_v2_features_v3",
-  "purpose": "Frozen source + parser identity for PR7A Retrosheet plate-discipline capture. Semantic authority + executable parser identity are pinned separately.",
+  "purpose": "Draft source + parser identity for PR7A Retrosheet plate-discipline capture. Semantic authority + executable parser identity are pinned separately, and finalized only after toolchain validation.",
   "dataSource": {
     "name": "Retrosheet play-by-play event files",
     "products": ["event_files (.EVN/.EVA)", "roster_files (.ROS)", "game_info records (info/start/sub)"],
@@ -33,8 +35,9 @@
   },
   "seasonWindow": {
     "trainingFloorSeason": 2000,
-    "reason": "PITCH_SEQ_TX completeness is strong from ~2000; outcome-only metrics extend earlier but v1 keeps a uniform 2000+ window.",
-    "seasonMatrix2000_2025": "PENDING_MEASUREMENT — must be produced by running the pinned parser over the licensed dataset in the authorized environment; values must never be fabricated (see contract §3.6)."
+    "trainingFloorStatus": "provisional_not_empirically_verified",
+    "reason": "PROVISIONAL. PITCH_SEQ_TX completeness is BELIEVED strong from ~2000, but this is not empirically verified until the season matrix is measured. Treat 2000+ as a working assumption, not a proven floor.",
+    "seasonMatrix2000_2025": "PENDING_MEASUREMENT — must be produced by running the pinned parser over the licensed dataset in the authorized environment; values must never be fabricated (see contract §3.6). The 2000+ floor is confirmed or corrected ONLY by this matrix."
   },
   "floors": {
     "pitchSequenceCoverage": 0.90,

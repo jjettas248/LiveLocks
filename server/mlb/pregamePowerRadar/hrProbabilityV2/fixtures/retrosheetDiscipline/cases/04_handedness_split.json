@@ -1,5 +1,8 @@
 {
   "case": "04_handedness_split",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
   "description": "A switch-hitter (roster bats 'B') faces a right-handed pitcher, so RESP_BAT_HAND_CD resolves to L. The PA contributes to the batter's vs-RHP split and to the pitcher's vs-LHB split. Handedness comes from resolved per-event codes, not the raw play line.",
   "raw": {
     "records": [

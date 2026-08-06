@@ -1,5 +1,8 @@
 {
   "case": "07_below_coverage_gate",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
   "description": "A batter window where 8 of 10 PAs are sequence-complete → coverage 0.80 < 0.90 gate. Sequence-derived leaves degrade to null-with-reason; outcome-only leaves (kRate/bbRate from EVENT_CD) remain computable. Raw counts preserved regardless.",
   "raw": {
     "note": "Aggregate-level fixture. The 10 PAs are represented as counts; 2 carry empty/uncountable sequences (see case 05 grammar).",

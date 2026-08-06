@@ -1,5 +1,8 @@
 {
   "case": "02_interrupted_pa_period",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
   "description": "A single plate appearance that spans TWO play records because a stolen base occurred mid-AB. The continuation record's PITCH_SEQ_TX begins with the Retrosheet period '.' denoting pitches already recorded. Must reassemble to ONE PA with pitches B,B,C,X — never double-count, never treat as malformed.",
   "raw": {
     "records": [

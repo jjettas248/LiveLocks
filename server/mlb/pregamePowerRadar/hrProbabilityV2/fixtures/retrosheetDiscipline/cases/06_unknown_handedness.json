@@ -1,5 +1,8 @@
 {
   "case": "06_unknown_handedness",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
   "description": "A PA whose opposing pitcher handedness cannot be resolved (RESP_PIT_HAND_CD = '?'). The PA still counts toward the batter's OVERALL metrics; only the handedness SPLIT attribution is withheld (neither vsL nor vsR). Nulls only the affected split, never the overall.",
   "raw": {
     "records": [

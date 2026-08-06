@@ -1,5 +1,8 @@
 {
   "case": "05_missing_incomplete_seq",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
   "description": "Two PAs whose pitch sequence cannot be trusted: one has an EMPTY PITCH_SEQ_TX, one contains the uncountable token 'U'. Both FAIL sequence-completeness and are excluded from sequence-derived counts (never guessed). They still count toward batterPa (the coverage denominator), which pulls pitchSequenceCoverage down.",
   "raw": {
     "records": [
