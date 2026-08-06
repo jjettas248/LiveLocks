@@ -26,6 +26,7 @@ import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/
 import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2ShadowPersistence";
 import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
 import { ensurePersistedPlaysSafetyCoreColumns } from "./dbMigrations/persistedPlaysSafetyCoreColumns";
+import { ensureMlbLanePredictionLedgerSchema } from "./dbMigrations/mlbLanePredictionLedgerPersistence";
 import { ensurePregameTargetsFoundationSchema } from "./dbMigrations/pregameTargetsFoundationPersistence";
 import { ensurePregameTargetsProvenanceColumns } from "./dbMigrations/pregameTargetsProvenancePersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
@@ -266,6 +267,14 @@ app.use((req, res, next) => {
   await ensureMlbRecommendationEpisodePersistenceSchema(pool);
   await ensurePersistedPlaysSafetyCoreColumns(pool);
   console.log("[startup] MLB Recommendation Episode persistence schema ensured");
+
+  // Durable persistence bootstrap: MLB Live Edge Stage B all-lane prediction
+  // ledger (research-only) — one additive, append-only table backing the
+  // private capture-and-settle dataset for a future Stage C calibrator. Same
+  // fail-hard reasoning as the calls above. No hot path writes to it yet
+  // (capture/settlement wiring is Stage B PR3); this only ever creates schema.
+  await ensureMlbLanePredictionLedgerSchema(pool);
+  console.log("[startup] MLB Live Edge Stage B prediction-ledger schema ensured");
 
   // Durable persistence bootstrap: Mound Radar V2 (shadow) prediction
   // capture (Flagship Program Phase 2, Part 4) — one additive table.

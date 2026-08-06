@@ -1815,6 +1815,82 @@ export type MlbRecommendationEpisodeRow = typeof mlbRecommendationEpisodes.$infe
 export type InsertMlbRecommendationEpisode = z.infer<typeof insertMlbRecommendationEpisodeSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MLB Live Edge Stage B — all-lane prediction ledger (research-only).
+// APPEND-ONLY, PRIVATE. One row per CAPTURE of a finalized Live Edge prediction
+// in ANY lane (official/watch/shadow) — see shared/mlbPredictionLedger.ts for the
+// frozen contract + settlement rules. This table is NEVER persisted_plays, ROI,
+// or a public/official surface; it exists solely to feed a future Stage C
+// offline calibrator. The frozen capture columns are immutable after insert;
+// only the small settlement surface (status/settlement_result/final_stat/
+// settled_at/void_reason) is ever updated, and only through storage's guarded
+// settle/void methods. `prediction_id` is the PK (unique per capture); a
+// re-insert of the same id is a no-op (onConflictDoNothing), never an overwrite.
+// ─────────────────────────────────────────────────────────────────────────────
+export const mlbLanePredictions = pgTable("mlb_lane_predictions", {
+  // Identity — frozen
+  predictionId: text("prediction_id").primaryKey(),
+  signalId: text("signal_id").notNull(),
+  sport: text("sport").notNull().default("MLB"),
+  gameId: text("game_id").notNull(),
+  playerId: text("player_id").notNull(),
+  playerName: text("player_name").notNull(),
+  market: text("market").notNull(),
+  side: text("side").notNull(),
+  lane: text("lane").notNull(),
+  // Captured market state — frozen
+  line: numeric("line").notNull(),
+  overOdds: integer("over_odds"),
+  underOdds: integer("under_odds"),
+  sideOdds: integer("side_odds"),
+  sportsbook: text("sportsbook"),
+  oddsFetchedAt: timestamp("odds_fetched_at"),
+  oddsAgeMs: integer("odds_age_ms"),
+  capturedAt: timestamp("captured_at").notNull(),
+  inning: integer("inning"),
+  gamePhase: text("game_phase"),
+  statAtCapture: numeric("stat_at_capture"),
+  // Model output — frozen (the prediction being measured)
+  candidateProbabilityPct: numeric("candidate_probability_pct").notNull(),
+  calibratedProbabilityPct: numeric("calibrated_probability_pct"),
+  probabilitySemantics: text("probability_semantics").notNull(),
+  modelEdgePctPoints: numeric("model_edge_pct_points"),
+  noVigBookProbability: numeric("no_vig_book_probability"),
+  edgeVersion: text("edge_version"),
+  finalizedTier: text("finalized_tier"),
+  modelMethod: text("model_method"),
+  dataQuality: text("data_quality"),
+  baseEligible: boolean("base_eligible"),
+  // Diagnostic-only research feature — NO authority (see contract hard rule 3).
+  signalScore: numeric("signal_score"),
+  laneReasons: jsonb("lane_reasons"),
+  // Provenance / versions — frozen
+  finalizerVersion: text("finalizer_version"),
+  laneVersion: text("lane_version"),
+  goldmasterVersion: text("goldmaster_version"),
+  contractVersion: text("contract_version").notNull(),
+  // Settlement — MUTABLE, only via storage's guarded settle/void methods.
+  status: text("status").notNull().default("captured"),
+  settlementResult: text("settlement_result"),
+  finalStat: numeric("final_stat"),
+  settledAt: timestamp("settled_at"),
+  voidReason: text("void_reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  gameIdIdx: index("mlb_lane_predictions_game_id_idx").on(table.gameId),
+  signalIdIdx: index("mlb_lane_predictions_signal_id_idx").on(table.signalId),
+  statusIdx: index("mlb_lane_predictions_status_idx").on(table.status),
+  laneIdx: index("mlb_lane_predictions_lane_idx").on(table.lane),
+  // The settlement sweep scans captured rows oldest-first — composite keeps that
+  // query index-only.
+  statusCapturedAtIdx: index("mlb_lane_predictions_status_captured_at_idx").on(table.status, table.capturedAt),
+}));
+
+export const insertMlbLanePredictionSchema = createInsertSchema(mlbLanePredictions).omit({ createdAt: true, updatedAt: true });
+export type MlbLanePredictionRow = typeof mlbLanePredictions.$inferSelect;
+export type InsertMlbLanePrediction = z.infer<typeof insertMlbLanePredictionSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Mound Radar V2 (Flagship Program Phase 2) — shadow prediction capture.
 // One row per (snapshotId, market) — a pitcher's frozen shadow snapshot
 // produces TWO rows (pitcher_strikeouts, pitcher_outs), never one blended

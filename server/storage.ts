@@ -75,6 +75,9 @@ import {
   type MlbMoundRadarBuildRow,
   type InsertMlbMoundRadarBuild,
   mlbRecommendationEpisodes,
+  mlbLanePredictions,
+  type MlbLanePredictionRow,
+  type InsertMlbLanePrediction,
   type MlbRecommendationEpisodeRow,
   type InsertMlbRecommendationEpisode,
   moundV2ShadowPredictions,
@@ -127,6 +130,17 @@ import {
   type MlbLifecycleStatus,
   type MlbSettlementResult,
 } from "@shared/mlbRecommendationEpisode";
+import {
+  settleMlbLanePrediction as settleMlbLanePredictionPure,
+  voidMlbLanePrediction as voidMlbLanePredictionPure,
+  type MlbLanePrediction,
+  type MlbPredictionLane,
+  type MlbLedgerStatus,
+  type MlbLedgerSide,
+  type MlbLedgerProbabilitySemantics,
+  type MlbLedgerSettlementResult,
+  type MlbLedgerVoidReason,
+} from "@shared/mlbPredictionLedger";
 import { eq, and, or, asc, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
@@ -542,6 +556,20 @@ export interface IStorage {
     settledAt: Date,
   ): Promise<MlbRecommendationEpisodeRow | null>;
 
+  // ── MLB Live Edge Stage B — all-lane prediction ledger (research-only) ──────
+  // Append-only, private. Capture writes all lanes; settlement mutates ONLY the
+  // small settlement surface via the guarded contract functions. NEVER touches
+  // persisted_plays / ROI / W-L. (Capture/settlement callers are Stage B PR3.)
+  /** Append-only bulk capture. Duplicate predictionId is a no-op (never an overwrite). Returns the count actually inserted. */
+  appendMlbLanePredictions(predictions: MlbLanePrediction[]): Promise<number>;
+  /** Captured (unsettled) rows, oldest-first, for the settlement sweep. */
+  listPendingMlbLanePredictions(opts?: { limit?: number; capturedBeforeMs?: number }): Promise<MlbLanePrediction[]>;
+  getMlbLanePredictionsByGame(gameId: string): Promise<MlbLanePrediction[]>;
+  /** Grades against the row's own frozen side/line. Returns null if id unknown. Throws if already terminal. */
+  settleMlbLanePrediction(predictionId: string, finalStat: number, settledAt: Date): Promise<MlbLanePrediction | null>;
+  /** Voids an ungradable row (postponed/DNP/unresolvable). Returns null if id unknown. Throws if already terminal. */
+  voidMlbLanePrediction(predictionId: string, voidReason: MlbLedgerVoidReason, settledAt: Date): Promise<MlbLanePrediction | null>;
+
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
   // Immutable raw source snapshots and append-only as-of feature readings; no
   // product writes to these yet. The as-of read enforces known_at <= predictionAt.
@@ -724,6 +752,102 @@ function mlbRecommendationEpisodeRowToDomain(row: MlbRecommendationEpisodeRow): 
     status: row.status as MlbEpisodeStatus,
     settlementResult: row.settlementResult as MlbSettlementResult | null,
     settledAt: row.settledAt ? row.settledAt.toISOString() : null,
+  };
+}
+
+// ── MLB Live Edge Stage B — all-lane prediction ledger row<->domain mappers ──
+// Numeric columns round-trip through strings (Drizzle numeric) and timestamps
+// through Date; the domain contract uses number/ISO-string, matching the
+// mlbRecommendationEpisode mapper convention above.
+function mlbLanePredictionRowToDomain(row: MlbLanePredictionRow): MlbLanePrediction {
+  return {
+    predictionId: row.predictionId,
+    signalId: row.signalId,
+    sport: "MLB",
+    gameId: row.gameId,
+    playerId: row.playerId,
+    playerName: row.playerName,
+    market: row.market,
+    side: row.side as MlbLedgerSide,
+    lane: row.lane as MlbPredictionLane,
+    line: Number(row.line),
+    overOdds: row.overOdds ?? null,
+    underOdds: row.underOdds ?? null,
+    sideOdds: row.sideOdds ?? null,
+    sportsbook: row.sportsbook ?? null,
+    oddsFetchedAt: row.oddsFetchedAt ? row.oddsFetchedAt.toISOString() : null,
+    oddsAgeMs: row.oddsAgeMs ?? null,
+    capturedAt: row.capturedAt.toISOString(),
+    inning: row.inning ?? null,
+    gamePhase: row.gamePhase ?? null,
+    statAtCapture: row.statAtCapture !== null ? Number(row.statAtCapture) : null,
+    candidateProbabilityPct: Number(row.candidateProbabilityPct),
+    calibratedProbabilityPct: row.calibratedProbabilityPct !== null ? Number(row.calibratedProbabilityPct) : null,
+    probabilitySemantics: row.probabilitySemantics as MlbLedgerProbabilitySemantics,
+    modelEdgePctPoints: row.modelEdgePctPoints !== null ? Number(row.modelEdgePctPoints) : null,
+    noVigBookProbability: row.noVigBookProbability !== null ? Number(row.noVigBookProbability) : null,
+    edgeVersion: row.edgeVersion ?? null,
+    finalizedTier: row.finalizedTier ?? null,
+    modelMethod: row.modelMethod ?? null,
+    dataQuality: row.dataQuality ?? null,
+    baseEligible: row.baseEligible ?? null,
+    signalScore: row.signalScore !== null ? Number(row.signalScore) : null,
+    laneReasons: Array.isArray(row.laneReasons) ? (row.laneReasons as string[]) : [],
+    finalizerVersion: row.finalizerVersion ?? null,
+    laneVersion: row.laneVersion ?? null,
+    goldmasterVersion: row.goldmasterVersion ?? null,
+    contractVersion: row.contractVersion,
+    status: row.status as MlbLedgerStatus,
+    settlementResult: row.settlementResult as MlbLedgerSettlementResult | null,
+    finalStat: row.finalStat !== null ? Number(row.finalStat) : null,
+    settledAt: row.settledAt ? row.settledAt.toISOString() : null,
+    voidReason: row.voidReason as MlbLedgerVoidReason | null,
+  };
+}
+
+function mlbLanePredictionToInsertRow(p: MlbLanePrediction): InsertMlbLanePrediction {
+  return {
+    predictionId: p.predictionId,
+    signalId: p.signalId,
+    sport: "MLB",
+    gameId: p.gameId,
+    playerId: p.playerId,
+    playerName: p.playerName,
+    market: p.market,
+    side: p.side,
+    lane: p.lane,
+    line: String(p.line),
+    overOdds: p.overOdds,
+    underOdds: p.underOdds,
+    sideOdds: p.sideOdds,
+    sportsbook: p.sportsbook,
+    oddsFetchedAt: p.oddsFetchedAt ? new Date(p.oddsFetchedAt) : null,
+    oddsAgeMs: p.oddsAgeMs,
+    capturedAt: new Date(p.capturedAt),
+    inning: p.inning,
+    gamePhase: p.gamePhase,
+    statAtCapture: p.statAtCapture !== null ? String(p.statAtCapture) : null,
+    candidateProbabilityPct: String(p.candidateProbabilityPct),
+    calibratedProbabilityPct: p.calibratedProbabilityPct !== null ? String(p.calibratedProbabilityPct) : null,
+    probabilitySemantics: p.probabilitySemantics,
+    modelEdgePctPoints: p.modelEdgePctPoints !== null ? String(p.modelEdgePctPoints) : null,
+    noVigBookProbability: p.noVigBookProbability !== null ? String(p.noVigBookProbability) : null,
+    edgeVersion: p.edgeVersion,
+    finalizedTier: p.finalizedTier,
+    modelMethod: p.modelMethod,
+    dataQuality: p.dataQuality,
+    baseEligible: p.baseEligible,
+    signalScore: p.signalScore !== null ? String(p.signalScore) : null,
+    laneReasons: p.laneReasons,
+    finalizerVersion: p.finalizerVersion,
+    laneVersion: p.laneVersion,
+    goldmasterVersion: p.goldmasterVersion,
+    contractVersion: p.contractVersion,
+    status: p.status,
+    settlementResult: p.settlementResult,
+    finalStat: p.finalStat !== null ? String(p.finalStat) : null,
+    settledAt: p.settledAt ? new Date(p.settledAt) : null,
+    voidReason: p.voidReason,
   };
 }
 
@@ -4241,6 +4365,109 @@ export class DatabaseStorage implements IStorage {
       .where(eq(mlbRecommendationEpisodes.episodeId, episodeId))
       .returning();
     return updated ?? null;
+  }
+
+  // ── MLB Live Edge Stage B — all-lane prediction ledger (research-only) ──────
+  async appendMlbLanePredictions(predictions: MlbLanePrediction[]): Promise<number> {
+    if (predictions.length === 0) return 0;
+    const rows = predictions.map(mlbLanePredictionToInsertRow);
+    // Append-only: a duplicate prediction_id (the same capture retried) is a
+    // no-op, never an overwrite of a frozen row.
+    const inserted = await db
+      .insert(mlbLanePredictions)
+      .values(rows)
+      .onConflictDoNothing({ target: mlbLanePredictions.predictionId })
+      .returning({ id: mlbLanePredictions.predictionId });
+    return inserted.length;
+  }
+
+  async listPendingMlbLanePredictions(
+    opts: { limit?: number; capturedBeforeMs?: number } = {},
+  ): Promise<MlbLanePrediction[]> {
+    const conditions = [eq(mlbLanePredictions.status, "captured")];
+    if (opts.capturedBeforeMs != null) {
+      conditions.push(lte(mlbLanePredictions.capturedAt, new Date(opts.capturedBeforeMs)));
+    }
+    const rows = await db
+      .select()
+      .from(mlbLanePredictions)
+      .where(and(...conditions))
+      .orderBy(asc(mlbLanePredictions.capturedAt))
+      .limit(opts.limit ?? 1000);
+    return rows.map(mlbLanePredictionRowToDomain);
+  }
+
+  async getMlbLanePredictionsByGame(gameId: string): Promise<MlbLanePrediction[]> {
+    const rows = await db
+      .select()
+      .from(mlbLanePredictions)
+      .where(eq(mlbLanePredictions.gameId, gameId))
+      .orderBy(asc(mlbLanePredictions.capturedAt));
+    return rows.map(mlbLanePredictionRowToDomain);
+  }
+
+  async settleMlbLanePrediction(
+    predictionId: string,
+    finalStat: number,
+    settledAt: Date,
+  ): Promise<MlbLanePrediction | null> {
+    const existing = await db
+      .select()
+      .from(mlbLanePredictions)
+      .where(eq(mlbLanePredictions.predictionId, predictionId))
+      .limit(1);
+    if (!existing[0]) return null;
+    // Grades + guards (throws on terminal/invalid) BEFORE any SQL; the UPDATE is
+    // column-scoped to the mutable settlement fields, so frozen columns are never
+    // named in a SET clause regardless.
+    const next = settleMlbLanePredictionPure(
+      mlbLanePredictionRowToDomain(existing[0]),
+      finalStat,
+      settledAt.toISOString(),
+    );
+    const [updated] = await db
+      .update(mlbLanePredictions)
+      .set({
+        status: next.status,
+        settlementResult: next.settlementResult,
+        finalStat: next.finalStat !== null ? String(next.finalStat) : null,
+        settledAt: next.settledAt ? new Date(next.settledAt) : null,
+        voidReason: next.voidReason,
+        updatedAt: new Date(),
+      })
+      .where(eq(mlbLanePredictions.predictionId, predictionId))
+      .returning();
+    return updated ? mlbLanePredictionRowToDomain(updated) : null;
+  }
+
+  async voidMlbLanePrediction(
+    predictionId: string,
+    voidReason: MlbLedgerVoidReason,
+    settledAt: Date,
+  ): Promise<MlbLanePrediction | null> {
+    const existing = await db
+      .select()
+      .from(mlbLanePredictions)
+      .where(eq(mlbLanePredictions.predictionId, predictionId))
+      .limit(1);
+    if (!existing[0]) return null;
+    const next = voidMlbLanePredictionPure(
+      mlbLanePredictionRowToDomain(existing[0]),
+      voidReason,
+      settledAt.toISOString(),
+    );
+    const [updated] = await db
+      .update(mlbLanePredictions)
+      .set({
+        status: next.status,
+        settlementResult: next.settlementResult,
+        settledAt: next.settledAt ? new Date(next.settledAt) : null,
+        voidReason: next.voidReason,
+        updatedAt: new Date(),
+      })
+      .where(eq(mlbLanePredictions.predictionId, predictionId))
+      .returning();
+    return updated ? mlbLanePredictionRowToDomain(updated) : null;
   }
 
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
