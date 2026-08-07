@@ -257,8 +257,10 @@ function checkCase02(acc, fx) {
   assert(acc, eq(r.terminalRecordCount, 1), `02 reassembly.terminalRecordCount ${r.terminalRecordCount} != 1`);
   assert(acc, r.interruptionMarker === '.', `02 reassembly.interruptionMarker '${r.interruptionMarker}' != '.'`);
   assert(acc, r.concatenatedFragments === false, `02 reassembly.concatenatedFragments must be false (no cross-record concat)`);
+  assert(acc, r.markerStrippedExactlyOnce === true, `02 markerStrippedExactlyOnce must be true`);
+  assert(acc, pa.doubleCounted === false, `02 doubleCounted must be false`);
   const markerCount = [...(pa.seq || '')].filter((c) => c === r.interruptionMarker).length;
-  if (r.markerStrippedExactlyOnce === true) assert(acc, markerCount === 1, `02 markerStrippedExactlyOnce=true but seq '${pa.seq}' has ${markerCount} '.' markers`);
+  assert(acc, markerCount === 1, `02 markerStrippedExactlyOnce=true but seq '${pa.seq}' has ${markerCount} '.' markers`);
   const stripped = strip(pa.seq).join('');
   assert(acc, Array.isArray(pa.reassembledPitches) && stripped === pa.reassembledPitches.join(''), `02 strip('${pa.seq}')='${stripped}' != reassembledPitches`);
   // the terminal record's PITCH_SEQ_TX must equal the PA seq (single cumulative row)

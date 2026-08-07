@@ -17,7 +17,7 @@
     {
       "case": "02_interrupted_pa_period",
       "realAnchored": true,
-      "checks": 37,
+      "checks": 39,
       "problems": [],
       "status": "PASS"
     },
