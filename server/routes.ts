@@ -348,8 +348,13 @@ export async function registerRoutes(
       const now = Date.now();
       const capturedAfterMs = now - days * 24 * 60 * 60 * 1000;
       const predictions = await storage.listRecentMlbLanePredictions({ capturedAfterMs, limit });
+      // The read is newest-first capped at `limit`; if the window holds more rows
+      // than that, the summary is a RECENT SAMPLE, not the whole window — surface
+      // it so coverage/hit-rate aren't read as window-complete. Raise `?limit=`
+      // (or narrow `?days=`) to de-truncate.
+      const truncated = predictions.length >= limit;
       const summary = summarizeStageBLedger(predictions, now);
-      return res.json({ windowDays: days, scanned: predictions.length, ...summary });
+      return res.json({ windowDays: days, scanned: predictions.length, limit, truncated, ...summary });
     } catch (err) {
       console.error("[admin/mlb/stage-b-ledger]", err);
       return res.status(500).json({ error: "Failed to build Stage B ledger summary" });
@@ -856,7 +861,7 @@ export async function registerRoutes(
   app.get("/api/mlb/mound-power-radar", requireMLBAccess, async (_req, res) => {
     try {
       const { getMoundRadarSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarService");
-      const { buildMoundResponse } = await import("./mlb/pregame/mound/diagnostics");
+      const { composeMoundResponseWithPlateTargets } = await import("./mlb/pregame/composition/composeMoundResponse");
       const { todayET } = await import("./utils/dateUtils");
       const { snapshot, source } = await getMoundRadarSnapshot();
       if (!snapshot) {
@@ -866,10 +871,12 @@ export async function registerRoutes(
         });
       }
       const signals = Array.from(snapshot.signals.values());
-      const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
-        gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
-        ...snapshot.coverage,
-      }, false, false);
+      const resp = await composeMoundResponseWithPlateTargets(
+        "/api/mlb/mound-power-radar",
+        snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals,
+        { gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated, ...snapshot.coverage },
+        false, false,
+      );
       return res.json(resp);
     } catch (err) {
       console.error("[mlb/mound-power-radar]", err);
@@ -888,7 +895,7 @@ export async function registerRoutes(
   app.get("/api/mlb/mound-power-radar/all-starters", requireMLBAccess, async (_req, res) => {
     try {
       const { getMoundRadarSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarService");
-      const { buildMoundResponse } = await import("./mlb/pregame/mound/diagnostics");
+      const { composeMoundResponseWithPlateTargets } = await import("./mlb/pregame/composition/composeMoundResponse");
       const { todayET } = await import("./utils/dateUtils");
       const { snapshot, source } = await getMoundRadarSnapshot();
       if (!snapshot) {
@@ -898,10 +905,12 @@ export async function registerRoutes(
         });
       }
       const signals = Array.from(snapshot.signals.values());
-      const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
-        gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
-        ...snapshot.coverage,
-      }, true, false);
+      const resp = await composeMoundResponseWithPlateTargets(
+        "/api/mlb/mound-power-radar/all-starters",
+        snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals,
+        { gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated, ...snapshot.coverage },
+        true, false,
+      );
       return res.json(resp);
     } catch (err) {
       console.error("[mlb/mound-power-radar/all-starters]", err);
@@ -914,7 +923,7 @@ export async function registerRoutes(
   app.get("/api/admin/mlb/mound-power-radar/debug", requireAdmin, async (_req, res) => {
     try {
       const { getMoundRadarSnapshot } = await import("./mlb/pregame/mound/mlbMoundRadarService");
-      const { buildMoundResponse } = await import("./mlb/pregame/mound/diagnostics");
+      const { composeMoundResponseWithPlateTargets } = await import("./mlb/pregame/composition/composeMoundResponse");
       const { todayET } = await import("./utils/dateUtils");
       const { snapshot, source } = await getMoundRadarSnapshot();
       if (!snapshot) {
@@ -924,10 +933,12 @@ export async function registerRoutes(
         });
       }
       const signals = Array.from(snapshot.signals.values());
-      const resp = buildMoundResponse(snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals, {
-        gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated,
-        ...snapshot.coverage,
-      }, true, true);
+      const resp = await composeMoundResponseWithPlateTargets(
+        "/api/admin/mlb/mound-power-radar/debug",
+        snapshot.sessionDate, snapshot.buildId, snapshot.generatedAt, source, signals,
+        { gamesScanned: snapshot.gamesScanned, pitchersEvaluated: snapshot.pitchersEvaluated, ...snapshot.coverage },
+        true, true,
+      );
       return res.json(resp);
     } catch (err) {
       console.error("[admin/mlb/mound-power-radar/debug]", err);

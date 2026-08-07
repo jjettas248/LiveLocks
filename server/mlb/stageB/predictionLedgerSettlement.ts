@@ -8,19 +8,23 @@
 // (server/services/gradePersistedPlays.ts) so Stage B grades identically to the
 // official pipeline WITHOUT touching it:
 //   * A not-final game ⇒ HOLD (never void on a transient/pending outcome — the
-//     sweep retries with backoff). Same as the persisted grader leaving pending.
-//   * A final game with a finite final stat ⇒ SETTLE (cashed/missed/push graded
-//     against the frozen side/line).
-//   * A final game where the player is present in the final box but has no stat
-//     ⇒ DNP ⇒ VOID immediately (matches settlePlay(..., "void", null) DNP path).
-//   * A final game where the player/stat is unresolvable ⇒ HOLD until the row is
-//     old enough (official stat corrections land late), then terminal-VOID —
-//     mirrors the grader's 48h terminal-void backstop.
+//     sweep retries). Only once the row is terminal-old is it retired via a
+//     NEUTRAL `line_unresolvable` void (never asserting "postponed" for a game
+//     whose box was merely unfetchable — that would mislabel a real final).
+//   * A final game with a finite final stat ⇒ SETTLE (cashed/missed/push).
+//   * A final game where the player TRULY did not appear (present in the box
+//     with NO batting AND NO pitching participation) ⇒ VOID player_did_not_appear
+//     immediately — matching the persisted grader's isDnp gate (both empty).
+//   * A final game where the player played but THIS market's stat is not yet
+//     resolvable (present WITH stats but the field is absent), or the player row
+//     is missing ⇒ HOLD for late/partial-box corrections, then terminal-VOID
+//     (line_unresolvable) once old enough. This preserves gradable observations
+//     instead of dropping them as false DNPs — the whole point of the dataset.
 //   * A postponed/suspended game ⇒ HOLD until old enough, then terminal-VOID.
 //
 // Void rows are excluded from calibration denominators (like a push is excluded
-// from a hit rate). No I/O; the outcome is resolved by the caller (the future
-// sweep) via fetchMlbBoxScore/getMlbStatValue read-only and passed in here.
+// from a hit rate). No I/O; the outcome is resolved by the caller (the sweep)
+// via fetchMlbBoxScore/getMlbStatValue read-only and passed in here.
 
 import {
   gradeMlbLanePredictionOutcome,
@@ -40,17 +44,23 @@ export type MlbLedgerOutcomeGameState = (typeof MLB_LEDGER_OUTCOME_GAME_STATES)[
 export interface MlbLedgerOutcomeResolution {
   gameState: MlbLedgerOutcomeGameState;
   // The resolved FINAL stat for this prediction's market, or null when it could
-  // not be resolved (game not final, player absent, or DNP). Never a live value.
+  // not be resolved (game not final, player absent, DNP, or field not yet in
+  // the box). Never a live value.
   finalStat: number | null;
-  // True when the player's row exists in a FINAL box score but the market stat
-  // is absent/empty (the DNP signal — distinct from "player row missing").
-  playerPresentButNoStat: boolean;
+  // The player's row exists in a FINAL box score.
+  playerFoundInFinalBox: boolean;
+  // The found player has ANY batting or pitching participation. false with
+  // playerFoundInFinalBox=true is a TRUE did-not-appear (matches the persisted
+  // grader's "batting AND pitching empty" DNP gate); true here with a null
+  // finalStat means the player played but this market's field is not yet
+  // resolvable (hold, do not DNP-void).
+  playerHasAnyStats: boolean;
   // Hours since the prediction was captured (drives the terminal-void backstop).
   ageHours: number;
 }
 
 export interface MlbLedgerSettlementPolicy {
-  // Age past which an ungradable (unresolvable or postponed/suspended) row is
+  // Age past which an ungradable (unresolvable / not-final / postponed) row is
   // terminal-voided instead of held forever. Matches the persisted grader's
   // TERMINAL_VOID_AGE_HOURS = 48.
   terminalVoidAgeHours: number;
@@ -102,8 +112,14 @@ export function decideLanePredictionSettlement(
     return { action: "hold", reason: `awaiting_${resolution.gameState}` };
   }
 
-  // Not final yet (scheduled/live/unknown) ⇒ hold; the sweep retries.
+  // Not final yet (scheduled/live/unknown ⇒ box not final or unfetchable). Hold
+  // and retry; only retire once terminal-old, and with a NEUTRAL reason —
+  // "postponed" must never be asserted for a game whose box was merely
+  // unavailable (that would mislabel a genuinely-final game).
   if (resolution.gameState !== "final") {
+    if (oldEnoughToVoid) {
+      return { action: "void", voidReason: "line_unresolvable", reason: `terminal_void_not_final_${resolution.gameState}` };
+    }
     return { action: "hold", reason: `game_not_final_${resolution.gameState}` };
   }
 
@@ -113,15 +129,18 @@ export function decideLanePredictionSettlement(
     return { action: "settle", result, finalStat: resolution.finalStat, reason: "graded_final" };
   }
 
-  // Final game, player present but no stat ⇒ DNP ⇒ void immediately.
-  if (resolution.playerPresentButNoStat) {
+  // Final game, player present in the box with NO participation at all ⇒ a TRUE
+  // did-not-appear ⇒ void immediately.
+  if (resolution.playerFoundInFinalBox && !resolution.playerHasAnyStats) {
     return { action: "void", voidReason: "player_did_not_appear", reason: "dnp_final_box" };
   }
 
-  // Final game, player/stat unresolvable ⇒ hold for late stat corrections, then
-  // terminal-void once old enough.
+  // Final game, but this market's stat is not (yet) resolvable — either the
+  // player played but the field is absent (partial/late box), or the player row
+  // is missing. Hold for corrections, then terminal-void as unresolvable. Do NOT
+  // treat this as a DNP: that would drop a gradable observation.
   if (oldEnoughToVoid) {
     return { action: "void", voidReason: "line_unresolvable", reason: "terminal_void_unresolvable" };
   }
-  return { action: "hold", reason: "final_box_missing_player" };
+  return { action: "hold", reason: "final_box_unresolvable" };
 }

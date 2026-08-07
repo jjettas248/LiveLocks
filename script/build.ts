@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
+import { execSync } from "child_process";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -32,6 +33,27 @@ const allowlist = [
   "zod-validation-error",
 ];
 
+function getBuildCommitSha(): { sha: string | null; source: string } {
+  // Railway's Railpack build container has no git binary, so prefer the
+  // platform-provided commit env var; fall back to git for local/other builds.
+  const envSha = process.env.RAILWAY_GIT_COMMIT_SHA?.trim();
+  if (envSha) {
+    return { sha: envSha.slice(0, 7), source: "RAILWAY_GIT_COMMIT_SHA env" };
+  }
+
+  try {
+    const sha = execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    })
+      .toString()
+      .trim();
+    if (sha) return { sha, source: "git rev-parse" };
+  } catch {}
+
+  return { sha: null, source: "unavailable" };
+}
+
 async function buildAll() {
   await rm("dist", { recursive: true, force: true });
 
@@ -46,6 +68,16 @@ async function buildAll() {
   ];
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
+  // Captured here because the runtime container has neither git nor
+  // RAILWAY_GIT_COMMIT_SHA — this is the only point where either is available.
+  const { sha: buildCommitSha, source: buildCommitShaSource } =
+    getBuildCommitSha();
+  console.log(
+    buildCommitSha
+      ? `captured build commit sha via ${buildCommitShaSource}: ${buildCommitSha}`
+      : `could not capture build commit sha (${buildCommitShaSource})`,
+  );
+
   await esbuild({
     entryPoints: ["server/index.ts"],
     platform: "node",
@@ -54,6 +86,9 @@ async function buildAll() {
     outfile: "dist/index.cjs",
     define: {
       "process.env.NODE_ENV": '"production"',
+      __BUILD_COMMIT_SHA__: buildCommitSha
+        ? JSON.stringify(buildCommitSha)
+        : "undefined",
     },
     minify: true,
     external: externals,

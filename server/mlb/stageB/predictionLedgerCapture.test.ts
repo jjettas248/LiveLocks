@@ -132,6 +132,14 @@ function sig(o: Partial<MLBQualifiedSignal> = {}): MLBQualifiedSignal {
   ok(unknown.statAtCapture === null, "unknown current stat ⇒ null (never a guessed value)");
 }
 
+// gamePhase derived from inning (1-9 ordinal, >9 extra, non-positive null)
+{
+  ok(buildLanePredictionFromSignal(sig({ inning: 5 }), ctx())!.gamePhase === "5th", "inning 5 ⇒ 5th");
+  ok(buildLanePredictionFromSignal(sig({ inning: 1 }), ctx())!.gamePhase === "1st", "inning 1 ⇒ 1st");
+  ok(buildLanePredictionFromSignal(sig({ inning: 12 }), ctx())!.gamePhase === "extra", "inning 12 ⇒ extra");
+  ok(buildLanePredictionFromSignal(sig({ inning: 0 }), ctx())!.gamePhase === null, "inning 0 ⇒ null");
+}
+
 // Batch builder drops skipped signals, preserves order
 {
   const batch = buildStageBCapturePredictions(

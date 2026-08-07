@@ -37,16 +37,24 @@ function pred(o: Partial<MlbLanePrediction> = {}): MlbLanePrediction {
   };
 }
 function res(o: Partial<MlbLedgerOutcomeResolution> = {}): MlbLedgerOutcomeResolution {
-  return { gameState: "final", finalStat: null, playerPresentButNoStat: false, ageHours: 3, ...o };
+  return { gameState: "final", finalStat: null, playerFoundInFinalBox: false, playerHasAnyStats: false, ageHours: 3, ...o };
 }
 
-// Not final ⇒ hold (never void on transient)
+// Not final (young) ⇒ hold (never void on transient)
 {
   ok(decideLanePredictionSettlement(pred(), res({ gameState: "live" })).action === "hold", "live game ⇒ hold");
   ok(decideLanePredictionSettlement(pred(), res({ gameState: "scheduled" })).action === "hold", "scheduled ⇒ hold");
   ok(decideLanePredictionSettlement(pred(), res({ gameState: "unknown" })).action === "hold", "unknown ⇒ hold");
-  // Even an old live game holds (does not void) — outcome still pending.
-  ok(decideLanePredictionSettlement(pred(), res({ gameState: "live", ageHours: 100 })).action === "hold", "old-but-live ⇒ still hold");
+}
+
+// Not final but TERMINAL-OLD ⇒ neutral line_unresolvable void (never synthesized
+// "postponed" — a genuinely-final game whose box was unavailable must not be
+// mislabeled). Bounds pending growth.
+{
+  const d = decideLanePredictionSettlement(pred(), res({ gameState: "unknown", ageHours: 100 }));
+  ok(d.action === "void" && d.voidReason === "line_unresolvable", "old not-final ⇒ terminal void line_unresolvable (neutral, not postponed)");
+  const live = decideLanePredictionSettlement(pred(), res({ gameState: "live", ageHours: 100 }));
+  ok(live.action === "void" && live.voidReason === "line_unresolvable", "old-but-live ⇒ terminal void line_unresolvable");
 }
 
 // Final + finite stat ⇒ settle graded
@@ -61,19 +69,27 @@ function res(o: Partial<MlbLedgerOutcomeResolution> = {}): MlbLedgerOutcomeResol
   ok(d4.action === "settle" && d4.result === "missed", "final OVER 1.5 vs 0 ⇒ settle missed (0 is a real stat, not void)");
 }
 
-// Final + DNP (player present, no stat) ⇒ void immediately
+// Final + TRUE DNP (player in box with NO participation at all) ⇒ void immediately
 {
-  const d = decideLanePredictionSettlement(pred(), res({ finalStat: null, playerPresentButNoStat: true, ageHours: 1 }));
-  ok(d.action === "void" && d.voidReason === "player_did_not_appear", "DNP in final box ⇒ void immediately (even young)");
+  const d = decideLanePredictionSettlement(pred(), res({ finalStat: null, playerFoundInFinalBox: true, playerHasAnyStats: false, ageHours: 1 }));
+  ok(d.action === "void" && d.voidReason === "player_did_not_appear", "true DNP (found, no stats) ⇒ void immediately (even young)");
 }
 
-// Final + unresolvable player ⇒ hold young, terminal-void when old
+// Final + player PLAYED but this market's stat is null ⇒ NOT a DNP: hold young,
+// terminal-void old (the key fix — preserve gradable observations).
 {
-  const young = decideLanePredictionSettlement(pred(), res({ finalStat: null, playerPresentButNoStat: false, ageHours: 3 }));
-  ok(young.action === "hold" && young.reason === "final_box_missing_player", "young unresolvable ⇒ hold (await stat corrections)");
-  const old = decideLanePredictionSettlement(pred(), res({ finalStat: null, playerPresentButNoStat: false, ageHours: 49 }));
+  const young = decideLanePredictionSettlement(pred(), res({ finalStat: null, playerFoundInFinalBox: true, playerHasAnyStats: true, ageHours: 3 }));
+  ok(young.action === "hold" && young.reason === "final_box_unresolvable", "played-but-stat-null (young) ⇒ hold, NOT DNP-void");
+  const old = decideLanePredictionSettlement(pred(), res({ finalStat: null, playerFoundInFinalBox: true, playerHasAnyStats: true, ageHours: 49 }));
+  ok(old.action === "void" && old.voidReason === "line_unresolvable", "played-but-stat-null (old) ⇒ terminal void line_unresolvable (not DNP)");
+}
+
+// Final + player absent from box ⇒ hold young, terminal-void when old
+{
+  const young = decideLanePredictionSettlement(pred(), res({ finalStat: null, playerFoundInFinalBox: false, ageHours: 3 }));
+  ok(young.action === "hold" && young.reason === "final_box_unresolvable", "young unresolvable (absent) ⇒ hold");
+  const old = decideLanePredictionSettlement(pred(), res({ finalStat: null, playerFoundInFinalBox: false, ageHours: 49 }));
   ok(old.action === "void" && old.voidReason === "line_unresolvable", "old unresolvable ⇒ terminal void");
-  // Boundary: exactly at the policy age voids.
   const atBoundary = decideLanePredictionSettlement(pred(), res({ finalStat: null, ageHours: DEFAULT_MLB_LEDGER_SETTLEMENT_POLICY.terminalVoidAgeHours }));
   ok(atBoundary.action === "void", "unresolvable at exactly terminalVoidAgeHours ⇒ void");
 }

@@ -61,6 +61,16 @@ function normalizeSide(side: unknown): MlbLedgerSide | null {
   return null;
 }
 
+const ORDINALS = ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th"];
+
+/** Maps a live inning to a game-phase label: 1-9 → ordinal, >9 → "extra",
+ *  non-positive/non-finite → null (unknown). */
+function inningToGamePhase(inning: number | null | undefined): string | null {
+  if (inning == null || !Number.isFinite(inning) || inning <= 0) return null;
+  if (inning >= 10) return "extra";
+  return ORDINALS[inning - 1] ?? null;
+}
+
 /**
  * Builds one frozen ledger row from a finalized signal, or returns null when the
  * signal must be skipped (capture disabled, home_runs, unfinalized lane, or
@@ -117,7 +127,7 @@ export function buildLanePredictionFromSignal(
     oddsAgeMs: sig.oddsAgeMs ?? null,
     capturedAt,
     inning: Number.isFinite(sig.inning) ? sig.inning : null,
-    gamePhase: null,
+    gamePhase: inningToGamePhase(sig.inning),
     statAtCapture: statKnown && Number.isFinite(sig.currentStat) ? sig.currentStat : null,
 
     // Model output — frozen
