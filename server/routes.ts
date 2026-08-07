@@ -1100,6 +1100,11 @@ export async function registerRoutes(
     }
   });
 
+  // NOTE: this is a bare tier write only — it does NOT cancel any active
+  // Stripe subscription, does NOT reset playsUsed, and does NOT stamp
+  // upgradedAt. For a downgrade/upgrade that must also touch Stripe/play
+  // counters, use POST /api/admin/change-tier below instead. The two are
+  // NOT interchangeable.
   app.patch("/api/admin/users/:id/tier", requireAdmin, async (req, res) => {
     try {
       const userId = parseInt(String(req.params.id), 10);
@@ -1142,6 +1147,11 @@ export async function registerRoutes(
     "elite": { label: "All Sports ($65/mo)", pricePerMonth: 65, stripePriceId: process.env.STRIPE_ALL_SPORTS_PRICE_ID || "price_1TJJ4M2ceUNmv10tB8JCzPYe" },
   };
 
+  // NOTE: this endpoint also cancels the user's active Stripe subscription
+  // on downgrade and resets playsUsed/stamps upgradedAt on upgrade — it is
+  // NOT interchangeable with the bare PATCH /api/admin/users/:id/tier above.
+  // Use that one only when you deliberately want a tier write with none of
+  // these side effects.
   app.post("/api/admin/change-tier", requireAdmin, async (req, res) => {
     try {
       const { userId, newTierKey } = req.body as { userId: number; newTierKey: string };
@@ -2143,6 +2153,7 @@ export async function registerRoutes(
     return previews.slice(0, 6);
   }
 
+  // LEGACY BYPASS — see docs/architecture/CANONICAL_SYSTEM_MAP.md §10; not yet migrated to LiveSignalBus canonical flow.
   app.get("/api/mlb/live-games", requireAuth, async (req, res) => {
     try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/live-games"); } catch {}
     const forceRefresh = req.query.force === "1";
@@ -2740,6 +2751,7 @@ export async function registerRoutes(
   // valid signals silently drop from the validated-set filter.
   // Phase 3.5 ext — single source of truth, shared with the grader.
 
+  // LEGACY BYPASS — see docs/architecture/CANONICAL_SYSTEM_MAP.md §10; not yet migrated to LiveSignalBus canonical flow.
   app.get("/api/mlb/live-signals/:gameId", requireMLBAccess, async (req, res) => {
     try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/live-signals/:gameId"); } catch {}
     const gameId = req.params.gameId as string;
@@ -3144,6 +3156,7 @@ export async function registerRoutes(
   // top-feed. A player can have a watch/building/monitor state here without appearing
   // in the main live-signals feed. Engine is the sole source of truth — no edge,
   // implied-probability, or sportsbook gating is applied here.
+  // LEGACY BYPASS — see docs/architecture/CANONICAL_SYSTEM_MAP.md §10; not yet migrated to LiveSignalBus canonical flow.
   app.get("/api/mlb/boxscore-engine-state/:gameId", requireMLBAccess, async (req, res) => {
     try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/boxscore-engine-state/:gameId"); } catch {}
     const gameId = req.params.gameId as string;
@@ -4697,6 +4710,7 @@ export async function registerRoutes(
     }
   });
 
+  // LEGACY BYPASS — see docs/architecture/CANONICAL_SYSTEM_MAP.md §10; not yet migrated to LiveSignalBus canonical flow.
   app.get("/api/mlb/hr-radar-analyze/:playerId/:gameId", requireMLBAccess, async (req, res) => {
     try {
       try { (await import("./services/liveSignalBus")).markLegacyConsumer("/api/mlb/hr-radar-analyze"); } catch {}
@@ -5256,6 +5270,7 @@ export async function registerRoutes(
   });
 
   // ── MLB Admin Debug Endpoint (Phase 8) ───────────────────────────────────────
+  // LEGACY BYPASS — see docs/architecture/CANONICAL_SYSTEM_MAP.md §10; not yet migrated to LiveSignalBus canonical flow.
   app.get("/api/mlb/debug", requireAuth, async (req, res) => {
     const reqUser = (req as any).user ?? (req as any).resolvedUser ?? null;
     if (!reqUser?.isAdmin) {
