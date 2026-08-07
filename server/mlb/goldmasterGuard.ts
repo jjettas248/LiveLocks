@@ -23,7 +23,15 @@ import { MLB_CALIBRATION_VERSION } from "./diagnosticsBuffer";
 // no-vig model edge replaces evPct=prob-50, and signalScore no longer promotes
 // official plays. [MLB_DRIFT_WARNING] noise from this intentional re-baseline is
 // expected, not a regression — see docs/agents/mlb-goldmaster-prd.md.
-export const MLB_GOLDMASTER_VERSION = "mlb-goldmaster-v27-2026-08-safety-core-production-lane";
+// v28 (Stage C PR3 calibrator promotion): the finalizer now consults an
+// in-memory active-calibrator registry to fill calibratedProbability (stamping
+// outcome_calibrated + routing calibrated prob into lane/edge/tier DECISIONS —
+// the raw engineProbability is never mutated). This path is gated on
+// MLB_CALIBRATION_PROMOTION_ENABLED (DEFAULT OFF): with the flag off it returns
+// null and engine output is byte-identical to v27. The version bump documents
+// the new decision input; drift only appears once the flag is flipped on for a
+// segment that cleared the promotion gate on out-of-sample walk-forward evidence.
+export const MLB_GOLDMASTER_VERSION = "mlb-goldmaster-v28-2026-08-stagec-calibrator-promotion";
 
 // Rolling drift snapshot ring buffer.
 const MAX_SNAPSHOTS = 50;

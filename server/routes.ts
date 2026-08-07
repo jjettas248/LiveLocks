@@ -361,6 +361,120 @@ export async function registerRoutes(
     }
   });
 
+  // ── MLB Live Edge Stage C — calibration artifacts (research, offline) ──────
+  // Read-only: latest fitted raw→calibrated artifact per segment (or history for
+  // one `?segment=`), with fit stats + in-sample promotion-readiness reasons.
+  // Nothing here promotes a calibrator — production stays calibratedProbability
+  // = null until a separate, human-reviewed promotion step exists.
+  app.get("/api/admin/mlb/calibration-artifacts", requireAdmin, async (req, res) => {
+    try {
+      const segment = typeof req.query.segment === "string" ? req.query.segment : undefined;
+      const limit = req.query.limit ? Math.min(2000, Math.max(1, Number(req.query.limit) || 500)) : 500;
+      // Single segment ⇒ its history (newest-first). No segment ⇒ the newest
+      // artifact per segment via DISTINCT ON — never dropped by a global limit.
+      const selected = segment
+        ? await storage.listMlbCalibrationArtifacts({ segment, limit })
+        : await storage.listLatestMlbCalibrationArtifactPerSegment();
+      const artifacts = selected.map((r) => ({
+        artifactId: r.artifactId,
+        segment: r.segment,
+        method: r.method,
+        builtAt: r.builtAt,
+        sampleSize: r.sampleSize,
+        distinctSlateDates: r.distinctSlateDates,
+        rawBrier: r.rawBrier != null ? Number(r.rawBrier) : null,
+        calibratedBrier: r.calibratedBrier != null ? Number(r.calibratedBrier) : null,
+        rawEcePct: r.rawEcePct != null ? Number(r.rawEcePct) : null,
+        calibratedEcePct: r.calibratedEcePct != null ? Number(r.calibratedEcePct) : null,
+        basePositiveRate: r.basePositiveRate != null ? Number(r.basePositiveRate) : null,
+        promotionReady: r.promotionReady,
+        promotionReasons: r.promotionReasons ?? [],
+        artifactVersion: r.artifactVersion,
+      }));
+      // ── Stage C PR3 — is-live signal ──────────────────────────────────────
+      // An admin (or an automated "ping me when live" poller) can read from THIS
+      // response whether calibrator promotion is actually live: the master-switch
+      // state + the segments currently promoted in the hot-path registry. This is
+      // the observable proof that a calibrator is affecting engine decisions.
+      const { isMlbCalibrationPromotionEnabled } = await import("./mlb/productionPolicy");
+      const { getActiveCalibratorRegistrySnapshot } = await import("./mlb/stageC/activeCalibratorRegistry");
+      const registry = getActiveCalibratorRegistrySnapshot();
+      return res.json({
+        count: artifacts.length,
+        segment: segment ?? null,
+        artifacts,
+        promotion: {
+          enabled: isMlbCalibrationPromotionEnabled(),
+          isLive: registry.enabled && registry.segments.length > 0,
+          activeSegments: registry.segments,
+          registryLoadedAt: registry.loadedAtMs != null ? new Date(registry.loadedAtMs).toISOString() : null,
+        },
+      });
+    } catch (err) {
+      console.error("[admin/mlb/calibration-artifacts]", err);
+      return res.status(500).json({ error: "Failed to list calibration artifacts" });
+    }
+  });
+
+  // ── MLB Live Edge Stage C PR3 — active (promoted) calibrator registry ──────
+  // Read-only view of every registry row (active + deactivated) for audit, plus
+  // the in-memory hot-path snapshot. Nothing here promotes; production only
+  // consults an active row when MLB_CALIBRATION_PROMOTION_ENABLED is on.
+  app.get("/api/admin/mlb/active-calibrators", requireAdmin, async (_req, res) => {
+    try {
+      const { isMlbCalibrationPromotionEnabled } = await import("./mlb/productionPolicy");
+      const { getActiveCalibratorRegistrySnapshot } = await import("./mlb/stageC/activeCalibratorRegistry");
+      const all = await storage.listAllMlbActiveCalibrators();
+      const registry = getActiveCalibratorRegistrySnapshot();
+      const rows = all.map((c) => ({
+        segment: c.segment,
+        artifactId: c.artifactId,
+        active: c.active,
+        activatedAt: new Date(c.activatedAtMs).toISOString(),
+        activatedBy: c.activatedBy,
+        deactivatedAt: c.deactivatedAtMs != null ? new Date(c.deactivatedAtMs).toISOString() : null,
+        deactivationReason: c.deactivationReason,
+        promotionEvidence: c.promotionEvidence,
+        artifactVersion: c.artifactVersion,
+      }));
+      return res.json({
+        promotionEnabled: isMlbCalibrationPromotionEnabled(),
+        isLive: registry.enabled && registry.segments.length > 0,
+        loadedActiveSegments: registry.segments,
+        registryLoadedAt: registry.loadedAtMs != null ? new Date(registry.loadedAtMs).toISOString() : null,
+        count: rows.length,
+        calibrators: rows,
+      });
+    } catch (err) {
+      console.error("[admin/mlb/active-calibrators]", err);
+      return res.status(500).json({ error: "Failed to list active calibrators" });
+    }
+  });
+
+  // Manual deactivation (kill switch for one segment). Flips active=false +
+  // stamps a reason, then reloads the hot-path registry so the change takes
+  // effect immediately. Safe regardless of the master switch. Never deletes.
+  app.post("/api/admin/mlb/active-calibrators/:segment/deactivate", requireAdmin, async (req, res) => {
+    try {
+      const segment = String(req.params.segment || "").trim();
+      if (!segment) return res.status(400).json({ error: "segment required" });
+      const reason =
+        typeof req.body?.reason === "string" && req.body.reason.trim()
+          ? `admin:${req.body.reason.trim().slice(0, 200)}`
+          : "admin:manual_deactivate";
+      const result = await storage.deactivateMlbActiveCalibrator(segment, reason, new Date());
+      const { refreshActiveCalibratorRegistry } = await import("./mlb/stageC/activeCalibratorRegistry");
+      await refreshActiveCalibratorRegistry(Date.now());
+      if (!result) {
+        return res.json({ segment, deactivated: false, note: "no active calibrator for this segment (already inactive or absent)" });
+      }
+      return res.json({ segment, deactivated: true, reason });
+    } catch (err) {
+      console.error("[admin/mlb/active-calibrators/deactivate]", err);
+      return res.status(500).json({ error: "Failed to deactivate calibrator" });
+    }
+  });
+
   // ── LiveLocks Batch C — LiveSignalBus runtime metrics (constraint 14) ──
   // Read-only admin surface exposing registration / dedupe / freshness /
   // legacy-consumer counts and propagation timing percentiles. Used to

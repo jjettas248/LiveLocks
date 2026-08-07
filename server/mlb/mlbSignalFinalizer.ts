@@ -26,6 +26,7 @@ import {
 } from "./mlbProductionLane";
 import type { MlbLane } from "./productionPolicy";
 import { MLB_EDGE_VERSION } from "./oddsProbability";
+import { lookupCalibratedProbability } from "./stageC/activeCalibratorRegistry";
 
 export const MLB_FINALIZATION_VERSION = "mlb_signal_finalizer_v1";
 
@@ -93,13 +94,18 @@ function computeLane(sig: MLBQualifiedSignal, baseEligible: boolean): {
   rawBookImpliedProbability: number | null;
   outcomeProbabilitySemantics: "raw_provisional" | "outcome_calibrated";
   calibratedCandidateProbability: number | null;
+  // The probability the lane/tier/edge DECISIONS use: the calibrated value when a
+  // promoted calibrator applies, else the raw engine probability. The raw
+  // engineProbability is never mutated — this is a decision input only.
+  effectiveCandidateProbabilityPct: number;
   lineIsInteger: boolean;
   inningBand: string;
 } {
   const side = sig.side === "OVER" || sig.side === "UNDER" ? sig.side : "OVER";
 
   if (sig.market === "home_runs") {
-    // HR keeps its own lifecycle — no production-matrix gate, no no-vig edge.
+    // HR keeps its own lifecycle — no production-matrix gate, no no-vig edge, no
+    // calibrator (HR Radar owns its probability path).
     return {
       lane: baseEligible ? "official" : "shadow",
       laneReasons: baseEligible ? ["hr_lifecycle_official"] : ["hr_lifecycle_non_official"],
@@ -108,10 +114,21 @@ function computeLane(sig: MLBQualifiedSignal, baseEligible: boolean): {
       rawBookImpliedProbability: null,
       outcomeProbabilitySemantics: "raw_provisional",
       calibratedCandidateProbability: null,
+      effectiveCandidateProbabilityPct: sig.engineProbability,
       lineIsInteger: false,
       inningBand: "n/a",
     };
   }
+
+  // Stage C PR3: consult the in-memory active-calibrator registry (cache-only,
+  // pure, flag-gated — returns null unless MLB_CALIBRATION_PROMOTION_ENABLED is
+  // on AND a compatible in-support calibrator is active). null ⇒ uncalibrated
+  // (raw_provisional), exactly the Stage A semantics. Never an identity copy of
+  // the raw probability. The registry default segmentation is per-market.
+  const calibrated = lookupCalibratedProbability(sig.market, null, sig.engineProbability);
+  // Decisions (edge / floor / tier / ranking) use the calibrated value when it
+  // exists; the raw engineProbability is preserved untouched as provenance.
+  const effectiveCandidateProbabilityPct = calibrated ?? sig.engineProbability;
 
   const bothOdds = sig.overOdds != null && sig.underOdds != null;
   const result: MlbProductionLaneResult = evaluateMlbProductionLane({
@@ -121,9 +138,8 @@ function computeLane(sig: MLBQualifiedSignal, baseEligible: boolean): {
     inning: sig.inning ?? 0,
     gameStatus: sig.gameStatus ?? "live",
     baseEligible,
-    candidateProbabilityPct: sig.engineProbability,
-    // Stage A: no real outcome calibrator exists yet — calibrated stays null.
-    calibratedProbabilityPct: sig.calibratedCandidateProbability ?? null,
+    candidateProbabilityPct: effectiveCandidateProbabilityPct,
+    calibratedProbabilityPct: calibrated,
     quote: {
       book: sig.sportsbook,
       line: sig.line,
@@ -161,6 +177,7 @@ function computeLane(sig: MLBQualifiedSignal, baseEligible: boolean): {
     rawBookImpliedProbability: result.rawBookImpliedProbability,
     outcomeProbabilitySemantics: result.probabilitySemantics,
     calibratedCandidateProbability: result.calibratedProbabilityPct,
+    effectiveCandidateProbabilityPct,
     lineIsInteger: result.lineIsInteger,
     inningBand: result.inningBand,
   };
@@ -240,7 +257,9 @@ export function finalizeMlbSignal(sig: MLBQualifiedSignal): MlbFinalizedSignal {
       : deriveFinalizedTier({
           lane: laneInfo.lane,
           semantics: laneInfo.outcomeProbabilitySemantics,
-          candidateProbabilityPct: sig.engineProbability,
+          // Tier uses the effective (calibrated when promoted, else raw) prob —
+          // the Strong/Elite bands only unlock for outcome_calibrated signals.
+          candidateProbabilityPct: laneInfo.effectiveCandidateProbabilityPct,
         });
 
   return {

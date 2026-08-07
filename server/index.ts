@@ -27,6 +27,8 @@ import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2Shad
 import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
 import { ensurePersistedPlaysSafetyCoreColumns } from "./dbMigrations/persistedPlaysSafetyCoreColumns";
 import { ensureMlbLanePredictionLedgerSchema } from "./dbMigrations/mlbLanePredictionLedgerPersistence";
+import { ensureMlbCalibrationArtifactsSchema } from "./dbMigrations/mlbCalibrationArtifactsPersistence";
+import { ensureMlbActiveCalibratorsSchema } from "./dbMigrations/mlbActiveCalibratorsPersistence";
 import { ensurePregameTargetsFoundationSchema } from "./dbMigrations/pregameTargetsFoundationPersistence";
 import { ensurePregameTargetsProvenanceColumns } from "./dbMigrations/pregameTargetsProvenancePersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
@@ -275,6 +277,21 @@ app.use((req, res, next) => {
   // (capture/settlement wiring is Stage B PR3); this only ever creates schema.
   await ensureMlbLanePredictionLedgerSchema(pool);
   console.log("[startup] MLB Live Edge Stage B prediction-ledger schema ensured");
+
+  // Durable persistence bootstrap: MLB Live Edge Stage C offline calibration
+  // artifacts (research-only) — one additive, append-only table holding fitted
+  // raw→calibrated mappings. Same fail-hard reasoning. Nothing in the live
+  // engine reads these; producing an artifact never promotes it.
+  await ensureMlbCalibrationArtifactsSchema(pool);
+  console.log("[startup] MLB Live Edge Stage C calibration-artifacts schema ensured");
+
+  // Durable persistence bootstrap: MLB Live Edge Stage C PR3 active (promoted)
+  // calibrator registry — the durable source of truth for which calibrator (if
+  // any) is currently live for a segment. Same fail-hard reasoning. A row here
+  // changes engine output ONLY when MLB_CALIBRATION_PROMOTION_ENABLED is on
+  // (default off); the table's existence is inert.
+  await ensureMlbActiveCalibratorsSchema(pool);
+  console.log("[startup] MLB Live Edge Stage C active-calibrator registry schema ensured");
 
   // Durable persistence bootstrap: Mound Radar V2 (shadow) prediction
   // capture (Flagship Program Phase 2, Part 4) — one additive table.
@@ -1183,6 +1200,34 @@ app.use((req, res, next) => {
       .catch((e) => console.warn("[MLB_STAGE_B_SETTLE_ERROR]", e?.message ?? e));
   setTimeout(runStageBSweep, 4 * 60 * 1000);
   setInterval(runStageBSweep, 5 * 60 * 1000);
+
+  // MLB Live Edge Stage C PR3 — resolve the calibrator-promotion master switch
+  // ONCE at boot (default OFF; only an exact MLB_CALIBRATION_PROMOTION_ENABLED=
+  // "true" turns it on) and load the active-calibrator registry into memory so
+  // the finalizer's hot-path lookup is cache-only. While the flag is off the
+  // registry has zero engine effect (the lookup is flag-gated); the load is a
+  // harmless no-op cost. Both are fire-and-forget and never throw.
+  import("./mlb/productionPolicy")
+    .then(({ resolveMlbCalibrationPromotionEnabled }) => {
+      const enabled = resolveMlbCalibrationPromotionEnabled();
+      console.log(`[MLB_STAGE_C_PROMOTION] calibrator promotion master switch: ${enabled ? "ON" : "OFF"}`);
+    })
+    .then(() => import("./mlb/stageC/activeCalibratorRegistry"))
+    .then(({ refreshActiveCalibratorRegistry }) => refreshActiveCalibratorRegistry(Date.now()))
+    .catch((e) => console.warn("[MLB_STAGE_C_REGISTRY_ERROR]", e?.message ?? e));
+
+  // MLB Live Edge Stage C offline calibration fit (research-only): reads a
+  // window of the Stage B ledger READ-ONLY, fits a raw→calibrated mapping per
+  // segment, persists artifacts, and — only when the promotion flag is ON —
+  // auto-promotes any segment that clears the gate on OUT-OF-SAMPLE walk-forward
+  // evidence (and deactivates ones that no longer qualify). Offline background
+  // job: first run +10 min, then every 6h. Never throws.
+  const runStageCCalibration = () =>
+    import("./mlb/stageC/calibrationRunner")
+      .then(({ runCalibrationFitWithDefaults }) => runCalibrationFitWithDefaults())
+      .catch((e) => console.warn("[MLB_STAGE_C_CALIBRATION_ERROR]", e?.message ?? e));
+  setTimeout(runStageCCalibration, 10 * 60 * 1000);
+  setInterval(runStageCCalibration, 6 * 60 * 60 * 1000);
 
   if (process.env.NODE_ENV !== "production") {
     app.get("/api/test-email", async (req: Request, res: Response) => {

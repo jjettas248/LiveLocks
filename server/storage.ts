@@ -78,6 +78,12 @@ import {
   mlbLanePredictions,
   type MlbLanePredictionRow,
   type InsertMlbLanePrediction,
+  mlbCalibrationArtifacts,
+  type MlbCalibrationArtifactRow,
+  type InsertMlbCalibrationArtifact,
+  mlbActiveCalibrators,
+  type MlbActiveCalibratorRow,
+  type InsertMlbActiveCalibrator,
   type MlbRecommendationEpisodeRow,
   type InsertMlbRecommendationEpisode,
   moundV2ShadowPredictions,
@@ -141,6 +147,11 @@ import {
   type MlbLedgerSettlementResult,
   type MlbLedgerVoidReason,
 } from "@shared/mlbPredictionLedger";
+import type {
+  MlbActiveCalibrator,
+  MlbCalibratorPromotionSnapshot,
+  MlbCalibrationArtifact,
+} from "@shared/mlbCalibration";
 import { eq, and, or, asc, desc, isNull, isNotNull, sql, lt, lte, gte, inArray, ne } from "drizzle-orm";
 
 const HIGH_VOLATILITY_TEAMS = new Set(["BKN", "WAS", "CHA", "POR", "UTA", "DET"]);
@@ -572,6 +583,26 @@ export interface IStorage {
   /** Recent captured predictions (any status), newest-first, for the admin read surface. */
   listRecentMlbLanePredictions(opts?: { capturedAfterMs?: number; limit?: number }): Promise<MlbLanePrediction[]>;
 
+  // ── MLB Live Edge Stage C — offline calibration artifacts (research-only) ───
+  /** Append-only save of fitted artifacts. Duplicate artifactId is a no-op. Returns inserted count. Producing a row NEVER promotes it. */
+  saveMlbCalibrationArtifacts(rows: InsertMlbCalibrationArtifact[]): Promise<number>;
+  /** Artifacts newest-first (optionally one segment) for the admin read surface. */
+  listMlbCalibrationArtifacts(opts?: { segment?: string; limit?: number }): Promise<MlbCalibrationArtifactRow[]>;
+  /** The newest artifact for EACH segment (DISTINCT ON), regardless of overall volume — the admin "latest per segment" view. */
+  listLatestMlbCalibrationArtifactPerSegment(): Promise<MlbCalibrationArtifactRow[]>;
+  /** Settled decided (cashed/missed only) predictions in the window — the exact fit input for the Stage C runner (far smaller than all captures). */
+  listSettledMlbLanePredictionsForCalibration(opts?: { capturedAfterMs?: number; limit?: number }): Promise<MlbLanePrediction[]>;
+
+  // ── MLB Live Edge Stage C PR3 — active (promoted) calibrator registry ───────
+  /** Promote/activate a calibrator for its segment (upsert by segment). Reactivates a previously-deactivated segment. */
+  upsertMlbActiveCalibrator(row: InsertMlbActiveCalibrator): Promise<MlbActiveCalibrator>;
+  /** Deactivate a segment's active calibrator (flips `active` false + stamps reason; row is kept for audit). No-op if already inactive/absent. */
+  deactivateMlbActiveCalibrator(segment: string, reason: string, deactivatedAt: Date): Promise<MlbActiveCalibrator | null>;
+  /** Currently-active calibrators only — the registry load + admin live view. */
+  listActiveMlbCalibrators(): Promise<MlbActiveCalibrator[]>;
+  /** Every registry row incl. deactivated — the admin audit view. */
+  listAllMlbActiveCalibrators(): Promise<MlbActiveCalibrator[]>;
+
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
   // Immutable raw source snapshots and append-only as-of feature readings; no
   // product writes to these yet. The as-of read enforces known_at <= predictionAt.
@@ -850,6 +881,23 @@ function mlbLanePredictionToInsertRow(p: MlbLanePrediction): InsertMlbLanePredic
     finalStat: p.finalStat !== null ? String(p.finalStat) : null,
     settledAt: p.settledAt ? new Date(p.settledAt) : null,
     voidReason: p.voidReason,
+  };
+}
+
+// ── MLB Live Edge Stage C PR3 — active calibrator registry row<->domain ──────
+function mlbActiveCalibratorRowToDomain(row: MlbActiveCalibratorRow): MlbActiveCalibrator {
+  return {
+    segment: row.segment,
+    artifactId: row.artifactId,
+    artifact: row.artifact as unknown as MlbCalibrationArtifact,
+    active: row.active,
+    activatedAtMs: row.activatedAt.getTime(),
+    activatedBy: row.activatedBy,
+    promotionEvidence: (row.promotionEvidence as MlbCalibratorPromotionSnapshot | null) ?? null,
+    deactivatedAtMs: row.deactivatedAt ? row.deactivatedAt.getTime() : null,
+    deactivationReason: row.deactivationReason ?? null,
+    ledgerContractVersion: row.ledgerContractVersion,
+    artifactVersion: row.artifactVersion,
   };
 }
 
@@ -4485,6 +4533,125 @@ export class DatabaseStorage implements IStorage {
           .orderBy(desc(mlbLanePredictions.capturedAt))
           .limit(limit);
     return rows.map(mlbLanePredictionRowToDomain);
+  }
+
+  // ── MLB Live Edge Stage C — offline calibration artifacts (research-only) ───
+  async saveMlbCalibrationArtifacts(rows: InsertMlbCalibrationArtifact[]): Promise<number> {
+    if (rows.length === 0) return 0;
+    // Append-only: a duplicate artifactId (same segment + built-at retried) is a
+    // no-op, never an overwrite.
+    const inserted = await db
+      .insert(mlbCalibrationArtifacts)
+      .values(rows)
+      .onConflictDoNothing({ target: mlbCalibrationArtifacts.artifactId })
+      .returning({ id: mlbCalibrationArtifacts.artifactId });
+    return inserted.length;
+  }
+
+  async listMlbCalibrationArtifacts(
+    opts: { segment?: string; limit?: number } = {},
+  ): Promise<MlbCalibrationArtifactRow[]> {
+    const limit = opts.limit ?? 500;
+    if (opts.segment) {
+      return db.select().from(mlbCalibrationArtifacts)
+        .where(eq(mlbCalibrationArtifacts.segment, opts.segment))
+        .orderBy(desc(mlbCalibrationArtifacts.builtAt))
+        .limit(limit);
+    }
+    return db.select().from(mlbCalibrationArtifacts)
+      .orderBy(desc(mlbCalibrationArtifacts.builtAt))
+      .limit(limit);
+  }
+
+  async listLatestMlbCalibrationArtifactPerSegment(): Promise<MlbCalibrationArtifactRow[]> {
+    // DISTINCT ON (segment) with segment-then-newest ordering returns exactly the
+    // most-recent artifact per segment regardless of total row volume — never
+    // truncated by a global limit window.
+    return db
+      .selectDistinctOn([mlbCalibrationArtifacts.segment])
+      .from(mlbCalibrationArtifacts)
+      .orderBy(mlbCalibrationArtifacts.segment, desc(mlbCalibrationArtifacts.builtAt));
+  }
+
+  async listSettledMlbLanePredictionsForCalibration(
+    opts: { capturedAfterMs?: number; limit?: number } = {},
+  ): Promise<MlbLanePrediction[]> {
+    const limit = opts.limit ?? 20000;
+    const conditions = [
+      eq(mlbLanePredictions.status, "settled"),
+      inArray(mlbLanePredictions.settlementResult, ["cashed", "missed"]),
+    ];
+    if (opts.capturedAfterMs != null) {
+      conditions.push(gte(mlbLanePredictions.capturedAt, new Date(opts.capturedAfterMs)));
+    }
+    const rows = await db
+      .select()
+      .from(mlbLanePredictions)
+      .where(and(...conditions))
+      .orderBy(desc(mlbLanePredictions.capturedAt))
+      .limit(limit);
+    return rows.map(mlbLanePredictionRowToDomain);
+  }
+
+  // ── MLB Live Edge Stage C PR3 — active (promoted) calibrator registry ───────
+  async upsertMlbActiveCalibrator(row: InsertMlbActiveCalibrator): Promise<MlbActiveCalibrator> {
+    // Promotion (or re-activation) of a segment. Upsert by segment: a segment
+    // never has two active calibrators. A previously-deactivated segment being
+    // re-promoted clears its deactivation stamps and sets active=true again.
+    const [saved] = await db
+      .insert(mlbActiveCalibrators)
+      .values(row)
+      .onConflictDoUpdate({
+        target: mlbActiveCalibrators.segment,
+        set: {
+          artifactId: row.artifactId,
+          artifact: row.artifact,
+          active: true,
+          activatedAt: row.activatedAt,
+          activatedBy: row.activatedBy,
+          promotionEvidence: row.promotionEvidence ?? null,
+          deactivatedAt: null,
+          deactivationReason: null,
+          ledgerContractVersion: row.ledgerContractVersion,
+          artifactVersion: row.artifactVersion,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return mlbActiveCalibratorRowToDomain(saved);
+  }
+
+  async deactivateMlbActiveCalibrator(
+    segment: string,
+    reason: string,
+    deactivatedAt: Date,
+  ): Promise<MlbActiveCalibrator | null> {
+    // Column-scoped UPDATE limited to the deactivation columns — the artifact and
+    // activation provenance are never in the SET clause. Only flips a currently
+    // active row; an already-inactive/absent segment is a no-op returning null.
+    const [updated] = await db
+      .update(mlbActiveCalibrators)
+      .set({ active: false, deactivatedAt, deactivationReason: reason, updatedAt: new Date() })
+      .where(and(eq(mlbActiveCalibrators.segment, segment), eq(mlbActiveCalibrators.active, true)))
+      .returning();
+    return updated ? mlbActiveCalibratorRowToDomain(updated) : null;
+  }
+
+  async listActiveMlbCalibrators(): Promise<MlbActiveCalibrator[]> {
+    const rows = await db
+      .select()
+      .from(mlbActiveCalibrators)
+      .where(eq(mlbActiveCalibrators.active, true))
+      .orderBy(mlbActiveCalibrators.segment);
+    return rows.map(mlbActiveCalibratorRowToDomain);
+  }
+
+  async listAllMlbActiveCalibrators(): Promise<MlbActiveCalibrator[]> {
+    const rows = await db
+      .select()
+      .from(mlbActiveCalibrators)
+      .orderBy(mlbActiveCalibrators.segment);
+    return rows.map(mlbActiveCalibratorRowToDomain);
   }
 
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
