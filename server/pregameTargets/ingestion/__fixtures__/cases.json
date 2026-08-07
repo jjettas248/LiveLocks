@@ -1,0 +1,139 @@
+{
+  "note": "SYNTHETIC PR5 NBA ingestion feasibility fixtures — hand-authored to be STRUCTURALLY FAITHFUL to the NBA Stats playergamelog/teamgamelog resultSets shape, NOT captured live payloads (this sandbox has no NBA Stats access; see docs/pregame-targets/PR5-source-manifest.md). RAW mirrors the provider { resultSets:[{headers,rowSet}] } shape; EXPECTED is the honest normalized/classified result. Thirteen cases cover the required matrix.",
+  "synthetic": true,
+  "headers": ["GAME_ID", "GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "FG3M"],
+  "cases": [
+    {
+      "id": "current_season",
+      "description": "Current-season player logs (normal).",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500500","2026-01-15","GSW vs. LAL",34,30,8,6,5]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "knownAtSupport": "forward_supported", "features": { "nba.player.points_per_min": "observed" } }
+    },
+    {
+      "id": "prior1_season",
+      "description": "Prior-1 season player logs (explicit season). Historical knownAt unsupported.",
+      "kind": "nba_stats_playergamelog",
+      "season": 2025,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022400400","2025-01-10","GSW @ BOS",33,27,7,7,4]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "knownAtSupport": "historical_unsupported", "features": { "nba.player.points_per_min": "observed" } }
+    },
+    {
+      "id": "prior2_season",
+      "description": "Prior-2 season player logs (explicit season). Historical knownAt unsupported.",
+      "kind": "nba_stats_playergamelog",
+      "season": 2024,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022300300","2024-01-05","GSW vs. DEN",31,22,6,8,3]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "knownAtSupport": "historical_unsupported", "features": { "nba.player.points_per_min": "observed" } }
+    },
+    {
+      "id": "traded_player",
+      "description": "Traded player: two team tricodes within one season; both stints retained.",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "1629029",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500620","2026-02-10","DAL vs. NYK",36,28,8,7,3],["0022500410","2026-01-02","LAL @ MIA",34,25,9,6,2]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 2 }, "teamTricodes": ["DAL","LAL"] }
+    },
+    {
+      "id": "team_change",
+      "description": "Team-level identity change (franchise tricode) via teamgamelog; ingested under its own id.",
+      "kind": "nba_stats_teamgamelog",
+      "season": 2026,
+      "entityNativeId": "1610612760",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500700","2026-03-01","OKC vs. SAS",240,118,44,26,14]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "teamTricodes": ["OKC"] }
+    },
+    {
+      "id": "missing_game",
+      "description": "A provider-omitted stat (FG3M null) → missing, never 0-for-absent.",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500510","2026-01-17","GSW @ PHX",30,26,5,6,null]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "features": { "nba.player.three_pointers_made_per_min": "missing" } }
+    },
+    {
+      "id": "observed_zero",
+      "description": "Player appeared (MIN>0) but recorded 0 threes → observed_zero (distinct from missing).",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500520","2026-01-19","GSW vs. UTA",28,18,4,5,0]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "features": { "nba.player.three_pointers_made_per_min": "observed_zero" } }
+    },
+    {
+      "id": "corrected_record",
+      "description": "Same game re-fetched with a corrected PTS → new content hash → new immutable snapshot.",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500500","2026-01-15","GSW vs. LAL",34,30,8,6,5]] }] },
+      "rawCorrected": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500500","2026-01-15","GSW vs. LAL",34,33,8,6,5]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "correctionChangesContentHash": true }
+    },
+    {
+      "id": "provider_incomplete",
+      "description": "Provider failure / truncated resultSets → incomplete, never complete, never fabricated.",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": "corrupted", "rowSet": [] }] },
+      "expected": { "adapter": { "ok": false, "reason": "incomplete_response" } }
+    },
+    {
+      "id": "reordered_headers",
+      "description": "Columns in a different order — resolved by NAME, parses correctly.",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["PTS","GAME_DATE","GAME_ID","AST","MIN","REB","FG3M","MATCHUP"], "rowSet": [[30,"2026-01-15","0022500500",6,34,8,5,"GSW vs. LAL"]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "features": { "nba.player.points_per_min": "observed" } }
+    },
+    {
+      "id": "missing_required_header",
+      "description": "Missing required GAME_DATE header → fail closed (incomplete_response).",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","MATCHUP","MIN","PTS"], "rowSet": [["0022500500","GSW vs. LAL",34,30]] }] },
+      "expected": { "adapter": { "ok": false, "reason": "incomplete_response" } }
+    },
+    {
+      "id": "duplicate_required_header",
+      "description": "Duplicate GAME_ID header → ambiguous → fail closed (incomplete_response).",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_ID","GAME_DATE","MIN","PTS"], "rowSet": [["A","B","2026-01-15",34,30]] }] },
+      "expected": { "adapter": { "ok": false, "reason": "incomplete_response" } }
+    },
+    {
+      "id": "same_content_different_games",
+      "description": "Identical stat content in two DIFFERENT games (distinct GAME_IDs) — no identity collision (game id is in the hashed payload).",
+      "kind": "nba_stats_playergamelog",
+      "season": 2026,
+      "entityNativeId": "201939",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "raw": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500500","2026-01-15","GSW vs. LAL",34,30,8,6,5]] }] },
+      "rawOtherGame": { "resultSets": [{ "headers": ["GAME_ID","GAME_DATE","MATCHUP","MIN","PTS","REB","AST","FG3M"], "rowSet": [["0022500777","2026-01-15","GSW vs. LAL",34,30,8,6,5]] }] },
+      "expected": { "adapter": { "ok": true, "recordCount": 1 }, "differentGameContentHash": true }
+    }
+  ]
+}

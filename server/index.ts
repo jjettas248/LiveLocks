@@ -31,6 +31,7 @@ import { ensureMlbCalibrationArtifactsSchema } from "./dbMigrations/mlbCalibrati
 import { ensureMlbActiveCalibratorsSchema } from "./dbMigrations/mlbActiveCalibratorsPersistence";
 import { ensurePregameTargetsFoundationSchema } from "./dbMigrations/pregameTargetsFoundationPersistence";
 import { ensurePregameTargetsProvenanceColumns } from "./dbMigrations/pregameTargetsProvenancePersistence";
+import { ensurePregameTargetsRawProvenanceColumns } from "./dbMigrations/pregameTargetsRawProvenancePersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
 import { users } from "@shared/schema";
 import { and, isNull, eq, gte, lte, sql } from "drizzle-orm";
@@ -313,6 +314,12 @@ app.use((req, res, next) => {
   // creates schema, never rows. See docs/pregame-targets/ + server/pregameTargets/.
   await ensurePregameTargetsFoundationSchema(pool);
   console.log("[startup] Pregame Targets temporal-foundation persistence schema ensured");
+
+  // Additive self-heal: PR5 raw-snapshot audit-metadata (source_published_at,
+  // known_at_policy_version) + correction lineage (supersedes_snapshot_id). ADD
+  // COLUMN IF NOT EXISTS only; nullable/no-default; no backfill. See docs/pregame-targets/.
+  await ensurePregameTargetsRawProvenanceColumns(pool);
+  console.log("[startup] Pregame Targets raw-snapshot provenance columns ensured");
 
   // Durable persistence bootstrap: Pregame Targets official-target provenance
   // columns on persisted_plays (PR2 contract layer, §10). Additive, nullable,

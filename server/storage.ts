@@ -1,4 +1,5 @@
 import { db } from "./db";
+import type { PosteriorState as PregamePosteriorState } from "./pregameTargets/posteriorState/posteriorState";
 import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
@@ -624,6 +625,36 @@ export interface IStorage {
     featureKey: string,
     featureVersion: string,
   ): Promise<PregamePosteriorStateRow | null>;
+  /**
+   * PR5 NBA ingestion — ALL-OR-NOTHING, serialized-per-entity commit of one OBSERVED
+   * state transition. Under a per-entity advisory lock, in ONE transaction:
+   *   1. Load the current HEAD for the STABLE semantic source identity, ordered by
+   *      `known_at` (observation chronology), NOT `created_at` (lock/commit order).
+   *   2. Decide vs. the head by observation instant + payload hash (audit-4):
+   *        • no head                         → first_capture (supersedes null)
+   *        • incoming.knownAt <  head.knownAt → stale (write nothing)
+   *        • incoming.knownAt == head.knownAt → same payload: noop; diff: conflict
+   *        • incoming.knownAt >  head.knownAt → same payload: noop (state unchanged);
+   *                                             diff: append (supersedes head.snapshotId)
+   *      A return to earlier content at a LATER instant (A→B→A) is an append, NOT a
+   *      no-op — capture identity (source_key incl. observation instant) keeps it
+   *      distinct from the earlier capture even though contentHash matches.
+   *   3. On first_capture/appended: read posterior states under the lock, fold, write
+   *      feature rows + posteriors. Roll back entirely on any failure.
+   * `contentHash` is a pure payload hash; the caller supplies the capture-specific
+   * `raw.sourceKey`, the stable `semanticSourceKey`, and `incomingKnownAt`/hash.
+   */
+  ingestPregameNbaSnapshotAtomic(args: {
+    entityCanonicalId: string;
+    featureVersion: string;
+    featureKeys: string[];
+    semanticSourceKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
+    raw: InsertPregameRawSourceSnapshot;
+    features: InsertPregameFeatureSnapshot[];
+    foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
+  }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }>;
 
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
   // Creation is INSERT-only with ON CONFLICT DO NOTHING — a repeated
@@ -4780,6 +4811,125 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  async ingestPregameNbaSnapshotAtomic(args: {
+    entityCanonicalId: string;
+    featureVersion: string;
+    featureKeys: string[];
+    semanticSourceKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
+    raw: InsertPregameRawSourceSnapshot;
+    features: InsertPregameFeatureSnapshot[];
+    foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
+  }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }> {
+    return await db.transaction(async (tx) => {
+      // Serialize the whole read-modify-write PER ENTITY *before* touching any row. A
+      // transaction-scoped advisory lock (auto-released on commit/rollback,
+      // connection-safe) makes the head read + decision + writes atomic even under
+      // concurrent same-entity ingestions.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${args.entityCanonicalId + "|" + args.featureVersion}))`,
+      );
+
+      // HEAD of the observation chain for this STABLE semantic identity, ordered by
+      // OBSERVATION chronology (known_at), not lock/commit order (created_at). The
+      // snapshot_id tie-break is deterministic but never decides temporal order (a
+      // same-instant conflict is rejected below, so at most one row per known_at).
+      const [head] = await tx
+        .select({
+          snapshotId: pregameRawSourceSnapshots.snapshotId,
+          knownAt: pregameRawSourceSnapshots.knownAt,
+          contentHash: pregameRawSourceSnapshots.contentHash,
+        })
+        .from(pregameRawSourceSnapshots)
+        .where(eq(pregameRawSourceSnapshots.semanticSourceKey, args.semanticSourceKey))
+        .orderBy(desc(pregameRawSourceSnapshots.knownAt), desc(pregameRawSourceSnapshots.snapshotId))
+        .limit(1);
+
+      // Decide vs. the head by observation instant + payload hash (audit-4). Idempotency
+      // is equality to the CURRENT HEAD, never "has this content ever existed" — so a
+      // genuine A→B→A recurrence at a later instant is an append, not a no-op.
+      let supersedes: string | null = null;
+      if (head) {
+        const inMs = args.incomingKnownAt.getTime();
+        const headMs = new Date(head.knownAt).getTime();
+        if (inMs < headMs) return { decision: "stale", snapshotId: null, supersedes: null };
+        if (inMs === headMs) {
+          return args.incomingContentHash === head.contentHash
+            ? { decision: "noop", snapshotId: head.snapshotId, supersedes: null }
+            : { decision: "conflict", snapshotId: null, supersedes: null };
+        }
+        // inMs > headMs
+        if (args.incomingContentHash === head.contentHash) {
+          return { decision: "noop", snapshotId: head.snapshotId, supersedes: null }; // state unchanged
+        }
+        supersedes = head.snapshotId; // later state (incl. return to earlier content)
+      }
+
+      // Insert the immutable capture. The content-identity unique index is a retry
+      // safety-net only (distinct captures differ by capture-specific source_key).
+      const [insertedRaw] = await tx
+        .insert(pregameRawSourceSnapshots)
+        .values({ ...args.raw, semanticSourceKey: args.semanticSourceKey, supersedesSnapshotId: supersedes })
+        .onConflictDoNothing({
+          target: [
+            pregameRawSourceSnapshots.sourceKind,
+            pregameRawSourceSnapshots.sourceKey,
+            pregameRawSourceSnapshots.contentHash,
+          ],
+        })
+        .returning();
+      if (!insertedRaw) return { decision: "noop", snapshotId: args.raw.snapshotId, supersedes: null }; // idempotent retry of the exact capture
+
+      const decision: "first_capture" | "appended" = supersedes === null ? "first_capture" : "appended";
+
+      // Read the CURRENT posterior states UNDER the lock, then fold against them.
+      const priorRows = args.featureKeys.length === 0
+        ? []
+        : await tx
+            .select()
+            .from(pregamePosteriorStates)
+            .where(
+              and(
+                eq(pregamePosteriorStates.entityCanonicalId, args.entityCanonicalId),
+                eq(pregamePosteriorStates.featureVersion, args.featureVersion),
+                inArray(pregamePosteriorStates.featureKey, args.featureKeys),
+              ),
+            );
+      const lockedPriors = new Map<string, PregamePosteriorState>();
+      for (const r of priorRows) {
+        lockedPriors.set(r.featureKey, {
+          version: r.stateVersion,
+          featureKey: r.featureKey,
+          featureVersion: r.featureVersion,
+          entityCanonicalId: r.entityCanonicalId,
+          bySeason: (r.bySeason ?? {}) as PregamePosteriorState["bySeason"],
+        });
+      }
+      const posteriors = args.foldPosteriors(lockedPriors);
+
+      // Feature rows: conflict-safe on their deterministic PK (a retried commit
+      // never duplicates). Posteriors: upsert the whole folded state.
+      for (const f of args.features) {
+        await tx.insert(pregameFeatureSnapshots).values(f).onConflictDoNothing({ target: pregameFeatureSnapshots.featureRowId });
+      }
+      for (const p of posteriors) {
+        await tx
+          .insert(pregamePosteriorStates)
+          .values(p)
+          .onConflictDoUpdate({
+            target: [
+              pregamePosteriorStates.entityCanonicalId,
+              pregamePosteriorStates.featureKey,
+              pregamePosteriorStates.featureVersion,
+            ],
+            set: { sport: p.sport, stateVersion: p.stateVersion, bySeason: p.bySeason, updatedAt: new Date() },
+          });
+      }
+      return { decision, snapshotId: insertedRaw.snapshotId, supersedes };
+    });
   }
 
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──

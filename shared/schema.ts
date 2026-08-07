@@ -2188,23 +2188,43 @@ export const pregameRawSourceSnapshots = pgTable("pregame_raw_source_snapshots",
   sport: text("sport").notNull(),
   /** Provider/source family, e.g. "nba_stats_playergamelog". */
   sourceKind: text("source_kind").notNull(),
-  /** Provider request key / params (identifies WHAT was fetched). */
+  /** CAPTURE key (semantic key + observation instant) — distinct per accepted
+   *  observation, so an A→B→A recurrence yields distinct captures. Part of the
+   *  inherited content-identity unique index. */
   sourceKey: text("source_key").notNull(),
+  /** STABLE semantic source identity (sport|provider|kind|entity|season|seasonType|
+   *  sourceVersion), constant across every observation of the same request. Drives
+   *  lineage/head selection — NOT capture identity. Nullable (additive). */
+  semanticSourceKey: text("semantic_source_key"),
   // Absolute instants — timezone-aware so a round trip can never shift them and
   // change the knownAt <= predictionAt cutoff (Postgres `timestamptz`).
   /** Event time — when the underlying facts became true. */
   validAt: timestamp("valid_at", { withTimezone: true }).notNull(),
   /** Observation time — when this payload was fetched / could be known. */
   knownAt: timestamp("known_at", { withTimezone: true }).notNull(),
+  /** Source-published/finalized instant IF the provider exposes one; NULL = explicitly
+   *  unknown (playergamelog exposes none). Persisted so "unknown" is a durable fact. */
+  sourcePublishedAt: timestamp("source_published_at", { withTimezone: true }),
+  /** Version of the rule that produced `knownAt` (audit metadata; e.g. nba_gamelog_knownAt_v1). */
+  knownAtPolicyVersion: text("known_at_policy_version"),
+  /** Correction lineage: the immediately-prior immutable snapshot for the SAME semantic
+   *  source identity that this one supersedes; NULL for a first capture. Set by storage
+   *  under the ingest transaction/lock — never caller-chosen. Prior rows are never
+   *  updated/deleted/repointed, so corrections form a deterministic chain. */
+  supersedesSnapshotId: text("supersedes_snapshot_id"),
   /** Raw response, stored verbatim and never mutated (a correction is a new row). */
   payload: jsonb("payload").notNull(),
   /** Content hash of the payload — dedupe / idempotent capture. */
   contentHash: text("content_hash").notNull(),
+  /** Immutable ingestion instant (row is INSERT-only, never updated) — the canonical `ingestedAt`. */
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 }, (table) => ({
   sportKindIdx: index("pregame_raw_source_snapshots_sport_kind_idx").on(table.sport, table.sourceKind),
   knownAtIdx: index("pregame_raw_source_snapshots_known_at_idx").on(table.knownAt),
   sourceKeyIdx: index("pregame_raw_source_snapshots_source_key_idx").on(table.sourceKey),
+  supersedesIdx: index("pregame_raw_source_snapshots_supersedes_idx").on(table.supersedesSnapshotId),
+  // Head selection: latest observation for a semantic identity (ORDER BY known_at DESC).
+  semanticHeadIdx: index("pregame_raw_source_snapshots_semantic_head_idx").on(table.semanticSourceKey, table.knownAt),
   // Uniqueness is scoped to the REQUESTED SOURCE, not the payload alone: two
   // different source_key requests can legitimately return the same payload
   // (commonly an empty response), and each is a distinct capture. Only a genuine

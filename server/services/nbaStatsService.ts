@@ -385,6 +385,65 @@ const GAME_LOGS_TTL = 30 * 60 * 1000; // 30 min — playoff games happen daily
 const playerGameLogsCache = new Map<string, CacheEntry<any[]>>();
 const teamGameLogsCache = new Map<string, CacheEntry<any[]>>();
 
+/**
+ * Result of a RAW playergamelog fetch (PR5 ingestion). Unlike getPlayerGameLogs(),
+ * this preserves the provider's verbatim JSON — original headers, cells, and any
+ * nulls — so the immutable snapshot is the real provider payload and the ingestion
+ * adapter (parseNbaGameLog) sees live schema drift (missing/duplicate headers) and
+ * genuine missing values instead of pre-coerced zeros.
+ *
+ * Timestamp honesty (the knownAt contract): `knownAt` is the instant this pipeline
+ * OBSERVED the payload. So on success `fetchedAt` is captured ONLY AFTER the response
+ * body has been received and decoded — never at request start (a slow request must
+ * not make data appear known seconds early). `requestedAt` names the request-start
+ * instant separately. A failure carries `failedAt` (the failure-observed instant),
+ * NEVER a successful-payload `fetchedAt`. All instants are generated INSIDE this
+ * bridge — no caller may supply or back-date them.
+ *
+ *  • `ok:true`  → the verbatim provider JSON (even an empty/malformed resultSet:
+ *                 the ADAPTER classifies those; the fetch itself succeeded).
+ *  • `ok:false` → ONLY a true transport / HTTP / JSON-decode failure.
+ */
+export type RawNbaGameLogFetchResult =
+  | { ok: true; rawPayload: unknown; requestedAt: string; fetchedAt: string }
+  | { ok: false; reason: "transport_failure" | "http_failure" | "invalid_json"; requestedAt: string; failedAt: string };
+
+/**
+ * RAW playergamelog fetch for PR5 ingestion. Deliberately does NOT go through
+ * rowsToObjects / PlayerGameLogRow (which drop metadata and coerce missing MIN/PTS
+ * to 0), and deliberately bypasses the presentation game-log cache — a backfill
+ * wants the provider bytes as-they-are, stamped with the real OBSERVATION instant.
+ */
+export async function fetchRawNbaPlayerGameLog(args: {
+  playerId: string;
+  season: string; // exact NBA season string, e.g. "2024-25"
+  seasonType: NBASeasonType;
+}): Promise<RawNbaGameLogFetchResult> {
+  const requestedAt = new Date().toISOString(); // request START — NOT knownAt
+  const qs = new URLSearchParams({
+    PlayerID: String(args.playerId),
+    Season: args.season,
+    SeasonType: args.seasonType,
+  }).toString();
+  const url = `${NBA_STATS_BASE}/playergamelog?${qs}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: NBA_HEADERS, signal: AbortSignal.timeout(8000) });
+  } catch {
+    return { ok: false, reason: "transport_failure", requestedAt, failedAt: new Date().toISOString() };
+  }
+  if (!res.ok) return { ok: false, reason: "http_failure", requestedAt, failedAt: new Date().toISOString() };
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    return { ok: false, reason: "invalid_json", requestedAt, failedAt: new Date().toISOString() };
+  }
+  // Payload received AND decoded — only now is it genuinely known to this pipeline.
+  const fetchedAt = new Date().toISOString();
+  return { ok: true, rawPayload: json, requestedAt, fetchedAt };
+}
+
 export interface PlayerGameLogRow {
   GAME_ID: string;
   GAME_DATE: string;
@@ -400,18 +459,31 @@ export interface PlayerGameLogRow {
   STL?: number;
   BLK?: number;
   TOV?: number;
+  FG3M?: number;
+}
+
+/**
+ * Resolve the NBA season string for a game-log request. An explicit, non-blank
+ * `season` (e.g. "2023-24") is used verbatim for a historical pull; otherwise the
+ * current season is used — so omitting `season` yields byte-identical behavior to
+ * the pre-existing current-season-only requests. Pure + exported for testing.
+ */
+export function resolveGameLogSeason(explicit?: string | null): string {
+  return typeof explicit === "string" && explicit.trim() !== "" ? explicit.trim() : getCurrentSeason();
 }
 
 export async function getPlayerGameLogs(args: {
   playerId?: string | number | null;
   seasonType?: NBASeasonType;
   limit?: number;
+  /** Optional NBA season string ("2023-24"). Omitted → current season (unchanged behavior). */
+  season?: string | null;
 }): Promise<PlayerGameLogRow[]> {
   const seasonType = args.seasonType ?? "Regular Season";
   const limit = args.limit ?? 25;
   if (args.playerId == null) return [];
   const pid = String(args.playerId);
-  const season = getCurrentSeason();
+  const season = resolveGameLogSeason(args.season);
   const cacheKey = `${season}:${seasonType}:${pid}`;
   const cached = playerGameLogsCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < GAME_LOGS_TTL) {
@@ -441,6 +513,7 @@ export async function getPlayerGameLogs(args: {
     STL: r.STL != null ? Number(r.STL) : undefined,
     BLK: r.BLK != null ? Number(r.BLK) : undefined,
     TOV: r.TOV != null ? Number(r.TOV) : undefined,
+    FG3M: r.FG3M != null ? Number(r.FG3M) : undefined,
   }));
   // playergamelog is most-recent-first
   playerGameLogsCache.set(cacheKey, { data: rows, fetchedAt: Date.now() });
@@ -468,10 +541,12 @@ export async function getTeamGameLogs(args: {
   teamAbbr: string;
   seasonType?: NBASeasonType;
   limit?: number;
+  /** Optional NBA season string ("2023-24"). Omitted → current season (unchanged behavior). */
+  season?: string | null;
 }): Promise<TeamGameLogRow[]> {
   const seasonType = args.seasonType ?? "Regular Season";
   const limit = args.limit ?? 25;
-  const season = getCurrentSeason();
+  const season = resolveGameLogSeason(args.season);
   const norm = args.teamAbbr.toUpperCase();
   const cacheKey = `${season}:${seasonType}:${norm}`;
   const cached = teamGameLogsCache.get(cacheKey);
