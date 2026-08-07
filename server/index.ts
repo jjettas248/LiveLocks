@@ -26,6 +26,7 @@ import { ensureMlbRecommendationEpisodePersistenceSchema } from "./dbMigrations/
 import { ensureMoundV2ShadowPersistenceSchema } from "./dbMigrations/moundV2ShadowPersistence";
 import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2ShadowJobsPersistence";
 import { ensurePersistedPlaysSafetyCoreColumns } from "./dbMigrations/persistedPlaysSafetyCoreColumns";
+import { ensureMlbLanePredictionLedgerSchema } from "./dbMigrations/mlbLanePredictionLedgerPersistence";
 import { ensurePregameTargetsFoundationSchema } from "./dbMigrations/pregameTargetsFoundationPersistence";
 import { ensurePregameTargetsProvenanceColumns } from "./dbMigrations/pregameTargetsProvenancePersistence";
 import { ensurePregameTargetsRawProvenanceColumns } from "./dbMigrations/pregameTargetsRawProvenancePersistence";
@@ -267,6 +268,14 @@ app.use((req, res, next) => {
   await ensureMlbRecommendationEpisodePersistenceSchema(pool);
   await ensurePersistedPlaysSafetyCoreColumns(pool);
   console.log("[startup] MLB Recommendation Episode persistence schema ensured");
+
+  // Durable persistence bootstrap: MLB Live Edge Stage B all-lane prediction
+  // ledger (research-only) — one additive, append-only table backing the
+  // private capture-and-settle dataset for a future Stage C calibrator. Same
+  // fail-hard reasoning as the calls above. No hot path writes to it yet
+  // (capture/settlement wiring is Stage B PR3); this only ever creates schema.
+  await ensureMlbLanePredictionLedgerSchema(pool);
+  console.log("[startup] MLB Live Edge Stage B prediction-ledger schema ensured");
 
   // Durable persistence bootstrap: Mound Radar V2 (shadow) prediction
   // capture (Flagship Program Phase 2, Part 4) — one additive table.
@@ -1169,6 +1178,18 @@ app.use((req, res, next) => {
   // Grade persisted plays every 3 minutes; run once after 2 min delay on startup
   setTimeout(() => gradePersistedPlays(storage).catch(console.warn), 2 * 60 * 1000);
   setInterval(() => gradePersistedPlays(storage).catch(console.warn), 3 * 60 * 1000);
+
+  // MLB Live Edge Stage B settlement sweep (research-only): grades captured
+  // all-lane predictions against the REAL final outcome (fetchMlbBoxScore
+  // read-only) and writes results back to the Stage B ledger ONLY — never
+  // persisted_plays/ROI/W-L. Never throws. First run after 4 min, then every
+  // 5 min (same cadence family as the mound-V2 grading sweep).
+  const runStageBSweep = () =>
+    import("./mlb/stageB/predictionLedgerSettlementSweep")
+      .then(({ runStageBSettlementSweepWithDefaults }) => runStageBSettlementSweepWithDefaults())
+      .catch((e) => console.warn("[MLB_STAGE_B_SETTLE_ERROR]", e?.message ?? e));
+  setTimeout(runStageBSweep, 4 * 60 * 1000);
+  setInterval(runStageBSweep, 5 * 60 * 1000);
 
   if (process.env.NODE_ENV !== "production") {
     app.get("/api/test-email", async (req: Request, res: Response) => {

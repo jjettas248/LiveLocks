@@ -335,6 +335,32 @@ export async function registerRoutes(
     }
   });
 
+  // ── MLB Live Edge Stage B — all-lane prediction ledger summary (research) ──
+  // Read-only calibration snapshot of the private Stage B ledger: capture/
+  // settlement counts + per-lane hit rate (excl. push/void) + coverage. This is
+  // a research surface only — never persisted_plays/ROI/public. `?days=N` bounds
+  // the window (default 7); `?limit=N` caps rows scanned (default 5000).
+  app.get("/api/admin/mlb/stage-b-ledger", requireAdmin, async (req, res) => {
+    try {
+      const { summarizeStageBLedger } = await import("./mlb/stageB/predictionLedgerSummary");
+      const days = req.query.days ? Math.min(60, Math.max(1, Number(req.query.days) || 7)) : 7;
+      const limit = req.query.limit ? Math.min(20000, Math.max(1, Number(req.query.limit) || 5000)) : 5000;
+      const now = Date.now();
+      const capturedAfterMs = now - days * 24 * 60 * 60 * 1000;
+      const predictions = await storage.listRecentMlbLanePredictions({ capturedAfterMs, limit });
+      // The read is newest-first capped at `limit`; if the window holds more rows
+      // than that, the summary is a RECENT SAMPLE, not the whole window — surface
+      // it so coverage/hit-rate aren't read as window-complete. Raise `?limit=`
+      // (or narrow `?days=`) to de-truncate.
+      const truncated = predictions.length >= limit;
+      const summary = summarizeStageBLedger(predictions, now);
+      return res.json({ windowDays: days, scanned: predictions.length, limit, truncated, ...summary });
+    } catch (err) {
+      console.error("[admin/mlb/stage-b-ledger]", err);
+      return res.status(500).json({ error: "Failed to build Stage B ledger summary" });
+    }
+  });
+
   // ── LiveLocks Batch C — LiveSignalBus runtime metrics (constraint 14) ──
   // Read-only admin surface exposing registration / dedupe / freshness /
   // legacy-consumer counts and propagation timing percentiles. Used to
