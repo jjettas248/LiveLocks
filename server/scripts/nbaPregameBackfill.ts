@@ -31,15 +31,11 @@ function rowsToRawPayload(rows: PlayerGameLogRow[]): unknown {
 /** Build the ingestion store port from a storage instance (IStorage-shaped). */
 export function buildStorePort(storage: {
   getPregameRawSourceSnapshot(id: string): Promise<{ snapshotId: string } | null>;
-  createPregameRawSourceSnapshot(row: never): Promise<unknown>;
-  createPregameFeatureSnapshot(row: never): Promise<unknown>;
   getPregamePosteriorState(entity: string, featureKey: string, featureVersion: string): Promise<{ stateVersion: number; bySeason: unknown } | null>;
-  upsertPregamePosteriorState(row: never): Promise<unknown>;
+  ingestPregameNbaSnapshotAtomic(args: never): Promise<{ inserted: boolean }>;
 }): IngestionStorePort {
   return {
     getRawSnapshotById: (id) => storage.getPregameRawSourceSnapshot(id),
-    putRawSnapshot: async (row) => { await storage.createPregameRawSourceSnapshot(row as never); },
-    putFeatureRow: async (row) => { await storage.createPregameFeatureSnapshot(row as never); },
     getPosterior: async (entity, featureKey, featureVersion) => {
       const r = await storage.getPregamePosteriorState(entity, featureKey, featureVersion);
       if (!r) return null;
@@ -52,7 +48,7 @@ export function buildStorePort(storage: {
       };
       return state;
     },
-    putPosterior: async (row) => { await storage.upsertPregamePosteriorState(row as never); },
+    ingestSnapshotAtomic: (args) => storage.ingestPregameNbaSnapshotAtomic(args as never),
   };
 }
 
@@ -92,17 +88,25 @@ async function main(): Promise<void> {
     return { rawPayload: rowsToRawPayload(rows), fetchedAt: new Date().toISOString() };
   };
 
+  let failures = 0;
   for (const playerNativeId of players) {
     for (const seasonStr of seasons) {
       const seasonInt = nbaSeasonIntFromString(seasonStr);
-      if (seasonInt === null) { console.error(`[NBA_INGEST] skip bad season "${seasonStr}"`); continue; }
-      const outcome = await ingestPlayerSeason({ store, fetch: fetcher }, {
-        playerNativeId, season: seasonInt, seasonType, currentSeason, asOfDate,
-      });
-      console.log(`[NBA_INGEST] player=${playerNativeId} season=${seasonStr} status=${outcome.status} records=${outcome.recordCount} features=${outcome.featureRowsWritten} posteriors=${outcome.posteriorsUpdated.length} coverage=${outcome.coverage.coverage}/${outcome.coverage.knownAtSupport}`);
+      if (seasonInt === null) { console.error(`[NBA_INGEST] bad season "${seasonStr}"`); failures++; continue; }
+      try {
+        const outcome = await ingestPlayerSeason({ store, fetch: fetcher }, { playerNativeId, season: seasonInt, seasonType, currentSeason, asOfDate });
+        if (outcome.status === "provider_failure" || outcome.status === "incomplete") failures++;
+        console.log(`[NBA_INGEST] player=${playerNativeId} season=${seasonStr} status=${outcome.status} records=${outcome.recordCount} features=${outcome.featureRowsWritten} posteriors=${outcome.posteriorsUpdated.length} coverage=${outcome.coverage.coverage}/${outcome.coverage.knownAtSupport}`);
+      } catch (err) {
+        failures++;
+        // A DB/write failure: log the message only — never the payload or connection string.
+        console.error(`[NBA_INGEST] player=${playerNativeId} season=${seasonStr} ERROR: ${err instanceof Error ? err.message : "unknown"}`);
+      }
     }
   }
-  console.log(`[NBA_INGEST] done. featureVersion=${NBA_FEATURE_VERSION}`);
+  console.log(`[NBA_INGEST] done. featureVersion=${NBA_FEATURE_VERSION} failures=${failures}`);
+  // A provider or database failure returns a nonzero exit code.
+  if (failures > 0) process.exit(1);
 }
 
 function nbaSeasonStringForInt(seasonInt: number): string {

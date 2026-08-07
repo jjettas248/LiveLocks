@@ -12,6 +12,45 @@ export type NbaSourceKind = "nba_stats_playergamelog" | "nba_stats_teamgamelog";
 
 export const NBA_KNOWN_AT_POLICY_VERSION = "nba_gamelog_knownAt_v1";
 
+/** Provider family (source identity). */
+export const NBA_SOURCE_PROVIDER = "nba_stats" as const;
+
+/**
+ * Source VERSION — the adapter's interpretation of the provider payload. Bumping
+ * it (a schema/interpretation change) MUST mint distinct snapshot identities for
+ * the same bytes, so two source-version interpretations of one payload can never
+ * collide. It is part of the canonical sourceKey below.
+ */
+export const NBA_SOURCE_VERSION = "nba_stats_gamelog_v1" as const;
+
+/**
+ * Canonical, collision-proof source key. Encodes EVERY locked identity component
+ * except the content hash (which is combined separately into the snapshotId):
+ * sport, provider, source kind, canonical entity id, season, season type, and
+ * source version. So two seasons, two entities, a player vs a team, or two source
+ * versions of the same bytes each resolve to a different key (and snapshotId).
+ * Canonical game identity lives inside the payload (each row's GAME_ID) and is
+ * therefore carried by the content hash; feature rows additionally stamp the
+ * canonical game id explicitly.
+ */
+export function buildNbaGameLogSourceKey(args: {
+  sourceKind: NbaSourceKind;
+  entityCanonicalId: string;
+  season: number;
+  seasonType: string;
+  sourceVersion?: string;
+}): string {
+  return [
+    `sport=nba`,
+    `provider=${NBA_SOURCE_PROVIDER}`,
+    `kind=${args.sourceKind}`,
+    `entity=${args.entityCanonicalId}`,
+    `season=${args.season}`,
+    `seasonType=${args.seasonType}`,
+    `sv=${args.sourceVersion ?? NBA_SOURCE_VERSION}`,
+  ].join("|");
+}
+
 /** The four honestly-distinct timestamps (published is unavailable from these endpoints). */
 export interface NbaSourceTimestamps {
   /** Source-effective — the game's calendar date (a validAt anchor, NOT knownAt). */

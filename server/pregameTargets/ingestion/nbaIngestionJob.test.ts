@@ -9,24 +9,32 @@ import type { PosteriorState } from "../posteriorState/posteriorState";
 let passed = 0, failed = 0;
 function ok(c: boolean, m: string) { if (c) passed++; else { failed++; console.error(`  ✗ ${m}`); } }
 
-function mockStore() {
+function mockStore(opts: { failFeatureWrite?: boolean } = {}) {
   const raw = new Map<string, InsertPregameRawSourceSnapshot>();
   const features: InsertPregameFeatureSnapshot[] = [];
   const posteriors = new Map<string, InsertPregamePosteriorState>();
   const pk = (e: string, f: string, v: string) => `${e}|${f}|${v}`;
   const store: IngestionStorePort = {
     getRawSnapshotById: async (id) => (raw.has(id) ? { snapshotId: id } : null),
-    putRawSnapshot: async (row) => {
-      if (raw.has(row.snapshotId)) throw new Error("IMMUTABLE VIOLATION: raw snapshot overwritten");
-      raw.set(row.snapshotId, row);
-    },
-    putFeatureRow: async (row) => { features.push(row); },
     getPosterior: async (e, f, v) => {
       const r = posteriors.get(pk(e, f, v));
       if (!r) return null;
       return { version: r.stateVersion, featureKey: f, featureVersion: v, entityCanonicalId: e, bySeason: r.bySeason as PosteriorState["bySeason"] };
     },
-    putPosterior: async (row) => { posteriors.set(pk(row.entityCanonicalId, row.featureKey, row.featureVersion), row); },
+    // ALL-OR-NOTHING: stage into locals, then commit only if nothing threw. The
+    // content-identity gate returns inserted:false when the raw already exists.
+    ingestSnapshotAtomic: async ({ raw: rawRow, features: feats, posteriors: posts }) => {
+      if (raw.has(rawRow.snapshotId)) return { inserted: false };
+      const stagedFeatures: InsertPregameFeatureSnapshot[] = [];
+      for (const f of feats) {
+        if (opts.failFeatureWrite) throw new Error("simulated DB failure mid-write");
+        if (!features.some((x) => x.featureRowId === f.featureRowId)) stagedFeatures.push(f);
+      }
+      raw.set(rawRow.snapshotId, rawRow);
+      features.push(...stagedFeatures);
+      for (const p of posts) posteriors.set(pk(p.entityCanonicalId, p.featureKey, p.featureVersion), p);
+      return { inserted: true };
+    },
   };
   return { store, raw, features, posteriors };
 }
@@ -101,6 +109,26 @@ const params = { playerNativeId: "201939", season: 2024, seasonType: "Regular Se
   const p = m.posteriors.get("nba:player:201939|nba.player.points_per_min|nba_gamelog_v1")!;
   const seasons = Object.keys(p.bySeason as Record<string, unknown>);
   ok(seasons.includes("2026") && seasons.includes("2025"), "posterior accumulates across separate season ingests");
+}
+
+// ── Atomicity: a mid-write DB failure rolls back — nothing is written ────────
+{
+  const m = mockStore({ failFeatureWrite: true });
+  let threw = false;
+  try {
+    await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30)) }, params);
+  } catch { threw = true; }
+  ok(threw, "a mid-write failure propagates (nonzero-exit path in the runner)");
+  ok(m.raw.size === 0 && m.features.length === 0 && m.posteriors.size === 0, "atomic rollback: NO partial state (raw/features/posteriors all empty)");
+}
+
+// ── Fast idempotency probe short-circuits before any build/fold work ─────────
+{
+  const m = mockStore();
+  const first = await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30)) }, params);
+  ok(first.status === "ingested", "first ingest ok");
+  const again = await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30)) }, params);
+  ok(again.status === "noop_identical" && again.featureRowsWritten === 0, "identical rerun → no-op via fast probe");
 }
 
 console.log(`\nnbaIngestionJob.test: ${passed} passed, ${failed} failed`);

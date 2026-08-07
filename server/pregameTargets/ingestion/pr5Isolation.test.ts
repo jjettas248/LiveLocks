@@ -57,7 +57,7 @@ function importLines(src: string): string {
 {
   const runner = codeOnly(readFileSync(resolve(here, "../../scripts/nbaPregameBackfill.ts"), "utf8"));
   ok(!/createPlay|recordPlay|settlePlay|gradePersistedPlays|createMlb|createHr/i.test(runner), "runner touches no ledger/grading storage methods");
-  ok(/createPregameRawSourceSnapshot|createPregameFeatureSnapshot|upsertPregamePosteriorState/.test(runner), "runner uses only the PR1 pregame_* storage methods");
+  ok(/ingestPregameNbaSnapshotAtomic|getPregameRawSourceSnapshot|getPregamePosteriorState/.test(runner), "runner uses only the PR1 pregame_* storage methods (atomic ingest + probes)");
 }
 
 // ── Runtime: ingested feature rows carry no forbidden key ───────────────────

@@ -73,19 +73,29 @@ export function parseNbaGameLog(args: ParseNbaGameLogArgs): NbaAdapterResult {
   if (!Array.isArray(headers) || !Array.isArray(rowSet)) return fail("incomplete_response");
   if (rowSet.length === 0) return fail("empty_result");
 
+  // Resolve columns BY NAME (order-independent). Detect DUPLICATE required
+  // headers — an ambiguous schema is a fail-closed break, not a silent
+  // last-wins. Unknown extra headers are ignored (we only read named columns,
+  // per the source manifest). A missing REQUIRED header also fails closed.
   const idx: Record<string, number> = {};
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
   headers.forEach((h, i) => {
-    if (typeof h === "string") idx[h.toUpperCase()] = i;
+    if (typeof h !== "string") return;
+    const key = h.toUpperCase();
+    if (seen.has(key)) duplicates.add(key);
+    seen.add(key);
+    idx[key] = i;
   });
+  // Structural anchors that MUST exist to identify a record and place it in time.
+  // MIN/PTS/etc. are optional per-row (absence → a missing reading, not a failure).
+  const REQUIRED = ["GAME_ID", "GAME_DATE"];
+  if (REQUIRED.some((k) => duplicates.has(k))) return fail("incomplete_response"); // ambiguous duplicate required header
+  if (REQUIRED.some((k) => idx[k] === undefined)) return fail("incomplete_response"); // missing required header
   const get = (row: unknown[], key: string): unknown => {
     const i = idx[key];
     return i === undefined ? undefined : row[i];
   };
-  // GAME_ID is mandatory to identify a record; its absence is a schema break.
-  if (idx["GAME_ID"] === undefined && idx["GAME_ID".toUpperCase()] === undefined) {
-    // Accept the alternate "Game_ID" casing the provider sometimes uses.
-    if (idx["GAME_ID"] === undefined) return fail("incomplete_response");
-  }
 
   const records: NbaNormalizedGameRecord[] = [];
   for (const raw of rowSet) {

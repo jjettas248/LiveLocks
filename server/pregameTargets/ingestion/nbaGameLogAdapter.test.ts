@@ -77,5 +77,37 @@ const args = (rawPayload: unknown, over: Partial<Parameters<typeof parseNbaGameL
   }
 }
 
+// ── Headers resolved BY NAME: reordered columns parse correctly ─────────────
+{
+  const reordered = { resultSets: [{ headers: ["PTS", "GAME_DATE", "GAME_ID", "AST", "MIN", "REB", "FG3M", "MATCHUP"], rowSet: [[30, "2024-01-15", "0022300500", 6, 34, 8, 3, "DEN vs. LAL"]] }] };
+  const res = parseNbaGameLog(args(reordered));
+  ok(res.ok, "reordered headers parse ok (name-based resolution)");
+  if (res.ok) ok(res.records[0].points === 30 && res.records[0].gameId === "0022300500" && res.records[0].minutes === 34, "columns read by name regardless of order");
+}
+
+// ── Missing REQUIRED header fails closed ────────────────────────────────────
+{
+  const noDate = { resultSets: [{ headers: ["GAME_ID", "MATCHUP", "MIN", "PTS"], rowSet: [["0022300500", "DEN vs. LAL", 34, 30]] }] };
+  const res = parseNbaGameLog(args(noDate));
+  ok(!res.ok && res.reason === "incomplete_response", "missing required GAME_DATE header → incomplete_response");
+  const noId = { resultSets: [{ headers: ["GAME_DATE", "MIN", "PTS"], rowSet: [["2024-01-15", 34, 30]] }] };
+  ok(parseNbaGameLog(args(noId)).ok === false, "missing required GAME_ID header → not ok");
+}
+
+// ── Duplicate REQUIRED header fails closed (ambiguous, not last-wins) ────────
+{
+  const dupId = { resultSets: [{ headers: ["GAME_ID", "GAME_ID", "GAME_DATE", "MIN", "PTS"], rowSet: [["A", "B", "2024-01-15", 34, 30]] }] };
+  const res = parseNbaGameLog(args(dupId));
+  ok(!res.ok && res.reason === "incomplete_response", "duplicate GAME_ID header → incomplete_response (ambiguous)");
+}
+
+// ── Unknown extra headers are ignored (read named columns per manifest) ─────
+{
+  const extra = { resultSets: [{ headers: [...HEADERS, "SURPRISE_COL"], rowSet: [["0022300500", "2024-01-15", "DEN vs. LAL", 34, 30, 8, 6, 3, "ignored"]] }] };
+  const res = parseNbaGameLog(args(extra));
+  ok(res.ok, "unknown extra header ignored (still parses)");
+  if (res.ok) ok(res.records[0].points === 30, "named columns unaffected by an unknown extra header");
+}
+
 console.log(`\nnbaGameLogAdapter.test: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

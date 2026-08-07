@@ -563,6 +563,19 @@ export interface IStorage {
     featureKey: string,
     featureVersion: string,
   ): Promise<PregamePosteriorStateRow | null>;
+  /**
+   * PR5 NBA ingestion — ALL-OR-NOTHING commit of one source snapshot. Inserts the
+   * immutable raw snapshot (idempotent on its content-identity unique index) and,
+   * ONLY when that insert is new, the feature rows + posterior upserts, inside a
+   * single transaction. Rolls back entirely on any failure, so a partial source
+   * snapshot can never be reported as fully ingested. Returns `inserted:false`
+   * when the content already existed (a no-op).
+   */
+  ingestPregameNbaSnapshotAtomic(args: {
+    raw: InsertPregameRawSourceSnapshot;
+    features: InsertPregameFeatureSnapshot[];
+    posteriors: InsertPregamePosteriorState[];
+  }): Promise<{ inserted: boolean }>;
 
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
   // Creation is INSERT-only with ON CONFLICT DO NOTHING — a repeated
@@ -4369,6 +4382,48 @@ export class DatabaseStorage implements IStorage {
       )
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  async ingestPregameNbaSnapshotAtomic(args: {
+    raw: InsertPregameRawSourceSnapshot;
+    features: InsertPregameFeatureSnapshot[];
+    posteriors: InsertPregamePosteriorState[];
+  }): Promise<{ inserted: boolean }> {
+    return await db.transaction(async (tx) => {
+      // Idempotency gate INSIDE the transaction: the raw snapshot's content-identity
+      // unique index. If the content already exists, insert nothing and no-op.
+      const [insertedRaw] = await tx
+        .insert(pregameRawSourceSnapshots)
+        .values(args.raw)
+        .onConflictDoNothing({
+          target: [
+            pregameRawSourceSnapshots.sourceKind,
+            pregameRawSourceSnapshots.sourceKey,
+            pregameRawSourceSnapshots.contentHash,
+          ],
+        })
+        .returning();
+      if (!insertedRaw) return { inserted: false };
+      // Feature rows: conflict-safe on their deterministic PK (a retried commit
+      // never duplicates). Posteriors: upsert the whole folded state.
+      for (const f of args.features) {
+        await tx.insert(pregameFeatureSnapshots).values(f).onConflictDoNothing({ target: pregameFeatureSnapshots.featureRowId });
+      }
+      for (const p of args.posteriors) {
+        await tx
+          .insert(pregamePosteriorStates)
+          .values(p)
+          .onConflictDoUpdate({
+            target: [
+              pregamePosteriorStates.entityCanonicalId,
+              pregamePosteriorStates.featureKey,
+              pregamePosteriorStates.featureVersion,
+            ],
+            set: { sport: p.sport, stateVersion: p.stateVersion, bySeason: p.bySeason, updatedAt: new Date() },
+          });
+      }
+      return { inserted: true };
+    });
   }
 
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
