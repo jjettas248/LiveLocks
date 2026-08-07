@@ -80,7 +80,7 @@ jobs:
           mkdir -p "${OUT}/cwevent_output"
           # commit only the small focused per-game CSVs; the full-season CSV ships in the artifact
           cp /tmp/out/ANA201904040.csv /tmp/out/ARI201908060.csv /tmp/out/ARI201909140.csv /tmp/out/BAL201908010.csv "${OUT}/cwevent_output/"
-          CW_VER=$(cwevent 2>&1 | grep -i version | head -1 | sed 's/^ *//')
+          CW_VER=$(cwevent 2>&1 | grep -i version | head -1 | sed 's/^ *//' || true)
           {
             echo "parser_name=Chadwick cwevent"
             echo "chadwick_tag=${CHADWICK_TAG}"
