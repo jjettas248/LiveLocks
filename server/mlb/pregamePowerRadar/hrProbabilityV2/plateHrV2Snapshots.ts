@@ -38,6 +38,8 @@ import {
   STARTER_BULLPEN_PROVIDERS,
   type StarterBullpenPaPathEvidencePayload,
 } from "./starterBullpenPaPath";
+// PR7A: Retrosheet plate-discipline evidence-kind contract (shadow-only, no producer yet).
+import { validateRetrosheetDisciplinePayload } from "./retrosheetDisciplineEvidence";
 
 export const EVIDENCE_KINDS = [
   "historical_stat",
@@ -53,6 +55,11 @@ export const EVIDENCE_KINDS = [
   // are reproducibly derived from. A pregame projection knowable at prediction time
   // → point-in-time rule identical to lineup/probable (availableAt ≤ predictionAsOf).
   "starter_bullpen",
+  // PR7A: the Retrosheet-backed plate-discipline raw counts + provenance a v3
+  // contactOpportunity/pitcherDiscipline leaf is re-derived from. Historical
+  // point-in-time rule identical to historical_stat (dataThroughAt < predictionAsOf
+  // ≤ firstPitch). Shadow-only; no producer until the adapter (PR7A stage 5).
+  "retrosheet_discipline",
 ] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
@@ -480,6 +487,7 @@ export function validateSourcePayload(kind: EvidenceKind, payload: unknown): { o
   }
   if (kind === "contact_events") return validateContactEventsPayload(payload);
   if (kind === "starter_bullpen") return validateStarterBullpenPayload(payload);
+  if (kind === "retrosheet_discipline") return validateRetrosheetDisciplinePayload(payload);
   return validateGenericPayload(payload);
 }
 
@@ -717,7 +725,8 @@ export function isSourceEvidenceEligible(
 
   switch (ev.evidenceKind) {
     case "historical_stat":
-    case "contact_events": {
+    case "contact_events":
+    case "retrosheet_discipline": {
       const dta = ms(ev.dataThroughAt);
       if (dta == null) return { eligible: false, reason: "missing_data_through_at" };
       if (!(dta < pAsOf)) return { eligible: false, reason: "data_not_strictly_before_prediction" };

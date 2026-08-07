@@ -482,9 +482,19 @@ network, no dataset download.
    and advanced `draft_pending_toolchain_validation → validated` **after** all 8 fixtures passed the
    revised contract comparison (`scripts/pr7a0/verifyFixtureContract.mjs`). The 2000+ floor stays
    provisional and the 2000–2025 matrix stays PENDING_MEASUREMENT.
-4. **[BLOCKED — separate authorization]** Add contract types + flags + evidence kind +
-   `licensed_source_unavailable` reason (+ unit tests).
-5. **[BLOCKED]** Write the Retrosheet normalization adapter against the validated fixtures (fail-closed).
+4. **[done — PR7A.2]** Add contract types + flags + evidence kind + `licensed_source_unavailable`
+   reason (+ unit tests). ADDITIVE/SHADOW, `npx tsc --noEmit` clean, no champion/public change:
+   `plate_hr_v2_features_v3` (V1/V2 preserved; `PLATE_HR_V2_FEATURES_CURRENT` stays V2 — no producer
+   emits V3 yet) extends `contactOpportunity`, adds a `pitcherDiscipline` group, and reshapes
+   `zoneLocation` to the explicit `{ status:"unavailable", reason:"licensed_source_unavailable", … }`
+   record (all location leaves typed `null`). New flag `PLATE_DISCIPLINE_NO_LOCATION_V1_ENABLED`
+   (fail-closed; PR7A capture requires it AND the master flag). New `retrosheet_discipline` evidence
+   kind (provider `retrosheet`, strict counts+provenance payload validator, historical point-in-time
+   eligibility) in the pure `retrosheetDisciplineEvidence.ts`. Unit + structural-isolation +
+   location-blindness tests: `plateHrV2FeaturesV3.test.ts`, `plateDisciplineNoLocationFlag.test.ts`,
+   `retrosheetDisciplineEvidence.test.ts`, `retrosheetDisciplineIsolation.test.ts`. No adapter,
+   capture wiring, ingestion, DB DDL, fitting, or champion/public change.
+5. **[BLOCKED — separate authorization]** Write the Retrosheet normalization adapter against the validated fixtures (fail-closed).
 6. **[BLOCKED]** Wire shadow forward-capture behind both flags; leakage + re-derivability + isolation tests.
 7. **[BLOCKED]** Run the §3.6 season matrix in the authorized environment; then, only on separate
    authorization, begin model fitting.
