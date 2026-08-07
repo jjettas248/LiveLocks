@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, RefreshCw, Search, Target, ChevronDown, ChevronUp } from "lucide-react";
 import { queryClient } from "@/lib/queryClient";
 import { normalizeMlbMarket, mlbLineKey, mlbCanonicalTupleKey } from "@shared/normalizeMlbMarket";
+import type { CanonicalMlbSignal } from "@shared/mlbCanonicalSignal";
 import type { MlbSignalData } from "./MlbSignalCard";
 import { MlbSignalCard } from "./MlbSignalCard";
 import {
@@ -104,17 +105,18 @@ type BoxScoreEngineStatePlayer = {
   source?: "engine" | "calculator";
 };
 
-type CanonicalSignalEntry = {
-  playerId: string;
-  market: string;
-  line: number | null;
-  recommendedSide: "OVER" | "UNDER" | "NO_EDGE";
-  overProbability: number;
-  underProbability: number;
-  engineConfidence: number;
-  signalState: "strong" | "building" | "watch" | "monitor" | "none";
-  source: "engine" | "calculator";
-};
+type CanonicalSignalEntry = Pick<
+  CanonicalMlbSignal,
+  | "playerId"
+  | "market"
+  | "line"
+  | "recommendedSide"
+  | "overProbability"
+  | "underProbability"
+  | "engineConfidence"
+  | "signalState"
+  | "source"
+>;
 
 type BoxScoreEngineStateResponse = {
   mode: "live" | "no_lines" | "monitoring";

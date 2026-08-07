@@ -11,17 +11,11 @@
 //     payload), surface a `unknown` lifecycle state and tag for
 //     diagnostics; do NOT guess.
 
-export type CanonicalLifecycleState =
-  | "watch"
-  | "build"
-  | "strong"
-  | "elite"
-  | "cashed"
-  | "missed"
-  | "expired"
-  | "unknown";
+import type { LifecycleState, CanonicalSignal } from "@shared/canonicalSignal";
 
-export type CanonicalSignalTier = "watch" | "lean" | "strong" | "elite";
+export type CanonicalLifecycleState = LifecycleState | "unknown";
+
+export type CanonicalSignalTier = CanonicalSignal["signalTier"];
 
 export interface CanonicalAwareSignal {
   signalTier?: CanonicalSignalTier | string | null;
