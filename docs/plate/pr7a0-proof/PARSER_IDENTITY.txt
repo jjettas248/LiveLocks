@@ -1,0 +1,6 @@
+parser_name=Chadwick cwevent
+chadwick_tag=v0.10.0
+chadwick_commit=8f7e0ecd8984cd752e6aca5deba81b86fb369602
+chadwick_version_banner=Chadwick expanded event descriptor, version 0.10.0
+cwevent_arguments=cwevent -n -y 2019 -f 0,2,3,4,5,6,7,10,11,12,13,14,15,16,17,29,31,33,34,35,36,86,87 <eventfile>
+field_list=0,2,3,4,5,6,7,10,11,12,13,14,15,16,17,29,31,33,34,35,36,86,87

@@ -1,0 +1,46 @@
+{
+  "verdicts": [
+    {
+      "case": "01_normal_game_complete",
+      "status": "VALIDATED",
+      "evidence": "frozen token table reproduced cwevent BALLS_CT/STRIKES_CT on 5561/5561 complete real PAs (rate 1)."
+    },
+    {
+      "case": "02_interrupted_pa_period",
+      "status": "MECHANISM_CONFIRMED_FIXTURE_RAW_DEFECT",
+      "evidence": "930 interrupted batting-event rows observed; interruptions are separate BAT_EVENT_FL=F rows (never a 2nd PA); dot-stripped sequence reproduces the count on 12/12 sampled examples.",
+      "fixtureDefect": "Fixture 02 raw continuation record is written as '.CX' (non-cumulative) and its note describes reassembly as concatenating two records. Real cwevent emits the FULL cumulative sequence verbatim on the single BAT_EVENT_FL=T row (e.g. 'BB.CX') and does not strip the dot. Correction: (a) raw continuation must be cumulative; (b) reassembly rule = take the BAT_EVENT_FL=T row's PITCH_SEQ_TX and strip non-pitch markers — do NOT concatenate across rows; (c) the interrupting event is a distinct BAT_EVENT_FL=F row."
+    },
+    {
+      "case": "03_sub_responsible_batter",
+      "status": "PARTIAL_RESP_DIFFERS_EXISTS",
+      "evidence": "dotted-strikeout rows: 241; T rows where RESP_BAT_ID != BAT_ID: 3.",
+      "interpretation": "See respDiffersExamples / dottedStrikeoutExamples for the actual attribution; adjudicate against fixture 03."
+    },
+    {
+      "case": "04_handedness_split",
+      "status": "MECHANISM_CONFIRMED",
+      "evidence": "15 batters resolved to BOTH L and R across PAs (switch-hitter per-event resolution), confirming RESP_BAT_HAND_CD/RESP_PIT_HAND_CD are resolved per event, not copied from the roster line."
+    },
+    {
+      "case": "05_missing_incomplete_seq",
+      "status": "ADAPTER_LOGIC_WITH_CWEVENT_INPUT",
+      "evidence": "cwevent emits empty PITCH_SEQ_TX for no-pitch PAs (0 T rows with empty sequence observed). Uncountable-token exclusion (U/K) and the coverage denominator are ADAPTER completeness policy applied on top of cwevent output, not fields cwevent emits."
+    },
+    {
+      "case": "06_unknown_handedness",
+      "status": "ADAPTER_LOGIC_ONLY",
+      "evidence": "No '?' handedness rows in the sampled games; split-withholding is adapter policy layered on cwevent output."
+    },
+    {
+      "case": "07_below_coverage_gate",
+      "status": "ADAPTER_LOGIC_ONLY",
+      "evidence": "Sequence-coverage gate is a statistical aggregation rule over many PAs; not a cwevent field. Out of scope for parser parity (no correction implied by real output)."
+    },
+    {
+      "case": "08_sample_floor_boundaries",
+      "status": "ADAPTER_LOGIC_ONLY",
+      "evidence": "Sample-floor present/null boundaries are adapter thresholds; not a cwevent field. Out of scope for parser parity."
+    }
+  ]
+}

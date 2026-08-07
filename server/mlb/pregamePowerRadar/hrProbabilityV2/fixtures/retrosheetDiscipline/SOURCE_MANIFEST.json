@@ -1,11 +1,38 @@
 {
   "manifestVersion": "pr7a_retrosheet_discipline_source_manifest_v1",
-  "status": "draft_pending_toolchain_validation",
-  "statusNote": "NOT frozen. parserVersion and parserArguments are PENDING_PIN; the synthetic contract fixtures have not been validated against real Chadwick output. Advances to 'validated' only after the PR7A.0 toolchain proof demonstrates parity against real Retrosheet source.",
+  "status": "validated",
+  "statusNote": "VALIDATED by the PR7A.0 toolchain proof: the pinned Chadwick cwevent was run over real, SHA-verified 2019 Retrosheet event files (GitHub Actions, no production secrets, no deploy/DB/Railway/runtime/model change) and its output was compared against the fixtures. parserVersion and parserArguments are now pinned to the exact proven toolchain; the raw-shape contract (grammar, interruption '.', responsible-batter attribution, handedness resolution) matches real output and all 8 fixtures pass the revised contract comparison (see fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json). SCOPE OF VALIDATION: parser identity + raw-shape/normalization contract only. It does NOT validate the 2000+ training floor or the 2000-2025 season matrix, both of which remain gated below and require measurement in the authorized environment.",
   "toolchainProofRunbook": "docs/plate/pr7a0ToolchainProofRunbook.md",
-  "toolchainProofBlockedInSandbox": "www.retrosheet.org:443 is denied by the agent proxy (connect_rejected 403; not in noProxy allowlist), so PR7A.0 must run in an environment with Retrosheet access. No validation may be fabricated.",
+  "toolchainProof": {
+    "status": "passed",
+    "executedIn": "github_actions_disposable_workflow",
+    "githubActionsRun": "31135930818",
+    "capturedUtc": "2026-08-07T00:49:28Z",
+    "proofBundle": "docs/plate/pr7a0-proof/",
+    "contractComparisonResult": "server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json",
+    "comparisonOverall": "PASS",
+    "grammarCrossCheck": "frozen token table reproduced cwevent BALLS_CT/STRIKES_CT on 5561/5561 complete real PAs (rate 1.0)",
+    "retrosheetArchive": {
+      "name": "2019eve.zip",
+      "url": "https://www.retrosheet.org/events/2019eve.zip",
+      "sha256": "90160a30231eee80700efa41782136e3ca2cde1bd881fc6c9ade0d9a0fe7b6e9"
+    },
+    "eventFileSha256": {
+      "2019ANA.EVA": "ca8cc579c8550942527b320519e6317ed719654cebac5e32827aca9bba126628",
+      "2019ARI.EVN": "ffadf78970a9ec6b14c3d56d842789b3a3d5986e91cc99bfee6caae5b9e1512b",
+      "2019BAL.EVA": "0a50a67e792d3e482b129b063cd8c179792086df79217054cba2a9283f652be8"
+    },
+    "cweventOutputSha256": {
+      "ANA201904040.csv": "ea825b16d71c39d1c87ddef1c507e1c99795d94fbb25bb679d662a374cfe1de2",
+      "ARI201908060.csv": "68709802290518f3a5459d87d4e0c2823f1e25b1fb25b5c22cf72dd713ca4345",
+      "ARI201909140.csv": "b349cab04e654f07eb27b79843fe07b15922a554764693b8fadac142e8946b5f",
+      "BAL201908010.csv": "2f4183644a8870b6580ecca7e98833ba881e48ca682594d4b5e6ab74df8ce7b2"
+    },
+    "games": ["ANA201904040", "ARI201908060", "ARI201909140", "BAL201908010"],
+    "note": "Only minimal source excerpts, hashes, and per-game proof CSVs are committed; the full Retrosheet archive and the full-season CSV are NOT committed (the full-season CSV lives only in the run's uploaded artifact)."
+  },
   "featureEnvelopeVersion": "plate_hr_v2_features_v3",
-  "purpose": "Draft source + parser identity for PR7A Retrosheet plate-discipline capture. Semantic authority + executable parser identity are pinned separately, and finalized only after toolchain validation.",
+  "purpose": "Validated source + parser identity for PR7A Retrosheet plate-discipline capture. Semantic authority + executable parser identity are pinned to the toolchain proven in PR7A.0.",
   "dataSource": {
     "name": "Retrosheet play-by-play event files",
     "products": ["event_files (.EVN/.EVA)", "roster_files (.ROS)", "game_info records (info/start/sub)"],
@@ -23,6 +50,8 @@
     "maps": {
       "PITCH_SEQ_TX": "parsed pitches",
       "BAT_LINEUP_ID": "lineup position",
+      "RESP_BAT_ID": "responsible batter (original batter on a two-strike substitution; distinct from completing BAT_ID)",
+      "REMOVED_FOR_PH_BAT_ID": "batter removed for a pinch hitter mid-PA",
       "RESP_BAT_HAND_CD": "responsible batter handedness (switch-hitter resolved vs actual pitcher)",
       "RESP_PIT_HAND_CD": "responsible pitcher handedness",
       "EVENT_CD": "plate-appearance outcome"
@@ -31,15 +60,18 @@
   "parser": {
     "name": "Chadwick cwevent",
     "role": "executable parser identity",
-    "parserVersion": "PENDING_PIN — set to the exact Chadwick release tag or commit SHA when Chadwick is installed in the authorized ingestion environment",
-    "parserArguments": "PENDING_PIN — record the exact frozen argument set (e.g. cwevent -y <season> -f <field-list> -x <extended-field-list>) at ingestion setup",
-    "note": "Version and arguments are pinned at ingestion setup in the authorized environment, not fabricated here. This manifest is finalized (parserVersion + parserArguments resolved) BEFORE any ingestion."
+    "parserVersion": "0.10.0",
+    "parserCommitSha": "8f7e0ecd8984cd752e6aca5deba81b86fb369602",
+    "parserVersionBanner": "Chadwick expanded event descriptor, version 0.10.0",
+    "parserArguments": "cwevent -n -y <season> -f 0,2,3,4,5,6,7,10,11,12,13,14,15,16,17,29,31,33,34,35,36,86,87 <eventfile>",
+    "fieldList": "0,2,3,4,5,6,7,10,11,12,13,14,15,16,17,29,31,33,34,35,36,86,87",
+    "note": "Pinned to the exact toolchain proven in PR7A.0 (built from source on a clean GitHub Actions runner). The runbook-required semantic fields (PITCH_SEQ_TX, RESP_BAT_ID, RESP_BAT_HAND_CD, RESP_PIT_ID, RESP_PIT_HAND_CD, EVENT_CD, BAT_LINEUP_ID, count fields) are STANDARD cwevent fields in 0.10.0, emitted via -f; -x extended fields are not required for this contract."
   },
   "seasonWindow": {
     "trainingFloorSeason": 2000,
     "trainingFloorStatus": "provisional_not_empirically_verified",
-    "reason": "PROVISIONAL. PITCH_SEQ_TX completeness is BELIEVED strong from ~2000, but this is not empirically verified until the season matrix is measured. Treat 2000+ as a working assumption, not a proven floor.",
-    "seasonMatrix2000_2025": "PENDING_MEASUREMENT — must be produced by running the pinned parser over the licensed dataset in the authorized environment; values must never be fabricated (see contract §3.6). The 2000+ floor is confirmed or corrected ONLY by this matrix."
+    "reason": "PROVISIONAL — UNCHANGED by PR7A.0/PR7A.1. PITCH_SEQ_TX completeness is BELIEVED strong from ~2000, but this is not empirically verified until the season matrix is measured. The PR7A.0 proof validated the parser + raw-shape contract on a 2019 sample; it did NOT measure multi-season coverage. Treat 2000+ as a working assumption, not a proven floor.",
+    "seasonMatrix2000_2025": "PENDING_MEASUREMENT — UNCHANGED by PR7A.0/PR7A.1. Must be produced by running the pinned parser over the licensed dataset in the authorized environment; values must never be fabricated (see contract §3.6). The 2000+ floor is confirmed or corrected ONLY by this matrix."
   },
   "floors": {
     "pitchSequenceCoverage": 0.90,
