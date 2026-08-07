@@ -19,10 +19,10 @@ const here = dirname(fileURLToPath(import.meta.url));
 const doc = JSON.parse(readFileSync(resolve(here, "__fixtures__/cases.json"), "utf8")) as {
   cases: Array<{
     id: string; kind: NbaSourceKind; season: number; entityNativeId: string; fetchedAtIso: string;
-    raw: unknown; rawCorrected?: unknown;
+    raw: unknown; rawCorrected?: unknown; rawOtherGame?: unknown;
     expected: {
       adapter: { ok: boolean; reason?: string; recordCount?: number };
-      knownAtSupport?: string; features?: Record<string, string>; teamTricodes?: string[]; correctionChangesContentHash?: boolean;
+      knownAtSupport?: string; features?: Record<string, string>; teamTricodes?: string[]; correctionChangesContentHash?: boolean; differentGameContentHash?: boolean;
     };
   }>;
 };
@@ -60,6 +60,9 @@ for (const c of doc.cases) {
   }
   if (c.expected.correctionChangesContentHash && c.rawCorrected !== undefined) {
     ok(computeContentHash(c.raw) !== computeContentHash(c.rawCorrected), `[${c.id}] correction changes the content hash (new immutable snapshot)`);
+  }
+  if (c.expected.differentGameContentHash && c.rawOtherGame !== undefined) {
+    ok(computeContentHash(c.raw) !== computeContentHash(c.rawOtherGame), `[${c.id}] identical stats in different games → different content hash (no collision)`);
   }
 }
 

@@ -20,6 +20,12 @@ validates every case against the real pipeline.
 | 7 | `observed_zero` | Player appeared but recorded 0 of a stat | `observed_zero` (finite 0), **distinct** from `missing`. |
 | 8 | `corrected_record` | Same game re-fetched with a corrected stat value | A genuine content change → a **new immutable snapshot** (different content hash); the prior snapshot is retained; replay before the correction still sees the old value. |
 | 9 | `provider_incomplete` | Provider failure / truncated / empty `resultSets` | Incomplete → coverage gap; **cannot** be reported as complete coverage and **cannot** fabricate a zero or a full feature. |
+| 10 | `reordered_headers` | Columns in a different order | Resolved **by name**; parses correctly (order-independent). |
+| 11 | `missing_required_header` | Missing `GAME_DATE` | Fail closed → `incomplete_response` (a structural anchor is required). |
+| 12 | `duplicate_required_header` | Duplicate `GAME_ID` | Ambiguous → fail closed → `incomplete_response` (never silent last-wins). |
+| 13 | `same_content_different_games` | Identical stat content, distinct `GAME_ID`s | Different content hash → no identity collision (game id is in the hashed payload). |
+
+**Synthetic, not captured:** these fixtures are hand-authored to be structurally faithful to the endpoint shape; they are **not** captured live NBA Stats payloads (`cases.json` carries `"synthetic": true`).
 
 ## Honesty rules these fixtures enforce (from the PR5 scope lock)
 
