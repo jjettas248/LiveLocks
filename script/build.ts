@@ -33,7 +33,14 @@ const allowlist = [
   "zod-validation-error",
 ];
 
-function getBuildCommitSha(): string | null {
+function getBuildCommitSha(): { sha: string | null; source: string } {
+  // Railway's Railpack build container has no git binary, so prefer the
+  // platform-provided commit env var; fall back to git for local/other builds.
+  const envSha = process.env.RAILWAY_GIT_COMMIT_SHA?.trim();
+  if (envSha) {
+    return { sha: envSha.slice(0, 7), source: "RAILWAY_GIT_COMMIT_SHA env" };
+  }
+
   try {
     const sha = execSync("git rev-parse --short HEAD", {
       stdio: ["ignore", "pipe", "ignore"],
@@ -41,10 +48,10 @@ function getBuildCommitSha(): string | null {
     })
       .toString()
       .trim();
-    return sha || null;
-  } catch {
-    return null;
-  }
+    if (sha) return { sha, source: "git rev-parse" };
+  } catch {}
+
+  return { sha: null, source: "unavailable" };
 }
 
 async function buildAll() {
@@ -61,13 +68,14 @@ async function buildAll() {
   ];
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
-  // Captured here because the runtime container has no .git / git binary —
-  // this is the only point in the pipeline where the real commit is available.
-  const buildCommitSha = getBuildCommitSha();
+  // Captured here because the runtime container has neither git nor
+  // RAILWAY_GIT_COMMIT_SHA — this is the only point where either is available.
+  const { sha: buildCommitSha, source: buildCommitShaSource } =
+    getBuildCommitSha();
   console.log(
     buildCommitSha
-      ? `captured build commit sha: ${buildCommitSha}`
-      : "could not capture build commit sha (git unavailable at build time)",
+      ? `captured build commit sha via ${buildCommitShaSource}: ${buildCommitSha}`
+      : `could not capture build commit sha (${buildCommitShaSource})`,
   );
 
   await esbuild({
