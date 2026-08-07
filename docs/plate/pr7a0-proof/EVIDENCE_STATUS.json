@@ -1,0 +1,49 @@
+{
+  "note": "Status metadata for the PR7A.0 proof bundle. The raw machine evidence files are NOT rewritten or deleted; this sidecar records which of them are authoritative raw capture vs. first-pass adjudication that PR7A.1 has since superseded. Read this to resolve any apparent contradiction between a PR7A.0 file and the PR7A.1 final state.",
+  "proofRun": {
+    "githubActionsRun": "31135930818",
+    "capturedUtc": "2026-08-07T00:49:28Z",
+    "parser": "Chadwick cwevent 0.10.0 (8f7e0ecd8984cd752e6aca5deba81b86fb369602)"
+  },
+  "finalAdjudication": {
+    "evidenceStage": "reconciled",
+    "contractComparisonResult": "../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json",
+    "manifest": "../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/SOURCE_MANIFEST.json",
+    "manifestStatus": "validated",
+    "producedBy": "PR7A.1"
+  },
+  "files": {
+    "rawEvidence_authoritative_unchanged": {
+      "evidenceStage": "raw_capture",
+      "note": "Byte-exact capture / provenance. Still authoritative; the PR7A.1 verifier reads these for the content-addressed provenance and grammar backing.",
+      "members": [
+        "PARSER_IDENTITY.json",
+        "PARSER_IDENTITY.txt",
+        "SOURCE_PROVENANCE.txt",
+        "GRAMMAR_CROSSCHECK.json",
+        "PHENOMENA.json",
+        "SOURCE_SAMPLE.txt",
+        "GAME_IDS.txt",
+        "cwevent_output/ANA201904040.csv",
+        "cwevent_output/ARI201908060.csv",
+        "cwevent_output/ARI201909140.csv",
+        "cwevent_output/BAL201908010.csv"
+      ]
+    },
+    "preReconciliationAdjudication_superseded": {
+      "evidenceStage": "pre_reconciliation",
+      "supersededBy": "../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json",
+      "note": "PR7A.0 FIRST-PASS per-fixture verdicts and 'manifest stays draft' / case-03 'actionable mismatch' framing. These reflect the pre-reconciliation state and are retained for history. The reconciled conclusions are: cases 02 & 03 corrected and real-anchored (case 03 attribution CONFIRMED, not a mismatch), and the manifest advanced to 'validated'. Do not treat the draft/mismatch statements in these files as current.",
+      "members": [
+        "COMPARISON.md",
+        "FIXTURE_COMPARISON.json",
+        "MISMATCHES.json"
+      ]
+    },
+    "analystSummary_updated": {
+      "evidenceStage": "reconciled",
+      "note": "Human adjudication; updated in PR7A.1 with a current-state banner (its historical PR7A.0 analysis is retained below the banner).",
+      "members": ["REVIEWER_SUMMARY.md"]
+    }
+  }
+}

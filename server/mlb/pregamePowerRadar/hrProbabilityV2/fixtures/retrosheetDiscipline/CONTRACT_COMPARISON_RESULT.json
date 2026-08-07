@@ -10,58 +10,66 @@
     {
       "case": "01_normal_game_complete",
       "realAnchored": false,
-      "checks": 4,
-      "status": "PASS",
-      "problems": []
+      "checks": 64,
+      "problems": [],
+      "status": "PASS"
     },
     {
       "case": "02_interrupted_pa_period",
       "realAnchored": true,
-      "checks": 1,
-      "status": "PASS",
-      "problems": []
+      "checks": 31,
+      "problems": [],
+      "status": "PASS"
     },
     {
       "case": "03_sub_responsible_batter",
       "realAnchored": true,
-      "checks": 1,
-      "status": "PASS",
-      "problems": []
+      "checks": 22,
+      "problems": [],
+      "status": "PASS"
     },
     {
       "case": "04_handedness_split",
       "realAnchored": false,
-      "checks": 1,
-      "status": "PASS",
-      "problems": []
+      "checks": 19,
+      "problems": [],
+      "status": "PASS"
     },
     {
       "case": "05_missing_incomplete_seq",
       "realAnchored": false,
-      "checks": 2,
-      "status": "PASS",
-      "problems": []
+      "checks": 21,
+      "problems": [],
+      "status": "PASS"
     },
     {
       "case": "06_unknown_handedness",
       "realAnchored": false,
-      "checks": 1,
-      "status": "PASS",
-      "problems": []
+      "checks": 19,
+      "problems": [],
+      "status": "PASS"
     },
     {
       "case": "07_below_coverage_gate",
       "realAnchored": false,
-      "checks": 0,
-      "status": "PASS",
-      "problems": []
+      "checks": 15,
+      "problems": [],
+      "status": "PASS"
     },
     {
       "case": "08_sample_floor_boundaries",
-      "checks": 0,
-      "status": "PASS",
-      "problems": []
+      "realAnchored": false,
+      "checks": 16,
+      "problems": [],
+      "status": "PASS"
     }
   ],
+  "provenance": {
+    "case": "__provenance__",
+    "realAnchored": false,
+    "checks": 25,
+    "problems": [],
+    "status": "PASS"
+  },
   "overall": "PASS"
 }

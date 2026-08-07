@@ -1,10 +1,20 @@
 # PR7A.0 — reviewer summary (analyst adjudication over the machine evidence)
 
+> **PR7A.1 UPDATE (current state):** the recommendations below were **carried out** in PR7A.1.
+> Fixtures 02 & 03 were re-anchored to the real cwevent output rows cited here, the contract/README
+> were updated, and `SOURCE_MANIFEST.json` was advanced to **`status: validated`** after all 8
+> fixtures + a content-addressed provenance check passed the revised contract comparison
+> (`../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json`).
+> The 2000+ training floor stays provisional and the 2000–2025 season matrix stays
+> PENDING_MEASUREMENT. See `EVIDENCE_STATUS.json` in this directory for which files are authoritative
+> raw evidence vs. superseded first-pass adjudication. The paragraph immediately below describes the
+> PR7A.0 state at capture time and is retained for history.
+
 **This file is human adjudication layered on top of the machine-generated evidence in this
 directory (`COMPARISON.md`, `GRAMMAR_CROSSCHECK.json`, `PHENOMENA.json`, `FIXTURE_COMPARISON.json`,
-`MISMATCHES.json`, `cwevent_output/`). The raw evidence is authoritative; nothing here edits the
-fixtures, the contract, or the manifest.** The manifest remains
-`draft_pending_toolchain_validation` pending your decision.
+`MISMATCHES.json`, `cwevent_output/`). The raw evidence is authoritative.** *(At PR7A.0 capture time
+the manifest was `draft_pending_toolchain_validation`; PR7A.1 has since advanced it to `validated` —
+see the update banner above.)*
 
 ## How this was produced
 
@@ -64,13 +74,16 @@ Disposable GitHub Actions workflow (`.github/workflows/pr7a0-chadwick-proof.yml`
    sample). Those 3 rows ARE the carryovers and they confirm the rule — see
    `PHENOMENA.json → responsibleBatter.respDiffersExamples`.
 
-## Recommendation
+## Recommendation — DONE in PR7A.1
 
-The synthetic contract is substantively correct on grammar, handedness, and responsible-batter
-attribution. The only real-output corrections are the raw-shape/reassembly representation in cases 02
-and 03. Once you approve those fixture edits, `SOURCE_MANIFEST.json` can move
+The synthetic contract was substantively correct on grammar, handedness, and responsible-batter
+attribution. The only real-output corrections were the raw-shape/reassembly representation in cases 02
+and 03. **PR7A.1 applied those fixture edits** and advanced `SOURCE_MANIFEST.json`
 `draft_pending_toolchain_validation → validated` with `parserVersion=Chadwick cwevent 0.10.0
-(8f7e0ecd…)` and the frozen `parserArguments` above. **Not done automatically here.**
+(8f7e0ecd…)` and the frozen `parserArguments` above — **only after** all 8 fixtures plus a
+content-addressed provenance/parser-identity check passed the revised contract comparison
+(`scripts/pr7a0/verifyFixtureContract.mjs`). The 2000+ floor and the 2000–2025 season matrix remain
+gated (provisional / PENDING_MEASUREMENT).
 
 ## Retrosheet attribution
 
