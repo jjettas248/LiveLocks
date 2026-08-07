@@ -95,6 +95,39 @@ export const PROVISIONAL_UNCALIBRATED_TAG = "provisional_uncalibrated" as const;
 export const MLB_PREDICTION_CAPTURE_ENABLED_DEFAULT = true;
 export const MLB_SHADOW_PUBLIC_SURFACING_DEFAULT = false;
 
+// ── Stage C PR3 — calibrator promotion master switch (default OFF) ────────────
+// The single gate on whether a fitted+gate-cleared calibrator is ever ACTIVATED
+// (written to mlb_active_calibrators by the runner) AND whether the finalizer
+// ever CONSULTS an active calibrator to fill calibratedProbability. Both the
+// write side (auto-promotion in the runner) and the read side (the hot-path
+// registry consult) are AND-gated on this flag. While it is off:
+//   * the runner fits + walk-forward-evaluates + persists artifacts as before,
+//     but activates NOTHING (production stays calibratedProbability = null);
+//   * the finalizer never reads the registry, so a stray active row (e.g. from a
+//     prior on-window) still has zero engine effect.
+// Read ONCE at boot via resolveMlbCalibrationPromotionEnabled (never per-tick);
+// flipping it is an explicit, human-reviewed step — no code change required.
+export const MLB_CALIBRATION_PROMOTION_ENABLED_DEFAULT = false;
+
+let CALIBRATION_PROMOTION_ENABLED = MLB_CALIBRATION_PROMOTION_ENABLED_DEFAULT;
+
+/** The resolved promotion master switch (default off unless overridden at boot). */
+export function isMlbCalibrationPromotionEnabled(): boolean {
+  return CALIBRATION_PROMOTION_ENABLED;
+}
+
+/**
+ * One-time boot resolution of the promotion master switch. Reads the
+ * MLB_CALIBRATION_PROMOTION_ENABLED env var ONCE (only an exact "true" enables;
+ * anything else — unset, "false", "1", garbage — stays fail-closed off) and
+ * caches it. Never read per-tick. Returns the resolved value.
+ */
+export function resolveMlbCalibrationPromotionEnabled(): boolean {
+  const raw = typeof process !== "undefined" ? process.env?.MLB_CALIBRATION_PROMOTION_ENABLED : undefined;
+  CALIBRATION_PROMOTION_ENABLED = raw === "true" ? true : MLB_CALIBRATION_PROMOTION_ENABLED_DEFAULT;
+  return CALIBRATION_PROMOTION_ENABLED;
+}
+
 export const DEFAULT_MLB_POLICY_THRESHOLDS: MlbPolicyThresholds = {
   minNoVigEdgePctPoints: 2.0,
   minCandidateProbabilityPct: 55,
@@ -218,6 +251,6 @@ export function describeMlbLivePolicy(policy: MlbLivePolicy = ACTIVE_POLICY): st
     `late(${inn.late.min}+)=${inn.late.officialAllowed ? "official" : "watch_only"} | markets ${marketStr} | ` +
     `minEdgePP=${policy.thresholds.minNoVigEdgePctPoints} minProb=${policy.thresholds.minCandidateProbabilityPct} | ` +
     `hitsProvisional=${HITS_PROVISIONAL_UNCALIBRATED_DEFAULT} captureOn=${MLB_PREDICTION_CAPTURE_ENABLED_DEFAULT} ` +
-    `publicShadow=${MLB_SHADOW_PUBLIC_SURFACING_DEFAULT}`
+    `publicShadow=${MLB_SHADOW_PUBLIC_SURFACING_DEFAULT} calibrationPromotion=${isMlbCalibrationPromotionEnabled()}`
   );
 }

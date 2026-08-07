@@ -5,12 +5,13 @@
 import {
   runCalibrationFit,
   artifactToInsertRow,
+  activationToInsertRow,
   latestArtifactPerSegment,
   type CalibrationRunnerDeps,
 } from "./calibrationRunner";
 import { MLB_CALIBRATION_ARTIFACT_VERSION, type MlbCalibrationArtifact } from "@shared/mlbCalibration";
 import { MLB_PREDICTION_LEDGER_CONTRACT_VERSION, type MlbLanePrediction, type MlbLedgerSettlementResult } from "@shared/mlbPredictionLedger";
-import type { InsertMlbCalibrationArtifact, MlbCalibrationArtifactRow } from "@shared/schema";
+import type { InsertMlbCalibrationArtifact, MlbCalibrationArtifactRow, InsertMlbActiveCalibrator } from "@shared/schema";
 
 let passed = 0;
 let failed = 0;
@@ -19,6 +20,31 @@ function ok(cond: boolean, msg: string) {
 }
 
 const NOW = 1_700_000_000_000;
+
+// Fills the Stage C PR3 promotion deps with inert defaults (flag OFF, no active
+// segments, recording no-op writers) so a test overrides only what it exercises.
+interface PromoRecorder {
+  activated: InsertMlbActiveCalibrator[];
+  deactivated: Array<{ segment: string; reason: string }>;
+  refreshCalls: number;
+}
+function withDeps(
+  partial: Partial<CalibrationRunnerDeps>,
+  rec?: PromoRecorder,
+  activeSegments: string[] = [],
+): CalibrationRunnerDeps {
+  return {
+    listLedgerRows: async () => [],
+    saveArtifacts: async (r) => r.length,
+    listActiveSegments: async () => activeSegments,
+    activateCalibrator: async (row) => { rec?.activated.push(row); return {}; },
+    deactivateCalibrator: async (segment, reason) => { rec?.deactivated.push({ segment, reason }); return {}; },
+    refreshRegistry: async () => { if (rec) rec.refreshCalls++; return {}; },
+    promotionEnabled: () => false,
+    now: () => NOW,
+    ...partial,
+  };
+}
 
 let seq = 0;
 function pred(market: string, probPct: number, result: MlbLedgerSettlementResult, dayIdx: number): MlbLanePrediction {
@@ -50,11 +76,10 @@ function makeLedger(): MlbLanePrediction[] {
 {
   const rows = makeLedger();
   let saved: InsertMlbCalibrationArtifact[] = [];
-  const deps: CalibrationRunnerDeps = {
+  const deps = withDeps({
     listLedgerRows: async () => rows,
     saveArtifacts: async (r) => { saved = r; return r.length; },
-    now: () => NOW,
-  };
+  });
   const s = await runCalibrationFit(deps);
   ok(!s.error && s.segments === 2 && s.artifactsSaved === 2, "fits + saves one artifact per market segment");
   ok(s.observationsScanned === rows.length, "reports rows scanned");
@@ -70,11 +95,10 @@ function makeLedger(): MlbLanePrediction[] {
 
 // NEVER throws when save rejects ⇒ error summary
 {
-  const deps: CalibrationRunnerDeps = {
+  const deps = withDeps({
     listLedgerRows: async () => makeLedger(),
     saveArtifacts: async () => { throw new Error("db down"); },
-    now: () => NOW,
-  };
+  });
   let threw = false;
   let s: any;
   try { s = await runCalibrationFit(deps); } catch { threw = true; }
@@ -85,11 +109,10 @@ function makeLedger(): MlbLanePrediction[] {
 // Empty / no-settled ledger ⇒ no fit, save not called
 {
   let saveCalls = 0;
-  const deps: CalibrationRunnerDeps = {
+  const deps = withDeps({
     listLedgerRows: async () => [],
     saveArtifacts: async (r) => { saveCalls++; return r.length; },
-    now: () => NOW,
-  };
+  });
   const s = await runCalibrationFit(deps);
   ok(s.segments === 0 && s.artifactsSaved === 0, "empty ledger ⇒ nothing fit");
   ok(saveCalls === 0, "save not called when there is nothing to persist");
@@ -99,11 +122,10 @@ function makeLedger(): MlbLanePrediction[] {
 {
   let capturedAfter = -1;
   let limitSeen = -1;
-  const deps: CalibrationRunnerDeps = {
+  const deps = withDeps({
     listLedgerRows: async (o) => { capturedAfter = o.capturedAfterMs; limitSeen = o.limit; return []; },
     saveArtifacts: async (r) => r.length,
-    now: () => NOW,
-  };
+  });
   const s = await runCalibrationFit(deps, { windowDays: 30, maxRows: 100, bins: 10, pseudoCount: 20, segmentByLane: false });
   ok(capturedAfter === NOW - 30 * 24 * 3600 * 1000, "reads ledger with the policy window bound");
   ok(limitSeen === 100, "passes maxRows as the read limit");
@@ -113,11 +135,10 @@ function makeLedger(): MlbLanePrediction[] {
 // Truncation is reported (not silent) when the read hits maxRows
 {
   const rows = makeLedger().slice(0, 2); // exactly maxRows=2
-  const deps: CalibrationRunnerDeps = {
+  const deps = withDeps({
     listLedgerRows: async () => rows,
     saveArtifacts: async (r) => r.length,
-    now: () => NOW,
-  };
+  });
   const s = await runCalibrationFit(deps, { windowDays: 120, maxRows: 2, bins: 10, pseudoCount: 20, segmentByLane: false });
   ok(s.truncated === true, "rows.length >= maxRows ⇒ summary.truncated true (window truncation surfaced)");
 }
@@ -142,6 +163,57 @@ function makeLedger(): MlbLanePrediction[] {
   const latest = latestArtifactPerSegment(rows);
   ok(latest.length === 2, "one row per segment");
   ok(latest.find((r) => r.segment === "hits")!.artifactId === "hits:3", "keeps the first (newest) hits row");
+}
+
+// ── Stage C PR3 — promotion wiring ───────────────────────────────────────────
+
+// SAFETY: flag OFF ⇒ ZERO registry writes, no refresh, even with settled data.
+{
+  const rec: PromoRecorder = { activated: [], deactivated: [], refreshCalls: 0 };
+  const deps = withDeps({ listLedgerRows: async () => makeLedger(), promotionEnabled: () => false }, rec, ["hits"]);
+  const s = await runCalibrationFit(deps);
+  ok(s.promotionEnabled === false, "summary reports promotion disabled");
+  ok(s.activated === 0 && s.deactivated === 0, "flag OFF ⇒ nothing activated/deactivated");
+  ok(rec.activated.length === 0 && rec.deactivated.length === 0 && rec.refreshCalls === 0, "flag OFF ⇒ registry untouched (no writes, no refresh)");
+}
+
+// Flag ON + a currently-active segment that does NOT clear the gate this run ⇒
+// deactivated, and the hot-path registry is refreshed.
+{
+  const rec: PromoRecorder = { activated: [], deactivated: [], refreshCalls: 0 };
+  // makeLedger has only ~4 slate dates ⇒ well under the gate's distinct-slate bar,
+  // so "hits" (active) fails and is pulled.
+  const deps = withDeps({ listLedgerRows: async () => makeLedger(), promotionEnabled: () => true }, rec, ["hits"]);
+  const s = await runCalibrationFit(deps);
+  ok(s.promotionEnabled === true, "summary reports promotion enabled");
+  ok(s.activated === 0, "insufficient-evidence segment is not activated");
+  ok(s.deactivated >= 1 && rec.deactivated.some((d) => d.segment === "hits"), "active segment that no longer qualifies is deactivated");
+  ok(rec.refreshCalls === 1, "registry refreshed once after a live-state change");
+}
+
+// Flag ON but no active segments + no passing segment ⇒ no writes, no refresh.
+{
+  const rec: PromoRecorder = { activated: [], deactivated: [], refreshCalls: 0 };
+  const deps = withDeps({ listLedgerRows: async () => makeLedger(), promotionEnabled: () => true }, rec, []);
+  const s = await runCalibrationFit(deps);
+  ok(s.activated === 0 && s.deactivated === 0, "no passing + no active ⇒ no registry writes");
+  ok(rec.refreshCalls === 0, "no live-state change ⇒ no refresh");
+}
+
+// activationToInsertRow — field mapping + provenance
+{
+  const artifact: MlbCalibrationArtifact = {
+    segment: "hits", method: "reliability_isotonic_v1",
+    bins: [{ lo: 0.5, hi: 0.6, center: 0.55, count: 100, empiricalRate: 0.55, calibratedRate: 0.55 }],
+    fitStats: { sampleSize: 200, distinctSlateDates: 20, basePositiveRate: 0.55, rawBrier: 0.28, calibratedBrier: 0.23, rawLogLoss: 0.7, calibratedLogLoss: 0.6, rawEcePct: 9, calibratedEcePct: 2, inSample: true },
+    builtAtMs: NOW, ledgerContractVersion: "mlb_prediction_ledger_v1", artifactVersion: MLB_CALIBRATION_ARTIFACT_VERSION,
+  };
+  const snapshot = { usedOutOfSample: true, evaluatedBrier: 0.23, evaluatedRawBrier: 0.28, evaluatedEcePct: 2, heldOutSampleSize: 200, heldOutDistinctSlateDates: 20, forwardRoiUnits: 5, forwardBetsPlaced: 100, tierMonotonic: true, gateReasons: [] };
+  const row = activationToInsertRow({ segment: "hits", artifact, snapshot }, NOW, NOW);
+  ok(row.segment === "hits" && row.artifactId === `hits:${NOW}`, "activation row: segment + artifactId");
+  ok(row.active === true && row.activatedBy === "auto_promotion_runner", "activation row: active + provenance");
+  ok((row.artifact as any).bins.length === 1 && (row.promotionEvidence as any).forwardRoiUnits === 5, "activation row: artifact + evidence jsonb carried");
+  ok(row.ledgerContractVersion === "mlb_prediction_ledger_v1" && row.artifactVersion === MLB_CALIBRATION_ARTIFACT_VERSION, "activation row: versions carried");
 }
 
 console.log(`\ncalibrationRunner.test.ts — ${passed} passed, ${failed} failed`);

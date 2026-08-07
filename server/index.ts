@@ -1201,11 +1201,27 @@ app.use((req, res, next) => {
   setTimeout(runStageBSweep, 4 * 60 * 1000);
   setInterval(runStageBSweep, 5 * 60 * 1000);
 
+  // MLB Live Edge Stage C PR3 — resolve the calibrator-promotion master switch
+  // ONCE at boot (default OFF; only an exact MLB_CALIBRATION_PROMOTION_ENABLED=
+  // "true" turns it on) and load the active-calibrator registry into memory so
+  // the finalizer's hot-path lookup is cache-only. While the flag is off the
+  // registry has zero engine effect (the lookup is flag-gated); the load is a
+  // harmless no-op cost. Both are fire-and-forget and never throw.
+  import("./mlb/productionPolicy")
+    .then(({ resolveMlbCalibrationPromotionEnabled }) => {
+      const enabled = resolveMlbCalibrationPromotionEnabled();
+      console.log(`[MLB_STAGE_C_PROMOTION] calibrator promotion master switch: ${enabled ? "ON" : "OFF"}`);
+    })
+    .then(() => import("./mlb/stageC/activeCalibratorRegistry"))
+    .then(({ refreshActiveCalibratorRegistry }) => refreshActiveCalibratorRegistry(Date.now()))
+    .catch((e) => console.warn("[MLB_STAGE_C_REGISTRY_ERROR]", e?.message ?? e));
+
   // MLB Live Edge Stage C offline calibration fit (research-only): reads a
   // window of the Stage B ledger READ-ONLY, fits a raw→calibrated mapping per
-  // segment, and persists artifacts — never promotes, nothing in the live engine
-  // reads them. Offline background job: first run +10 min, then every 6h. Never
-  // throws.
+  // segment, persists artifacts, and — only when the promotion flag is ON —
+  // auto-promotes any segment that clears the gate on OUT-OF-SAMPLE walk-forward
+  // evidence (and deactivates ones that no longer qualify). Offline background
+  // job: first run +10 min, then every 6h. Never throws.
   const runStageCCalibration = () =>
     import("./mlb/stageC/calibrationRunner")
       .then(({ runCalibrationFitWithDefaults }) => runCalibrationFitWithDefaults())
