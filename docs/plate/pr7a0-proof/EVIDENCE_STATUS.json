@@ -7,8 +7,8 @@
   },
   "finalAdjudication": {
     "evidenceStage": "reconciled",
-    "contractComparisonResult": "../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json",
-    "manifest": "../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/SOURCE_MANIFEST.json",
+    "contractComparisonResult": "../../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json",
+    "manifest": "../../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/SOURCE_MANIFEST.json",
     "manifestStatus": "validated",
     "producedBy": "PR7A.1"
   },
@@ -32,7 +32,7 @@
     },
     "preReconciliationAdjudication_superseded": {
       "evidenceStage": "pre_reconciliation",
-      "supersededBy": "../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json",
+      "supersededBy": "../../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json",
       "note": "PR7A.0 FIRST-PASS per-fixture verdicts and 'manifest stays draft' / case-03 'actionable mismatch' framing. These reflect the pre-reconciliation state and are retained for history. The reconciled conclusions are: cases 02 & 03 corrected and real-anchored (case 03 attribution CONFIRMED, not a mismatch), and the manifest advanced to 'validated'. Do not treat the draft/mismatch statements in these files as current.",
       "members": [
         "COMPARISON.md",

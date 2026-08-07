@@ -4,7 +4,7 @@
 > Fixtures 02 & 03 were re-anchored to the real cwevent output rows cited here, the contract/README
 > were updated, and `SOURCE_MANIFEST.json` was advanced to **`status: validated`** after all 8
 > fixtures + a content-addressed provenance check passed the revised contract comparison
-> (`../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json`).
+> (`../../../server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/CONTRACT_COMPARISON_RESULT.json`).
 > The 2000+ training floor stays provisional and the 2000–2025 season matrix stays
 > PENDING_MEASUREMENT. See `EVIDENCE_STATUS.json` in this directory for which files are authoritative
 > raw evidence vs. superseded first-pass adjudication. The paragraph immediately below describes the

@@ -17,14 +17,14 @@
     {
       "case": "02_interrupted_pa_period",
       "realAnchored": true,
-      "checks": 31,
+      "checks": 37,
       "problems": [],
       "status": "PASS"
     },
     {
       "case": "03_sub_responsible_batter",
       "realAnchored": true,
-      "checks": 22,
+      "checks": 39,
       "problems": [],
       "status": "PASS"
     },

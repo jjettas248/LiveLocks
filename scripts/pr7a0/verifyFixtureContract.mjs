@@ -251,6 +251,47 @@ function crossCheckReal(acc, fx) {
     if (rec[k] !== undefined) assert(acc, eq(m[k], rec[k]), `real ${k}='${m[k]}' != fixture '${rec[k]}'`);
 }
 
+// ---- case 02: interrupted-PA reassembly semantics (normalized contract) ----
+function checkCase02(acc, fx) {
+  const e = fx.expected || {}; const r = e.reassembly || {}; const pa = (e.plateAppearances || [])[0] || {};
+  assert(acc, eq(r.terminalRecordCount, 1), `02 reassembly.terminalRecordCount ${r.terminalRecordCount} != 1`);
+  assert(acc, r.interruptionMarker === '.', `02 reassembly.interruptionMarker '${r.interruptionMarker}' != '.'`);
+  assert(acc, r.concatenatedFragments === false, `02 reassembly.concatenatedFragments must be false (no cross-record concat)`);
+  const markerCount = [...(pa.seq || '')].filter((c) => c === r.interruptionMarker).length;
+  if (r.markerStrippedExactlyOnce === true) assert(acc, markerCount === 1, `02 markerStrippedExactlyOnce=true but seq '${pa.seq}' has ${markerCount} '.' markers`);
+  const stripped = strip(pa.seq).join('');
+  assert(acc, Array.isArray(pa.reassembledPitches) && stripped === pa.reassembledPitches.join(''), `02 strip('${pa.seq}')='${stripped}' != reassembledPitches`);
+  // the terminal record's PITCH_SEQ_TX must equal the PA seq (single cumulative row)
+  const rec = fx.raw && fx.raw.terminalBatterEventRecord;
+  if (rec) assert(acc, eq(rec.PITCH_SEQ_TX, pa.seq), `02 terminal PITCH_SEQ_TX '${rec.PITCH_SEQ_TX}' != PA seq '${pa.seq}'`);
+}
+
+// ---- case 03: responsible/completing-batter attribution objects (normalized contract) ----
+function checkCase03(acc, fx) {
+  const e = fx.expected || {}; const rec = (fx.raw && fx.raw.terminalBatterEventRecord) || {};
+  const pa = (e.plateAppearances || [])[0] || {}; const attr = e.attribution || {};
+  // field-name declarations
+  assert(acc, e.responsibleBatterField === 'RESP_BAT_ID', `03 responsibleBatterField '${e.responsibleBatterField}' != RESP_BAT_ID`);
+  assert(acc, e.completingBatterField === 'BAT_ID', `03 completingBatterField '${e.completingBatterField}' != BAT_ID`);
+  assert(acc, e.removedForPhField === 'REMOVED_FOR_PH_BAT_ID', `03 removedForPhField '${e.removedForPhField}' != REMOVED_FOR_PH_BAT_ID`);
+  assert(acc, e.responsibleBatterRule === 'two_strike_substitution_charges_original_batter', `03 responsibleBatterRule '${e.responsibleBatterRule}'`);
+  // ids consistent with the real terminal record
+  assert(acc, e.responsibleBatterId === rec.RESP_BAT_ID, `03 responsibleBatterId '${e.responsibleBatterId}' != RESP_BAT_ID '${rec.RESP_BAT_ID}'`);
+  assert(acc, e.completingBatterId === rec.BAT_ID, `03 completingBatterId '${e.completingBatterId}' != BAT_ID '${rec.BAT_ID}'`);
+  assert(acc, e.responsibleBatterId === rec.REMOVED_FOR_PH_BAT_ID, `03 responsibleBatterId '${e.responsibleBatterId}' != REMOVED_FOR_PH_BAT_ID '${rec.REMOVED_FOR_PH_BAT_ID}'`);
+  assert(acc, pa.attributedToBatterId === e.responsibleBatterId, `03 PA attributedToBatterId '${pa.attributedToBatterId}' != responsibleBatterId '${e.responsibleBatterId}'`);
+  // responsible batter charged the whole PA; stats == recomputed classify()
+  const d = classify(pa.reassembledPitches || pa.pitches || []);
+  const resp = attr[e.responsibleBatterId] || {};
+  assert(acc, eq(resp.pa, 1), `03 attribution[${e.responsibleBatterId}].pa ${resp.pa} != 1`);
+  assert(acc, eq(resp.k, (pa.struckOut === true || eq(pa.eventCd, 3)) ? 1 : 0), `03 attribution[${e.responsibleBatterId}].k ${resp.k} inconsistent with outcome`);
+  for (const [key, val] of [['pitches', d.pitches], ['swings', d.swings], ['whiffs', d.swingingStrikes], ['fouls', d.fouls], ['calledStrikes', d.calledStrikes], ['takenPitches', d.takenPitches]])
+    if (resp[key] !== undefined) assert(acc, eq(resp[key], val), `03 attribution[${e.responsibleBatterId}].${key} ${resp[key]} != recomputed ${val}`);
+  // completing batter charged nothing
+  const comp = attr[e.completingBatterId] || {};
+  assert(acc, eq(comp.pa, 0) && eq(comp.k, 0), `03 completing batter '${e.completingBatterId}' must be charged nothing (pa=${comp.pa} k=${comp.k})`);
+}
+
 // ---- provenance + parser identity (gates status=validated) ----
 function checkProvenance() {
   const acc = { case: '__provenance__', realAnchored: false, checks: 0, problems: [] };
@@ -279,8 +320,10 @@ function checkProvenance() {
   assert(acc, normV(manifest.parser.parserVersion) === normV(parserId.parserVersion), `parserVersion manifest '${manifest.parser.parserVersion}' != PARSER_IDENTITY '${parserId.parserVersion}'`);
   assert(acc, manifest.parser.parserCommitSha === parserId.parserCommitSha, `parserCommitSha manifest '${manifest.parser.parserCommitSha}' != PARSER_IDENTITY '${parserId.parserCommitSha}'`);
   assert(acc, manifest.parser.fieldList === parserId.fieldList, `fieldList manifest != PARSER_IDENTITY`);
-  // args: manifest uses <season>/<eventfile> placeholders; compare on the field-list substring
-  assert(acc, parserId.cweventArguments.includes('-f ' + parserId.fieldList) && manifest.parser.parserArguments.includes('-f ' + manifest.parser.fieldList), `parser arguments field-list mismatch`);
+  // args: normalize the manifest <season> placeholder to the proof season, then require EXACT equality
+  const proofSeason = provGet(/retrosheet_dataset=Retrosheet (\d{4})/) || '2019';
+  const manifestArgsNorm = String(manifest.parser.parserArguments).replace(/<season>/g, proofSeason);
+  assert(acc, manifestArgsNorm === parserId.cweventArguments, `parser arguments (season-normalized) '${manifestArgsNorm}' != PARSER_IDENTITY '${parserId.cweventArguments}'`);
 
   // 4. fixture-declared hashes (cases 02/03) == recomputed CSV + manifest
   for (const cf of ['02_interrupted_pa_period.json', '03_sub_responsible_batter.json']) {
@@ -308,6 +351,8 @@ for (const cf of caseFiles) {
   const pas = (fx.expected && fx.expected.plateAppearances) || [];
   for (let i = 0; i < pas.length; i++) checkPa(acc, i, pas[i]);
   checkBatterAggregate(acc, fx);
+  if (fx.case.startsWith('02')) checkCase02(acc, fx);
+  if (fx.case.startsWith('03')) checkCase03(acc, fx);
   if (fx.case.startsWith('04')) checkCase04(acc, fx);
   if (fx.case.startsWith('05')) checkCase05(acc, fx);
   if (fx.case.startsWith('06')) checkCase06(acc, fx);
