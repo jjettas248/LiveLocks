@@ -1,4 +1,5 @@
 import { type ReactNode } from "react";
+import { useLocation } from "wouter";
 import { Check, Plus } from "lucide-react";
 import { type ConfidenceTier } from "./ConfidenceBadge";
 import { ShareSignalButton } from "@/components/common/ShareSignalButton";
@@ -153,6 +154,7 @@ export function SportSignalCard({
   lastABContact,
   matchup,
 }: SportSignalCardProps) {
+  const [, navigate] = useLocation();
   const sportBadge = SPORT_BADGE[sport] ?? SPORT_BADGE.NBA;
   const grade = TIER_GRADE[badgeTier];
   const rankStyle = rank != null ? RANK_STYLES[rank] : undefined;
@@ -236,7 +238,7 @@ export function SportSignalCard({
       <div className="px-4 py-2.5 border-t border-border/30">
         <CardActions
           primaryLabel={locked ? "Upgrade" : "View Details"}
-          onPrimary={locked ? () => { window.location.href = "/upgrade"; } : onPrimaryAction}
+          onPrimary={locked ? () => navigate("/upgrade") : onPrimaryAction}
           isUrgent={isBestBet}
           trailingSlot={footerSlot}
         >
