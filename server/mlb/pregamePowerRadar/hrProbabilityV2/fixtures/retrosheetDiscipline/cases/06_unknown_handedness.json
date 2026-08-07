@@ -1,0 +1,40 @@
+{
+  "case": "06_unknown_handedness",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
+  "description": "A PA whose opposing pitcher handedness cannot be resolved (RESP_PIT_HAND_CD = '?'). The PA still counts toward the batter's OVERALL metrics; only the handedness SPLIT attribution is withheld (neither vsL nor vsR). Nulls only the affected split, never the overall.",
+  "raw": {
+    "records": [
+      "id,BOS201909100",
+      "info,site,BOS07",
+      "info,date,2019/09/10",
+      "start,ovrb001,\"Overall Counts\",0,5,3",
+      "roster,ovrb001,bats=L,throws=L",
+      "play,3,0,ovrb001,21,BCBFS,K"
+    ]
+  },
+  "expected": {
+    "gameId": "BOS201909100",
+    "batterId": "ovrb001",
+    "handednessResolution": {
+      "resolvedBatterHand": "L",
+      "resolvedPitcherHand": "?",
+      "unknownHandedness": true,
+      "splitAttributed": false,
+      "note": "Pitcher hand unresolved → this PA is NOT attributed to any batter vs-hand split."
+    },
+    "plateAppearances": [
+      {
+        "seq": "BCBFS", "pitches": ["B","C","B","F","S"], "count": {"balls": 2, "strikes": 2},
+        "balls": 2, "calledStrikes": 1, "swingingStrikes": 1, "fouls": 1, "inPlay": 0, "takenPitches": 3, "swings": 2,
+        "firstPitchStrike": false, "reachedTwoStrikes": true, "struckOut": true, "twoStrikeSurvived": false,
+        "eventCd": 3, "outcome": "K", "sequenceComplete": true
+      }
+    ],
+    "batterAggregate": {
+      "overall": {"pa": 1, "codedPitchPa": 1, "k": 1, "swings": 2, "whiffs": 1, "fouls": 1},
+      "split": {"paVsL": 0, "paVsR": 0, "reason": "unknown_handedness_split_withheld"}
+    }
+  }
+}

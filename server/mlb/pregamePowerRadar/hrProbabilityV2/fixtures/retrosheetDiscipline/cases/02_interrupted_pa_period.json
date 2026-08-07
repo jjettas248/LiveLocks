@@ -1,0 +1,39 @@
+{
+  "case": "02_interrupted_pa_period",
+  "fixtureOrigin": "synthetic",
+  "purpose": "contract_and_normalization_specification",
+  "notValidatedAgainstRealRetrosheetOutput": true,
+  "description": "A single plate appearance that spans TWO play records because a stolen base occurred mid-AB. The continuation record's PITCH_SEQ_TX begins with the Retrosheet period '.' denoting pitches already recorded. Must reassemble to ONE PA with pitches B,B,C,X — never double-count, never treat as malformed.",
+  "raw": {
+    "records": [
+      "id,SLN201905010",
+      "info,site,STL10",
+      "info,date,2019/05/01",
+      "start,markn001,\"Nicholas Markakis\",0,3,9",
+      "play,4,0,markn001,20,BB,SB2",
+      "play,4,0,markn001,21,.CX,S8"
+    ]
+  },
+  "expected": {
+    "gameId": "SLN201905010",
+    "batterId": "markn001",
+    "reassembly": {
+      "recordCount": 2,
+      "interruptionMarker": ".",
+      "interruptingPlay": "SB2",
+      "note": "SB2 is a baserunning event within the AB — it must NOT create a second PA. The '.' on the continuation marks already-recorded pitches [B,B]; only [C,X] are new."
+    },
+    "plateAppearances": [
+      {
+        "seq": "BB.CX", "reassembledPitches": ["B","B","C","X"], "count": {"balls": 2, "strikes": 1},
+        "balls": 2, "calledStrikes": 1, "swingingStrikes": 0, "fouls": 0, "inPlay": 1, "takenPitches": 3, "swings": 1,
+        "firstPitchStrike": false, "reachedTwoStrikes": false, "struckOut": false, "twoStrikeSurvived": null,
+        "eventCd": 20, "outcome": "single", "sequenceComplete": true, "doubleCounted": false
+      }
+    ],
+    "batterAggregate": {
+      "pa": 1, "codedPitchPa": 1, "pitchSequenceCoverage": 1.0, "sequenceFloorMet": true,
+      "pitches": 4, "swings": 1, "whiffs": 0, "contacts": 1, "fouls": 0, "calledStrikes": 1, "takenPitches": 3, "inPlay": 1
+    }
+  }
+}

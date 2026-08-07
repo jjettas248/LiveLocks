@@ -19,6 +19,12 @@ import {
   moundFinalStatLabel,
   type MoundSettlementLane,
 } from "@/lib/mlb/moundSettlementLabels";
+import {
+  plateTargetsHeading,
+  plateTargetScoreLabel,
+  plateTierLabel,
+  type PlateSuggestionTier,
+} from "@/lib/mlb/moundPlateTargetsDisplay";
 
 type Tier = "track" | "watch" | "strong" | "elite" | "nuclear";
 type Market = "pitcher_strikeouts" | "pitcher_outs";
@@ -174,6 +180,30 @@ interface MoundSignal {
   projectedStrikeouts?: number | null;
   /** Display-only enrichment (multi-year K/9 + opponent/BvP/park/recent-form) — never used for grading. */
   matchupAdjustedStrikeouts?: number | null;
+  /**
+   * Bolted on by the server-side pregame composition layer
+   * (server/mlb/pregame/composition/) AFTER the canonical Mound response is
+   * built — not part of the Mound engine's own contract. Up to 3 Plate
+   * ("the Plate") batters facing this exact pitcher today, already filtered
+   * to Plate's own canonical public-visibility predicate plus a pregame-only
+   * lifecycle check. Optional/possibly absent: an older server, cached
+   * payload, or rollback may not have composed this field at all — always
+   * read via `s.plateTargetSuggestions ?? []`, never assume presence.
+   */
+  plateTargetSuggestions?: MoundPlateTargetSuggestion[];
+}
+
+interface MoundPlateTargetSuggestion {
+  batterId: string;
+  batterName: string;
+  team: string;
+  battingOrderSlot: number | null;
+  plateTier: PlateSuggestionTier;
+  plateScore10: number;
+  /** The batter's HR-specific market score, when reliably available. */
+  hrScore: number | null;
+  /** "home_runs" when hrScore drove this suggestion's rank; "overall_fallback" when hrScore was unavailable. Never present a fallback score as an HR score. */
+  rankingBasis: "home_runs" | "overall_fallback";
 }
 
 interface MoundRadarResponse {
@@ -707,6 +737,48 @@ function MoundCard({ signal: s }: { signal: MoundSignal }) {
           ))}
         </div>
       )}
+
+      {/* Cross-Radar: qualifying Plate targets facing this arm, bolted on
+          server-side by the pregame composition layer AFTER the canonical
+          Mound response is built. Field may be entirely absent on an older/
+          cached response — always read via plateTargets, never s.plateTargetSuggestions
+          directly. Renders nothing when the array is empty. Header + per-row
+          copy switch based on rankingBasis so an overall Plate score is
+          never mislabeled as an HR score, and safely degrade when hrScore is
+          malformed even if rankingBasis claims "home_runs". */}
+      {(() => {
+        const plateTargets = s.plateTargetSuggestions ?? [];
+        if (plateTargets.length === 0) return null;
+        return (
+          <div className="mt-2" data-testid={`mound-plate-suggestions-${slug}`}>
+            <div className="text-[10px] text-muted-foreground mb-1">
+              {plateTargetsHeading(plateTargets)}
+            </div>
+            <ul
+              className="flex items-start gap-1.5 flex-wrap list-none m-0 p-0"
+              aria-label={`Plate targets facing ${s.pitcherName}`}
+            >
+              {plateTargets.map((t) => (
+                <li
+                  key={t.batterId}
+                  data-testid={`mound-plate-suggestion-${slug}-${t.batterId}`}
+                  className="flex flex-col gap-0.5 text-[10px] px-2 py-1 rounded-md bg-amber-500/10 border border-amber-500/20 max-w-full sm:max-w-[220px] overflow-hidden"
+                >
+                  {/* Two lines, not one inline-flex row: a name+details row
+                      fighting over one line needs min-w-0 on a flex child for
+                      truncate to work at all, and even then a long name next
+                      to "Power Watch" details can still overflow a narrow
+                      card. Each line truncates independently and safely. */}
+                  <span className="truncate text-amber-200">{t.batterName}</span>
+                  <span className="truncate text-amber-300/70">
+                    ({t.team}) · {plateTargetScoreLabel(t)} · {plateTierLabel(t.plateTier)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      })()}
       </div>
 
       <div className="flex items-center justify-end mt-2 pt-1.5 border-t border-border/20" onClick={(e) => e.stopPropagation()}>
