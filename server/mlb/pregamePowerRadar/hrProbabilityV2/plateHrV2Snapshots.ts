@@ -1052,6 +1052,15 @@ export function evaluatePredictionRowIntegrity(
     if (actor === "batter" && src.entityId !== prediction.batterId) reasons.push("retrosheet_discipline_batter_mismatch");
   }
 
+  // PR7A stage 4: a V3 prediction is FAIL-CLOSED training-ineligible. The V3 envelope
+  // parses, but the discipline-evidence re-derivation / cross-binding that would make a
+  // V3 projection trustworthy is not implemented until stage 5/6. Until then NO V3 row
+  // is admitted for training — never silently admit a V3 projection (even one with no
+  // Retrosheet evidence attached). This block is removed only when stage 5/6 lands.
+  if (prediction.featureVersion === PLATE_HR_V2_FEATURES_V3) {
+    reasons.push("v3_discipline_binding_not_implemented");
+  }
+
   let envHash: string | null = null;
   try { envHash = computePredictionEnvelopeHash(prediction); }
   catch { reasons.push("prediction_features_noncanonical"); }

@@ -67,9 +67,9 @@ export interface RetrosheetDisciplineBatterHandSplits {
   whiffsVsL: number; whiffsVsR: number;
 }
 export interface RetrosheetDisciplinePitcherBlock {
-  counts: { bf: number; k: number; bb: number; ibb: number; whiffs: number; swings: number; calledStrikes: number; firstPitchStrikes: number };
-  handSplits: { bfVsHand: number; kVsHand: number; bbVsHand: number };
-  batterHand: "L" | "R" | null;   // resolved hand — never "S"
+  counts: { bf: number; pitches: number; k: number; bb: number; ibb: number; whiffs: number; swings: number; calledStrikes: number; firstPitchStrikes: number };
+  // IMMUTABLE vs-L / vs-R history — not a prediction-specific vsHand bucket.
+  handSplits: { bfVsL: number; bfVsR: number; kVsL: number; kVsR: number; bbVsL: number; bbVsR: number };
   pitcherThrows: "L" | "R" | null;
 }
 export interface RetrosheetDisciplineEvidencePayload {
@@ -88,8 +88,8 @@ const BATTER_SPLIT_KEYS = [
   "paVsL", "paVsR", "kVsL", "kVsR", "bbVsL", "bbVsR",
   "contactsVsL", "contactsVsR", "swingsVsL", "swingsVsR", "whiffsVsL", "whiffsVsR",
 ] as const;
-const PITCHER_COUNT_KEYS = ["bf", "k", "bb", "ibb", "whiffs", "swings", "calledStrikes", "firstPitchStrikes"] as const;
-const PITCHER_SPLIT_KEYS = ["bfVsHand", "kVsHand", "bbVsHand"] as const;
+const PITCHER_COUNT_KEYS = ["bf", "pitches", "k", "bb", "ibb", "whiffs", "swings", "calledStrikes", "firstPitchStrikes"] as const;
+const PITCHER_SPLIT_KEYS = ["bfVsL", "bfVsR", "kVsL", "kVsR", "bbVsL", "bbVsR"] as const;
 const PROVENANCE_KEYS = ["datasetVersion", "dataThroughDate", "seasonsCovered", "window", "gameIds", "gameCount", "attributionNotice", "sequenceFloorMet", "overallQuality", "nullReasons"] as const;
 
 function isPlainObj(x: unknown): x is Record<string, unknown> {
@@ -97,7 +97,11 @@ function isPlainObj(x: unknown): x is Record<string, unknown> {
 }
 function isNonNegInt(x: unknown): x is number { return typeof x === "number" && Number.isInteger(x) && x >= 0; }
 function isNonEmptyStr(x: unknown): x is string { return typeof x === "string" && x.trim().length > 0; }
-function isIso(x: unknown): x is string { return typeof x === "string" && x.trim().length > 0 && Number.isFinite(Date.parse(x)); }
+// (Strict ISO helper below.)
+// Strict ISO: a calendar date (YYYY-MM-DD) or full RFC3339 datetime, that is also a
+// REAL date (Date.parse finite). Rejects loose strings like "2019/09/14" or "Sept 14".
+const STRICT_ISO_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2}))?$/;
+function isStrictIso(x: unknown): x is string { return typeof x === "string" && STRICT_ISO_RE.test(x) && Number.isFinite(Date.parse(x)); }
 function hasNonCanonicalNumber(x: unknown): boolean {
   if (typeof x === "number") return !Number.isFinite(x);
   if (Array.isArray(x)) return x.some(hasNonCanonicalNumber);
@@ -125,15 +129,15 @@ function validateProvenance(prov: unknown, reasons: string[]): void {
   if (!isPlainObj(prov)) { reasons.push("provenance_missing"); return; }
   closedKeys(prov, PROVENANCE_KEYS, "provenance", reasons);
   if (!isNonEmptyStr(prov.datasetVersion)) reasons.push("provenance_datasetVersion_empty");
-  if (!isNonEmptyStr(prov.dataThroughDate)) reasons.push("provenance_dataThroughDate_empty");
+  if (!isStrictIso(prov.dataThroughDate)) reasons.push("provenance_dataThroughDate_not_strict_iso");
   if (!Array.isArray(prov.seasonsCovered) || prov.seasonsCovered.length === 0 || !prov.seasonsCovered.every((s) => Number.isInteger(s) && (s as number) >= 1900 && (s as number) <= 2100)) reasons.push("provenance_seasonsCovered_invalid");
-  // coverage window
+  // coverage window — strict ISO bounds, from ≤ to
   if (!isPlainObj(prov.window)) reasons.push("provenance_window_missing");
   else {
     closedKeys(prov.window, ["from", "to"], "window", reasons);
-    if (!isIso(prov.window.from)) reasons.push("provenance_window_from_invalid");
-    if (!isIso(prov.window.to)) reasons.push("provenance_window_to_invalid");
-    if (isIso(prov.window.from) && isIso(prov.window.to) && Date.parse(prov.window.from as string) > Date.parse(prov.window.to as string)) reasons.push("provenance_window_from_after_to");
+    if (!isStrictIso(prov.window.from)) reasons.push("provenance_window_from_not_strict_iso");
+    if (!isStrictIso(prov.window.to)) reasons.push("provenance_window_to_not_strict_iso");
+    if (isStrictIso(prov.window.from) && isStrictIso(prov.window.to) && Date.parse(prov.window.from as string) > Date.parse(prov.window.to as string)) reasons.push("provenance_window_from_after_to");
   }
   // game ids: present, non-empty, unique; gameCount === gameIds.length
   if (!Array.isArray(prov.gameIds) || prov.gameIds.length === 0) reasons.push("provenance_gameIds_missing");
@@ -148,10 +152,22 @@ function validateProvenance(prov: unknown, reasons: string[]): void {
   if (typeof prov.sequenceFloorMet !== "boolean") reasons.push("provenance_sequenceFloorMet_not_boolean");
   if (!(prov.overallQuality === "full" || prov.overallQuality === "degraded" || prov.overallQuality === "missing")) reasons.push("provenance_overallQuality_invalid");
   const allowedReasons = new Set<string>(RETROSHEET_DISCIPLINE_NULL_REASONS);
+  let nullReasonsValid = false;
   if (!Array.isArray(prov.nullReasons)) reasons.push("provenance_nullReasons_not_array");
   else {
-    for (const r of prov.nullReasons) if (!allowedReasons.has(r as string)) reasons.push(`provenance_nullReason_unknown:${String(r)}`);
-    if (new Set(prov.nullReasons).size !== prov.nullReasons.length) reasons.push("provenance_nullReasons_duplicate");
+    nullReasonsValid = true;
+    for (const r of prov.nullReasons) if (!allowedReasons.has(r as string)) { reasons.push(`provenance_nullReason_unknown:${String(r)}`); nullReasonsValid = false; }
+    if (new Set(prov.nullReasons).size !== prov.nullReasons.length) { reasons.push("provenance_nullReasons_duplicate"); nullReasonsValid = false; }
+  }
+  // Internal semantics:
+  //  - below_sequence_coverage present  IFF  sequenceFloorMet === false (biconditional)
+  //  - non-empty nullReasons cannot coexist with overallQuality === "full"
+  if (nullReasonsValid && typeof prov.sequenceFloorMet === "boolean") {
+    const belowSeq = (prov.nullReasons as string[]).includes("below_sequence_coverage");
+    if (belowSeq !== (prov.sequenceFloorMet === false)) reasons.push("inconsistent:below_sequence_coverage_xor_sequenceFloorMet");
+  }
+  if (nullReasonsValid && (prov.nullReasons as string[]).length > 0 && prov.overallQuality === "full") {
+    reasons.push("inconsistent:null_reasons_with_overallQuality_full");
   }
 }
 
@@ -192,36 +208,59 @@ function validateBatter(batter: unknown, reasons: string[]): void {
     leq(hs.whiffsVsR, hs.swingsVsR, "whiffsVsR_le_swingsVsR", reasons);
     leq(hs.contactsVsL, hs.swingsVsL, "contactsVsL_le_swingsVsL", reasons);
     leq(hs.contactsVsR, hs.swingsVsR, "contactsVsR_le_swingsVsR", reasons);
-    if (isPlainObj(c) && typeof hs.paVsL === "number" && typeof hs.paVsR === "number" && typeof c.pa === "number" && Number.isFinite(c.pa) && hs.paVsL + hs.paVsR > c.pa) reasons.push("inconsistent:paVsL_plus_paVsR_gt_pa");
+    // per-side swings = whiffs + contacts
+    eqSum(hs.swingsVsL, [hs.whiffsVsL, hs.contactsVsL], "swingsVsL_eq_whiffsVsL_plus_contactsVsL", reasons);
+    eqSum(hs.swingsVsR, [hs.whiffsVsR, hs.contactsVsR], "swingsVsR_eq_whiffsVsR_plus_contactsVsR", reasons);
+    // split totals must not exceed the overall totals
+    if (isPlainObj(c)) {
+      const sumLe = (l: unknown, r: unknown, total: unknown, label: string) => {
+        if (typeof l === "number" && typeof r === "number" && typeof total === "number" && Number.isFinite(l) && Number.isFinite(r) && Number.isFinite(total) && l + r > total) reasons.push(`inconsistent:${label}`);
+      };
+      sumLe(hs.paVsL, hs.paVsR, c.pa, "paVsL_plus_paVsR_gt_pa");
+      sumLe(hs.swingsVsL, hs.swingsVsR, c.swings, "swingsVsL_plus_swingsVsR_gt_swings");
+      sumLe(hs.whiffsVsL, hs.whiffsVsR, c.whiffs, "whiffsVsL_plus_whiffsVsR_gt_whiffs");
+      sumLe(hs.contactsVsL, hs.contactsVsR, c.contacts, "contactsVsL_plus_contactsVsR_gt_contacts");
+      sumLe(hs.kVsL, hs.kVsR, c.k, "kVsL_plus_kVsR_gt_k");
+      sumLe(hs.bbVsL, hs.bbVsR, c.bb, "bbVsL_plus_bbVsR_gt_bb");
+    }
   }
 }
 
 function validatePitcher(pitcher: unknown, reasons: string[]): void {
   if (!isPlainObj(pitcher)) { reasons.push("pitcher_missing"); return; }
-  closedKeys(pitcher, ["counts", "handSplits", "batterHand", "pitcherThrows"], "pitcher", reasons);
-  // RESOLVED batter hand — L/R/null only; "S" (or anything else) rejected.
-  if (!(pitcher.batterHand === null || pitcher.batterHand === "L" || pitcher.batterHand === "R")) reasons.push("pitcher_batterHand_invalid");
+  closedKeys(pitcher, ["counts", "handSplits", "pitcherThrows"], "pitcher", reasons);
   if (!(pitcher.pitcherThrows === null || pitcher.pitcherThrows === "L" || pitcher.pitcherThrows === "R")) reasons.push("pitcher_pitcherThrows_invalid");
   const pc = pitcher.counts;
   if (!isPlainObj(pc)) reasons.push("pitcher_counts_missing");
   else {
     closedKeys(pc, PITCHER_COUNT_KEYS, "pitcher_counts", reasons);
     requireInts(pc, PITCHER_COUNT_KEYS, "pitcher_counts", reasons);
+    // pitch-grained vs PA-grained denominators kept distinct:
+    leq(pc.swings, pc.pitches, "pswings_le_pitches", reasons);
+    leq(pc.whiffs, pc.swings, "pwhiffs_le_swings", reasons);
+    leq(pc.calledStrikes, pc.pitches, "pcalled_le_pitches", reasons);  // called-strike rate = calledStrikes / pitches
     leq(pc.k, pc.bf, "pk_le_bf", reasons);
     leq(pc.bb, pc.bf, "pbb_le_bf", reasons);
     leq(pc.ibb, pc.bb, "pibb_le_bb", reasons);
-    leq(pc.whiffs, pc.swings, "pwhiffs_le_swings", reasons);
-    leq(pc.calledStrikes, pc.bf, "pcalled_le_bf", reasons);
-    leq(pc.firstPitchStrikes, pc.bf, "pfps_le_bf", reasons);
+    leq(pc.firstPitchStrikes, pc.bf, "pfps_le_bf", reasons);            // one first pitch per BF
   }
   const ph = pitcher.handSplits;
   if (!isPlainObj(ph)) reasons.push("pitcher_handSplits_missing");
   else {
     closedKeys(ph, PITCHER_SPLIT_KEYS, "pitcher_handSplits", reasons);
     requireInts(ph, PITCHER_SPLIT_KEYS, "pitcher_handSplits", reasons);
-    leq(ph.kVsHand, ph.bfVsHand, "pkVsHand_le_bfVsHand", reasons);
-    leq(ph.bbVsHand, ph.bfVsHand, "pbbVsHand_le_bfVsHand", reasons);
-    if (isPlainObj(pc)) leq(ph.bfVsHand, pc.bf, "bfVsHand_le_bf", reasons);
+    leq(ph.kVsL, ph.bfVsL, "pkVsL_le_bfVsL", reasons);
+    leq(ph.kVsR, ph.bfVsR, "pkVsR_le_bfVsR", reasons);
+    leq(ph.bbVsL, ph.bfVsL, "pbbVsL_le_bfVsL", reasons);
+    leq(ph.bbVsR, ph.bfVsR, "pbbVsR_le_bfVsR", reasons);
+    if (isPlainObj(pc)) {
+      const sumLe = (l: unknown, r: unknown, total: unknown, label: string) => {
+        if (typeof l === "number" && typeof r === "number" && typeof total === "number" && Number.isFinite(l) && Number.isFinite(r) && Number.isFinite(total) && l + r > total) reasons.push(`inconsistent:${label}`);
+      };
+      sumLe(ph.bfVsL, ph.bfVsR, pc.bf, "bfVsL_plus_bfVsR_gt_bf");
+      sumLe(ph.kVsL, ph.kVsR, pc.k, "pkVsL_plus_kVsR_gt_k");
+      sumLe(ph.bbVsL, ph.bbVsR, pc.bb, "pbbVsL_plus_bbVsR_gt_bb");
+    }
   }
 }
 

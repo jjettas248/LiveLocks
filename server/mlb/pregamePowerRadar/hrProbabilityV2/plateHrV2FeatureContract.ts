@@ -45,6 +45,8 @@ export const PLATE_HR_V2_FEATURES_CURRENT = PLATE_HR_V2_FEATURES_V2;
 export const PLATE_HR_V2_RAW_INPUTS_V1 = "plate_hr_v2_raw_inputs_v1" as const;
 
 const numericLeaf = z.number().nullable();
+// A count/denominator leaf: a non-negative integer, or explicit null when absent.
+const nonNegIntLeaf = z.number().int().nonnegative().nullable();
 const extraLeaves = z.record(z.string(), z.number().nullable());
 const handednessSchema = z.enum(["L", "R", "S"]).nullable();
 
@@ -254,15 +256,15 @@ export const plateHrV2ContactOpportunityV3FeaturesSchema = plateHrV2ContactOppor
   twoStrikeSurvivalRatePct: numericLeaf, // (reached 2 strikes, not K) / reached 2 strikes
   inPlayRatePct: numericLeaf,            // (X + Y) terminal / PA
   // co-located evidence-quality leaves (a rate is never read without its provenance):
-  batterPa: numericLeaf,
-  codedPitchPa: numericLeaf,
-  pitchSequenceCoverage: numericLeaf,
+  batterPa: nonNegIntLeaf,        // count denominator — non-negative int or null
+  codedPitchPa: nonNegIntLeaf,    // count denominator — non-negative int or null
+  pitchSequenceCoverage: numericLeaf, // a ratio in [0,1], not a count
   // top-line hand-splits (cardinality-bounded per §3.1):
   kRatePctVsL: numericLeaf, kRatePctVsR: numericLeaf,
   bbRatePctVsL: numericLeaf, bbRatePctVsR: numericLeaf,
   contactRatePctVsL: numericLeaf, contactRatePctVsR: numericLeaf,
   whiffRatePctVsL: numericLeaf, whiffRatePctVsR: numericLeaf,
-  paVsL: numericLeaf, paVsR: numericLeaf,
+  paVsL: nonNegIntLeaf, paVsR: nonNegIntLeaf,   // per-hand count denominators
 }).strict();
 export type PlateHrV2ContactOpportunityV3Features = z.infer<typeof plateHrV2ContactOpportunityV3FeaturesSchema>;
 
@@ -270,20 +272,20 @@ export type PlateHrV2ContactOpportunityV3Features = z.infer<typeof plateHrV2Cont
 // K/BB/contact are NEVER duplicated here. Conditional on the pitcher being known.
 export const plateHrV2PitcherDisciplineFeaturesSchema = z.object({
   pitcherKnown: z.boolean(),
-  // RESOLVED batter hand the vsHand splits are against — L or R only. A switch
-  // hitter resolves per-event to the hand actually used, so "S" is never a resolved
-  // hand here (it would mean "unresolved", which is not a split identity).
-  batterHand: z.enum(["L", "R"]).nullable(),
   pitcherThrows: z.enum(["L", "R"]).nullable(),
   pitcherKRatePct: numericLeaf,
   pitcherBbRatePct: numericLeaf,                 // unintentional
   pitcherWhiffRatePct: numericLeaf,             // whiff / swings induced
-  pitcherCalledStrikeRatePct: numericLeaf,
+  pitcherCalledStrikeRatePct: numericLeaf,      // calledStrikes / pitches (NOT / BF)
   pitcherFirstPitchStrikeRatePct: numericLeaf,  // strike seen on pitch 1 / BF
-  pitcherKRatePctVsHand: numericLeaf,
-  pitcherBbRatePctVsHand: numericLeaf,
-  pitcherBf: numericLeaf,
-  pitcherBfVsHand: numericLeaf,
+  // IMMUTABLE vs-L / vs-R history — the pitcher's own record against each batter
+  // hand, NOT a prediction-specific "vsHand" bucket. The consumer selects the
+  // relevant side at scoring time; the stored feature is hand-agnostic and stable.
+  pitcherKRatePctVsL: numericLeaf, pitcherKRatePctVsR: numericLeaf,
+  pitcherBbRatePctVsL: numericLeaf, pitcherBbRatePctVsR: numericLeaf,
+  pitcherPitches: nonNegIntLeaf,                // pitch denominator for calledStrikeRate
+  pitcherBf: nonNegIntLeaf,
+  pitcherBfVsL: nonNegIntLeaf, pitcherBfVsR: nonNegIntLeaf,
   extra: extraLeaves,
 }).strict();
 export type PlateHrV2PitcherDisciplineFeatures = z.infer<typeof plateHrV2PitcherDisciplineFeaturesSchema>;
@@ -342,6 +344,25 @@ export const plateHrV2DataQualityFeaturesSchema = z.object({
 }).strict();
 export type PlateHrV2DataQualityFeatures = z.infer<typeof plateHrV2DataQualityFeaturesSchema>;
 
+// ── PR7A (V3) — Retrosheet quality/provenance block + V3 dataQuality extension.
+// V3 carries a Retrosheet-specific provenance/quality block (§3.4) with TYPED null
+// reasons, on top of the base V1/V2 dataQuality fields — so a V3 rate is never read
+// without its dataset provenance and the reasons any leaf was nulled. ────────────────
+export const plateHrV2RetrosheetQualityBlockSchema = z.object({
+  datasetVersion: z.string(),
+  dataThroughDate: z.string(),
+  pitchSequenceCoverage: numericLeaf,
+  sequenceFloorMet: z.boolean(),
+  overallQuality: z.enum(["full", "degraded", "missing"]),
+  nullReasons: z.array(z.enum(PLATE_DISCIPLINE_FLOOR_NULL_REASONS)),
+}).strict();
+export type PlateHrV2RetrosheetQualityBlock = z.infer<typeof plateHrV2RetrosheetQualityBlockSchema>;
+
+export const plateHrV2DataQualityV3FeaturesSchema = plateHrV2DataQualityFeaturesSchema.extend({
+  retrosheetDiscipline: plateHrV2RetrosheetQualityBlockSchema,
+}).strict();
+export type PlateHrV2DataQualityV3Features = z.infer<typeof plateHrV2DataQualityV3FeaturesSchema>;
+
 // ── Derived feature vector (validated against the `derived_features` jsonb
 // column) ────────────────────────────────────────────────────────────────────
 export const plateHrV2DerivedFeatureVectorV1Schema = z.object({
@@ -379,6 +400,7 @@ export const plateHrV2DerivedFeatureVectorV3Schema = plateHrV2DerivedFeatureVect
   contactOpportunity: plateHrV2ContactOpportunityV3FeaturesSchema,
   zoneLocation: plateHrV2ZoneLocationV3FeaturesSchema,
   pitcherDiscipline: plateHrV2PitcherDisciplineFeaturesSchema,
+  dataQuality: plateHrV2DataQualityV3FeaturesSchema,
 }).strict();
 export type PlateHrV2DerivedFeatureVectorV3 = z.infer<typeof plateHrV2DerivedFeatureVectorV3Schema>;
 

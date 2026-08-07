@@ -1,7 +1,6 @@
 // PR7A.2 — retrosheet_discipline strict-read integrity (training-read gate).
 // Non-vacuous: builds shape-valid stored rows and asserts the SPECIFIC rejection
-// reason appears in evaluatePredictionRowIntegrity's reasons (other id/hash reasons
-// from the deliberately-minimal fixtures are ignored).
+// reason appears in evaluatePredictionRowIntegrity's reasons.
 // Run: npx tsx server/mlb/pregamePowerRadar/hrProbabilityV2/retrosheetDisciplineReadIntegrity.test.ts
 
 import { evaluatePredictionRowIntegrity } from "./plateHrV2Snapshots";
@@ -27,7 +26,7 @@ function retroBatterPayload(): any {
       counts: { pa: 100, k: 22, bb: 10, ibb: 1, hbp: 2, pitches: 380, swings: 180, whiffs: 40, contacts: 140, fouls: 90,
         calledStrikes: 70, takenPitches: 200, inPlay: 50, firstPitchStrikes: 55, twoStrikePa: 45, twoStrikeK: 22, twoStrikeSurvived: 23, codedPitchPa: 96 },
       handSplits: { paVsL: 30, paVsR: 70, kVsL: 7, kVsR: 15, bbVsL: 3, bbVsR: 7,
-        contactsVsL: 40, contactsVsR: 100, swingsVsL: 55, swingsVsR: 125, whiffsVsL: 12, whiffsVsR: 28 },
+        contactsVsL: 40, contactsVsR: 100, swingsVsL: 52, swingsVsR: 128, whiffsVsL: 12, whiffsVsR: 28 },
     },
   };
 }
@@ -50,34 +49,29 @@ function predRow(overrides: Record<string, unknown> = {}): any {
     trainingEligible: true, authoritative: false, trainingBlockReasons: [], ...overrides,
   };
 }
-function run(pred: any, srcs: any[]): string[] {
+function run(pred: any, srcs: any[]): { readable: boolean; reasons: string[] } {
   const map = new Map<string, unknown>(srcs.map((s) => [s.sourceSnapshotId, s]));
-  return evaluatePredictionRowIntegrity(pred, map).reasons;
+  const r = evaluatePredictionRowIntegrity(pred, map);
+  return { readable: r.readable, reasons: r.reasons };
 }
 const has = (reasons: string[], needle: string) => reasons.some((r) => r.includes(needle));
 
 // 6. unauthorized provider.
-ok(has(run(predRow(), [srcRow({ provider: "mlb_stats_live" })]), "retrosheet_discipline_provider_unauthorized"), "unauthorized provider rejected");
-
-// 7. non-verified_as_of Retrosheet evidence.
-ok(has(run(predRow(), [srcRow({ availabilitySource: "fetched_at" })]), "retrosheet_discipline_not_verified_as_of"), "non-verified_as_of rejected");
-
-// 5. wrong entityType vs payload actorType (payload is batter; entityType pitcher).
-ok(has(run(predRow(), [srcRow({ entityType: "pitcher" })]), "retrosheet_discipline_entity_actor_mismatch"), "entityType/actor mismatch rejected");
-// batter-actor source must be for THIS batter.
-ok(has(run(predRow(), [srcRow({ entityId: "someone_else" })]), "retrosheet_discipline_batter_mismatch"), "wrong batter id rejected");
-// schemaVersion must match feature version.
-ok(has(run(predRow(), [srcRow({ schemaVersion: "plate_hr_v2_features_v2" })]), "retrosheet_discipline_schema_version_mismatch"), "schema/version mismatch rejected");
-
-// 8. Retrosheet evidence attached to V1/V2.
-ok(has(run(predRow({ featureVersion: "plate_hr_v2_features_v2" }), [srcRow({ schemaVersion: "plate_hr_v2_features_v2" })]), "retrosheet_discipline_on_non_v3"), "retrosheet evidence on V2 rejected");
-ok(has(run(predRow({ featureVersion: "plate_hr_v2_features_v1" }), [srcRow({ schemaVersion: "plate_hr_v2_features_v1" })]), "retrosheet_discipline_on_non_v3"), "retrosheet evidence on V1 rejected");
-
+ok(has(run(predRow(), [srcRow({ provider: "mlb_stats_live" })]).reasons, "retrosheet_discipline_provider_unauthorized"), "unauthorized provider rejected");
+// 7. non-verified_as_of.
+ok(has(run(predRow(), [srcRow({ availabilitySource: "fetched_at" })]).reasons, "retrosheet_discipline_not_verified_as_of"), "non-verified_as_of rejected");
+// 5. entityType vs payload actorType, wrong batter id, schema/version.
+ok(has(run(predRow(), [srcRow({ entityType: "pitcher" })]).reasons, "retrosheet_discipline_entity_actor_mismatch"), "entityType/actor mismatch rejected");
+ok(has(run(predRow(), [srcRow({ entityId: "someone_else" })]).reasons, "retrosheet_discipline_batter_mismatch"), "wrong batter id rejected");
+ok(has(run(predRow(), [srcRow({ schemaVersion: "plate_hr_v2_features_v2" })]).reasons, "retrosheet_discipline_schema_version_mismatch"), "schema/version mismatch rejected");
+// 8. retrosheet evidence on V1/V2.
+ok(has(run(predRow({ featureVersion: "plate_hr_v2_features_v2" }), [srcRow({ schemaVersion: "plate_hr_v2_features_v2" })]).reasons, "retrosheet_discipline_on_non_v3"), "retrosheet evidence on V2 rejected");
+ok(has(run(predRow({ featureVersion: "plate_hr_v2_features_v1" }), [srcRow({ schemaVersion: "plate_hr_v2_features_v1" })]).reasons, "retrosheet_discipline_on_non_v3"), "retrosheet evidence on V1 rejected");
 // positive control: a clean V3 retrosheet source raises NO retrosheet_discipline_* reason.
-{ const reasons = run(predRow(), [srcRow()]); ok(!reasons.some((r) => r.startsWith("retrosheet_discipline_")), `clean retrosheet source raises no retrosheet_discipline_* reason (got: ${reasons.filter((r) => r.startsWith("retrosheet_discipline_")).join("|")})`); }
+{ const reasons = run(predRow(), [srcRow()]).reasons; ok(!reasons.some((r) => r.startsWith("retrosheet_discipline_")), `clean retrosheet source raises no retrosheet_discipline_* reason (got: ${reasons.filter((r) => r.startsWith("retrosheet_discipline_")).join("|")})`); }
 
-// 11. V3 recentContactForm without valid contact_events evidence remains unreadable.
-function v3ProjectionWithNonNeutralRecentForm(): Record<string, unknown> {
+// 4 (issue). V3 is FAIL-CLOSED training-ineligible until stage 5/6, even a fully-formed one.
+function v3Projection(recentFormEv: number | null): Record<string, unknown> {
   const pf = () => nulls("usageShare", "batterXslg", "batterWhiffPct", "batterSampleSwings", "batterDamageBbeSample", "batterWhiffSwingSample");
   return {
     featureVersion: PLATE_HR_V2_FEATURES_V3,
@@ -90,17 +84,26 @@ function v3ProjectionWithNonNeutralRecentForm(): Record<string, unknown> {
     starterBullpen: withExtra({ starterConfirmed: false, ...nulls("projectedPaVsStarter", "projectedPaVsBullpen", "bullpenHrPer9", "bullpenBarrelAllowedPct") }),
     availability: withExtra({ confirmedActive: null, lateScratchRisk: null, restDayRisk: null, platoonSubRisk: null }),
     contactOpportunity: withExtra({ chaseRatePct: null, zoneContactRatePct: null, ...nulls("kRatePct", "bbRatePct", "whiffRatePct", "contactRatePct", "foulStrikeRatePct", "firstPitchStrikeRatePct", "twoStrikeSurvivalRatePct", "inPlayRatePct", "batterPa", "codedPitchPa", "pitchSequenceCoverage", "kRatePctVsL", "kRatePctVsR", "bbRatePctVsL", "bbRatePctVsR", "contactRatePctVsL", "contactRatePctVsR", "whiffRatePctVsL", "whiffRatePctVsR", "paVsL", "paVsR") }),
-    // NON-neutral recent-contact form (recentFormEv populated) with NO contact_events source.
-    recentContactForm: withExtra({ recentFormEv: 100, ...nulls("recentFormEv90", "recentFormAirBallPct", "recentFormBarrelPct", "recentFormPulledAirShare", "recentFormXHrPerContact", "effectiveBbe", "last15Bbe", "reliabilityWeight") }),
-    pitcherDiscipline: withExtra({ pitcherKnown: false, batterHand: null, pitcherThrows: null, ...nulls("pitcherKRatePct", "pitcherBbRatePct", "pitcherWhiffRatePct", "pitcherCalledStrikeRatePct", "pitcherFirstPitchStrikeRatePct", "pitcherKRatePctVsHand", "pitcherBbRatePctVsHand", "pitcherBf", "pitcherBfVsHand") }),
-    dataQuality: { savantQuality: "missing", venueResolved: false, pitcherHandResolved: false, batterPowerFullyAvailable: false, missingInputs: [], overallQuality: "missing" },
+    recentContactForm: withExtra({ recentFormEv, ...nulls("recentFormEv90", "recentFormAirBallPct", "recentFormBarrelPct", "recentFormPulledAirShare", "recentFormXHrPerContact", "effectiveBbe", "last15Bbe", "reliabilityWeight") }),
+    pitcherDiscipline: withExtra({ pitcherKnown: false, pitcherThrows: null, ...nulls("pitcherKRatePct", "pitcherBbRatePct", "pitcherWhiffRatePct", "pitcherCalledStrikeRatePct", "pitcherFirstPitchStrikeRatePct", "pitcherKRatePctVsL", "pitcherKRatePctVsR", "pitcherBbRatePctVsL", "pitcherBbRatePctVsR", "pitcherPitches", "pitcherBf", "pitcherBfVsL", "pitcherBfVsR") }),
+    dataQuality: { savantQuality: "missing", venueResolved: false, pitcherHandResolved: false, batterPowerFullyAvailable: false, missingInputs: [], overallQuality: "missing",
+      retrosheetDiscipline: { datasetVersion: "rs_2019_v1", dataThroughDate: "2019-09-14", pitchSequenceCoverage: null, sequenceFloorMet: false, overallQuality: "missing", nullReasons: [] } },
     slateBaselineGameHrProbability: null,
   };
 }
 {
-  const reasons = run(predRow({ derivedFeatures: v3ProjectionWithNonNeutralRecentForm(), sourceSnapshotIds: [] }), []);
-  ok(!has(reasons, "derived_projection:"), `V3 authorized projection is valid (no projection error; got: ${reasons.filter((r) => r.startsWith("derived_projection")).join("|")})`);
-  ok(has(reasons, "contact_events_missing"), "V3 non-neutral recentContactForm with no contact_events => unreadable (contact_events_missing)");
+  // neutral recent form + no sources: the V3 projection is structurally valid, but V3 is fail-closed.
+  const res = run(predRow({ derivedFeatures: v3Projection(null), sourceSnapshotIds: [] }), []);
+  ok(!has(res.reasons, "derived_projection:"), `V3 authorized projection is structurally valid (got: ${res.reasons.filter((r) => r.startsWith("derived_projection")).join("|")})`);
+  ok(has(res.reasons, "v3_discipline_binding_not_implemented"), "V3 is fail-closed training-ineligible (v3_discipline_binding_not_implemented)");
+  ok(res.readable === false, "a structurally-valid V3 projection is NOT readable/training-eligible");
+}
+
+// 11. V3 non-neutral recentContactForm with no contact_events stays unreadable.
+{
+  const res = run(predRow({ derivedFeatures: v3Projection(100), sourceSnapshotIds: [] }), []);
+  ok(has(res.reasons, "contact_events_missing"), "V3 non-neutral recentContactForm without contact_events => contact_events_missing");
+  ok(res.readable === false, "V3 non-neutral recentContactForm without contact_events => unreadable");
 }
 
 console.log(`retrosheetDisciplineReadIntegrity.test: ${passed} passed, ${fails.length} failed`);
