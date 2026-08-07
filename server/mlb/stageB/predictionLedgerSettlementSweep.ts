@@ -23,7 +23,7 @@ import {
 } from "./predictionLedgerSettlement";
 
 export interface StageBSweepDeps {
-  listPending(opts: { limit: number }): Promise<MlbLanePrediction[]>;
+  listPending(opts: { limit: number; capturedBeforeMs?: number }): Promise<MlbLanePrediction[]>;
   settle(predictionId: string, finalStat: number, settledAt: Date): Promise<unknown>;
   voidPrediction(predictionId: string, reason: MlbLedgerVoidReason, settledAt: Date): Promise<unknown>;
   // Returns a final box score object, or null when the game is not final /
@@ -31,6 +31,11 @@ export interface StageBSweepDeps {
   fetchBox(gameId: string): Promise<unknown | null>;
   buildPlayerStats(box: unknown): Map<string, unknown>;
   getStatValue(entry: unknown, market: string): number | null;
+  // True when the found box entry has ANY batting or pitching participation.
+  // false distinguishes a TRUE did-not-appear from a player who played but whose
+  // specific market field is not (yet) present — the decision voids only the
+  // former as DNP.
+  playerHasAnyStats(entry: unknown): boolean;
   normalizeMarket(market: string): string;
   now: () => number;
 }
@@ -38,18 +43,16 @@ export interface StageBSweepDeps {
 export interface StageBSweepPolicy {
   pendingLimit: number;
   maxGamesPerSweep: number;
-  // A pending prediction whose game is STILL not final past this age is treated
-  // as abandoned (postponed) and retired via terminal void, so pending rows
-  // never accumulate forever. Aligns with the 48h final-unresolvable backstop in
-  // the decision function; set a bit higher so genuinely-late finals settle
-  // first.
-  abandonAfterHours: number;
+  // Skip rows captured within the last N minutes — their game cannot be final
+  // yet, so a box fetch would just be a wasted round-trip. The row is picked up
+  // on a later sweep once it ages past this floor.
+  minSettleAgeMinutes: number;
 }
 
 export const DEFAULT_STAGE_B_SWEEP_POLICY: StageBSweepPolicy = {
   pendingLimit: 2000,
   maxGamesPerSweep: 25,
-  abandonAfterHours: 72,
+  minSettleAgeMinutes: 10,
 };
 
 export interface StageBSweepSummary {
@@ -91,7 +94,10 @@ export async function runStageBSettlementSweep(
   }
   sweeping = true;
   try {
-    const pending = await deps.listPending({ limit: policy.pendingLimit });
+    const now = deps.now();
+    // Skip rows too fresh to have a final box yet (wasted fetch otherwise).
+    const capturedBeforeMs = now - policy.minSettleAgeMinutes * 60 * 1000;
+    const pending = await deps.listPending({ limit: policy.pendingLimit, capturedBeforeMs });
     summary.scanned = pending.length;
     if (pending.length === 0) return summary;
 
@@ -103,7 +109,6 @@ export async function runStageBSettlementSweep(
     }
     const games = Array.from(byGame.keys()).slice(0, policy.maxGamesPerSweep);
     summary.games = games.length;
-    const now = deps.now();
 
     for (const gameId of games) {
       // One box fetch per game per sweep (dedup).
@@ -122,25 +127,30 @@ export async function runStageBSettlementSweep(
       for (const pred of byGame.get(gameId)!) {
         try {
           const ageHours = Math.max(0, (now - Date.parse(pred.capturedAt)) / 3_600_000);
-          const gameState = resolveGameState(box, ageHours, policy);
+          const gameState = resolveGameState(box);
 
           let finalStat: number | null = null;
-          let playerPresentButNoStat = false;
+          let playerFoundInFinalBox = false;
+          let playerHasAnyStats = false;
           if (gameState === "final" && playerMap) {
             const entry = playerMap.get(pred.playerId);
             if (entry !== undefined) {
+              playerFoundInFinalBox = true;
+              playerHasAnyStats = deps.playerHasAnyStats(entry);
               const v = deps.getStatValue(entry, deps.normalizeMarket(pred.market));
               if (v != null && Number.isFinite(v)) finalStat = v;
-              else playerPresentButNoStat = true; // present in final box, no stat ⇒ DNP
+              // else: field not present. If the player has NO participation at all
+              // ⇒ true DNP (voided by the decision); otherwise ⇒ held/unresolvable.
             }
-            // entry undefined ⇒ player absent from final box ⇒ leave both null;
-            // the decision holds young / terminal-voids old (unresolvable).
+            // entry undefined ⇒ player absent from final box ⇒ unresolvable;
+            // the decision holds young / terminal-voids old.
           }
 
           const decision = decideLanePredictionSettlement(pred, {
             gameState,
             finalStat,
-            playerPresentButNoStat,
+            playerFoundInFinalBox,
+            playerHasAnyStats,
             ageHours,
           });
 
@@ -173,19 +183,15 @@ export async function runStageBSettlementSweep(
 }
 
 /**
- * Maps a fetched box (or its absence) + age into the decision function's game
- * state. A present box means final (fetchMlbBoxScore only returns final games).
- * An absent box is transient (hold) until the hard abandon age, after which the
- * game is treated as postponed so the row is retired.
+ * Maps a fetched box (or its absence) into the decision function's game state. A
+ * present box means final (fetchMlbBoxScore only returns final games). An absent
+ * box is "unknown" (not-final or unfetchable) — the decision holds young and,
+ * once terminal-old, retires it via a NEUTRAL `line_unresolvable` void (never a
+ * synthesized "postponed", which would mislabel a genuinely-final game whose box
+ * was merely unavailable).
  */
-function resolveGameState(
-  box: unknown | null,
-  ageHours: number,
-  policy: StageBSweepPolicy,
-): MlbLedgerOutcomeGameState {
-  if (box) return "final";
-  if (ageHours >= policy.abandonAfterHours) return "postponed";
-  return "unknown";
+function resolveGameState(box: unknown | null): MlbLedgerOutcomeGameState {
+  return box ? "final" : "unknown";
 }
 
 /**
@@ -203,6 +209,14 @@ export async function defaultStageBSweepDeps(): Promise<StageBSweepDeps> {
     fetchBox: (gameId) => fetchMlbBoxScore(gameId) as Promise<unknown | null>,
     buildPlayerStats: (box) => buildMlbPlayerStats(box as any) as unknown as Map<string, unknown>,
     getStatValue: (entry, market) => getMlbStatValue(entry as any, market),
+    // A true DNP has empty batting AND empty pitching (matches gradePersistedPlays'
+    // isDnp gate). Any populated stat object ⇒ the player appeared.
+    playerHasAnyStats: (entry) => {
+      const e = entry as { batting?: Record<string, unknown>; pitching?: Record<string, unknown> } | null | undefined;
+      const battingCount = e?.batting ? Object.keys(e.batting).length : 0;
+      const pitchingCount = e?.pitching ? Object.keys(e.pitching).length : 0;
+      return battingCount > 0 || pitchingCount > 0;
+    },
     normalizeMarket: (market) => normalizeMlbMarketKey(market),
     now: () => Date.now(),
   };

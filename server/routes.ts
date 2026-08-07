@@ -348,8 +348,13 @@ export async function registerRoutes(
       const now = Date.now();
       const capturedAfterMs = now - days * 24 * 60 * 60 * 1000;
       const predictions = await storage.listRecentMlbLanePredictions({ capturedAfterMs, limit });
+      // The read is newest-first capped at `limit`; if the window holds more rows
+      // than that, the summary is a RECENT SAMPLE, not the whole window — surface
+      // it so coverage/hit-rate aren't read as window-complete. Raise `?limit=`
+      // (or narrow `?days=`) to de-truncate.
+      const truncated = predictions.length >= limit;
       const summary = summarizeStageBLedger(predictions, now);
-      return res.json({ windowDays: days, scanned: predictions.length, ...summary });
+      return res.json({ windowDays: days, scanned: predictions.length, limit, truncated, ...summary });
     } catch (err) {
       console.error("[admin/mlb/stage-b-ledger]", err);
       return res.status(500).json({ error: "Failed to build Stage B ledger summary" });

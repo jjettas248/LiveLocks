@@ -42,12 +42,14 @@ interface Recorder {
   fetchCalls: string[];
   settled: Array<{ id: string; finalStat: number }>;
   voided: Array<{ id: string; reason: string }>;
+  listPendingOpts: Array<{ limit: number; capturedBeforeMs?: number }>;
 }
 function makeDeps(opts: {
   pending: MlbLanePrediction[];
   box?: (gameId: string) => unknown | null;   // null ⇒ not final
   stat?: (playerId: string, market: string) => number | null;
   players?: Set<string>;                       // playerIds present in the final box
+  playerHasStats?: boolean;                    // did the found player participate at all
   fetchThrows?: boolean;
   settleThrows?: boolean;
 }): Recorder {
@@ -55,8 +57,9 @@ function makeDeps(opts: {
   const settled: Array<{ id: string; finalStat: number }> = [];
   const voided: Array<{ id: string; reason: string }> = [];
   const players = opts.players ?? new Set(["p1"]);
+  const listPendingOpts: Array<{ limit: number; capturedBeforeMs?: number }> = [];
   const deps: StageBSweepDeps = {
-    listPending: async () => opts.pending,
+    listPending: async (o) => { listPendingOpts.push(o); return opts.pending; },
     settle: async (id, finalStat) => {
       if (opts.settleThrows) throw new Error("settle failed");
       settled.push({ id, finalStat }); return {};
@@ -73,10 +76,11 @@ function makeDeps(opts: {
       return map;
     },
     getStatValue: (entry, market) => (opts.stat ? opts.stat((entry as any).pid, market) : 2),
+    playerHasAnyStats: () => opts.playerHasStats ?? true,
     normalizeMarket: (m) => m,
     now: () => NOW,
   };
-  return { deps, fetchCalls, settled, voided };
+  return { deps, fetchCalls, settled, voided, listPendingOpts };
 }
 
 // Final + finite stat ⇒ settle graded
@@ -105,12 +109,26 @@ function makeDeps(opts: {
   ok(s.games === 2 && s.settled === 3, "all three predictions settled across two games");
 }
 
-// Final + player present but no stat ⇒ void player_did_not_appear
+// Final + TRUE DNP (present, no participation at all) ⇒ void player_did_not_appear
 {
   __resetStageBSweepGuardForTest();
-  const r = makeDeps({ pending: [pred({ predictionId: "dnp", playerId: "p1" })], players: new Set(["p1"]), stat: () => null });
+  const r = makeDeps({ pending: [pred({ predictionId: "dnp", playerId: "p1" })], players: new Set(["p1"]), stat: () => null, playerHasStats: false });
   const s = await runStageBSettlementSweep(r.deps);
-  ok(s.voided === 1 && r.voided[0].reason === "player_did_not_appear", "present-but-no-stat ⇒ void DNP");
+  ok(s.voided === 1 && r.voided[0].reason === "player_did_not_appear", "found + no participation ⇒ void DNP");
+}
+
+// Final + player PLAYED but this market's stat null ⇒ NOT DNP: young holds
+// (preserves the observation for a late/partial box), old terminal-voids neutral.
+{
+  __resetStageBSweepGuardForTest();
+  const young = makeDeps({ pending: [pred({ predictionId: "np", playerId: "p1" })], players: new Set(["p1"]), stat: () => null, playerHasStats: true });
+  const sy = await runStageBSettlementSweep(young.deps);
+  ok(sy.held === 1 && sy.voided === 0, "played-but-stat-null (young) ⇒ hold, not DNP-void");
+
+  __resetStageBSweepGuardForTest();
+  const old = makeDeps({ pending: [pred({ predictionId: "npold", playerId: "p1", capturedAt: new Date(NOW - 60 * HOUR).toISOString() })], players: new Set(["p1"]), stat: () => null, playerHasStats: true });
+  const so = await runStageBSettlementSweep(old.deps);
+  ok(so.voided === 1 && old.voided[0].reason === "line_unresolvable", "played-but-stat-null (old) ⇒ terminal void line_unresolvable (not DNP)");
 }
 
 // Not final (box null), young ⇒ hold; no settle/void
@@ -121,13 +139,22 @@ function makeDeps(opts: {
   ok(s.held === 1 && s.settled === 0 && s.voided === 0, "young not-final ⇒ hold");
 }
 
-// Not final (box null), older than abandon age ⇒ void game_postponed
+// Not final (box null), terminal-old ⇒ NEUTRAL line_unresolvable void (never a
+// synthesized game_postponed that would mislabel a real final).
 {
   __resetStageBSweepGuardForTest();
-  const policy: StageBSweepPolicy = { pendingLimit: 2000, maxGamesPerSweep: 25, abandonAfterHours: 72 };
   const r = makeDeps({ pending: [pred({ predictionId: "old", capturedAt: new Date(NOW - 80 * HOUR).toISOString() })], box: () => null });
-  const s = await runStageBSettlementSweep(r.deps, policy);
-  ok(s.voided === 1 && r.voided[0].reason === "game_postponed", "old not-final ⇒ terminal void game_postponed");
+  const s = await runStageBSettlementSweep(r.deps);
+  ok(s.voided === 1 && r.voided[0].reason === "line_unresolvable", "old not-final ⇒ terminal void line_unresolvable (neutral, not postponed)");
+}
+
+// Sweep passes a capturedBeforeMs floor to listPending (skip too-fresh rows)
+{
+  __resetStageBSweepGuardForTest();
+  const r = makeDeps({ pending: [], });
+  await runStageBSettlementSweep(r.deps);
+  const o = r.listPendingOpts[0];
+  ok(o != null && typeof o.capturedBeforeMs === "number" && o.capturedBeforeMs < NOW, "listPending receives a capturedBeforeMs floor below now (skips fresh rows)");
 }
 
 // fetchBox throws ⇒ fetchFailures counted, row held, sweep never throws
@@ -165,7 +192,7 @@ function makeDeps(opts: {
   __resetStageBSweepGuardForTest();
   const pending = [pred({ predictionId: "g1p", gameId: "g1" }), pred({ predictionId: "g2p", gameId: "g2" }), pred({ predictionId: "g3p", gameId: "g3" })];
   const r = makeDeps({ pending, stat: () => 2 });
-  const s = await runStageBSettlementSweep(r.deps, { pendingLimit: 2000, maxGamesPerSweep: 2, abandonAfterHours: 72 });
+  const s = await runStageBSettlementSweep(r.deps, { pendingLimit: 2000, maxGamesPerSweep: 2, minSettleAgeMinutes: 10 });
   ok(s.games === 2 && r.fetchCalls.length === 2, "maxGamesPerSweep caps games (and fetches) per run");
 }
 
