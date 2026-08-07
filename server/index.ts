@@ -28,6 +28,7 @@ import { ensureMoundV2ShadowJobsPersistenceSchema } from "./dbMigrations/moundV2
 import { ensurePersistedPlaysSafetyCoreColumns } from "./dbMigrations/persistedPlaysSafetyCoreColumns";
 import { ensureMlbLanePredictionLedgerSchema } from "./dbMigrations/mlbLanePredictionLedgerPersistence";
 import { ensureMlbCalibrationArtifactsSchema } from "./dbMigrations/mlbCalibrationArtifactsPersistence";
+import { ensureMlbActiveCalibratorsSchema } from "./dbMigrations/mlbActiveCalibratorsPersistence";
 import { ensurePregameTargetsFoundationSchema } from "./dbMigrations/pregameTargetsFoundationPersistence";
 import { ensurePregameTargetsProvenanceColumns } from "./dbMigrations/pregameTargetsProvenancePersistence";
 import { installPlateHrV2CapturePersistence } from "./mlb/pregamePowerRadar/hrProbabilityV2/installPlateHrV2Capture";
@@ -283,6 +284,14 @@ app.use((req, res, next) => {
   // engine reads these; producing an artifact never promotes it.
   await ensureMlbCalibrationArtifactsSchema(pool);
   console.log("[startup] MLB Live Edge Stage C calibration-artifacts schema ensured");
+
+  // Durable persistence bootstrap: MLB Live Edge Stage C PR3 active (promoted)
+  // calibrator registry — the durable source of truth for which calibrator (if
+  // any) is currently live for a segment. Same fail-hard reasoning. A row here
+  // changes engine output ONLY when MLB_CALIBRATION_PROMOTION_ENABLED is on
+  // (default off); the table's existence is inert.
+  await ensureMlbActiveCalibratorsSchema(pool);
+  console.log("[startup] MLB Live Edge Stage C active-calibrator registry schema ensured");
 
   // Durable persistence bootstrap: Mound Radar V2 (shadow) prediction
   // capture (Flagship Program Phase 2, Part 4) — one additive table.

@@ -63,6 +63,43 @@ export interface MlbCalibrationArtifact {
   artifactVersion: typeof MLB_CALIBRATION_ARTIFACT_VERSION;
 }
 
+// ── Active calibrator registry contract (Stage C PR3) ────────────────────────
+// A PROMOTED calibrator: an artifact that cleared the promotion gate on held-out
+// evidence and is (or was) live for its segment. This is the ONE shape the
+// promotion runner, the in-memory hot-path registry, the storage layer, and the
+// admin surface all speak. An active calibrator existing does NOT by itself
+// change engine output — the finalizer only consults it when
+// MLB_CALIBRATION_PROMOTION_ENABLED is on (default off, see productionPolicy.ts).
+
+// A frozen snapshot of the held-out evidence that justified a promotion. Kept
+// numeric-only so shared/ stays decoupled from the server-side gate internals.
+export interface MlbCalibratorPromotionSnapshot {
+  usedOutOfSample: boolean;
+  evaluatedBrier: number;
+  evaluatedRawBrier: number;
+  evaluatedEcePct: number;
+  heldOutSampleSize: number;
+  heldOutDistinctSlateDates: number;
+  forwardRoiUnits: number | null;
+  forwardBetsPlaced: number;
+  tierMonotonic: boolean | null;
+  gateReasons: string[]; // empty when the gate passed
+}
+
+export interface MlbActiveCalibrator {
+  segment: string;                 // market key or "market:lane"
+  artifactId: string;              // the promoted artifact's id
+  artifact: MlbCalibrationArtifact;
+  active: boolean;                 // false ⇒ deactivated (kept for audit)
+  activatedAtMs: number;
+  activatedBy: string;             // "auto_promotion_runner" | admin identifier
+  promotionEvidence: MlbCalibratorPromotionSnapshot | null;
+  deactivatedAtMs: number | null;
+  deactivationReason: string | null;
+  ledgerContractVersion: string;
+  artifactVersion: string;
+}
+
 export function clamp01(x: number): number {
   if (!Number.isFinite(x)) return 0;
   if (x < 0) return 0;

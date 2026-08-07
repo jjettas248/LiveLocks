@@ -1932,6 +1932,38 @@ export type MlbCalibrationArtifactRow = typeof mlbCalibrationArtifacts.$inferSel
 export type InsertMlbCalibrationArtifact = z.infer<typeof insertMlbCalibrationArtifactSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MLB Live Edge Stage C PR3 — active (promoted) calibrator registry.
+// The durable source of truth for which calibrator (if any) is CURRENTLY live
+// for a segment. One row per segment (PK). A promotion upserts this row; a
+// deactivation flips `active` false and stamps a reason — the row is KEPT for
+// audit, never deleted. `artifact` holds the full MlbCalibrationArtifact so the
+// in-memory hot-path registry can load a segment's mapping without a join.
+// A row here changes engine output ONLY when MLB_CALIBRATION_PROMOTION_ENABLED
+// is on (default off) — see server/mlb/productionPolicy.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+export const mlbActiveCalibrators = pgTable("mlb_active_calibrators", {
+  segment: text("segment").primaryKey(),
+  artifactId: text("artifact_id").notNull(),
+  artifact: jsonb("artifact").notNull(),
+  active: boolean("active").notNull().default(true),
+  activatedAt: timestamp("activated_at").notNull(),
+  activatedBy: text("activated_by").notNull(),
+  promotionEvidence: jsonb("promotion_evidence"),
+  deactivatedAt: timestamp("deactivated_at"),
+  deactivationReason: text("deactivation_reason"),
+  ledgerContractVersion: text("ledger_contract_version").notNull(),
+  artifactVersion: text("artifact_version").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (table) => ({
+  activeIdx: index("mlb_active_calibrators_active_idx").on(table.active),
+}));
+
+export const insertMlbActiveCalibratorSchema = createInsertSchema(mlbActiveCalibrators).omit({ createdAt: true, updatedAt: true });
+export type MlbActiveCalibratorRow = typeof mlbActiveCalibrators.$inferSelect;
+export type InsertMlbActiveCalibrator = z.infer<typeof insertMlbActiveCalibratorSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Mound Radar V2 (Flagship Program Phase 2) — shadow prediction capture.
 // One row per (snapshotId, market) — a pitcher's frozen shadow snapshot
 // produces TWO rows (pitcher_strikeouts, pitcher_outs), never one blended
