@@ -1290,22 +1290,35 @@ export async function registerRoutes(
   // Freshness Integrity Fix #7 — admin diagnostic for the MLB live pipeline.
   // Lets admins confirm cache freshness, signal counts, and active games at a
   // glance. No engine recompute is triggered; pure read of in-memory state.
+  // Shared by /api/admin/mlb-live-debug and /api/admin/live-debug — both read
+  // the same mlbEdgeCache per-game debug fields; kept as one mapping so the
+  // field computation (ageSec, defaults) only needs updating in one place.
+  function buildMlbEdgeEntriesDebugView(now: number) {
+    return Array.from(mlbEdgeCache.entries()).map(([gameId, entry]) => ({
+      sport: "mlb" as const,
+      gameId,
+      updatedAt: entry.updatedAt,
+      ageSec: entry.updatedAt ? Math.round((now - entry.updatedAt) / 1000) : null,
+      createdAt: entry.createdAt,
+      outputs: entry.outputs?.length ?? 0,
+      qualifiedSignals: entry.qualifiedSignals?.length ?? 0,
+      allSignals: entry.allSignals?.length ?? 0,
+      isDegraded: entry.isDegraded ?? false,
+      signalLocked: entry.signalLocked ?? false,
+      preservedAt: (entry as any).preservedAt ?? null,
+      tags: entry.gameCardTags ?? [],
+    }));
+  }
+
   app.get("/api/admin/mlb-live-debug", requireAdmin, async (_req, res) => {
     try {
       const games = getActiveGames();
       const now = Date.now();
-      const edgeEntries = Array.from(mlbEdgeCache.entries()).map(([gameId, entry]) => ({
-        gameId,
-        updatedAt: entry.updatedAt,
-        ageSec: entry.updatedAt ? Math.round((now - entry.updatedAt) / 1000) : null,
-        createdAt: entry.createdAt,
-        outputs: entry.outputs?.length ?? 0,
-        qualifiedSignals: entry.qualifiedSignals?.length ?? 0,
-        allSignals: entry.allSignals?.length ?? 0,
-        isDegraded: entry.isDegraded ?? false,
-        signalLocked: entry.signalLocked ?? false,
-        tags: entry.gameCardTags ?? [],
-      }));
+      // Narrower historical shape — no `sport`/`preservedAt` — preserved
+      // byte-for-byte; see /api/admin/live-debug for the superset view.
+      const edgeEntries = buildMlbEdgeEntriesDebugView(now).map(
+        ({ sport: _sport, preservedAt: _preservedAt, ...rest }) => rest,
+      );
 
       return res.json({
         now,
@@ -6926,20 +6939,7 @@ export async function registerRoutes(
   app.get("/api/admin/live-debug", requireAdmin, async (_req, res) => {
     try {
       const now = Date.now();
-      const mlbEntries = Array.from(mlbEdgeCache.entries()).map(([gameId, entry]) => ({
-        sport: "mlb" as const,
-        gameId,
-        updatedAt: entry.updatedAt,
-        ageSec: entry.updatedAt ? Math.round((now - entry.updatedAt) / 1000) : null,
-        createdAt: entry.createdAt,
-        outputs: entry.outputs?.length ?? 0,
-        qualifiedSignals: entry.qualifiedSignals?.length ?? 0,
-        allSignals: entry.allSignals?.length ?? 0,
-        isDegraded: entry.isDegraded ?? false,
-        signalLocked: entry.signalLocked ?? false,
-        preservedAt: (entry as any).preservedAt ?? null,
-        tags: entry.gameCardTags ?? [],
-      }));
+      const mlbEntries = buildMlbEdgeEntriesDebugView(now);
 
       const nbaEntries = Array.from(liveSignalsCache.entries()).map(([gameId, entry]) => ({
         sport: "nba" as const,
