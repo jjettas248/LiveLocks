@@ -1,10 +1,16 @@
 import { execSync } from "child_process";
 
+declare const __BUILD_COMMIT_SHA__: string | undefined;
+
 let cachedVersion: string | null = null;
 
 function deriveVersion(): string {
   const envVersion = process.env.APP_VERSION?.trim();
   if (envVersion) return envVersion;
+
+  if (typeof __BUILD_COMMIT_SHA__ !== "undefined" && __BUILD_COMMIT_SHA__) {
+    return __BUILD_COMMIT_SHA__;
+  }
 
   try {
     const sha = execSync("git rev-parse --short HEAD", {
