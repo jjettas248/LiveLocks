@@ -243,6 +243,11 @@ export type PlateHrV2RecentContactFormFeatures = z.infer<typeof plateHrV2RecentC
 // never proxied under Retrosheet — §2.2). `datasetVersion`/`dataThroughAt`/`gameIds`
 // live in the evidence descriptor (§4), not as leaves here (leaves stay all-numeric).
 export const plateHrV2ContactOpportunityV3FeaturesSchema = plateHrV2ContactOpportunityFeaturesSchema.extend({
+  // zone-dependent leaves are RETAINED but pinned to literal `null` under Retrosheet
+  // (never proxied, §2.2). Typed `z.null()` (not nullable) so a populated value is
+  // STRUCTURALLY rejected — the no-proxy rule is enforced by the type, not convention.
+  chaseRatePct: z.null(),
+  zoneContactRatePct: z.null(),
   // new v3 non-location discipline rates:
   foulStrikeRatePct: numericLeaf,        // foul strikes (F/T/L/O/R) / swings
   firstPitchStrikeRatePct: numericLeaf,  // strike seen on pitch 1 / PA
@@ -265,7 +270,10 @@ export type PlateHrV2ContactOpportunityV3Features = z.infer<typeof plateHrV2Cont
 // K/BB/contact are NEVER duplicated here. Conditional on the pitcher being known.
 export const plateHrV2PitcherDisciplineFeaturesSchema = z.object({
   pitcherKnown: z.boolean(),
-  batterHand: handednessSchema,                 // the batter's resolved hand the vsHand splits are against
+  // RESOLVED batter hand the vsHand splits are against — L or R only. A switch
+  // hitter resolves per-event to the hand actually used, so "S" is never a resolved
+  // hand here (it would mean "unresolved", which is not a split identity).
+  batterHand: z.enum(["L", "R"]).nullable(),
   pitcherThrows: z.enum(["L", "R"]).nullable(),
   pitcherKRatePct: numericLeaf,
   pitcherBbRatePct: numericLeaf,                 // unintentional
@@ -285,6 +293,18 @@ export type PlateHrV2PitcherDisciplineFeatures = z.infer<typeof plateHrV2Pitcher
 // than silently dropping it — the seam a future licensed zone source would fill.
 export const PLATE_HR_V2_ZONE_UNAVAILABLE_REASONS = ["licensed_source_unavailable"] as const;
 export type PlateHrV2ZoneUnavailableReason = (typeof PLATE_HR_V2_ZONE_UNAVAILABLE_REASONS)[number];
+
+// The closed set of explicit null-with-reason codes a v3 discipline rate carries
+// when a capture floor (§3.4) is not met. The affected rate is null; raw counts are
+// always preserved so PR8 can re-shrink. One reason per floor — no others.
+export const PLATE_DISCIPLINE_FLOOR_NULL_REASONS = [
+  "below_sequence_coverage",   // pitchSequenceCoverage < 0.90
+  "below_batter_pa_floor",     // batter overall PA < 150
+  "below_pitcher_bf_floor",    // pitcher overall BF < 300
+  "below_hand_split_pa_floor", // a batter hand-split < 75 PA
+  "below_hand_split_bf_floor", // a pitcher hand-split < 150 BF
+] as const;
+export type PlateDisciplineFloorNullReason = (typeof PLATE_DISCIPLINE_FLOOR_NULL_REASONS)[number];
 
 // V3 zoneLocation = the explicit unavailable record. Every location leaf is a
 // literal `null` (not merely nullable) so the schema STRUCTURALLY rejects any

@@ -84,6 +84,9 @@ const coParsed = plateHrV2ContactOpportunityV3FeaturesSchema.safeParse(contactOp
 ok(coParsed.success, "v3 contactOpportunity parses");
 ok(!(plateHrV2ContactOpportunityV3FeaturesSchema.safeParse((() => { const c: any = contactOppV3(); delete c.foulStrikeRatePct; return c; })()).success), "v3 contactOpportunity requires foulStrikeRatePct");
 ok(!(plateHrV2ContactOpportunityV3FeaturesSchema.safeParse((() => { const c: any = contactOppV3(); delete c.chaseRatePct; return c; })()).success), "v3 contactOpportunity retains legacy chaseRatePct leaf");
+// zone-dependent leaves are pinned to literal null — a populated value is rejected (no proxy).
+ok(!plateHrV2ContactOpportunityV3FeaturesSchema.safeParse({ ...contactOppV3(), chaseRatePct: 0.25 }).success, "non-null chaseRatePct rejected (no zone proxy)");
+ok(!plateHrV2ContactOpportunityV3FeaturesSchema.safeParse({ ...contactOppV3(), zoneContactRatePct: 80 }).success, "non-null zoneContactRatePct rejected (no zone proxy)");
 
 // 6. zoneLocation v3 = explicit unavailable record; location values MUST be null.
 const zl = plateHrV2UnavailableZoneLocationV3();
@@ -96,6 +99,8 @@ ok(!plateHrV2ZoneLocationV3FeaturesSchema.safeParse({ ...zl, status: "available"
 // 7. pitcherDiscipline shape.
 ok(plateHrV2PitcherDisciplineFeaturesSchema.safeParse(pitcherDiscipline()).success, "pitcherDiscipline parses");
 ok(!plateHrV2PitcherDisciplineFeaturesSchema.safeParse({ ...pitcherDiscipline(), kRatePct: null }).success, "pitcherDiscipline rejects a batter K leaf (no duplication)");
+ok(plateHrV2PitcherDisciplineFeaturesSchema.safeParse({ ...pitcherDiscipline(), batterHand: "R" }).success, "pitcherDiscipline accepts resolved hand R");
+ok(!plateHrV2PitcherDisciplineFeaturesSchema.safeParse({ ...pitcherDiscipline(), batterHand: "S" }).success, "pitcherDiscipline rejects 'S' as a resolved batter hand");
 
 // 8. Authorized projection V3 strips market + zoneLocation; parseAuthorizedProjection routes V3.
 const proj: any = { ...v3 };

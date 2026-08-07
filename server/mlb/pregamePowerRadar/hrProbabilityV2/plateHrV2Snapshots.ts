@@ -24,6 +24,7 @@ import { z } from "zod";
 import {
   PLATE_HR_V2_FEATURES_V1,
   PLATE_HR_V2_FEATURES_V2,
+  PLATE_HR_V2_FEATURES_V3,
   parseAuthorizedProjection,
 } from "./plateHrV2FeatureContract";
 import {
@@ -39,7 +40,11 @@ import {
   type StarterBullpenPaPathEvidencePayload,
 } from "./starterBullpenPaPath";
 // PR7A: Retrosheet plate-discipline evidence-kind contract (shadow-only, no producer yet).
-import { validateRetrosheetDisciplinePayload } from "./retrosheetDisciplineEvidence";
+import {
+  validateRetrosheetDisciplinePayload,
+  retrosheetDisciplineActorType,
+  RETROSHEET_DISCIPLINE_PROVIDERS,
+} from "./retrosheetDisciplineEvidence";
 
 export const EVIDENCE_KINDS = [
   "historical_stat",
@@ -886,6 +891,7 @@ export function evaluatePredictionRowIntegrity(
 
   const contactEventsSources: StoredSourceEvidence[] = [];
   const starterBullpenSources: StoredSourceEvidence[] = [];
+  const retrosheetDisciplineSources: StoredSourceEvidence[] = [];
   for (const id of ids) {
     const raw = sourceRows.get(id);
     if (raw === undefined) { reasons.push(`missing_source_evidence:${id}`); continue; }
@@ -894,6 +900,7 @@ export function evaluatePredictionRowIntegrity(
     const src = sp.data;
     if (src.evidenceKind === "contact_events") contactEventsSources.push(src);
     if (src.evidenceKind === "starter_bullpen") starterBullpenSources.push(src);
+    if (src.evidenceKind === "retrosheet_discipline") retrosheetDisciplineSources.push(src);
 
     // Triple identity: map key === stored id === recomputed id.
     if (src.sourceSnapshotId !== id) reasons.push(`source_stored_id_mismatch:${id}`);
@@ -934,7 +941,7 @@ export function evaluatePredictionRowIntegrity(
   // PR5.2 gaps 3+4: a V2 row's recentContactForm leaf must be reproducible from a
   // single content-addressed contact_events source (cross-bound), or fully neutral
   // with no such evidence.
-  if (projection.ok && prediction.featureVersion === PLATE_HR_V2_FEATURES_V2) {
+  if (projection.ok && (prediction.featureVersion === PLATE_HR_V2_FEATURES_V2 || prediction.featureVersion === PLATE_HR_V2_FEATURES_V3)) {
     const leaf = extractRecentContactFormLeaf(prediction.derivedFeatures);
     if (leaf == null) {
       reasons.push("recent_contact_form_missing");
@@ -1023,6 +1030,26 @@ export function evaluatePredictionRowIntegrity(
         }
       }
     }
+  }
+
+  // PR7A: retrosheet_discipline evidence integrity. This kind belongs ONLY to a V3
+  // prediction; on V1/V2 it must never appear. Each source is a single-actor
+  // (batter XOR pitcher) Retrosheet source that must be verified-as-of (a
+  // reconstructed historical dataset carries no live availability), from the
+  // authorized provider, its entityType matching the payload's declared actor, and
+  // its schemaVersion matching the prediction's feature version.
+  if (retrosheetDisciplineSources.length > 0 && prediction.featureVersion !== PLATE_HR_V2_FEATURES_V3) {
+    reasons.push("retrosheet_discipline_on_non_v3");
+  }
+  for (const src of retrosheetDisciplineSources) {
+    if (!RETROSHEET_DISCIPLINE_PROVIDERS.has(src.provider)) reasons.push("retrosheet_discipline_provider_unauthorized");
+    if (src.availabilitySource !== "verified_as_of") reasons.push("retrosheet_discipline_not_verified_as_of");
+    if (src.schemaVersion !== prediction.featureVersion) reasons.push("retrosheet_discipline_schema_version_mismatch");
+    if (src.entityType !== "batter" && src.entityType !== "pitcher") reasons.push("retrosheet_discipline_entity_type_invalid");
+    const actor = retrosheetDisciplineActorType(src.authorizedPayload);
+    if (actor == null) reasons.push("retrosheet_discipline_actor_unresolvable");
+    else if (actor !== src.entityType) reasons.push("retrosheet_discipline_entity_actor_mismatch");
+    if (actor === "batter" && src.entityId !== prediction.batterId) reasons.push("retrosheet_discipline_batter_mismatch");
   }
 
   let envHash: string | null = null;
