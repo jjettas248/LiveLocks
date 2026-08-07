@@ -16,8 +16,23 @@
 // Neutral + `available:false` when the pitcher is unknown or no handedness
 // splits exist — never fabricated.
 
-import type { ComponentScore, MoundDriver } from "./types";
+import type { ComponentScore, MoundDriver, MoundSignal } from "./types";
 import { lin, weightedAvg, round1, weightedPlatoonKRate } from "./scoreUtils";
+
+/** The driver key this module stamps when contactRiskScore crosses the high threshold (score >= 6.5) — see computeContactRisk below. Single source of truth so callers never hardcode the string. */
+export const CONTACT_RISK_HIGH_KEY = "cr_high";
+
+/**
+ * Non-behavioral presence check — does this signal already carry the
+ * "Hit/HR Susceptible: High" driver? Never recalculates contact risk; reads
+ * the already-stamped chip only. Used by the neutral pregame composition
+ * layer (server/mlb/pregame/composition/) as the sole trigger for cross-radar
+ * Plate target suggestions, so the "known to give up homers" threshold lives
+ * in exactly one place. Pure, no I/O, no dependency on the composition layer.
+ */
+export function hasHighContactRisk(signal: Pick<MoundSignal, "drivers">): boolean {
+  return signal.drivers.some((driver) => driver.key === CONTACT_RISK_HIGH_KEY);
+}
 
 export interface ContactRiskInputs {
   pitcherKnown: boolean;
@@ -71,7 +86,7 @@ export function computeContactRisk(inputs: ContactRiskInputs): ComponentScore {
   // Exactly two grades, at the tails only — no middle ground, mirrors
   // marketTagger.ts's marketSetupLabel() "no Solid/Watch middle ground" rule.
   if (score >= 6.5) {
-    drivers.push({ key: "cr_high", label: "Hit/HR Susceptible: High", direction: "negative", weight: Math.round(score * 10), evidence });
+    drivers.push({ key: CONTACT_RISK_HIGH_KEY, label: "Hit/HR Susceptible: High", direction: "negative", weight: Math.round(score * 10), evidence });
   } else if (score <= 3.5) {
     drivers.push({ key: "cr_low", label: "Hit/HR Susceptible: Low", direction: "positive", weight: Math.round((10 - score) * 10), evidence });
   }
