@@ -140,14 +140,6 @@ export const MODE_STYLES: Record<string, { label: string; color: string; bg: str
   hr_watch:      { label: "HR WATCH",    color: "#a78bfa", bg: "rgba(167,139,250,0.10)", border: "rgba(167,139,250,0.35)", icon: "👁" },
 };
 
-export function classifyTier(score: number | null | undefined): string {
-  const s = score ?? 0;
-  if (s >= 75) return "elite";
-  if (s >= 65) return "edge";
-  if (s >= 55) return "lean";
-  return "watch";
-}
-
 export function generateShareTweet(sig: {
   playerName: string;
   recommendedSide: string;

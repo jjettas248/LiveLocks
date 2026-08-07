@@ -1,5 +1,4 @@
 import type { Sport } from "./oddsConfig";
-import { getFreshnessThresholds } from "./oddsConfig";
 import { annotateSnapshot, snapshotKey } from "./oddsSnapshot";
 import type { BookLineSnapshot, OddsSnapshot, ReadOddsSnapshot } from "./oddsSnapshot";
 import {
@@ -115,11 +114,4 @@ export function pruneExpired(maxAgeMs = 30 * 60 * 1000): number {
     }
   });
   return removed;
-}
-
-export function isFreshFromCache(args: ReadOddsArgs): boolean {
-  const snap = readOddsSnapshot({ ...args, allowStale: true });
-  if (!snap) return false;
-  const t = getFreshnessThresholds(args.sport, args.isLive);
-  return snap.ageMs <= t.freshMs;
 }
