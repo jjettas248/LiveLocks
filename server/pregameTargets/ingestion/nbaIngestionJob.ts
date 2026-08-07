@@ -27,12 +27,81 @@ import type {
 import { instantMs, type AsOfFeatureRow } from "../../../shared/pregameTargets/featureStore";
 import { type PosteriorState } from "../posteriorState/posteriorState";
 import { buildRawSnapshotIdentity, computeContentHash } from "./rawSnapshotIdentity";
-import { parseNbaGameLog, gameDateToIso } from "./nbaGameLogAdapter";
+import { parseNbaGameLog, gameDateToIso, nbaSeasonIntFromString } from "./nbaGameLogAdapter";
 import { buildNbaFeatureRows, NBA_FEATURE_VERSION } from "./nbaFeatureBuilder";
 import { foldNbaPosteriors } from "./nbaPosteriorBuilder";
 import { classifySourceCoverage, type SourceCoverage } from "./ingestionCoverage";
-import { buildNbaGameLogSourceKey, type NbaSourceKind } from "./nbaSourceContracts";
+import { buildNbaGameLogSourceKey, isNbaIngestSeasonType, NBA_KNOWN_AT_POLICY_VERSION, type NbaIngestSeasonType, type NbaSourceKind } from "./nbaSourceContracts";
 import { buildCanonicalId } from "../../../shared/pregameTargets/canonicalEntities";
+
+/**
+ * Typed, fail-closed invocation error. Thrown when a caller — the CLI OR any direct
+ * programmatic caller — asks the orchestrator to ingest with an incoherent identity
+ * (mismatched season/label, unsupported season type, invalid current-season/as-of).
+ * The CLI maps it to exit code 2. This is the identity firewall that does NOT rely on
+ * the runner having validated first.
+ */
+export class IngestInvocationError extends Error {
+  constructor(public readonly kind: string, message: string) {
+    super(message);
+    this.name = "IngestInvocationError";
+  }
+}
+
+/** An immutable, fully-validated request plan. The provider request AND the persisted
+ *  sourceKey are BOTH derived from this ONE object — never from independently supplied
+ *  fields — so a fetch can never disagree with the identity it is stored under. */
+export interface ValidatedIngestRequest {
+  readonly kind: NbaSourceKind;
+  readonly playerNativeId: string;
+  readonly entityCanonicalId: string;
+  readonly season: number;
+  readonly seasonLabel: string;
+  readonly seasonType: NbaIngestSeasonType;
+  readonly currentSeason: number;
+  readonly asOfDate: string;
+  readonly sourceKey: string;
+}
+
+/**
+ * Validate an ingestion invocation and produce the immutable request plan, or THROW a
+ * typed fail-closed error. All checks run before any provider or storage access.
+ */
+export function buildValidatedIngestRequest(params: IngestPlayerSeasonParams): ValidatedIngestRequest {
+  if (typeof params.playerNativeId !== "string" || params.playerNativeId.trim() === "") {
+    throw new IngestInvocationError("invalid_player", "playerNativeId must be a non-empty string");
+  }
+  if (!isNbaIngestSeasonType(params.seasonType)) {
+    throw new IngestInvocationError("unsupported_season_type", `unsupported seasonType ${JSON.stringify(params.seasonType)}`);
+  }
+  const parsedSeason = nbaSeasonIntFromString(params.seasonLabel);
+  if (parsedSeason === null) {
+    throw new IngestInvocationError("malformed_season_label", `malformed seasonLabel ${JSON.stringify(params.seasonLabel)}`);
+  }
+  if (parsedSeason !== params.season) {
+    throw new IngestInvocationError("season_identity_mismatch", `seasonLabel ${JSON.stringify(params.seasonLabel)} resolves to ${parsedSeason}, not season ${params.season}`);
+  }
+  if (!Number.isInteger(params.currentSeason) || params.currentSeason <= 0) {
+    throw new IngestInvocationError("invalid_current_season", `invalid currentSeason ${params.currentSeason}`);
+  }
+  if (typeof params.asOfDate !== "string" || !Number.isFinite(Date.parse(params.asOfDate))) {
+    throw new IngestInvocationError("invalid_as_of_date", `invalid asOfDate ${JSON.stringify(params.asOfDate)}`);
+  }
+  const kind: NbaSourceKind = "nba_stats_playergamelog";
+  const entityCanonicalId = buildCanonicalId("nba", "player", params.playerNativeId);
+  const sourceKey = buildNbaGameLogSourceKey({ sourceKind: kind, entityCanonicalId, season: params.season, seasonType: params.seasonType });
+  return {
+    kind,
+    playerNativeId: params.playerNativeId,
+    entityCanonicalId,
+    season: params.season,
+    seasonLabel: params.seasonLabel,
+    seasonType: params.seasonType,
+    currentSeason: params.currentSeason,
+    asOfDate: params.asOfDate,
+    sourceKey,
+  };
+}
 
 export interface AtomicIngestArgs {
   entityCanonicalId: string;
@@ -75,10 +144,12 @@ export interface GameLogFetchArgs {
 }
 
 /** Typed fetch result: a shallow/empty provider response is `ok:true` (the adapter
- *  classifies it); only a real transport/HTTP/JSON failure is `ok:false`. */
+ *  classifies it); only a real transport/HTTP/JSON failure is `ok:false`. `fetchedAt`
+ *  is the post-decode OBSERVATION instant (→ knownAt); `failedAt` is a failure-observed
+ *  instant that is NEVER treated as a successful payload's fetchedAt. */
 export type GameLogFetchResult =
-  | { ok: true; rawPayload: unknown; fetchedAt: string }
-  | { ok: false; reason: string; fetchedAt: string };
+  | { ok: true; rawPayload: unknown; fetchedAt: string; requestedAt?: string }
+  | { ok: false; reason: string; failedAt: string; requestedAt?: string };
 export type GameLogFetcher = (args: GameLogFetchArgs) => Promise<GameLogFetchResult>;
 
 export type IngestStatus = "provider_failure" | "incomplete" | "noop_identical" | "ingested";
@@ -96,9 +167,10 @@ export interface IngestOutcome {
 export interface IngestPlayerSeasonParams {
   playerNativeId: string;
   season: number;
-  /** Exact validated NBA season string ("2023-24") forwarded verbatim to the provider. */
+  /** Exact NBA season string ("2023-24"); its parsed start year must equal `season`. */
   seasonLabel: string;
-  seasonType: string;
+  /** Canonical supported season type — validated at the orchestrator boundary too. */
+  seasonType: NbaIngestSeasonType;
   currentSeason: number;
   /** Reference instant for recency weighting (ISO). */
   asOfDate: string;
@@ -164,18 +236,19 @@ export async function ingestPlayerSeason(
   deps: { store: IngestionStorePort; fetch: GameLogFetcher },
   params: IngestPlayerSeasonParams,
 ): Promise<IngestOutcome> {
-  const kind: NbaSourceKind = "nba_stats_playergamelog";
-  const entityCanonicalId = buildCanonicalId("nba", "player", params.playerNativeId);
-  const sourceKey = buildNbaGameLogSourceKey({ sourceKind: kind, entityCanonicalId, season: params.season, seasonType: params.seasonType });
+  // Identity firewall — throws a typed error BEFORE any provider/storage access. The
+  // provider request AND the persisted sourceKey both come from this ONE validated plan.
+  const plan = buildValidatedIngestRequest(params);
+  const { kind, entityCanonicalId, sourceKey } = plan;
 
-  const fetched = await deps.fetch({ kind, entityNativeId: params.playerNativeId, season: params.season, seasonLabel: params.seasonLabel, seasonType: params.seasonType });
+  const fetched = await deps.fetch({ kind, entityNativeId: plan.playerNativeId, season: plan.season, seasonLabel: plan.seasonLabel, seasonType: plan.seasonType });
   if (!fetched.ok) {
-    const parsedFail = parseNbaGameLog({ kind, season: params.season, sourceKey, entityNativeId: params.playerNativeId, rawPayload: null, fetchedAt: fetched.fetchedAt });
-    return { status: "provider_failure", sourceKey, snapshotId: null, recordCount: 0, featureRowsWritten: 0, posteriorsUpdated: [], coverage: classifySourceCoverage(parsedFail, params.currentSeason) };
+    const parsedFail = parseNbaGameLog({ kind, season: plan.season, sourceKey, entityNativeId: plan.playerNativeId, rawPayload: null, fetchedAt: fetched.failedAt });
+    return { status: "provider_failure", sourceKey, snapshotId: null, recordCount: 0, featureRowsWritten: 0, posteriorsUpdated: [], coverage: classifySourceCoverage(parsedFail, plan.currentSeason) };
   }
 
-  const parsed = parseNbaGameLog({ kind, season: params.season, sourceKey, entityNativeId: params.playerNativeId, rawPayload: fetched.rawPayload, fetchedAt: fetched.fetchedAt });
-  const coverage = classifySourceCoverage(parsed, params.currentSeason);
+  const parsed = parseNbaGameLog({ kind, season: plan.season, sourceKey, entityNativeId: plan.playerNativeId, rawPayload: fetched.rawPayload, fetchedAt: fetched.fetchedAt });
+  const coverage = classifySourceCoverage(parsed, plan.currentSeason);
   if (!parsed.ok) {
     return { status: "incomplete", sourceKey, snapshotId: null, recordCount: 0, featureRowsWritten: 0, posteriorsUpdated: [], coverage };
   }
@@ -190,6 +263,12 @@ export async function ingestPlayerSeason(
   // New content (first capture or a genuine correction). Build the immutable raw
   // snapshot + feature rows; the posterior fold is deferred INTO the transaction.
   const validAtIso = maxGameDateIso(parsed.records) ?? gameDateToIso(parsed.records[0].gameDate);
+  // Timestamp-policy metadata persisted as audit fields (survives the DB, not just the
+  // transient TS object). `sourcePublishedAt` is explicitly null for these endpoints
+  // (they expose no publish instant). `supersedesSnapshotId` is deliberately NOT set
+  // here — the correction predecessor is resolved by storage UNDER the same lock as the
+  // insert (a caller can never pick its own predecessor). `createdAt` (defaultNow) is
+  // the immutable ingestion instant.
   const rawRow: InsertPregameRawSourceSnapshot = {
     snapshotId: identity.snapshotId,
     sport: "nba",
@@ -197,11 +276,13 @@ export async function ingestPlayerSeason(
     sourceKey,
     validAt: new Date(validAtIso),
     knownAt: new Date(fetched.fetchedAt),
+    sourcePublishedAt: parsed.records[0].timestamps.sourcePublishedAt === null ? null : new Date(parsed.records[0].timestamps.sourcePublishedAt),
+    knownAtPolicyVersion: parsed.records[0].timestamps.knownAtPolicyVersion ?? NBA_KNOWN_AT_POLICY_VERSION,
     payload: parsed.rawPayload as InsertPregameRawSourceSnapshot["payload"],
     contentHash: identity.contentHash,
   };
 
-  const built = buildNbaFeatureRows({ season: params.season, playerNativeId: params.playerNativeId, sourceId: identity.snapshotId, records: parsed.records });
+  const built = buildNbaFeatureRows({ season: plan.season, playerNativeId: plan.playerNativeId, sourceId: identity.snapshotId, records: parsed.records });
   const features = built.rows.map((row) => toFeatureInsert(row, identity.snapshotId));
   const featureKeys = Array.from(new Set(built.rows.map((r) => r.featureKey)));
 
@@ -209,7 +290,7 @@ export async function ingestPlayerSeason(
   // under a per-entity lock — so it always sees any concurrently-committed season.
   let posteriorsUpdated: string[] = [];
   const foldPosteriors = (lockedPriors: Map<string, PosteriorState>): InsertPregamePosteriorState[] => {
-    const folded = foldNbaPosteriors({ rows: built.rows, currentSeason: params.currentSeason, asOfDate: params.asOfDate, priorStates: lockedPriors });
+    const folded = foldNbaPosteriors({ rows: built.rows, currentSeason: plan.currentSeason, asOfDate: plan.asOfDate, priorStates: lockedPriors });
     posteriorsUpdated = Array.from(folded.keys()).sort();
     return Array.from(folded.values()).map((state) => toPosteriorInsert(state, "nba"));
   };

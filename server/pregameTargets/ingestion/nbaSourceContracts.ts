@@ -10,6 +10,17 @@
 
 export type NbaSourceKind = "nba_stats_playergamelog" | "nba_stats_teamgamelog";
 
+/**
+ * The ONLY season types PR5 ingestion accepts — the canonical supported type shared
+ * by the CLI and the orchestrator so identity validation happens in ONE place. A
+ * direct caller cannot smuggle an arbitrary `seasonType: string` past this.
+ */
+export type NbaIngestSeasonType = "Regular Season" | "Playoffs";
+export const NBA_SUPPORTED_SEASON_TYPES: readonly NbaIngestSeasonType[] = ["Regular Season", "Playoffs"];
+export function isNbaIngestSeasonType(s: unknown): s is NbaIngestSeasonType {
+  return typeof s === "string" && (NBA_SUPPORTED_SEASON_TYPES as readonly string[]).includes(s);
+}
+
 export const NBA_KNOWN_AT_POLICY_VERSION = "nba_gamelog_knownAt_v1";
 
 /** Provider family (source identity). */

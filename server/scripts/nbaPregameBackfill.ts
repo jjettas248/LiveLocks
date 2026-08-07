@@ -24,19 +24,18 @@
 import {
   fetchRawNbaPlayerGameLog,
   resolveGameLogSeason,
-  type NBASeasonType,
 } from "../services/nbaStatsService";
 import { nbaSeasonIntFromString } from "../pregameTargets/ingestion/nbaGameLogAdapter";
 import { isNbaIngestEnabled } from "../pregameTargets/ingestion/nbaIngestionFlags";
-import { ingestPlayerSeason, type GameLogFetcher, type IngestionStorePort } from "../pregameTargets/ingestion/nbaIngestionJob";
+import { ingestPlayerSeason, IngestInvocationError, type GameLogFetcher, type IngestionStorePort } from "../pregameTargets/ingestion/nbaIngestionJob";
 import { NBA_FEATURE_VERSION } from "../pregameTargets/ingestion/nbaFeatureBuilder";
 import { buildIngestErrorRecord } from "../pregameTargets/ingestion/nbaIngestionErrors";
+import { isNbaIngestSeasonType, NBA_SUPPORTED_SEASON_TYPES, type NbaIngestSeasonType } from "../pregameTargets/ingestion/nbaSourceContracts";
 import type { PosteriorState } from "../pregameTargets/posteriorState/posteriorState";
 
-/** The ONLY season types this runner accepts. Any other value is rejected up front. */
-const SUPPORTED_SEASON_TYPES: readonly NBASeasonType[] = ["Regular Season", "Playoffs"];
-export function parseSeasonType(raw: string): NBASeasonType | null {
-  return (SUPPORTED_SEASON_TYPES as readonly string[]).includes(raw) ? (raw as NBASeasonType) : null;
+/** Canonical season-type gate (single source of truth shared with the orchestrator). */
+export function parseSeasonType(raw: string): NbaIngestSeasonType | null {
+  return isNbaIngestSeasonType(raw) ? raw : null;
 }
 
 /** Build the ingestion store port from a storage instance (IStorage-shaped). */
@@ -87,7 +86,7 @@ async function main(): Promise<void> {
   const seasonTypeRaw = parseListArg(argv, "--seasonType")[0] ?? "Regular Season";
   const seasonType = parseSeasonType(seasonTypeRaw);
   if (seasonType === null) {
-    console.error(`[NBA_INGEST] refused: unsupported --seasonType "${seasonTypeRaw}" (allowed: ${SUPPORTED_SEASON_TYPES.join(", ")}).`);
+    console.error(`[NBA_INGEST] refused: unsupported --seasonType "${seasonTypeRaw}" (allowed: ${NBA_SUPPORTED_SEASON_TYPES.join(", ")}).`);
     process.exit(2);
   }
   // Seasons: the ONE canonical parser validates every season string semantically. A
@@ -113,8 +112,8 @@ async function main(): Promise<void> {
   const fetcher: GameLogFetcher = async ({ entityNativeId, seasonLabel }) => {
     const res = await fetchRawNbaPlayerGameLog({ playerId: entityNativeId, season: seasonLabel, seasonType });
     return res.ok
-      ? { ok: true, rawPayload: res.rawPayload, fetchedAt: res.fetchedAt }
-      : { ok: false, reason: res.reason, fetchedAt: res.fetchedAt };
+      ? { ok: true, rawPayload: res.rawPayload, requestedAt: res.requestedAt, fetchedAt: res.fetchedAt }
+      : { ok: false, reason: res.reason, requestedAt: res.requestedAt, failedAt: res.failedAt };
   };
 
   let failures = 0;
@@ -128,6 +127,12 @@ async function main(): Promise<void> {
         if (outcome.status === "provider_failure" || outcome.status === "incomplete") failures++;
         console.log(`[NBA_INGEST] player=${playerNativeId} season=${seasonLabel} seasonType=${seasonType} status=${outcome.status} records=${outcome.recordCount} features=${outcome.featureRowsWritten} posteriors=${outcome.posteriorsUpdated.length} coverage=${outcome.coverage.coverage}/${outcome.coverage.knownAtSupport}`);
       } catch (err) {
+        // A typed invocation error means an incoherent identity slipped past CLI
+        // validation (a bug/bypass) — fail closed with exit 2, not a data-failure exit.
+        if (err instanceof IngestInvocationError) {
+          console.error(`[NBA_INGEST] refused: invalid invocation (${err.kind}) for player=${playerNativeId} season=${seasonLabel}.`);
+          process.exit(2);
+        }
         failures++;
         // Bounded, redacted record only — never the payload, connection string, SQL
         // parameters, auth headers, or a raw stack.

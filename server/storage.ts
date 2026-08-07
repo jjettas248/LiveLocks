@@ -4399,11 +4399,37 @@ export class DatabaseStorage implements IStorage {
     foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
   }): Promise<{ inserted: boolean }> {
     return await db.transaction(async (tx) => {
+      // Serialize the whole read-modify-write PER ENTITY *before* touching any row. A
+      // transaction-scoped advisory lock (auto-released on commit/rollback,
+      // connection-safe) covers what a row-level FOR UPDATE cannot: a not-yet-existing
+      // posterior row, AND deterministic correction-lineage selection. Two concurrent
+      // same-entity ingestions take turns, so neither reads a stale predecessor/prior.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${args.entityCanonicalId + "|" + args.featureVersion}))`,
+      );
+
+      // Correction lineage, resolved UNDER the lock: the current latest immutable
+      // snapshot for the SAME semantic source identity (sourceKind + sourceKey). NULL
+      // for a first capture. A caller can never pick its own predecessor. Prior rows
+      // are never updated/deleted/repointed, so B→A then C→B is a deterministic chain.
+      const [predecessor] = await tx
+        .select({ snapshotId: pregameRawSourceSnapshots.snapshotId })
+        .from(pregameRawSourceSnapshots)
+        .where(
+          and(
+            eq(pregameRawSourceSnapshots.sourceKind, args.raw.sourceKind),
+            eq(pregameRawSourceSnapshots.sourceKey, args.raw.sourceKey),
+          ),
+        )
+        .orderBy(desc(pregameRawSourceSnapshots.createdAt), desc(pregameRawSourceSnapshots.snapshotId))
+        .limit(1);
+
       // Idempotency gate INSIDE the transaction: the raw snapshot's content-identity
-      // unique index. If the content already exists, insert nothing and no-op.
+      // unique index. If the content already exists, insert nothing and no-op (and the
+      // lineage is unchanged — no supersession is recorded for a no-op rerun).
       const [insertedRaw] = await tx
         .insert(pregameRawSourceSnapshots)
-        .values(args.raw)
+        .values({ ...args.raw, supersedesSnapshotId: predecessor?.snapshotId ?? null })
         .onConflictDoNothing({
           target: [
             pregameRawSourceSnapshots.sourceKind,
@@ -4413,15 +4439,6 @@ export class DatabaseStorage implements IStorage {
         })
         .returning();
       if (!insertedRaw) return { inserted: false };
-
-      // Serialize the posterior read-modify-write PER ENTITY. A transaction-scoped
-      // advisory lock (auto-released on commit/rollback, connection-safe) covers the
-      // case a row-level FOR UPDATE cannot: a posterior row that does not yet exist.
-      // Two concurrent same-player ingestions now take turns here, so neither reads a
-      // stale prior and overwrites the other's freshly-committed season.
-      await tx.execute(
-        sql`SELECT pg_advisory_xact_lock(hashtext(${args.entityCanonicalId + "|" + args.featureVersion}))`,
-      );
 
       // Read the CURRENT posterior states UNDER the lock, then fold against them.
       const priorRows = args.featureKeys.length === 0
