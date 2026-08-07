@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
+import { execSync } from "child_process";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -32,6 +33,20 @@ const allowlist = [
   "zod-validation-error",
 ];
 
+function getBuildCommitSha(): string | null {
+  try {
+    const sha = execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    })
+      .toString()
+      .trim();
+    return sha || null;
+  } catch {
+    return null;
+  }
+}
+
 async function buildAll() {
   await rm("dist", { recursive: true, force: true });
 
@@ -46,6 +61,15 @@ async function buildAll() {
   ];
   const externals = allDeps.filter((dep) => !allowlist.includes(dep));
 
+  // Captured here because the runtime container has no .git / git binary —
+  // this is the only point in the pipeline where the real commit is available.
+  const buildCommitSha = getBuildCommitSha();
+  console.log(
+    buildCommitSha
+      ? `captured build commit sha: ${buildCommitSha}`
+      : "could not capture build commit sha (git unavailable at build time)",
+  );
+
   await esbuild({
     entryPoints: ["server/index.ts"],
     platform: "node",
@@ -54,6 +78,9 @@ async function buildAll() {
     outfile: "dist/index.cjs",
     define: {
       "process.env.NODE_ENV": '"production"',
+      __BUILD_COMMIT_SHA__: buildCommitSha
+        ? JSON.stringify(buildCommitSha)
+        : "undefined",
     },
     minify: true,
     external: externals,
