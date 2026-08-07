@@ -24,7 +24,8 @@ function featureClassFor(featureKey: string): FeatureClass {
 export interface FoldNbaPosteriorsArgs {
   rows: readonly AsOfFeatureRow[];
   currentSeason: number;
-  /** Reference instant for recency (ISO). Typically the ingestion "as of now". */
+  /** Recency-WEIGHTING reference instant (ISO) — the anchor for age/season decay only.
+   *  NOT payload availability (knownAt) and NOT a prediction/as-of read time. */
   asOfDate: string;
   /** Existing posterior states keyed by featureKey (from the DB), if any. */
   priorStates?: ReadonlyMap<string, PosteriorState>;

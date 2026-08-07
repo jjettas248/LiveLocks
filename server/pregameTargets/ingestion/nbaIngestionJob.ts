@@ -1,21 +1,27 @@
 // PR5 — NBA ingestion orchestrator (pure of I/O via injected ports).
 //
-// Per (player, season): fetch RAW provider payload → parse → (idempotency probe) →
-// write immutable raw snapshot → build as-of feature rows → fold posteriors. Storage
-// and the provider are PORTS so the whole job is unit-testable with mocks (no DB, no
-// network).
+// Per (player, season): validate identity → fetch RAW provider payload → parse → build
+// the capture identity + as-of feature rows → hand to the atomic store, which decides
+// vs. the current head and folds posteriors. Storage and the provider are PORTS so the
+// whole job is unit-testable with mocks (no DB, no network).
 //
 // Guarantees enforced here:
 //   • Transport/HTTP/JSON failure → typed provider_failure, NO writes, coverage gap.
 //   • Empty/malformed provider RESULTSET → the adapter classifies it (empty/incomplete);
 //     the fetch still "succeeded", so a shallow response is never mislabeled a failure.
-//   • Identical content (deterministic snapshotId already present) → NO-OP, NO writes.
-//   • New content (first capture OR correction) → append-only immutable raw snapshot
-//     (never an update/delete), new feature rows, incremental posterior fold. A
-//     correction reuses PR1's same-game correction semantics in updatePosterior.
-//   • The posterior read→fold→write happens INSIDE the storage transaction under a
-//     per-entity lock (see ingestSnapshotAtomic) so two concurrent season ingests for
-//     one player can never lose an update.
+//   • There is NO pre-transaction content-existence probe (removed in audit-4 — it was
+//     invalid for an A→B→A recurrence). Idempotency and lineage are decided ENTIRELY
+//     inside the atomic store, under the lock, vs. the current head ordered by knownAt:
+//     equal-to-head → no-op; a later differing state → append (incl. a return to earlier
+//     content); older-than-head → stale (write nothing); same-knownAt-different-payload →
+//     conflict (write nothing).
+//   • An accepted capture (first_capture / appended) is append-only + immutable (never an
+//     update/delete of a prior row); its feature rows fold via PR1's same-game correction
+//     semantics in updatePosterior.
+//   • The head decision + raw insert + feature insert + posterior read→fold→write ALL
+//     happen INSIDE one storage transaction, under a per-entity advisory lock taken
+//     BEFORE head selection, so concurrent season ingests can never lose an update and
+//     an out-of-order arrival can never invert the chain.
 //   • Nothing here writes persisted_plays, produces targets/grades, emits analytics,
 //     or reads a line/price/EV/outcome. The projection-core inputs stay blind.
 
@@ -48,9 +54,14 @@ export class IngestInvocationError extends Error {
   }
 }
 
-/** An immutable, fully-validated request plan. The provider request AND the persisted
- *  sourceKey are BOTH derived from this ONE object — never from independently supplied
- *  fields — so a fetch can never disagree with the identity it is stored under. */
+/** An immutable, fully-validated request plan. The provider request AND the STABLE
+ *  SEMANTIC source identity (`sourceKey` here) are BOTH derived from this ONE object —
+ *  never from independently supplied fields — so a fetch can never disagree with the
+ *  semantic identity it is stored under. NOTE the three-identity split (audit-4): this
+ *  `sourceKey` is the SEMANTIC identity (stable across observations, drives head/lineage).
+ *  The persisted `source_key` column is the CAPTURE key (semantic key + observation
+ *  instant, distinct per accepted observation), and `content_hash` is the pure payload
+ *  hash — all three are separate. */
 export interface ValidatedIngestRequest {
   readonly kind: NbaSourceKind;
   readonly playerNativeId: string;
@@ -60,6 +71,7 @@ export interface ValidatedIngestRequest {
   readonly seasonType: NbaIngestSeasonType;
   readonly currentSeason: number;
   readonly asOfDate: string;
+  /** STABLE semantic source identity (NOT the capture-specific persisted source_key). */
   readonly sourceKey: string;
 }
 
@@ -182,7 +194,9 @@ export interface IngestPlayerSeasonParams {
   /** Canonical supported season type — validated at the orchestrator boundary too. */
   seasonType: NbaIngestSeasonType;
   currentSeason: number;
-  /** Reference instant for recency weighting (ISO). */
+  /** Recency-WEIGHTING reference instant (ISO) only — the anchor from which season/age
+   *  decay weights are computed. It is NOT payload availability (`knownAt` = the observed
+   *  `fetchedAt`) and NOT a prediction/as-of read time; it never gates leakage. */
   asOfDate: string;
 }
 
@@ -247,7 +261,9 @@ export async function ingestPlayerSeason(
   params: IngestPlayerSeasonParams,
 ): Promise<IngestOutcome> {
   // Identity firewall — throws a typed error BEFORE any provider/storage access. The
-  // provider request AND the persisted sourceKey both come from this ONE validated plan.
+  // provider request AND the STABLE SEMANTIC identity both come from this ONE validated
+  // plan (`plan.sourceKey` IS the semantic key; the capture-specific persisted source_key
+  // is derived per-observation below from the semantic key + observation instant).
   const plan = buildValidatedIngestRequest(params);
   const { kind, entityCanonicalId, sourceKey } = plan;
 
