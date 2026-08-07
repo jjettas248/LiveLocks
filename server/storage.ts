@@ -656,6 +656,27 @@ export interface IStorage {
     foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
   }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }>;
 
+  /**
+   * PR6 NFL ingestion — DATASET-scoped variant of the above. One nflverse whole-season
+   * capture yields MANY players' feature rows + posteriors, so (unlike the per-entity
+   * method) the advisory lock is on the DATASET `semanticSourceKey`, and posterior priors
+   * are read for the SET of (entityCanonicalId, featureKey) pairs in the fold. The audit-4
+   * head-by-`known_at` observation-chain decision (first_capture/noop/appended/stale/
+   * conflict, incl. A→B→A) is IDENTICAL. `foldPosteriors` receives priors keyed
+   * `${entityCanonicalId}|${featureKey}`. All-or-nothing in one transaction.
+   */
+  ingestPregameDatasetSnapshotAtomic(args: {
+    featureVersion: string;
+    entityCanonicalIds: string[];
+    featureKeys: string[];
+    semanticSourceKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
+    raw: InsertPregameRawSourceSnapshot;
+    features: InsertPregameFeatureSnapshot[];
+    foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
+  }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }>;
+
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
   // Creation is INSERT-only with ON CONFLICT DO NOTHING — a repeated
   // evaluation of the exact same frozen (snapshotId, market) is a harmless
@@ -4925,6 +4946,93 @@ export class DatabaseStorage implements IStorage {
               pregamePosteriorStates.featureKey,
               pregamePosteriorStates.featureVersion,
             ],
+            set: { sport: p.sport, stateVersion: p.stateVersion, bySeason: p.bySeason, updatedAt: new Date() },
+          });
+      }
+      return { decision, snapshotId: insertedRaw.snapshotId, supersedes };
+    });
+  }
+
+  async ingestPregameDatasetSnapshotAtomic(args: {
+    featureVersion: string;
+    entityCanonicalIds: string[];
+    featureKeys: string[];
+    semanticSourceKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
+    raw: InsertPregameRawSourceSnapshot;
+    features: InsertPregameFeatureSnapshot[];
+    foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
+  }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }> {
+    return await db.transaction(async (tx) => {
+      // Serialize the whole read-modify-write for this DATASET before touching any row.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${args.semanticSourceKey}))`);
+
+      // HEAD of the observation chain for this semantic identity, by known_at (audit-4).
+      const [head] = await tx
+        .select({ snapshotId: pregameRawSourceSnapshots.snapshotId, knownAt: pregameRawSourceSnapshots.knownAt, contentHash: pregameRawSourceSnapshots.contentHash })
+        .from(pregameRawSourceSnapshots)
+        .where(eq(pregameRawSourceSnapshots.semanticSourceKey, args.semanticSourceKey))
+        .orderBy(desc(pregameRawSourceSnapshots.knownAt), desc(pregameRawSourceSnapshots.snapshotId))
+        .limit(1);
+
+      let supersedes: string | null = null;
+      if (head) {
+        const inMs = args.incomingKnownAt.getTime();
+        const headMs = new Date(head.knownAt).getTime();
+        if (inMs < headMs) return { decision: "stale", snapshotId: null, supersedes: null };
+        if (inMs === headMs) {
+          return args.incomingContentHash === head.contentHash
+            ? { decision: "noop", snapshotId: head.snapshotId, supersedes: null }
+            : { decision: "conflict", snapshotId: null, supersedes: null };
+        }
+        if (args.incomingContentHash === head.contentHash) return { decision: "noop", snapshotId: head.snapshotId, supersedes: null };
+        supersedes = head.snapshotId;
+      }
+
+      const [insertedRaw] = await tx
+        .insert(pregameRawSourceSnapshots)
+        .values({ ...args.raw, semanticSourceKey: args.semanticSourceKey, supersedesSnapshotId: supersedes })
+        .onConflictDoNothing({ target: [pregameRawSourceSnapshots.sourceKind, pregameRawSourceSnapshots.sourceKey, pregameRawSourceSnapshots.contentHash] })
+        .returning();
+      if (!insertedRaw) return { decision: "noop", snapshotId: args.raw.snapshotId, supersedes: null };
+
+      const decision: "first_capture" | "appended" = supersedes === null ? "first_capture" : "appended";
+
+      // Read priors for the SET of (entity, featureKey) pairs, keyed `${entity}|${featureKey}`.
+      const priorRows = args.entityCanonicalIds.length === 0 || args.featureKeys.length === 0
+        ? []
+        : await tx
+            .select()
+            .from(pregamePosteriorStates)
+            .where(
+              and(
+                eq(pregamePosteriorStates.featureVersion, args.featureVersion),
+                inArray(pregamePosteriorStates.entityCanonicalId, args.entityCanonicalIds),
+                inArray(pregamePosteriorStates.featureKey, args.featureKeys),
+              ),
+            );
+      const lockedPriors = new Map<string, PregamePosteriorState>();
+      for (const r of priorRows) {
+        lockedPriors.set(`${r.entityCanonicalId}|${r.featureKey}`, {
+          version: r.stateVersion,
+          featureKey: r.featureKey,
+          featureVersion: r.featureVersion,
+          entityCanonicalId: r.entityCanonicalId,
+          bySeason: (r.bySeason ?? {}) as PregamePosteriorState["bySeason"],
+        });
+      }
+      const posteriors = args.foldPosteriors(lockedPriors);
+
+      for (const f of args.features) {
+        await tx.insert(pregameFeatureSnapshots).values(f).onConflictDoNothing({ target: pregameFeatureSnapshots.featureRowId });
+      }
+      for (const p of posteriors) {
+        await tx
+          .insert(pregamePosteriorStates)
+          .values(p)
+          .onConflictDoUpdate({
+            target: [pregamePosteriorStates.entityCanonicalId, pregamePosteriorStates.featureKey, pregamePosteriorStates.featureVersion],
             set: { sport: p.sport, stateVersion: p.stateVersion, bySeason: p.bySeason, updatedAt: new Date() },
           });
       }
