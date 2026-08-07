@@ -8,17 +8,32 @@
 
 import {
   NBA_KNOWN_AT_POLICY_VERSION,
+  type NbaAdapterDiagnostics,
   type NbaAdapterResult,
   type NbaNormalizedGameRecord,
   type NbaSourceKind,
 } from "./nbaSourceContracts";
 
-/** NBA season string ("2025-26") → integer season (2026 = the end year). */
+/**
+ * NBA season string ("2025-26") → integer season (2026 = the end year), or null.
+ *
+ * SEMANTIC validation, not just structural: the two-digit suffix MUST equal the
+ * final two digits of `startYear + 1`. So a structurally-shaped but semantically
+ * impossible season is rejected rather than silently normalized to a different
+ * season the caller never asked for:
+ *   "2025-26" → 2026   "1999-00" → 2000   (valid)
+ *   "2025-99" → null   "2025-25" → null   "2025-2" → null   "garbage" → null
+ * This is the ONE canonical season parser; the CLI and the provider request path
+ * both go through it (never "accept one string, fetch a different season").
+ */
 export function nbaSeasonIntFromString(s: string): number | null {
   const m = /^(\d{4})-(\d{2})$/.exec(s.trim());
   if (!m) return null;
   const start = Number(m[1]);
-  return start + 1;
+  const end = start + 1;
+  // Suffix must be exactly (start + 1) mod 100, zero-padded (e.g. 1999-00, 2025-26).
+  if (String(end % 100).padStart(2, "0") !== m[2]) return null;
+  return end;
 }
 
 /** Integer season (2026) → NBA season string ("2025-26"). */
@@ -51,8 +66,18 @@ export interface ParseNbaGameLogArgs {
 }
 
 /** Parse a raw NBA Stats game-log response into normalized records (or a typed failure). */
+/** Structural anchors that MUST exist to identify a record and place it in time. */
+const REQUIRED_HEADERS = ["GAME_ID", "GAME_DATE"] as const;
+/**
+ * Every header the adapter READS. A duplicate of any of these is ambiguous (which
+ * column wins?) and fails closed. MIN/PTS/etc. may be *absent* (→ a missing
+ * reading, never a failure), but never DUPLICATED. Headers outside this set are
+ * unknown extras and ignored.
+ */
+const CONSUMED_HEADERS = ["GAME_ID", "GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "FG3M"] as const;
+
 export function parseNbaGameLog(args: ParseNbaGameLogArgs): NbaAdapterResult {
-  const fail = (reason: "empty_result" | "incomplete_response" | "malformed"): NbaAdapterResult =>
+  const fail = (reason: "empty_result" | "incomplete_response" | "conflicting_rows" | "malformed"): NbaAdapterResult =>
     ({
       ok: false as const,
       kind: args.kind,
@@ -73,10 +98,10 @@ export function parseNbaGameLog(args: ParseNbaGameLogArgs): NbaAdapterResult {
   if (!Array.isArray(headers) || !Array.isArray(rowSet)) return fail("incomplete_response");
   if (rowSet.length === 0) return fail("empty_result");
 
-  // Resolve columns BY NAME (order-independent). Detect DUPLICATE required
-  // headers — an ambiguous schema is a fail-closed break, not a silent
-  // last-wins. Unknown extra headers are ignored (we only read named columns,
-  // per the source manifest). A missing REQUIRED header also fails closed.
+  // Resolve columns BY NAME (order-independent). A DUPLICATE of ANY consumed
+  // header — required or optional — is an ambiguous schema and fails closed (never
+  // a silent last-wins). Unknown extra headers are ignored (we read only named
+  // columns, per the source manifest). A missing REQUIRED header also fails closed.
   const idx: Record<string, number> = {};
   const seen = new Set<string>();
   const duplicates = new Set<string>();
@@ -87,22 +112,25 @@ export function parseNbaGameLog(args: ParseNbaGameLogArgs): NbaAdapterResult {
     seen.add(key);
     idx[key] = i;
   });
-  // Structural anchors that MUST exist to identify a record and place it in time.
-  // MIN/PTS/etc. are optional per-row (absence → a missing reading, not a failure).
-  const REQUIRED = ["GAME_ID", "GAME_DATE"];
-  if (REQUIRED.some((k) => duplicates.has(k))) return fail("incomplete_response"); // ambiguous duplicate required header
-  if (REQUIRED.some((k) => idx[k] === undefined)) return fail("incomplete_response"); // missing required header
+  if (CONSUMED_HEADERS.some((k) => duplicates.has(k))) return fail("incomplete_response"); // ambiguous duplicate consumed header
+  if (REQUIRED_HEADERS.some((k) => idx[k] === undefined)) return fail("incomplete_response"); // missing required header
   const get = (row: unknown[], key: string): unknown => {
     const i = idx[key];
     return i === undefined ? undefined : row[i];
   };
 
-  const records: NbaNormalizedGameRecord[] = [];
+  // Deduplicate/verify by GAME_ID. Two rows with the same GAME_ID:
+  //   • byte-identical consumed content → collapse (deterministic, order-independent);
+  //   • differing content → CONFLICTING source data, fail closed (never fold by row order).
+  // A blank GAME_ID cannot be an observation — dropped and surfaced in diagnostics
+  // so a reduced depth is never read as a shallower-but-complete response.
+  const byGameId = new Map<string, { record: NbaNormalizedGameRecord; sig: string }>();
+  const diagnostics: NbaAdapterDiagnostics = { blankGameIdRows: 0, duplicateRowsCollapsed: 0 };
   for (const raw of rowSet) {
     if (!Array.isArray(raw)) return fail("malformed");
     const gameId = String(get(raw, "GAME_ID") ?? "").trim();
-    if (gameId === "") continue; // a row with no game id cannot be an observation
-    records.push({
+    if (gameId === "") { diagnostics.blankGameIdRows++; continue; }
+    const record: NbaNormalizedGameRecord = {
       gameId,
       gameDate: String(get(raw, "GAME_DATE") ?? "").trim(),
       teamTricode: teamTricodeFromMatchup(String(get(raw, "MATCHUP") ?? "")),
@@ -117,8 +145,21 @@ export function parseNbaGameLog(args: ParseNbaGameLogArgs): NbaAdapterResult {
         fetchedAt: args.fetchedAt,
         knownAtPolicyVersion: NBA_KNOWN_AT_POLICY_VERSION,
       },
-    });
+    };
+    // Content signature over the CONSUMED cells only (order-independent by name).
+    const sig = JSON.stringify(CONSUMED_HEADERS.map((k) => {
+      const v = get(raw, k);
+      return v === undefined ? null : v;
+    }));
+    const existing = byGameId.get(gameId);
+    if (existing) {
+      if (existing.sig !== sig) return fail("conflicting_rows"); // same game, contradictory data
+      diagnostics.duplicateRowsCollapsed++; // exact duplicate — collapse, don't double-count
+      continue;
+    }
+    byGameId.set(gameId, { record, sig });
   }
+  const records = Array.from(byGameId.values()).map((v) => v.record);
   if (records.length === 0) return fail("empty_result");
 
   return {
@@ -128,6 +169,7 @@ export function parseNbaGameLog(args: ParseNbaGameLogArgs): NbaAdapterResult {
     season: args.season,
     entityNativeId: args.entityNativeId,
     records,
+    diagnostics,
     rawPayload: args.rawPayload,
     fetchedAt: args.fetchedAt,
   };

@@ -82,8 +82,21 @@ export interface NbaNormalizedGameRecord {
 
 export type NbaAdapterFailureReason =
   | "empty_result" // resultSets present but zero rows
-  | "incomplete_response" // missing resultSets / missing headers / rowSet not an array
+  | "incomplete_response" // missing resultSets / missing headers / rowSet not an array / a missing OR duplicated required/consumed header (ambiguous schema, never silent last-wins)
+  | "conflicting_rows" // two rows share a GAME_ID but disagree on content — contradictory source data, fail closed (never fold by row order)
   | "malformed"; // structurally unusable payload
+
+/**
+ * Non-fatal diagnostics carried on a successful parse. These record what the
+ * adapter deterministically *dropped* so a reduced record count is never silently
+ * read as a shallower-but-complete response.
+ */
+export interface NbaAdapterDiagnostics {
+  /** Rows with a blank/absent GAME_ID (cannot be an observation) — dropped, surfaced here. */
+  blankGameIdRows: number;
+  /** Byte-identical duplicate rows for the same GAME_ID collapsed (order-independent). */
+  duplicateRowsCollapsed: number;
+}
 
 export type NbaAdapterResult =
   | {
@@ -94,6 +107,8 @@ export type NbaAdapterResult =
       season: number;
       entityNativeId: string;
       records: NbaNormalizedGameRecord[];
+      /** Deterministic drop accounting (blank ids, collapsed exact duplicates). */
+      diagnostics: NbaAdapterDiagnostics;
       /** The raw payload, retained verbatim for the immutable snapshot. */
       rawPayload: unknown;
       fetchedAt: string;

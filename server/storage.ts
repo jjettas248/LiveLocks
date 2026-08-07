@@ -1,4 +1,5 @@
 import { db } from "./db";
+import type { PosteriorState as PregamePosteriorState } from "./pregameTargets/posteriorState/posteriorState";
 import { todayET, daysAgoET } from "./utils/dateUtils";
 import { resolveMlbGameSessionDate } from "./utils/mlbSessionDate";
 import { decideHrRadarMatch, QUALIFYING_EVENT_TYPES } from "./validation/hrRadar/matchDecision";
@@ -564,17 +565,22 @@ export interface IStorage {
     featureVersion: string,
   ): Promise<PregamePosteriorStateRow | null>;
   /**
-   * PR5 NBA ingestion — ALL-OR-NOTHING commit of one source snapshot. Inserts the
-   * immutable raw snapshot (idempotent on its content-identity unique index) and,
-   * ONLY when that insert is new, the feature rows + posterior upserts, inside a
-   * single transaction. Rolls back entirely on any failure, so a partial source
-   * snapshot can never be reported as fully ingested. Returns `inserted:false`
-   * when the content already existed (a no-op).
+   * PR5 NBA ingestion — ALL-OR-NOTHING, serialized-per-entity commit of one source
+   * snapshot. Inserts the immutable raw snapshot (idempotent on its content-identity
+   * unique index) and, ONLY when that insert is new: takes a per-entity advisory lock,
+   * reads the CURRENT posterior states under that lock, calls `foldPosteriors` with
+   * them, then writes the feature rows + folded posteriors — all inside ONE
+   * transaction. Rolls back entirely on any failure. The lock + in-transaction read
+   * close the read-modify-write race two concurrent same-player ingestions would
+   * otherwise lose. Returns `inserted:false` when the content already existed (no-op).
    */
   ingestPregameNbaSnapshotAtomic(args: {
+    entityCanonicalId: string;
+    featureVersion: string;
+    featureKeys: string[];
     raw: InsertPregameRawSourceSnapshot;
     features: InsertPregameFeatureSnapshot[];
-    posteriors: InsertPregamePosteriorState[];
+    foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
   }): Promise<{ inserted: boolean }>;
 
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
@@ -4385,9 +4391,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async ingestPregameNbaSnapshotAtomic(args: {
+    entityCanonicalId: string;
+    featureVersion: string;
+    featureKeys: string[];
     raw: InsertPregameRawSourceSnapshot;
     features: InsertPregameFeatureSnapshot[];
-    posteriors: InsertPregamePosteriorState[];
+    foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
   }): Promise<{ inserted: boolean }> {
     return await db.transaction(async (tx) => {
       // Idempotency gate INSIDE the transaction: the raw snapshot's content-identity
@@ -4404,12 +4413,47 @@ export class DatabaseStorage implements IStorage {
         })
         .returning();
       if (!insertedRaw) return { inserted: false };
+
+      // Serialize the posterior read-modify-write PER ENTITY. A transaction-scoped
+      // advisory lock (auto-released on commit/rollback, connection-safe) covers the
+      // case a row-level FOR UPDATE cannot: a posterior row that does not yet exist.
+      // Two concurrent same-player ingestions now take turns here, so neither reads a
+      // stale prior and overwrites the other's freshly-committed season.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${args.entityCanonicalId + "|" + args.featureVersion}))`,
+      );
+
+      // Read the CURRENT posterior states UNDER the lock, then fold against them.
+      const priorRows = args.featureKeys.length === 0
+        ? []
+        : await tx
+            .select()
+            .from(pregamePosteriorStates)
+            .where(
+              and(
+                eq(pregamePosteriorStates.entityCanonicalId, args.entityCanonicalId),
+                eq(pregamePosteriorStates.featureVersion, args.featureVersion),
+                inArray(pregamePosteriorStates.featureKey, args.featureKeys),
+              ),
+            );
+      const lockedPriors = new Map<string, PregamePosteriorState>();
+      for (const r of priorRows) {
+        lockedPriors.set(r.featureKey, {
+          version: r.stateVersion,
+          featureKey: r.featureKey,
+          featureVersion: r.featureVersion,
+          entityCanonicalId: r.entityCanonicalId,
+          bySeason: (r.bySeason ?? {}) as PregamePosteriorState["bySeason"],
+        });
+      }
+      const posteriors = args.foldPosteriors(lockedPriors);
+
       // Feature rows: conflict-safe on their deterministic PK (a retried commit
       // never duplicates). Posteriors: upsert the whole folded state.
       for (const f of args.features) {
         await tx.insert(pregameFeatureSnapshots).values(f).onConflictDoNothing({ target: pregameFeatureSnapshots.featureRowId });
       }
-      for (const p of args.posteriors) {
+      for (const p of posteriors) {
         await tx
           .insert(pregamePosteriorStates)
           .values(p)

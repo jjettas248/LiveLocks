@@ -385,6 +385,55 @@ const GAME_LOGS_TTL = 30 * 60 * 1000; // 30 min — playoff games happen daily
 const playerGameLogsCache = new Map<string, CacheEntry<any[]>>();
 const teamGameLogsCache = new Map<string, CacheEntry<any[]>>();
 
+/**
+ * Result of a RAW playergamelog fetch (PR5 ingestion). Unlike getPlayerGameLogs(),
+ * this preserves the provider's verbatim JSON — original headers, cells, and any
+ * nulls — so the immutable snapshot is the real provider payload and the ingestion
+ * adapter (parseNbaGameLog) sees live schema drift (missing/duplicate headers) and
+ * genuine missing values instead of pre-coerced zeros.
+ *
+ *  • `ok:true`  → the verbatim provider JSON (even an empty/malformed resultSet:
+ *                 the ADAPTER classifies those; the fetch itself succeeded).
+ *  • `ok:false` → ONLY a true transport / HTTP / JSON-decode failure.
+ */
+export type RawNbaGameLogFetchResult =
+  | { ok: true; rawPayload: unknown; fetchedAt: string }
+  | { ok: false; reason: "transport_failure" | "http_failure" | "invalid_json"; fetchedAt: string };
+
+/**
+ * RAW playergamelog fetch for PR5 ingestion. Deliberately does NOT go through
+ * rowsToObjects / PlayerGameLogRow (which drop metadata and coerce missing MIN/PTS
+ * to 0), and deliberately bypasses the presentation game-log cache — a backfill
+ * wants the provider bytes as-they-are, stamped with the real fetch instant.
+ */
+export async function fetchRawNbaPlayerGameLog(args: {
+  playerId: string;
+  season: string; // exact NBA season string, e.g. "2024-25"
+  seasonType: NBASeasonType;
+}): Promise<RawNbaGameLogFetchResult> {
+  const fetchedAt = new Date().toISOString();
+  const qs = new URLSearchParams({
+    PlayerID: String(args.playerId),
+    Season: args.season,
+    SeasonType: args.seasonType,
+  }).toString();
+  const url = `${NBA_STATS_BASE}/playergamelog?${qs}`;
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: NBA_HEADERS, signal: AbortSignal.timeout(8000) });
+  } catch {
+    return { ok: false, reason: "transport_failure", fetchedAt };
+  }
+  if (!res.ok) return { ok: false, reason: "http_failure", fetchedAt };
+  let json: unknown;
+  try {
+    json = await res.json();
+  } catch {
+    return { ok: false, reason: "invalid_json", fetchedAt };
+  }
+  return { ok: true, rawPayload: json, fetchedAt };
+}
+
 export interface PlayerGameLogRow {
   GAME_ID: string;
   GAME_DATE: string;
