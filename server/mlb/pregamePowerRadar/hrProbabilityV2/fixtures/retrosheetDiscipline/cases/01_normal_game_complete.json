@@ -50,7 +50,7 @@
     ],
     "batterAggregate": {
       "pa": 4, "codedPitchPa": 4, "pitchSequenceCoverage": 1.0, "sequenceFloorMet": true,
-      "k": 1, "bb": 1, "ibb": 0, "hbp": 0, "inPlay": 2, "pitches": 20, "swings": 8, "whiffs": 1, "contacts": 6, "fouls": 5,
+      "k": 1, "bb": 1, "ibb": 0, "hbp": 0, "inPlay": 2, "pitches": 20, "swings": 8, "whiffs": 1, "contacts": 7, "fouls": 5,
       "calledStrikes": 4, "takenPitches": 12, "firstPitchStrikes": 3, "twoStrikePa": 3, "twoStrikeK": 1, "twoStrikeSurvived": 2
     }
   }

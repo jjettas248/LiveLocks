@@ -1,0 +1,3 @@
+interrupted_pa=ANA201904040
+responsible_batter=ARI201908060,ARI201909140,BAL201908010
+grammar_population=2019ANA.EVA (all Angels home games, ~81 games)

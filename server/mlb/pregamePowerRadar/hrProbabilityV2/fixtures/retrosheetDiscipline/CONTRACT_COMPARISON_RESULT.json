@@ -1,0 +1,75 @@
+{
+  "revised_contract_comparison": "pr7a1",
+  "parser": "Chadwick cwevent 0.10.0 (8f7e0ecd8984cd752e6aca5deba81b86fb369602)",
+  "grammarCrossCheckFromProof": {
+    "checked": 5561,
+    "matched": 5561,
+    "matchRate": 1
+  },
+  "cases": [
+    {
+      "case": "01_normal_game_complete",
+      "realAnchored": false,
+      "checks": 64,
+      "problems": [],
+      "status": "PASS"
+    },
+    {
+      "case": "02_interrupted_pa_period",
+      "realAnchored": true,
+      "checks": 39,
+      "problems": [],
+      "status": "PASS"
+    },
+    {
+      "case": "03_sub_responsible_batter",
+      "realAnchored": true,
+      "checks": 39,
+      "problems": [],
+      "status": "PASS"
+    },
+    {
+      "case": "04_handedness_split",
+      "realAnchored": false,
+      "checks": 19,
+      "problems": [],
+      "status": "PASS"
+    },
+    {
+      "case": "05_missing_incomplete_seq",
+      "realAnchored": false,
+      "checks": 21,
+      "problems": [],
+      "status": "PASS"
+    },
+    {
+      "case": "06_unknown_handedness",
+      "realAnchored": false,
+      "checks": 19,
+      "problems": [],
+      "status": "PASS"
+    },
+    {
+      "case": "07_below_coverage_gate",
+      "realAnchored": false,
+      "checks": 15,
+      "problems": [],
+      "status": "PASS"
+    },
+    {
+      "case": "08_sample_floor_boundaries",
+      "realAnchored": false,
+      "checks": 16,
+      "problems": [],
+      "status": "PASS"
+    }
+  ],
+  "provenance": {
+    "case": "__provenance__",
+    "realAnchored": false,
+    "checks": 25,
+    "problems": [],
+    "status": "PASS"
+  },
+  "overall": "PASS"
+}

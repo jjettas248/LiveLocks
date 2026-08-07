@@ -1,0 +1,33 @@
+{
+  "parserName": "Chadwick cwevent",
+  "parserVersion": "0.10.0",
+  "parserCommitSha": "8f7e0ecd8984cd752e6aca5deba81b86fb369602",
+  "cweventArguments": "cwevent -n -y 2019 -f 0,2,3,4,5,6,7,10,11,12,13,14,15,16,17,29,31,33,34,35,36,86,87 <eventfile>",
+  "fieldList": "0,2,3,4,5,6,7,10,11,12,13,14,15,16,17,29,31,33,34,35,36,86,87",
+  "fieldNamesInOrder": [
+    "GAME_ID",
+    "INN_CT",
+    "BAT_HOME_ID",
+    "OUTS_CT",
+    "BALLS_CT",
+    "STRIKES_CT",
+    "PITCH_SEQ_TX",
+    "BAT_ID",
+    "BAT_HAND_CD",
+    "RESP_BAT_ID",
+    "RESP_BAT_HAND_CD",
+    "PIT_ID",
+    "PIT_HAND_CD",
+    "RESP_PIT_ID",
+    "RESP_PIT_HAND_CD",
+    "EVENT_TX",
+    "PH_FL",
+    "BAT_LINEUP_ID",
+    "EVENT_CD",
+    "BAT_EVENT_FL",
+    "AB_FL",
+    "REMOVED_FOR_PH_BAT_ID",
+    "REMOVED_FOR_PH_BAT_FLD_CD"
+  ],
+  "note": "The runbook-required semantic fields (PITCH_SEQ_TX, RESP_BAT_ID, RESP_BAT_HAND_CD, RESP_PIT_ID, RESP_PIT_HAND_CD, EVENT_CD, BAT_LINEUP_ID, count fields) are STANDARD cwevent fields in Chadwick 0.10.0, emitted via -f; -x extended fields are not required for this contract."
+}

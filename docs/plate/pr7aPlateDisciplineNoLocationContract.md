@@ -1,16 +1,21 @@
 # PR7A — Zone-Independent Plate-Discipline Upgrade (`plateDisciplineNoLocationV1`)
 
-> **Status: CONDITIONALLY APPROVED — contract revised, fixtures + source manifest authorized.**
+> **Status: TOOLCHAIN VALIDATED (PR7A.0 proved parity; PR7A.1 reconciled fixtures + manifest).**
 > The audit + redundancy + contract were reviewed and **approved**; the architecture is locked
 > (no separate `plateDisciplineNoLocation` group — the canonical `contactOpportunity` group is
 > extended, with a separate `pitcherDiscipline` group and an explicitly-unavailable `zoneLocation`
-> group). The committed fixtures are **synthetic raw-shape contract fixtures** — authored Retrosheet-
-> *shaped* records + expected-normalized parse, **NOT captured from Retrosheet and NOT validated
-> against real Chadwick output**. The source manifest is **draft** (`status:
-> draft_pending_toolchain_validation`); the 2000+ floor is **provisional**. The authorized next step
-> is **PR7A.0**: a narrow Retrosheet/Chadwick toolchain-parity proof (§7). Still prohibited:
-> full/multi-season ingestion, the 2000–2025 matrix job, DB changes, fetch scheduling, feature-
-> envelope TypeScript changes, evidence-kind wiring, feature-builder wiring, fitting, PR8,
+> group). **PR7A.0** ran the pinned Chadwick `cwevent` over real, SHA-verified 2019 Retrosheet event
+> files on a clean GitHub Actions runner (no production secrets, no deploy/DB/Railway/runtime/model
+> change) and captured actual output (`docs/plate/pr7a0-proof/`). **PR7A.1** reconciled the fixtures
+> and manifest to that real output: the pitch-sequence grammar reproduced cwevent's own counts on
+> **5561/5561** real PAs; cases 02 (interrupted PA) and 03 (responsible batter) are **re-anchored to
+> real cwevent output rows**; all 8 cases pass the revised contract comparison
+> (`scripts/pr7a0/verifyFixtureContract.mjs`). The source manifest is now **`status: validated`** with
+> the parser version/commit, exact `cwevent` arguments, and archive/source/output hashes pinned. **The
+> 2000+ training floor remains provisional and the 2000–2025 season matrix remains PENDING_MEASUREMENT
+> — PR7A.0/PR7A.1 validated the parser + raw-shape contract only, not multi-season coverage.** Still
+> prohibited: full/multi-season ingestion, the 2000–2025 matrix job, DB changes, fetch scheduling,
+> feature-envelope TypeScript changes, evidence-kind wiring, feature-builder wiring, fitting, PR8,
 > champion/public changes. This doc changes no runtime code.
 
 ## 0. Why PR7A exists
@@ -105,6 +110,17 @@ in-play `EVENT_CD` ends in `X`/`Y`; a strikeout ends in `S`/`C`/`M`). A batter's
 only when the **share of sequence-complete PAs ≥ a coverage floor** (proposed `0.90`); otherwise the
 window degrades → the leaf is `null`, never estimated. Pitch-sequence coverage is high in the modern
 era but **not** universal historically — this floor is mandatory, not cosmetic.
+
+**Interrupted-PA raw shape (VALIDATED against real Chadwick output — PR7A.0).** A PA that spans
+multiple event-file play records (a stolen base, wild pitch, injury, or substitution mid-AB) surfaces
+in **actual cwevent output** as **ONE `BAT_EVENT_FL=T` row whose `PITCH_SEQ_TX` carries the FULL
+CUMULATIVE sequence with the `.` marker preserved verbatim** — cwevent does **not** strip the dot
+(e.g. real rows `.BBCX`, `CC.FS`, `BCBB.CX`). The interrupting event is a **separate
+`BAT_EVENT_FL=F` row** and is **never** a second PA. Normalization therefore **reads the single
+terminal row and strips the `.` in one pass** (`.BBCX` → `[B,B,C,X]`); it **must not** concatenate
+pitch fragments from separate records. On a two-strike substitution, cwevent charges the PA to the
+**original** batter via `RESP_BAT_ID`, with `BAT_ID` the completing batter and `REMOVED_FOR_PH_BAT_ID`
+the removed original — confirmed on real 2019 rows (`docs/plate/pr7a0-proof/`, fixtures 02 & 03).
 
 ### 1.5 Licensing / attribution posture (record, do not self-approve)
 
@@ -370,13 +386,15 @@ Two-part authority, frozen in `fixtures/retrosheetDiscipline/SOURCE_MANIFEST.jso
 ```
 semanticCrosswalk: Retrosheet Play-by-Play Crosswalk
 parser:            Chadwick cwevent
-parserVersion:     <release or commit SHA — pinned at ingestion setup in the authorized env>
-parserArguments:   <exact frozen arguments>
+parserVersion:     0.10.0  (commit 8f7e0ecd8984cd752e6aca5deba81b86fb369602)
+parserArguments:   cwevent -n -y <season> -f 0,2,3,4,5,6,7,10,11,12,13,14,15,16,17,29,31,33,34,35,36,86,87 <eventfile>
 ```
 
-> `parserVersion`/`parserArguments` are pinned when Chadwick is actually installed in the authorized
-> environment; the manifest records the intended pin and is finalized before ingestion. Not
-> fabricated here.
+> `parserVersion`/`parserArguments` are now **pinned** to the toolchain proven in PR7A.0 (Chadwick
+> built from source on a clean GitHub Actions runner; frozen argument set above). The manifest
+> (`fixtures/retrosheetDiscipline/SOURCE_MANIFEST.json`, `status: validated`) records these plus the
+> Retrosheet archive hash, per-event-file hashes, and per-game output hashes from the proof
+> (`docs/plate/pr7a0-proof/`). Nothing was fabricated.
 
 ### 4.2 Required Retrosheet attribution notice
 
@@ -398,18 +416,25 @@ Fixture attribution:    fixture README
 ## 5. Fixtures to freeze BEFORE the adapter (requirement 6)
 
 The adapter is **not** written until these fixtures are frozen with expected normalized output.
-These are **synthetic raw-shape contract fixtures** — authored Retrosheet-*shaped* `play,`/`sub,`
-records + expected-normalized JSON, **not captured from Retrosheet and not yet validated against real
-Chadwick output** (each case carries `fixtureOrigin: synthetic`,
-`notValidatedAgainstRealRetrosheetOutput: true`). They are a normalization **specification**; real-
-output parity is proven in PR7A.0 (§7). Committed under
+These are raw-shape + normalization contract fixtures. **PR7A.0 validated the parser and raw shape
+against real Chadwick output**, and **PR7A.1 reconciled the fixtures to it**: cases 02 & 03 are now
+**real-anchored** (`fixtureOrigin: real_retrosheet_chadwick_v0_10_0` + a `validatedAgainstProof` block
+citing the game, output CSV, and hashes); cases 01 & 04 were confirmed by the proof (grammar
+5561/5561; per-event handedness); cases 05–08 remain **adapter-policy specifications**
+(`fixtureOrigin: synthetic`) — fail-closed completeness, unknown-handedness split-withholding, the
+coverage gate, and the sample floors are adapter policies layered on cwevent output, not fields
+Chadwick emits, and real output does not contradict them. All 8 pass the revised contract comparison
+(`scripts/pr7a0/verifyFixtureContract.mjs` → `CONTRACT_COMPARISON_RESULT.json`). Committed under
 `server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/`:
 
-1. **Normal modern game, complete pitch sequences** — several sequence-complete PAs (K, BB, in-play, foul-heavy).
-2. **Interrupted PA with the Retrosheet period separator** — a PA spanning **multiple play records**;
-   the continuation record's `PITCH_SEQ_TX` begins with `.` to denote already-recorded pitches.
-   Retrosheet documents this; it must reassemble to one PA (no double-count), **not** be treated as malformed.
-3. **Substitution / pinch-hit where the responsible batter differs** — a `sub,` mid-PA; responsible-batter resolution.
+1. **Normal modern game, complete pitch sequences** — several sequence-complete PAs (K, BB, in-play, foul-heavy). *Grammar validated on 5561/5561 real PAs (PR7A.0).*
+2. **Interrupted PA with the Retrosheet period separator** — VALIDATED raw shape: cwevent emits ONE
+   `BAT_EVENT_FL=T` row carrying the FULL CUMULATIVE `PITCH_SEQ_TX` with the `.` preserved (real row
+   `.BBCX`); the interrupting event is a separate `BAT_EVENT_FL=F` row, never a second PA. Reassembly =
+   read the single terminal row and strip the `.` once — **no fragment concatenation**.
+3. **Substitution / pinch-hit where the responsible batter differs** — VALIDATED: real two-strike
+   carryover charges the PA to the **original** batter via `RESP_BAT_ID` (`BAT_ID` = completing batter,
+   `REMOVED_FOR_PH_BAT_ID` = original); real row `CC.FS`, K.
 4. **Handedness-split example** — resolved `RESP_BAT_HAND_CD`/`RESP_PIT_HAND_CD` contributing to a specific split.
 5. **Missing / incomplete `PITCH_SEQ_TX`** — empty sequence or `U`/`K` present → **fails closed** (excluded, not guessed).
 6. **Unknown handedness** — hand `?` → **only the affected split** nulls; overall metrics still count.
@@ -443,15 +468,20 @@ network, no dataset download.
 2. **[done]** Remove the duplicate group; commit the **synthetic raw-shape contract fixtures**; draft
    the source manifest. Fixtures marked synthetic; manifest `draft_pending_toolchain_validation`;
    2000+ floor provisional.
-3. **[AUTHORIZED — PR7A.0 toolchain proof, next]** Narrow Retrosheet/Chadwick compatibility proof:
-   pin an exact Chadwick release/commit; freeze the exact `cwevent` arguments; download the smallest
-   practical Retrosheet sample (1–2 named games covering a normal PA, an interrupted PA, and a
-   substitution/responsible-batter case); preserve source files unchanged; capture actual Chadwick
-   output; compare against the synthetic assumptions; correct the contract/fixtures wherever real
-   output differs; then advance the manifest `draft_pending_toolchain_validation → validated` **only**
-   after parity is demonstrated. Each captured artifact records: source URL/archive name, Retrosheet
-   dataset/version, game ID, download date, file hash, Chadwick version/commit, exact parser
-   arguments, output hash.
+3. **[done — PR7A.0]** Narrow Retrosheet/Chadwick compatibility proof, run in a disposable GitHub
+   Actions workflow (no production secrets, no deploy/DB/Railway/runtime/model change): pinned Chadwick
+   `cwevent` 0.10.0 (`8f7e0ec`); frozen `cwevent` arguments; SHA-verified `2019eve.zip`
+   (`90160a30…fe7b6e9`); real games `ANA201904040`, `ARI201908060`, `ARI201909140`, `BAL201908010`;
+   actual output captured and compared against the fixtures. Evidence bundle committed under
+   `docs/plate/pr7a0-proof/` (parser identity, source/output hashes, per-game CSVs, comparison,
+   reviewer summary). The full archive and full-season CSV are **not** committed.
+3a. **[done — PR7A.1]** Fixture + manifest reconciliation (docs-and-fixtures only): cases 02 & 03
+   re-anchored to real cwevent output rows; the interruption raw shape and responsible-batter
+   attribution corrected to match real output (§1.4, §5); README + this contract updated; manifest
+   populated (parser version/commit, exact arguments, archive/source/output hashes, proof-run identity)
+   and advanced `draft_pending_toolchain_validation → validated` **after** all 8 fixtures passed the
+   revised contract comparison (`scripts/pr7a0/verifyFixtureContract.mjs`). The 2000+ floor stays
+   provisional and the 2000–2025 matrix stays PENDING_MEASUREMENT.
 4. **[BLOCKED — separate authorization]** Add contract types + flags + evidence kind +
    `licensed_source_unavailable` reason (+ unit tests).
 5. **[BLOCKED]** Write the Retrosheet normalization adapter against the validated fixtures (fail-closed).

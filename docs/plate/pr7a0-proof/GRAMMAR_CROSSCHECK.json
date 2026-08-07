@@ -1,0 +1,12 @@
+{
+  "populationTRows": 6557,
+  "checked": 5561,
+  "matched": 5561,
+  "skipped": 996,
+  "skipReasons": {
+    "non_terminal_last_token": 66,
+    "interrupted": 930
+  },
+  "mismatches": [],
+  "matchRate": 1
+}
