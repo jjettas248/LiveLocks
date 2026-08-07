@@ -98,10 +98,22 @@ function isPlainObj(x: unknown): x is Record<string, unknown> {
 function isNonNegInt(x: unknown): x is number { return typeof x === "number" && Number.isInteger(x) && x >= 0; }
 function isNonEmptyStr(x: unknown): x is string { return typeof x === "string" && x.trim().length > 0; }
 // (Strict ISO helper below.)
-// Strict ISO: a calendar date (YYYY-MM-DD) or full RFC3339 datetime, that is also a
-// REAL date (Date.parse finite). Rejects loose strings like "2019/09/14" or "Sept 14".
-const STRICT_ISO_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2}))?$/;
-function isStrictIso(x: unknown): x is string { return typeof x === "string" && STRICT_ISO_RE.test(x) && Number.isFinite(Date.parse(x)); }
+// Calendar-valid STRICT ISO date (YYYY-MM-DD) or RFC3339 datetime. Rejects loose
+// formats ("2019/09/14", "Sept 14 2019") AND non-calendar dates ("2019-02-30",
+// "2019-13-40") that a permissive Date.parse could roll over. Zero-import: mirrors
+// isStrictIsoCalendarTimestamp in plateHrV2FeatureContract.ts (kept in sync by test).
+const STRICT_ISO_CAL_RE = /^(\d{4})-(\d{2})-(\d{2})(T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-]\d{2}:\d{2}))?$/;
+function isStrictIso(x: unknown): x is string {
+  if (typeof x !== "string") return false;
+  const m = STRICT_ISO_CAL_RE.exec(x);
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return false;
+  if (m[4]) { const hh = Number(m[5]), mi = Number(m[6]), ss = Number(m[7]); if (hh > 23 || mi > 59 || ss > 59) return false; }
+  return true;
+}
 function hasNonCanonicalNumber(x: unknown): boolean {
   if (typeof x === "number") return !Number.isFinite(x);
   if (Array.isArray(x)) return x.some(hasNonCanonicalNumber);

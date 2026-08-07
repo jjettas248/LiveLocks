@@ -86,8 +86,8 @@ function v3Projection(recentFormEv: number | null): Record<string, unknown> {
     contactOpportunity: withExtra({ chaseRatePct: null, zoneContactRatePct: null, ...nulls("kRatePct", "bbRatePct", "whiffRatePct", "contactRatePct", "foulStrikeRatePct", "firstPitchStrikeRatePct", "twoStrikeSurvivalRatePct", "inPlayRatePct", "batterPa", "codedPitchPa", "pitchSequenceCoverage", "kRatePctVsL", "kRatePctVsR", "bbRatePctVsL", "bbRatePctVsR", "contactRatePctVsL", "contactRatePctVsR", "whiffRatePctVsL", "whiffRatePctVsR", "paVsL", "paVsR") }),
     recentContactForm: withExtra({ recentFormEv, ...nulls("recentFormEv90", "recentFormAirBallPct", "recentFormBarrelPct", "recentFormPulledAirShare", "recentFormXHrPerContact", "effectiveBbe", "last15Bbe", "reliabilityWeight") }),
     pitcherDiscipline: withExtra({ pitcherKnown: false, pitcherThrows: null, ...nulls("pitcherKRatePct", "pitcherBbRatePct", "pitcherWhiffRatePct", "pitcherCalledStrikeRatePct", "pitcherFirstPitchStrikeRatePct", "pitcherKRatePctVsL", "pitcherKRatePctVsR", "pitcherBbRatePctVsL", "pitcherBbRatePctVsR", "pitcherPitches", "pitcherBf", "pitcherBfVsL", "pitcherBfVsR") }),
-    dataQuality: { savantQuality: "missing", venueResolved: false, pitcherHandResolved: false, batterPowerFullyAvailable: false, missingInputs: [], overallQuality: "missing",
-      retrosheetDiscipline: { datasetVersion: "rs_2019_v1", dataThroughDate: "2019-09-14", pitchSequenceCoverage: null, sequenceFloorMet: false, overallQuality: "missing", nullReasons: [] } },
+    dataQuality: { savantQuality: "missing", venueResolved: false, pitcherHandResolved: false, batterPowerFullyAvailable: false, missingInputs: [], overallQuality: "degraded",
+      retrosheetDiscipline: { datasetVersion: "rs_2019_v1", dataThroughDate: "2019-09-14", pitchSequenceCoverage: 0.95, sequenceFloorMet: true, overallQuality: "degraded", nullReasons: [] } },
     slateBaselineGameHrProbability: null,
   };
 }

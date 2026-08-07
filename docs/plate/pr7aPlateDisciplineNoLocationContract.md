@@ -279,19 +279,26 @@ Every rate above is accompanied by its integer numerator/denominator in the **ev
 ```
 pitcherDiscipline: {
   pitcherKnown,                        // boolean
+  pitcherThrows,                       // "L" | "R" | null
   pitcherKRatePct,
   pitcherBbRatePct,                    // unintentional
   pitcherWhiffRatePct,                 // whiff / swings induced
-  pitcherCalledStrikeRatePct,
+  pitcherCalledStrikeRatePct,          // calledStrikes / pitches   (NOT / BF)
   pitcherFirstPitchStrikeRatePct,      // strike seen on pitch 1 / BF
-  pitcherKRatePctVsHand,               // vs this batter's resolved hand
-  pitcherBbRatePctVsHand,
-  pitcherBf,                           // raw BF denominator
-  pitcherBfVsHand,
+  // IMMUTABLE vs-L / vs-R history — NOT a prediction-specific "vsHand" bucket:
+  pitcherKRatePctVsL,  pitcherKRatePctVsR,
+  pitcherBbRatePctVsL, pitcherBbRatePctVsR,
+  pitcherPitches,                      // raw pitch denominator (for calledStrikeRate)
+  pitcherBf,                           // raw BF denominator (nonneg int | null)
+  pitcherBfVsL, pitcherBfVsR,          // per-hand BF denominators (nonneg int | null)
 }
 ```
 
-Batter K/BB/contact are **never** duplicated here.
+Batter K/BB/contact are **never** duplicated here. There is **no** `batterHand`,
+`vsHand`, or `pitcherBfVsHand` field: the pitcher record is hand-agnostic, immutable
+history; the consumer selects the relevant `vsL`/`vsR` side at scoring time.
+`pitcherCalledStrikeRatePct` is `calledStrikes / pitches` (a called strike is per-pitch,
+so its denominator is `pitches`, not `BF` — a pitcher can have `calledStrikes > BF`).
 
 ### 3.4 Floors → null-with-reason (capture-usability, NOT final modeling thresholds)
 
@@ -486,18 +493,26 @@ network, no dataset download.
    reason (+ unit tests). ADDITIVE/SHADOW, `npx tsc --noEmit` clean, no champion/public change:
    `plate_hr_v2_features_v3` (V1/V2 preserved; `PLATE_HR_V2_FEATURES_CURRENT` stays V2 — no producer
    emits V3 yet) extends `contactOpportunity` (legacy `chaseRatePct`/`zoneContactRatePct` pinned to
-   literal `null` — a populated value is rejected, no zone proxy), adds a `pitcherDiscipline` group
-   (resolved batter hand `L`/`R`/`null` only — never `S`), and reshapes `zoneLocation` to the explicit
-   `{ status:"unavailable", reason:"licensed_source_unavailable", … }` record (all location leaves
-   typed `null`). New flag `PLATE_DISCIPLINE_NO_LOCATION_V1_ENABLED` (fail-closed; PR7A capture requires
-   it AND the master flag). New `retrosheet_discipline` evidence kind in the pure
-   `retrosheetDisciplineEvidence.ts`: provider `retrosheet`; **single-actor (batter XOR pitcher, matching
-   `entityType`)** payload; strict counts+provenance validator (present+unique `gameIds`, coverage
-   `window`, EXACT Retrosheet attribution notice, closed floor null-reasons, internal-consistency
-   invariants); historical point-in-time eligibility. Strict training-read integrity in
-   `plateHrV2Snapshots.ts` rejects a retrosheet source that is unauthorized-provider, not
-   `verified_as_of`, entity/actor-mismatched, or attached to a V1/V2 prediction, and extends the
-   `recentContactForm`↔`contact_events` cross-bind to V3. Tests (unit + structural-isolation +
+   literal `null` — a populated value is rejected, no zone proxy; count leaves `batterPa`/`codedPitchPa`/
+   `paVsL`/`paVsR` are non-negative-integer-or-null; `pitchSequenceCoverage` is a ratio in `[0,1]`),
+   adds a `pitcherDiscipline` group (immutable `vsL`/`vsR` history + `pitcherPitches`; `pitcherCalledStrikeRatePct`
+   = `calledStrikes / pitches`; NO prediction-specific `batterHand`/`vsHand`), and reshapes `zoneLocation`
+   to the explicit `{ status:"unavailable", reason:"licensed_source_unavailable", … }` record (all
+   location leaves typed `null`). A V3-specific `dataQuality.retrosheetDiscipline` block carries dataset
+   provenance + typed floor null-reasons and self-enforces (non-empty `datasetVersion`, calendar-valid
+   strict-ISO `dataThroughDate`, unique `nullReasons`, `below_sequence_coverage` ⇔ `sequenceFloorMet=false`,
+   non-empty `nullReasons` ⇒ `overallQuality≠full`). New flag `PLATE_DISCIPLINE_NO_LOCATION_V1_ENABLED`
+   (fail-closed; PR7A capture requires it AND the master flag). New `retrosheet_discipline` evidence kind
+   in the pure `retrosheetDisciplineEvidence.ts`: provider `retrosheet`; **single-actor (batter XOR pitcher,
+   matching `entityType`)** payload; strict counts+provenance validator (present+unique `gameIds`,
+   `gameCount==gameIds.length`, coverage `window` with calendar-valid strict-ISO bounds, EXACT Retrosheet
+   attribution notice, same self-enforcing null-reason semantics, batter/pitcher sufficient-stat
+   invariants incl. pitcher `calledStrikes ≤ pitches` NOT `≤ BF`); historical point-in-time eligibility.
+   Strict training-read integrity in `plateHrV2Snapshots.ts` rejects a retrosheet source that is
+   unauthorized-provider, not `verified_as_of`, entity/actor-mismatched, or attached to a V1/V2
+   prediction; extends the `recentContactForm`↔`contact_events` cross-bind to V3; and FAIL-CLOSES every
+   V3 prediction as training-ineligible (`v3_discipline_binding_not_implemented`) until stage 5/6 —
+   V3 schema-valid ≠ V3 training-authorized. Tests (unit + structural-isolation +
    location-blindness + read-integrity): `plateHrV2FeaturesV3.test.ts`,
    `plateDisciplineNoLocationFlag.test.ts`, `retrosheetDisciplineEvidence.test.ts`,
    `retrosheetDisciplineIsolation.test.ts`, `retrosheetDisciplineReadIntegrity.test.ts`. No adapter,

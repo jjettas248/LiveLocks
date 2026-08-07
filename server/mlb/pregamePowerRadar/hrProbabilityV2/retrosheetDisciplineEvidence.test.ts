@@ -9,6 +9,7 @@ import {
   retrosheetDisciplineActorType,
 } from "./retrosheetDisciplineEvidence";
 import { validateSourcePayload, EVIDENCE_KINDS } from "./plateHrV2Snapshots";
+import { PLATE_DISCIPLINE_FLOOR_NULL_REASONS } from "./plateHrV2FeatureContract";
 
 let passed = 0;
 const fails: string[] = [];
@@ -72,7 +73,14 @@ ok(retrosheetDisciplineActorType(validBatter()) === "batter" && retrosheetDiscip
 // strict ISO
 { const p = validBatter(); p.provenance.dataThroughDate = "2019/09/14"; rejects(p, "dataThroughDate_not_strict_iso", "loose dataThroughDate rejected"); }
 { const p = validBatter(); p.provenance.window.from = "2019-13-40"; rejects(p, "window_from_not_strict_iso", "impossible window date rejected"); }
+{ const p = validBatter(); p.provenance.dataThroughDate = "2019-02-30"; rejects(p, "dataThroughDate_not_strict_iso", "non-calendar dataThroughDate (2019-02-30) rejected"); }
+{ const p = validBatter(); p.provenance.dataThroughDate = "Sept 14 2019"; rejects(p, "dataThroughDate_not_strict_iso", "prose dataThroughDate rejected"); }
 { const p = validBatter(); p.provenance.dataThroughDate = "2019-09-14T00:00:00Z"; accepts(p, "full RFC3339 dataThroughDate accepted"); }
+
+// enum exact-sync (test-only import; no production import added to accomplish this).
+ok(PLATE_DISCIPLINE_FLOOR_NULL_REASONS.length === RETROSHEET_DISCIPLINE_NULL_REASONS.length &&
+  PLATE_DISCIPLINE_FLOOR_NULL_REASONS.every((r, i) => r === RETROSHEET_DISCIPLINE_NULL_REASONS[i]),
+  "PLATE_DISCIPLINE_FLOOR_NULL_REASONS === RETROSHEET_DISCIPLINE_NULL_REASONS (same values, same order)");
 
 // 3b. provenance internal semantics.
 { const p = validBatter(); p.provenance.nullReasons = ["below_sequence_coverage"]; p.provenance.sequenceFloorMet = true; p.provenance.overallQuality = "degraded"; rejects(p, "below_sequence_coverage_xor_sequenceFloorMet", "below_sequence_coverage with floorMet=true rejected"); }

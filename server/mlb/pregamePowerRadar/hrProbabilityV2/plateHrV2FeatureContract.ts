@@ -47,7 +47,28 @@ export const PLATE_HR_V2_RAW_INPUTS_V1 = "plate_hr_v2_raw_inputs_v1" as const;
 const numericLeaf = z.number().nullable();
 // A count/denominator leaf: a non-negative integer, or explicit null when absent.
 const nonNegIntLeaf = z.number().int().nonnegative().nullable();
+// A ratio leaf: a real number in [0,1], or explicit null when absent.
+const ratioLeaf = z.number().min(0).max(1).nullable();
 const extraLeaves = z.record(z.string(), z.number().nullable());
+
+// Calendar-valid STRICT ISO date (YYYY-MM-DD) or RFC3339 datetime. Rejects loose
+// formats (2019/09/14, "Sept 14 2019") AND non-calendar dates (2019-02-30, 2019-13-40)
+// that a permissive Date.parse could roll over. Used to validate dataset provenance.
+const STRICT_ISO_CAL_RE = /^(\d{4})-(\d{2})-(\d{2})(T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-]\d{2}:\d{2}))?$/;
+export function isStrictIsoCalendarTimestamp(s: unknown): boolean {
+  if (typeof s !== "string") return false;
+  const m = STRICT_ISO_CAL_RE.exec(s);
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return false;
+  if (m[4]) {
+    const hh = Number(m[5]), mi = Number(m[6]), ss = Number(m[7]);
+    if (hh > 23 || mi > 59 || ss > 59) return false;
+  }
+  return true;
+}
 const handednessSchema = z.enum(["L", "R", "S"]).nullable();
 
 // ── A. Batter true-power skill ──────────────────────────────────────────────
@@ -258,7 +279,7 @@ export const plateHrV2ContactOpportunityV3FeaturesSchema = plateHrV2ContactOppor
   // co-located evidence-quality leaves (a rate is never read without its provenance):
   batterPa: nonNegIntLeaf,        // count denominator — non-negative int or null
   codedPitchPa: nonNegIntLeaf,    // count denominator — non-negative int or null
-  pitchSequenceCoverage: numericLeaf, // a ratio in [0,1], not a count
+  pitchSequenceCoverage: ratioLeaf, // a ratio in [0,1], not a count
   // top-line hand-splits (cardinality-bounded per §3.1):
   kRatePctVsL: numericLeaf, kRatePctVsR: numericLeaf,
   bbRatePctVsL: numericLeaf, bbRatePctVsR: numericLeaf,
@@ -349,13 +370,27 @@ export type PlateHrV2DataQualityFeatures = z.infer<typeof plateHrV2DataQualityFe
 // reasons, on top of the base V1/V2 dataQuality fields — so a V3 rate is never read
 // without its dataset provenance and the reasons any leaf was nulled. ────────────────
 export const plateHrV2RetrosheetQualityBlockSchema = z.object({
-  datasetVersion: z.string(),
-  dataThroughDate: z.string(),
-  pitchSequenceCoverage: numericLeaf,
+  datasetVersion: z.string().min(1),
+  dataThroughDate: z.string().refine(isStrictIsoCalendarTimestamp, "dataThroughDate must be a calendar-valid strict ISO/RFC3339 date"),
+  pitchSequenceCoverage: ratioLeaf,
   sequenceFloorMet: z.boolean(),
   overallQuality: z.enum(["full", "degraded", "missing"]),
   nullReasons: z.array(z.enum(PLATE_DISCIPLINE_FLOOR_NULL_REASONS)),
-}).strict();
+}).strict().superRefine((v, ctx) => {
+  // below_sequence_coverage present  IFF  sequenceFloorMet === false
+  const belowSeq = v.nullReasons.includes("below_sequence_coverage");
+  if (belowSeq !== (v.sequenceFloorMet === false)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["nullReasons"], message: "below_sequence_coverage must be present iff sequenceFloorMet===false" });
+  }
+  // nullReasons must be unique
+  if (new Set(v.nullReasons).size !== v.nullReasons.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["nullReasons"], message: "nullReasons must be unique" });
+  }
+  // non-empty nullReasons cannot coexist with overallQuality === "full"
+  if (v.nullReasons.length > 0 && v.overallQuality === "full") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["overallQuality"], message: "non-empty nullReasons cannot coexist with overallQuality=full" });
+  }
+});
 export type PlateHrV2RetrosheetQualityBlock = z.infer<typeof plateHrV2RetrosheetQualityBlockSchema>;
 
 export const plateHrV2DataQualityV3FeaturesSchema = plateHrV2DataQualityFeaturesSchema.extend({

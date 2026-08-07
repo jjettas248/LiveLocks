@@ -57,6 +57,25 @@ const zl = plateHrV2UnavailableZoneLocationV3();
 for (const k of ["plateX", "plateZ", "zone", "szTop", "szBot"] as const) ok(zl[k] === null, `zoneLocation.${k} is null`);
 ok(zl.status === "unavailable" && zl.reason === "licensed_source_unavailable", "zoneLocation is the licensed_source_unavailable record");
 
+// 6. No champion/public/scoring path imports the PR7A implementation module.
+const championPublicFiles = [
+  "server/mlb/pregamePowerRadar/modelVersions/plateChampionJul20.ts",
+  "server/mlb/pregamePowerRadar/scoring.ts",
+  "server/mlb/pregamePowerRadar/evaluatePlateModel.ts",
+  "server/mlb/pregamePowerRadar/buildPregamePowerRadar.ts",
+];
+let checkedChampionFiles = 0;
+for (const cf of championPublicFiles) {
+  let src: string;
+  try { src = readFileSync(cf, "utf8"); } catch { continue; }
+  checkedChampionFiles++;
+  // Guard the genuinely-new PR7A implementation module. (plateHrV2CaptureFlags is a
+  // pre-existing shared module the pregame builder legitimately wires for the existing
+  // V2 capture, so it is NOT part of this check.)
+  ok(!src.includes("retrosheetDisciplineEvidence"), `${cf} must not import the PR7A retrosheetDisciplineEvidence module`);
+}
+ok(checkedChampionFiles >= 2, `expected to check at least 2 champion/public files (checked ${checkedChampionFiles})`);
+
 console.log(`retrosheetDisciplineIsolation.test: ${passed} passed, ${fails.length} failed`);
 for (const f of fails) console.log("  FAIL:", f);
 process.exit(fails.length ? 1 : 0);

@@ -44,9 +44,11 @@ const pitcherDiscipline = () => withExtra({
     "pitcherPitches", "pitcherBf", "pitcherBfVsL", "pitcherBfVsR"),
 });
 
+// Internally-consistent valid fixture: sequenceFloorMet=true with empty nullReasons
+// (a false floor would REQUIRE below_sequence_coverage present — see the biconditional).
 const dataQualityV3 = () => ({
-  savantQuality: "missing", venueResolved: false, pitcherHandResolved: false, batterPowerFullyAvailable: false, missingInputs: [], overallQuality: "missing",
-  retrosheetDiscipline: { datasetVersion: "rs_2019_v1", dataThroughDate: "2019-09-14", pitchSequenceCoverage: null, sequenceFloorMet: false, overallQuality: "missing", nullReasons: [] as string[] },
+  savantQuality: "missing", venueResolved: false, pitcherHandResolved: false, batterPowerFullyAvailable: false, missingInputs: [], overallQuality: "degraded",
+  retrosheetDiscipline: { datasetVersion: "rs_2019_v1", dataThroughDate: "2019-09-14", pitchSequenceCoverage: 0.95, sequenceFloorMet: true, overallQuality: "degraded", nullReasons: [] as string[] },
 });
 
 function buildV3(): Record<string, unknown> {
@@ -117,7 +119,6 @@ ok(!plateHrV2PitcherDisciplineFeaturesSchema.safeParse({ ...pitcherDiscipline(),
 // 7. V3 dataQuality carries the retrosheetDiscipline block with typed null reasons.
 ok(plateHrV2DataQualityV3FeaturesSchema.safeParse(dataQualityV3()).success, "v3 dataQuality parses");
 ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(del(dataQualityV3(), "retrosheetDiscipline")).success, "v3 dataQuality requires retrosheetDiscipline block");
-ok(plateHrV2DataQualityV3FeaturesSchema.safeParse((() => { const d: any = dataQualityV3(); d.retrosheetDiscipline.nullReasons = [...PLATE_DISCIPLINE_FLOOR_NULL_REASONS]; return d; })()).success, "all typed null reasons accepted");
 ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse((() => { const d: any = dataQualityV3(); d.retrosheetDiscipline.nullReasons = ["bogus_floor"]; return d; })()).success, "untyped null reason rejected");
 ok(PLATE_DISCIPLINE_FLOOR_NULL_REASONS.length === 5, "exactly 5 floor null reasons");
 
@@ -132,6 +133,28 @@ ok(!parseAuthorizedProjection(PLATE_HR_V2_FEATURES_V2, proj).ok, "parseAuthorize
 const avail: any = { featureVersion: PLATE_HR_V2_FEATURES_V3, batterPower: {}, batTracking: {}, pitcherVulnerability: {}, pitchType: {}, zoneLocation: {}, parkWeatherSpray: {}, lineupOpportunity: {}, starterBullpen: {}, market: {}, availability: {}, contactOpportunity: {}, recentContactForm: {}, pitcherDiscipline: {} };
 ok(plateHrV2FeatureAvailabilityVectorV3Schema.safeParse(avail).success, "v3 availability vector parses");
 ok(!plateHrV2FeatureAvailabilityVectorV3Schema.safeParse(del(avail, "pitcherDiscipline")).success, "v3 availability vector requires pitcherDiscipline");
+
+// 10. pitchSequenceCoverage range [0,1].
+ok(!plateHrV2ContactOpportunityV3FeaturesSchema.safeParse({ ...contactOppV3(), pitchSequenceCoverage: 1.5 }).success, "coverage > 1 rejected");
+ok(!plateHrV2ContactOpportunityV3FeaturesSchema.safeParse({ ...contactOppV3(), pitchSequenceCoverage: -0.1 }).success, "coverage < 0 rejected");
+ok(plateHrV2ContactOpportunityV3FeaturesSchema.safeParse({ ...contactOppV3(), pitchSequenceCoverage: 0.9 }).success, "coverage 0.9 accepted");
+
+// 11. V3 dataQuality quality-block self-enforced semantics.
+const qb = () => JSON.parse(JSON.stringify(dataQualityV3().retrosheetDiscipline));
+const dqWith = (rd: any) => ({ ...dataQualityV3(), retrosheetDiscipline: rd });
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), datasetVersion: "" })).success, "empty datasetVersion rejected");
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), dataThroughDate: "2019/09/14" })).success, "loose dataThroughDate rejected");
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), dataThroughDate: "2019-02-30" })).success, "non-calendar dataThroughDate (2019-02-30) rejected");
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), dataThroughDate: "2019-13-40" })).success, "non-calendar dataThroughDate (2019-13-40) rejected");
+ok(plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), dataThroughDate: "2019-09-14T00:00:00Z" })).success, "RFC3339 datetime accepted");
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), pitchSequenceCoverage: 1.2 })).success, "block coverage > 1 rejected");
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), nullReasons: ["below_batter_pa_floor", "below_batter_pa_floor"] })).success, "duplicate nullReasons rejected");
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), nullReasons: ["below_sequence_coverage"], sequenceFloorMet: true })).success, "below_sequence_coverage with floorMet=true rejected");
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), sequenceFloorMet: false, nullReasons: [] })).success, "floorMet=false without below_sequence_coverage rejected");
+ok(plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), sequenceFloorMet: false, nullReasons: ["below_sequence_coverage"] })).success, "floorMet=false with below_sequence_coverage accepted");
+ok(!plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), nullReasons: ["below_batter_pa_floor"], overallQuality: "full" })).success, "non-empty nullReasons with overallQuality=full rejected");
+// all five reasons accepted together — but below_sequence_coverage present ⇒ floorMet=false.
+ok(plateHrV2DataQualityV3FeaturesSchema.safeParse(dqWith({ ...qb(), nullReasons: [...PLATE_DISCIPLINE_FLOOR_NULL_REASONS], sequenceFloorMet: false, overallQuality: "degraded" })).success, "all typed null reasons accepted (with consistent floor flag)");
 
 console.log(`plateHrV2FeaturesV3.test: ${passed} passed, ${fails.length} failed`);
 for (const f of fails) console.log("  FAIL:", f);
