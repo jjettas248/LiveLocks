@@ -1,0 +1,155 @@
+name: PR7A.0 Chadwick Parity Proof (disposable)
+
+# Disposable, evidence-only workflow for the PR7A.0 toolchain-parity proof.
+# It installs a PINNED Chadwick, downloads + SHA-verifies the exact Retrosheet
+# archive, runs cwevent with a frozen argument set on real games, compares the
+# real output against the committed synthetic fixtures, and uploads/commits a
+# proof bundle. It uses NO production secrets, makes NO deployment, DB, Railway,
+# runtime, or model change, and does NOT promote the source manifest. Delete
+# this workflow and its branch after the proof bundle is retrieved.
+
+on:
+  push:
+    branches: [claude/pr7a0-chadwick-proof-tmp]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # only to commit the proof bundle back to this temp branch
+
+concurrency:
+  group: pr7a0-chadwick-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    env:
+      CHADWICK_TAG: v0.10.0
+      CHADWICK_SHA: 8f7e0ecd8984cd752e6aca5deba81b86fb369602
+      RETROSHEET_URL: https://www.retrosheet.org/events/2019eve.zip
+      ARCHIVE_SHA256: 90160a30231eee80700efa41782136e3ca2cde1bd881fc6c9ade0d9a0fe7b6e9
+      SEASON: "2019"
+      FIELDS: "0,2,3,4,5,6,7,10,11,12,13,14,15,16,17,29,31,33,34,35,36,86,87"
+      OUT: docs/plate/pr7a0-proof
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y build-essential autoconf automake libtool
+
+      - name: Build & install pinned Chadwick
+        run: |
+          set -euo pipefail
+          git clone https://github.com/chadwickbureau/chadwick.git /tmp/chadwick
+          cd /tmp/chadwick
+          git checkout "${CHADWICK_SHA}"
+          test "$(git rev-parse HEAD)" = "${CHADWICK_SHA}"
+          autoreconf -fvi
+          ./configure
+          make -j2
+          sudo make install
+          sudo ldconfig
+          cwevent 2>&1 | head -3 || true
+
+      - name: Download & SHA-verify Retrosheet archive
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rs && cd /tmp/rs
+          curl -fL --retry 4 --retry-delay 3 -o 2019eve.zip "${RETROSHEET_URL}"
+          echo "${ARCHIVE_SHA256}  2019eve.zip" | sha256sum -c -
+          unzip -o -q 2019eve.zip
+          ls 2019ANA.EVA 2019ARI.EVN 2019BAL.EVA
+
+      - name: Run cwevent (frozen args) on real games
+        run: |
+          set -euo pipefail
+          cd /tmp/rs
+          mkdir -p /tmp/out
+          # whole Angels home file -> grammar cross-check population + interrupted PA (ANA201904040 is inside)
+          cwevent -n -y "${SEASON}" -f "${FIELDS}" 2019ANA.EVA > /tmp/out/ANA_full.csv 2>/dev/null
+          # focused single-game captures (small, committed for humans)
+          cwevent -n -i ANA201904040 -y "${SEASON}" -f "${FIELDS}" 2019ANA.EVA > /tmp/out/ANA201904040.csv 2>/dev/null
+          cwevent -n -i ARI201908060 -y "${SEASON}" -f "${FIELDS}" 2019ARI.EVN > /tmp/out/ARI201908060.csv 2>/dev/null
+          cwevent -n -i ARI201909140 -y "${SEASON}" -f "${FIELDS}" 2019ARI.EVN > /tmp/out/ARI201909140.csv 2>/dev/null
+          cwevent -n -i BAL201908010 -y "${SEASON}" -f "${FIELDS}" 2019BAL.EVA > /tmp/out/BAL201908010.csv 2>/dev/null
+          wc -l /tmp/out/*.csv
+
+      - name: Assemble provenance, parser identity, source sample
+        run: |
+          set -euo pipefail
+          mkdir -p "${OUT}/cwevent_output"
+          # commit only the small focused per-game CSVs; the full-season CSV ships in the artifact
+          cp /tmp/out/ANA201904040.csv /tmp/out/ARI201908060.csv /tmp/out/ARI201909140.csv /tmp/out/BAL201908010.csv "${OUT}/cwevent_output/"
+          CW_VER=$(cwevent 2>&1 | grep -i version | head -1 | sed 's/^ *//')
+          {
+            echo "parser_name=Chadwick cwevent"
+            echo "chadwick_tag=${CHADWICK_TAG}"
+            echo "chadwick_commit=${CHADWICK_SHA}"
+            echo "chadwick_version_banner=${CW_VER}"
+            echo "cwevent_arguments=cwevent -n -y ${SEASON} -f ${FIELDS} <eventfile>"
+            echo "field_list=${FIELDS}"
+          } > "${OUT}/PARSER_IDENTITY.txt"
+          {
+            echo "# Retrosheet source + cwevent output provenance"
+            echo "captured_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "archive_name=2019eve.zip"
+            echo "archive_url=${RETROSHEET_URL}"
+            echo "retrosheet_dataset=Retrosheet 2019 season event files (.EVA/.EVN)"
+            sha256sum /tmp/rs/2019eve.zip | awk '{print "archive_sha256="$1}'
+            for f in 2019ANA.EVA 2019ARI.EVN 2019BAL.EVA; do
+              sha256sum "/tmp/rs/$f" | sed 's#/tmp/rs/##' | awk '{print "eventfile_sha256["$2"]="$1}'
+            done
+            for f in /tmp/out/*.csv; do
+              sha256sum "$f" | awk -v b="$(basename "$f")" '{print "output_sha256["b"]="$1}'
+            done
+          } > "${OUT}/SOURCE_PROVENANCE.txt"
+          {
+            echo "interrupted_pa=ANA201904040"
+            echo "responsible_batter=ARI201908060,ARI201909140,BAL201908010"
+            echo "grammar_population=2019ANA.EVA (all Angels home games, ~81 games)"
+          } > "${OUT}/GAME_IDS.txt"
+          {
+            echo "Retrosheet attribution: The information used here was obtained free of charge from and is"
+            echo "copyrighted by Retrosheet. Interested parties may contact Retrosheet at www.retrosheet.org."
+            echo
+            echo "== ANA201904040 interrupted-PA raw excerpt (2019ANA.EVA) =="
+            grep -nE 'cabra002|,forsl001,' /tmp/rs/2019ANA.EVA | head -24 || true
+            echo
+            echo "== ARI201908060 responsible-batter raw excerpt (2019ARI.EVN) =="
+            grep -nE 'dysoj001|jonea003' /tmp/rs/2019ARI.EVN | head -24 || true
+            echo
+            echo "== ARI201909140 responsible-batter raw excerpt (2019ARI.EVN) =="
+            grep -nE 'galvf001|blana002' /tmp/rs/2019ARI.EVN | head -24 || true
+            echo
+            echo "== BAL201908010 responsible-batter raw excerpt (2019BAL.EVA) =="
+            grep -nE 'gricr001|fishd001' /tmp/rs/2019BAL.EVA | head -24 || true
+          } > "${OUT}/SOURCE_SAMPLE.txt"
+
+      - name: Run parity comparison
+        run: |
+          set -euo pipefail
+          CHADWICK_VERSION=0.10.0 CHADWICK_SHA="${CHADWICK_SHA}" \
+          CWEVENT_ARGS="cwevent -n -y ${SEASON} -f ${FIELDS} <eventfile>" \
+          node scripts/pr7a0/compareChadwick.mjs \
+            --fixtures server/mlb/pregamePowerRadar/hrProbabilityV2/fixtures/retrosheetDiscipline/cases \
+            --out "${OUT}" \
+            --csv "/tmp/out/ANA_full.csv,/tmp/out/ARI201908060.csv,/tmp/out/ARI201909140.csv,/tmp/out/BAL201908010.csv"
+          echo "----- COMPARISON.md -----"; cat "${OUT}/COMPARISON.md"
+
+      - name: Upload proof artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr7a0-chadwick-proof
+          path: |
+            docs/plate/pr7a0-proof/
+            /tmp/out/ANA_full.csv
+          if-no-files-found: error
+
+      - name: Commit proof bundle back to temp branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${OUT}"
+          git commit -m "PR7A.0: real Chadwick cwevent parity proof bundle [skip ci]" || { echo "nothing to commit"; exit 0; }
+          git push origin "HEAD:${GITHUB_REF_NAME}"
