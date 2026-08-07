@@ -4,7 +4,7 @@
 // provider failure / incomplete response writes NOTHING and fabricates nothing,
 // and CONCURRENT season ingests for one player never lose a posterior update
 // (the fold runs under the atomic method's per-entity serialization).
-import { ingestPlayerSeason, type IngestionStorePort, type GameLogFetcher, type AtomicIngestArgs } from "./nbaIngestionJob";
+import { ingestPlayerSeason, buildValidatedIngestRequest, IngestInvocationError, type IngestionStorePort, type GameLogFetcher, type AtomicIngestArgs } from "./nbaIngestionJob";
 import type { InsertPregameRawSourceSnapshot, InsertPregameFeatureSnapshot, InsertPregamePosteriorState } from "../../../shared/schema";
 import type { PosteriorState } from "../posteriorState/posteriorState";
 
@@ -36,6 +36,12 @@ function mockStore(opts: { failFeatureWrite?: boolean; interleaveYield?: () => P
     ingestSnapshotAtomic: async (args: AtomicIngestArgs) => {
       if (raw.has(args.raw.snapshotId)) return { inserted: false };
       return withEntityLock(args.entityCanonicalId, async () => {
+        // Correction lineage under the lock: latest existing raw for the same source
+        // identity (insertion order == recency in this Map model).
+        let predecessor: string | null = null;
+        for (const r of raw.values()) {
+          if (r.sourceKind === args.raw.sourceKind && r.sourceKey === args.raw.sourceKey) predecessor = r.snapshotId;
+        }
         // Read CURRENT posteriors under the lock, then fold against them.
         const lockedPriors = new Map<string, PosteriorState>();
         for (const fk of args.featureKeys) {
@@ -49,7 +55,7 @@ function mockStore(opts: { failFeatureWrite?: boolean; interleaveYield?: () => P
           if (opts.failFeatureWrite) throw new Error("simulated DB failure mid-write");
           if (!features.some((x) => x.featureRowId === f.featureRowId)) stagedFeatures.push(f);
         }
-        raw.set(args.raw.snapshotId, args.raw);
+        raw.set(args.raw.snapshotId, { ...args.raw, supersedesSnapshotId: predecessor });
         features.push(...stagedFeatures);
         for (const p of posts) posteriors.set(pk(p.entityCanonicalId, p.featureKey, p.featureVersion), p);
         return { inserted: true };
@@ -62,8 +68,8 @@ function mockStore(opts: { failFeatureWrite?: boolean; interleaveYield?: () => P
 const HEADERS = ["GAME_ID", "GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "FG3M"];
 const payload = (pts: number, gameId = "0022300500", gameDate = "2024-01-15") => ({ resultSets: [{ headers: HEADERS, rowSet: [[gameId, gameDate, "DEN vs. LAL", 34, pts, 8, 6, 3]] }] });
 const fetcherOf = (p: unknown | null): GameLogFetcher => async () =>
-  p === null ? { ok: false, reason: "transport_failure", fetchedAt: "2026-08-05T18:00:00Z" } : { ok: true, rawPayload: p, fetchedAt: "2026-08-05T18:00:00Z" };
-const params = { playerNativeId: "201939", season: 2024, seasonLabel: "2023-24", seasonType: "Regular Season", currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z" };
+  p === null ? { ok: false, reason: "transport_failure", failedAt: "2026-08-05T18:00:00Z" } : { ok: true, rawPayload: p, fetchedAt: "2026-08-05T18:00:00Z" };
+const params = { playerNativeId: "201939", season: 2024, seasonLabel: "2023-24", seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z" };
 
 // ── First ingest writes raw + features + posteriors ─────────────────────────
 {
@@ -179,6 +185,77 @@ const params = { playerNativeId: "201939", season: 2024, seasonLabel: "2023-24",
   ok(first.status === "ingested", "first ingest ok");
   const again = await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30)) }, params);
   ok(again.status === "noop_identical" && again.featureRowsWritten === 0, "identical rerun → no-op via fast probe");
+}
+
+// ── Orchestrator identity firewall: rejected BEFORE any fetch (not runner-only) ─
+{
+  let fetchCalls = 0;
+  const spy: GameLogFetcher = async () => { fetchCalls++; return { ok: true, rawPayload: payload(30), fetchedAt: "2026-08-05T18:00:00Z" }; };
+  const expectThrowBeforeFetch = async (p: typeof params, label: string) => {
+    fetchCalls = 0;
+    let kind: string | null = null;
+    try { await ingestPlayerSeason({ store: mockStore().store, fetch: spy }, p); } catch (e) { if (e instanceof IngestInvocationError) kind = e.kind; }
+    ok(kind !== null && fetchCalls === 0, label);
+    return kind;
+  };
+  await expectThrowBeforeFetch({ ...params, season: 2024, seasonLabel: "2024-25" }, "season 2024 + label 2024-25 rejected before fetch");
+  await expectThrowBeforeFetch({ ...params, seasonType: "Preseason" as unknown as "Regular Season" }, "unsupported season type rejected before fetch");
+  await expectThrowBeforeFetch({ ...params, seasonLabel: "2023-2" }, "malformed season label rejected before fetch");
+  await expectThrowBeforeFetch({ ...params, currentSeason: NaN }, "invalid currentSeason rejected before fetch");
+  await expectThrowBeforeFetch({ ...params, asOfDate: "not-a-date" }, "invalid asOfDate rejected before fetch");
+  const mk = await expectThrowBeforeFetch({ ...params, season: 2024, seasonLabel: "2024-25" }, "mismatch kind is season_identity_mismatch");
+  ok(mk === "season_identity_mismatch", "typed mismatch kind surfaced");
+
+  // A coherent request is accepted and reaches the fetch.
+  fetchCalls = 0;
+  const okOut = await ingestPlayerSeason({ store: mockStore().store, fetch: spy }, { ...params, season: 2024, seasonLabel: "2023-24" });
+  ok(okOut.status === "ingested" && fetchCalls === 1, "coherent season/label accepted, fetch invoked once");
+}
+
+// ── One validated plan drives BOTH the provider request and the persisted sourceKey ─
+{
+  const plan = buildValidatedIngestRequest({ ...params, season: 2025, seasonLabel: "2024-25", seasonType: "Playoffs" });
+  ok(plan.seasonType === "Playoffs" && plan.seasonLabel === "2024-25" && plan.season === 2025, "plan captures the validated identity");
+  ok(plan.sourceKey.includes("seasonType=Playoffs") && plan.sourceKey.includes("season=2025"), "sourceKey derived from the ONE plan (Playoffs identity)");
+  // A valid Playoffs ingest persists a Playoffs source identity.
+  const m = mockStore();
+  await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30, "0042400300", "2025-05-01")) }, { ...params, season: 2025, seasonLabel: "2024-25", seasonType: "Playoffs" });
+  const stored = Array.from(m.raw.values())[0];
+  ok(stored.sourceKey.includes("seasonType=Playoffs"), "persisted raw snapshot carries the Playoffs identity");
+}
+
+// ── Timestamp-policy metadata is stamped on the raw row ─────────────────────
+{
+  const m = mockStore();
+  await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30)) }, params);
+  const row = Array.from(m.raw.values())[0];
+  ok(row.knownAtPolicyVersion === "nba_gamelog_knownAt_v1", "knownAtPolicyVersion persisted on the raw row");
+  ok(row.sourcePublishedAt === null, "sourcePublishedAt explicitly null (provider exposes none)");
+  ok(row.knownAt instanceof Date, "knownAt persisted as the observation instant");
+}
+
+// ── Correction lineage: first capture has no predecessor; B→A→...; C→B ──────
+{
+  const m = mockStore();
+  const a = await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30)) }, params);
+  const rowA = m.raw.get(a.snapshotId!)!;
+  ok((rowA.supersedesSnapshotId ?? null) === null, "first capture has NO predecessor");
+  const b = await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(31)) }, params); // correction
+  const rowB = m.raw.get(b.snapshotId!)!;
+  ok(rowB.supersedesSnapshotId === a.snapshotId, "correction B explicitly supersedes A");
+  const c = await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(32)) }, params); // 2nd correction
+  const rowC = m.raw.get(c.snapshotId!)!;
+  ok(rowC.supersedesSnapshotId === b.snapshotId, "correction C explicitly supersedes B (deterministic chain)");
+  ok(m.raw.size === 3, "all three immutable snapshots retained (none repointed/deleted)");
+  ok(rowA.supersedesSnapshotId == null && rowB.supersedesSnapshotId === a.snapshotId, "prior snapshots' lineage never mutated by a later correction");
+}
+
+// ── Identical rerun changes no lineage ──────────────────────────────────────
+{
+  const m = mockStore();
+  const a = await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30)) }, params);
+  await ingestPlayerSeason({ store: m.store, fetch: fetcherOf(payload(30)) }, params);
+  ok(m.raw.size === 1 && (m.raw.get(a.snapshotId!)!.supersedesSnapshotId ?? null) === null, "identical rerun creates nothing and no lineage");
 }
 
 console.log(`\nnbaIngestionJob.test: ${passed} passed, ${failed} failed`);

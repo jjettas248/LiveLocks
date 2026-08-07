@@ -26,20 +26,26 @@ async function run(): Promise<void> {
   const { storage } = await import("../../storage");
   const { db, pool } = await import("../../db");
   const { pregameRawSourceSnapshots, pregameFeatureSnapshots, pregamePosteriorStates } = await import("@shared/schema");
-  const { eq } = await import("drizzle-orm");
+  const { eq, like, or } = await import("drizzle-orm");
   const { ensurePregameTargetsFoundationSchema } = await import("../../dbMigrations/pregameTargetsFoundationPersistence");
+  const { ensurePregameTargetsRawProvenanceColumns } = await import("../../dbMigrations/pregameTargetsRawProvenancePersistence");
   const { buildStorePort } = await import("../../scripts/nbaPregameBackfill");
   const { ingestPlayerSeason } = await import("./nbaIngestionJob");
   const { buildNbaFeatureRows } = await import("./nbaFeatureBuilder");
   const { buildRawSnapshotIdentity } = await import("./rawSnapshotIdentity");
 
   await ensurePregameTargetsFoundationSchema({ query: (s: string) => pool.query(s) } as never);
+  await ensurePregameTargetsRawProvenanceColumns({ query: (s: string) => pool.query(s) } as never);
 
   const ENTITY = "nba:player:itest_pr5_777";
+  // All test artifacts are scoped by the "itest_pr5" marker (entity id / source key)
+  // so cleanup never touches real rows even on a shared disposable database.
   const cleanup = async () => {
-    await db.delete(pregameFeatureSnapshots).where(eq(pregameFeatureSnapshots.entityCanonicalId, ENTITY));
-    await db.delete(pregamePosteriorStates).where(eq(pregamePosteriorStates.entityCanonicalId, ENTITY));
-    await db.delete(pregameRawSourceSnapshots).where(eq(pregameRawSourceSnapshots.sport, "nba_itest_pr5"));
+    await db.delete(pregameFeatureSnapshots).where(like(pregameFeatureSnapshots.entityCanonicalId, "%itest_pr5%"));
+    await db.delete(pregamePosteriorStates).where(like(pregamePosteriorStates.entityCanonicalId, "%itest_pr5%"));
+    await db.delete(pregameRawSourceSnapshots).where(
+      or(like(pregameRawSourceSnapshots.sourceKey, "%itest_pr5%"), eq(pregameRawSourceSnapshots.sport, "nba_itest_pr5")),
+    );
   };
   await cleanup();
 
@@ -90,6 +96,61 @@ async function run(): Promise<void> {
     ok(seasons.includes("2026") && seasons.includes("2025"), "concurrent ingests: final posterior contains BOTH seasons (advisory lock prevented lost update)");
   }
 
+  // ── (4) Timestamp-policy metadata survives a DB round trip ──────────────────
+  const CH_PLAYER = "itest_pr5_chain";
+  const CH_ENTITY = "nba:player:itest_pr5_chain";
+  const chParams = { playerNativeId: CH_PLAYER, seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z", season: 2026, seasonLabel: "2025-26" };
+  {
+    const out = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500910", "2026-01-15", 30)) }, chParams);
+    const row = await storage.getPregameRawSourceSnapshot(out.snapshotId!);
+    ok(row !== null && row!.knownAtPolicyVersion === "nba_gamelog_knownAt_v1", "knownAtPolicyVersion survives the DB round trip");
+    ok(row !== null && row!.sourcePublishedAt === null, "sourcePublishedAt = null remains explicitly unknown after round trip");
+    ok(row !== null && row!.createdAt != null, "immutable ingestion instant (created_at) present");
+    ok(row !== null && (row!.supersedesSnapshotId ?? null) === null, "first capture has no predecessor");
+    // Feature sourceId resolves back to this immutable raw snapshot + its policy version.
+    const feats = await db.select().from(pregameFeatureSnapshots).where(eq(pregameFeatureSnapshots.entityCanonicalId, CH_ENTITY));
+    ok(feats.length > 0 && feats.every((f) => f.sourceId === out.snapshotId), "feature sourceId resolves to the correct immutable raw snapshot");
+  }
+
+  // ── (5) Correction chain A←B←C is deterministic + serialized ────────────────
+  {
+    const a = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500910", "2026-01-15", 30)) }, chParams); // == (4)'s content → no-op
+    ok(a.status === "noop_identical", "re-ingesting identical content is a no-op (no lineage change)");
+    const firstId = a.snapshotId!;
+    const b = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500910", "2026-01-15", 31)) }, chParams); // correction B
+    const between = new Date();
+    await new Promise((r) => setTimeout(r, 5));
+    const c = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500910", "2026-01-15", 33)) }, chParams); // correction C
+    const rowB = await storage.getPregameRawSourceSnapshot(b.snapshotId!);
+    const rowC = await storage.getPregameRawSourceSnapshot(c.snapshotId!);
+    ok(rowB!.supersedesSnapshotId === firstId, "correction B supersedes A");
+    ok(rowC!.supersedesSnapshotId === b.snapshotId, "correction C supersedes B (deterministic chain)");
+    const rowA = await storage.getPregameRawSourceSnapshot(firstId);
+    ok((rowA!.supersedesSnapshotId ?? null) === null, "prior snapshot A never repointed by a later correction");
+
+    // Replay: as-of BETWEEN B and C sees B's value; as-of NOW sees C's value.
+    const asB = await storage.getPregameFeatureAsOf({ sport: "nba", entityCanonicalId: CH_ENTITY, featureKey: "nba.player.points_per_min", featureVersion: "nba_gamelog_v1", predictionAt: between });
+    const asNow = await storage.getPregameFeatureAsOf({ sport: "nba", entityCanonicalId: CH_ENTITY, featureKey: "nba.player.points_per_min", featureVersion: "nba_gamelog_v1", predictionAt: new Date() });
+    ok(asB !== null && Math.abs(Number(asB!.value) - 31 / 34) < 1e-9, "replay before C sees correction B (31/34)");
+    ok(asNow !== null && Math.abs(Number(asNow!.value) - 33 / 34) < 1e-9, "replay after C sees correction C (33/34)");
+  }
+
+  // ── (6) Concurrent corrections serialize into one deterministic chain ───────
+  {
+    const CC_PLAYER = "itest_pr5_ccorr", CC_ENTITY = "nba:player:itest_pr5_ccorr";
+    const ccParams = { playerNativeId: CC_PLAYER, seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z", season: 2026, seasonLabel: "2025-26" };
+    await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500999", "2026-03-01", 20)) }, ccParams); // base
+    const x = ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500999", "2026-03-01", 21)) }, ccParams);
+    const y = ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500999", "2026-03-01", 22)) }, ccParams);
+    await Promise.all([x, y]);
+    const rows = await db.select().from(pregameRawSourceSnapshots).where(eq(pregameRawSourceSnapshots.entityCanonicalId, CC_ENTITY));
+    // Exactly one chain: no two snapshots share a predecessor (a fork would mean a lost update).
+    const preds = rows.map((r) => r.supersedesSnapshotId).filter((p): p is string => p != null);
+    ok(new Set(preds).size === preds.length, "concurrent corrections form a single linear chain (no shared predecessor / fork)");
+    void CC_ENTITY;
+  }
+
+  void CH_ENTITY;
   await cleanup();
   await pool.end();
   console.log(`\nnbaIngestionStorage.integration.test: ${passed} passed, ${failed} failed`);

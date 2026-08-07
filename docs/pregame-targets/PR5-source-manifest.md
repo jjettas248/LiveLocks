@@ -25,10 +25,10 @@ published / finalized / last-updated timestamp**. This governs the `knownAt` con
 | --- | --- |
 | **source-effective** (`sourceEffectiveAt`) | `GAME_DATE` — the game's calendar date. This is *when the stat became true* (a `validAt` anchor), **not** `knownAt`. |
 | **source-published / updated** (`sourcePublishedAt`) | **NOT EXPOSED.** The endpoint returns no publish/finalize/update instant. |
-| **fetched** (`fetchedAt`) | Real wall-clock time of our request. |
-| **ingested** (`ingestedAt`) | Real wall-clock time of our DB write. |
-| **computed `knownAt`** | See policy below. |
-| `knownAtPolicyVersion` | `nba_gamelog_knownAt_v1` (documents the rule that produced `knownAt`). |
+| **fetched** (`fetchedAt`) | The instant the response body was **received and decoded** — i.e. when the payload became known to this pipeline — **captured after** `res.json()` resolves, never at request start. `requestedAt` names the request-start instant separately; a transport/HTTP/JSON failure carries a `failedAt`, never a successful-payload `fetchedAt`. All instants are generated inside the provider bridge — no caller may supply or back-date them. |
+| **ingested** (`ingestedAt`) | The raw snapshot row's `created_at` (INSERT-only, immutable) — the canonical ingestion instant; no separate column. |
+| **computed `knownAt`** | = the successful `fetchedAt` (see policy below). |
+| `knownAtPolicyVersion` | `nba_gamelog_knownAt_v1` (documents the rule that produced `knownAt`). **Persisted** on each raw snapshot. |
 
 ### `knownAt` policy (`nba_gamelog_knownAt_v1`)
 
@@ -37,6 +37,27 @@ published / finalized / last-updated timestamp**. This governs the `knownAt` con
 - **Never** substitute `GAME_DATE` for `knownAt`. **Never** assign a present-day `fetchedAt` as a synthetic earlier historical `knownAt`. Equal-to-prediction instants follow the existing PR1 firewall contract (`knownAt <= predictionAt`, with the PR1 tie-break).
 
 **Consequence, stated plainly:** with only `playergamelog`/`teamgamelog`, honest *historical* as-of replay of prior-season box-score features is **not source-supported**; those rows are ingested (raw snapshot + source-effective/fetched/ingested preserved) but marked `unsupported` for historical `knownAt`. A leakage-safe historical backfill would require a source that publishes a per-record finalize/publish instant — a provider-selection question flagged here, not silently resolved.
+
+### Persisted audit metadata + correction lineage
+
+The timestamp policy and correction lineage are **durable columns** on
+`pregame_raw_source_snapshots` (additive `ADD COLUMN IF NOT EXISTS` self-heal,
+`server/dbMigrations/pregameTargetsRawProvenancePersistence.ts`), not transient
+TypeScript fields:
+
+- `source_published_at` — nullable; **NULL is the explicit, durable "provider exposes
+  no publish instant"** (never fabricated).
+- `known_at_policy_version` — the rule that produced `knownAt`.
+- `created_at` — the immutable ingestion instant (`ingestedAt`).
+- `supersedes_snapshot_id` — the immediately-prior immutable snapshot for the **same
+  semantic source identity** (`source_kind` + `source_key`) that a correction supersedes;
+  NULL for a first capture. It is resolved by storage **under the same transaction and
+  per-entity advisory lock** as the immutable insert and the posterior fold — never
+  chosen by the caller, never computed outside the transaction. Prior snapshots are never
+  updated/deleted/repointed, so corrections form a deterministic chain (A←B←C), and two
+  concurrent corrections serialize into one linear chain (no fork). Feature rows retain
+  `source_id`, so a reading's timestamp policy and correction lineage resolve through the
+  raw snapshot join.
 
 ## 3. Licensing & production-use assumptions
 

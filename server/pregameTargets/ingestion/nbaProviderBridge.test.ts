@@ -17,7 +17,8 @@ let passed = 0, failed = 0;
 function ok(c: boolean, m: string) { if (c) passed++; else { failed++; console.error(`  ✗ ${m}`); } }
 
 const realFetch = globalThis.fetch;
-async function withCapturedFetch<T>(response: { okStatus?: boolean; json: unknown; throwTransport?: boolean }, fn: () => Promise<T>): Promise<{ result: T; url: string | null }> {
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+async function withCapturedFetch<T>(response: { okStatus?: boolean; json: unknown; throwTransport?: boolean; jsonDelayMs?: number }, fn: () => Promise<T>): Promise<{ result: T; url: string | null }> {
   let url: string | null = null;
   globalThis.fetch = (async (input: unknown) => {
     url = String(input);
@@ -25,7 +26,7 @@ async function withCapturedFetch<T>(response: { okStatus?: boolean; json: unknow
     return {
       ok: response.okStatus ?? true,
       status: response.okStatus === false ? 500 : 200,
-      json: async () => response.json,
+      json: async () => { if (response.jsonDelayMs) await sleep(response.jsonDelayMs); return response.json; },
     } as Response;
   }) as typeof globalThis.fetch;
   try {
@@ -57,12 +58,31 @@ const providerBody = (rowSet: unknown[][], headers: string[] = H) => ({ resultSe
   ok(playoffKey !== regularKey, "playoff and regular-season keys are distinct identities (no cross-storage)");
 }
 
-// ── Transport / HTTP / JSON failures are typed, not silent empties ──────────
+// ── Transport / HTTP / JSON failures are typed; carry failedAt, NOT fetchedAt ─
 {
   const transport = await withCapturedFetch({ json: null, throwTransport: true }, () => fetchRawNbaPlayerGameLog({ playerId: "1", season: "2024-25", seasonType: "Regular Season" }));
-  ok(!transport.result.ok && transport.result.ok === false && (transport.result as { reason: string }).reason === "transport_failure", "transport error → transport_failure");
+  ok(!transport.result.ok && transport.result.reason === "transport_failure", "transport error → transport_failure");
+  ok(!transport.result.ok && typeof transport.result.failedAt === "string" && !("fetchedAt" in transport.result), "failure carries failedAt and NO fetchedAt (never a successful-observation instant)");
   const http = await withCapturedFetch({ okStatus: false, json: null }, () => fetchRawNbaPlayerGameLog({ playerId: "1", season: "2024-25", seasonType: "Regular Season" }));
-  ok(!http.result.ok && (http.result as { reason: string }).reason === "http_failure", "non-200 → http_failure");
+  ok(!http.result.ok && http.result.reason === "http_failure", "non-200 → http_failure");
+}
+
+// ── knownAt honesty: successful fetchedAt is captured AFTER payload decode ───
+{
+  const before = Date.now();
+  const { result } = await withCapturedFetch(
+    { json: providerBody([["0022400500", "2025-01-15", "DEN vs. LAL", 34, 30, 8, 6, 3]]), jsonDelayMs: 40 },
+    () => fetchRawNbaPlayerGameLog({ playerId: "201939", season: "2024-25", seasonType: "Regular Season" }),
+  );
+  ok(result.ok, "delayed fetch still resolves ok");
+  if (result.ok) {
+    const requested = Date.parse(result.requestedAt);
+    const fetched = Date.parse(result.fetchedAt);
+    ok(fetched > requested, "fetchedAt (observation) is strictly after requestedAt (request start)");
+    // The body decode was delayed 40ms; fetchedAt is stamped only after it resolves,
+    // so it cannot precede request-start + the decode delay.
+    ok(fetched >= before + 35, "fetchedAt cannot precede payload resolution (>= start + decode delay)");
+  }
 }
 
 // ── Missing vs zero survive the REAL bridge (raw provider JSON → adapter) ────
