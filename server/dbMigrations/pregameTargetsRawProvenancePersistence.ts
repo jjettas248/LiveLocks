@@ -43,11 +43,26 @@ const RAW_SUPERSEDES_IDX = `
     WHERE supersedes_snapshot_id IS NOT NULL;
 `;
 
+// audit-4: STABLE semantic source identity (distinct from the capture-specific
+// source_key), so lineage/head selection is by semantic identity + observation
+// chronology, and an A->B->A recurrence is not collapsed by content identity.
+const RAW_SEMANTIC_SOURCE_KEY = `
+  ALTER TABLE pregame_raw_source_snapshots
+    ADD COLUMN IF NOT EXISTS semantic_source_key TEXT;
+`;
+
+const RAW_SEMANTIC_HEAD_IDX = `
+  CREATE INDEX IF NOT EXISTS pregame_raw_source_snapshots_semantic_head_idx
+    ON pregame_raw_source_snapshots (semantic_source_key, known_at);
+`;
+
 export const PREGAME_TARGETS_RAW_PROVENANCE_PERSISTENCE_STATEMENTS: readonly string[] = [
   RAW_SOURCE_PUBLISHED_AT,
   RAW_KNOWN_AT_POLICY_VERSION,
   RAW_SUPERSEDES_SNAPSHOT_ID,
   RAW_SUPERSEDES_IDX,
+  RAW_SEMANTIC_SOURCE_KEY,
+  RAW_SEMANTIC_HEAD_IDX,
 ];
 
 /**

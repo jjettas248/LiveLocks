@@ -40,19 +40,20 @@ export function parseSeasonType(raw: string): NbaIngestSeasonType | null {
 
 /** Build the ingestion store port from a storage instance (IStorage-shaped). */
 export function buildStorePort(storage: {
-  getPregameRawSourceSnapshot(id: string): Promise<{ snapshotId: string } | null>;
   ingestPregameNbaSnapshotAtomic(args: {
     entityCanonicalId: string;
     featureVersion: string;
     featureKeys: string[];
+    semanticSourceKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
     raw: unknown;
     features: unknown[];
     foldPosteriors: (lockedPriors: Map<string, PosteriorState>) => unknown[];
-  }): Promise<{ inserted: boolean }>;
+  }): Promise<{ decision: string; snapshotId: string | null; supersedes: string | null }>;
 }): IngestionStorePort {
   return {
-    getRawSnapshotById: (id) => storage.getPregameRawSourceSnapshot(id),
-    ingestSnapshotAtomic: (args) => storage.ingestPregameNbaSnapshotAtomic(args as never),
+    ingestSnapshotAtomic: (args) => storage.ingestPregameNbaSnapshotAtomic(args as never) as never,
   };
 }
 
@@ -124,7 +125,10 @@ async function main(): Promise<void> {
           { store, fetch: fetcher },
           { playerNativeId, season: seasonInt, seasonLabel, seasonType, currentSeason, asOfDate },
         );
-        if (outcome.status === "provider_failure" || outcome.status === "incomplete") failures++;
+        // provider_failure / incomplete / conflicting_observation are real failures.
+        // stale_observation is a benign out-of-order arrival (write nothing) — logged,
+        // not counted. noop_identical / ingested are successes.
+        if (outcome.status === "provider_failure" || outcome.status === "incomplete" || outcome.status === "conflicting_observation") failures++;
         console.log(`[NBA_INGEST] player=${playerNativeId} season=${seasonLabel} seasonType=${seasonType} status=${outcome.status} records=${outcome.recordCount} features=${outcome.featureRowsWritten} posteriors=${outcome.posteriorsUpdated.length} coverage=${outcome.coverage.coverage}/${outcome.coverage.knownAtSupport}`);
       } catch (err) {
         // A typed invocation error means an incoherent identity slipped past CLI

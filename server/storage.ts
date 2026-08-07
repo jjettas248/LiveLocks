@@ -565,23 +565,35 @@ export interface IStorage {
     featureVersion: string,
   ): Promise<PregamePosteriorStateRow | null>;
   /**
-   * PR5 NBA ingestion — ALL-OR-NOTHING, serialized-per-entity commit of one source
-   * snapshot. Inserts the immutable raw snapshot (idempotent on its content-identity
-   * unique index) and, ONLY when that insert is new: takes a per-entity advisory lock,
-   * reads the CURRENT posterior states under that lock, calls `foldPosteriors` with
-   * them, then writes the feature rows + folded posteriors — all inside ONE
-   * transaction. Rolls back entirely on any failure. The lock + in-transaction read
-   * close the read-modify-write race two concurrent same-player ingestions would
-   * otherwise lose. Returns `inserted:false` when the content already existed (no-op).
+   * PR5 NBA ingestion — ALL-OR-NOTHING, serialized-per-entity commit of one OBSERVED
+   * state transition. Under a per-entity advisory lock, in ONE transaction:
+   *   1. Load the current HEAD for the STABLE semantic source identity, ordered by
+   *      `known_at` (observation chronology), NOT `created_at` (lock/commit order).
+   *   2. Decide vs. the head by observation instant + payload hash (audit-4):
+   *        • no head                         → first_capture (supersedes null)
+   *        • incoming.knownAt <  head.knownAt → stale (write nothing)
+   *        • incoming.knownAt == head.knownAt → same payload: noop; diff: conflict
+   *        • incoming.knownAt >  head.knownAt → same payload: noop (state unchanged);
+   *                                             diff: append (supersedes head.snapshotId)
+   *      A return to earlier content at a LATER instant (A→B→A) is an append, NOT a
+   *      no-op — capture identity (source_key incl. observation instant) keeps it
+   *      distinct from the earlier capture even though contentHash matches.
+   *   3. On first_capture/appended: read posterior states under the lock, fold, write
+   *      feature rows + posteriors. Roll back entirely on any failure.
+   * `contentHash` is a pure payload hash; the caller supplies the capture-specific
+   * `raw.sourceKey`, the stable `semanticSourceKey`, and `incomingKnownAt`/hash.
    */
   ingestPregameNbaSnapshotAtomic(args: {
     entityCanonicalId: string;
     featureVersion: string;
     featureKeys: string[];
+    semanticSourceKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
     raw: InsertPregameRawSourceSnapshot;
     features: InsertPregameFeatureSnapshot[];
     foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
-  }): Promise<{ inserted: boolean }>;
+  }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }>;
 
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
   // Creation is INSERT-only with ON CONFLICT DO NOTHING — a repeated
@@ -4394,42 +4406,62 @@ export class DatabaseStorage implements IStorage {
     entityCanonicalId: string;
     featureVersion: string;
     featureKeys: string[];
+    semanticSourceKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
     raw: InsertPregameRawSourceSnapshot;
     features: InsertPregameFeatureSnapshot[];
     foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
-  }): Promise<{ inserted: boolean }> {
+  }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }> {
     return await db.transaction(async (tx) => {
       // Serialize the whole read-modify-write PER ENTITY *before* touching any row. A
       // transaction-scoped advisory lock (auto-released on commit/rollback,
-      // connection-safe) covers what a row-level FOR UPDATE cannot: a not-yet-existing
-      // posterior row, AND deterministic correction-lineage selection. Two concurrent
-      // same-entity ingestions take turns, so neither reads a stale predecessor/prior.
+      // connection-safe) makes the head read + decision + writes atomic even under
+      // concurrent same-entity ingestions.
       await tx.execute(
         sql`SELECT pg_advisory_xact_lock(hashtext(${args.entityCanonicalId + "|" + args.featureVersion}))`,
       );
 
-      // Correction lineage, resolved UNDER the lock: the current latest immutable
-      // snapshot for the SAME semantic source identity (sourceKind + sourceKey). NULL
-      // for a first capture. A caller can never pick its own predecessor. Prior rows
-      // are never updated/deleted/repointed, so B→A then C→B is a deterministic chain.
-      const [predecessor] = await tx
-        .select({ snapshotId: pregameRawSourceSnapshots.snapshotId })
+      // HEAD of the observation chain for this STABLE semantic identity, ordered by
+      // OBSERVATION chronology (known_at), not lock/commit order (created_at). The
+      // snapshot_id tie-break is deterministic but never decides temporal order (a
+      // same-instant conflict is rejected below, so at most one row per known_at).
+      const [head] = await tx
+        .select({
+          snapshotId: pregameRawSourceSnapshots.snapshotId,
+          knownAt: pregameRawSourceSnapshots.knownAt,
+          contentHash: pregameRawSourceSnapshots.contentHash,
+        })
         .from(pregameRawSourceSnapshots)
-        .where(
-          and(
-            eq(pregameRawSourceSnapshots.sourceKind, args.raw.sourceKind),
-            eq(pregameRawSourceSnapshots.sourceKey, args.raw.sourceKey),
-          ),
-        )
-        .orderBy(desc(pregameRawSourceSnapshots.createdAt), desc(pregameRawSourceSnapshots.snapshotId))
+        .where(eq(pregameRawSourceSnapshots.semanticSourceKey, args.semanticSourceKey))
+        .orderBy(desc(pregameRawSourceSnapshots.knownAt), desc(pregameRawSourceSnapshots.snapshotId))
         .limit(1);
 
-      // Idempotency gate INSIDE the transaction: the raw snapshot's content-identity
-      // unique index. If the content already exists, insert nothing and no-op (and the
-      // lineage is unchanged — no supersession is recorded for a no-op rerun).
+      // Decide vs. the head by observation instant + payload hash (audit-4). Idempotency
+      // is equality to the CURRENT HEAD, never "has this content ever existed" — so a
+      // genuine A→B→A recurrence at a later instant is an append, not a no-op.
+      let supersedes: string | null = null;
+      if (head) {
+        const inMs = args.incomingKnownAt.getTime();
+        const headMs = new Date(head.knownAt).getTime();
+        if (inMs < headMs) return { decision: "stale", snapshotId: null, supersedes: null };
+        if (inMs === headMs) {
+          return args.incomingContentHash === head.contentHash
+            ? { decision: "noop", snapshotId: head.snapshotId, supersedes: null }
+            : { decision: "conflict", snapshotId: null, supersedes: null };
+        }
+        // inMs > headMs
+        if (args.incomingContentHash === head.contentHash) {
+          return { decision: "noop", snapshotId: head.snapshotId, supersedes: null }; // state unchanged
+        }
+        supersedes = head.snapshotId; // later state (incl. return to earlier content)
+      }
+
+      // Insert the immutable capture. The content-identity unique index is a retry
+      // safety-net only (distinct captures differ by capture-specific source_key).
       const [insertedRaw] = await tx
         .insert(pregameRawSourceSnapshots)
-        .values({ ...args.raw, supersedesSnapshotId: predecessor?.snapshotId ?? null })
+        .values({ ...args.raw, semanticSourceKey: args.semanticSourceKey, supersedesSnapshotId: supersedes })
         .onConflictDoNothing({
           target: [
             pregameRawSourceSnapshots.sourceKind,
@@ -4438,7 +4470,9 @@ export class DatabaseStorage implements IStorage {
           ],
         })
         .returning();
-      if (!insertedRaw) return { inserted: false };
+      if (!insertedRaw) return { decision: "noop", snapshotId: args.raw.snapshotId, supersedes: null }; // idempotent retry of the exact capture
+
+      const decision: "first_capture" | "appended" = supersedes === null ? "first_capture" : "appended";
 
       // Read the CURRENT posterior states UNDER the lock, then fold against them.
       const priorRows = args.featureKeys.length === 0
@@ -4483,7 +4517,7 @@ export class DatabaseStorage implements IStorage {
             set: { sport: p.sport, stateVersion: p.stateVersion, bySeason: p.bySeason, updatedAt: new Date() },
           });
       }
-      return { inserted: true };
+      return { decision, snapshotId: insertedRaw.snapshotId, supersedes };
     });
   }
 

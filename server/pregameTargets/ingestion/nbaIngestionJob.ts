@@ -26,7 +26,7 @@ import type {
 } from "../../../shared/schema";
 import { instantMs, type AsOfFeatureRow } from "../../../shared/pregameTargets/featureStore";
 import { type PosteriorState } from "../posteriorState/posteriorState";
-import { buildRawSnapshotIdentity, computeContentHash } from "./rawSnapshotIdentity";
+import { buildCaptureSnapshotIdentity, computeContentHash } from "./rawSnapshotIdentity";
 import { parseNbaGameLog, gameDateToIso, nbaSeasonIntFromString } from "./nbaGameLogAdapter";
 import { buildNbaFeatureRows, NBA_FEATURE_VERSION } from "./nbaFeatureBuilder";
 import { foldNbaPosteriors } from "./nbaPosteriorBuilder";
@@ -103,36 +103,40 @@ export function buildValidatedIngestRequest(params: IngestPlayerSeasonParams): V
   };
 }
 
+export type IngestDecision = "first_capture" | "appended" | "noop" | "stale" | "conflict";
+
 export interface AtomicIngestArgs {
   entityCanonicalId: string;
   featureVersion: string;
   /** featureKeys whose posterior states must be read + locked before folding. */
   featureKeys: string[];
+  /** STABLE semantic source identity (drives head/lineage selection). */
+  semanticSourceKey: string;
+  /** Honest post-decode observation instant of THIS capture. */
+  incomingKnownAt: Date;
+  /** Pure payload content hash of THIS capture. */
+  incomingContentHash: string;
   raw: InsertPregameRawSourceSnapshot;
   features: InsertPregameFeatureSnapshot[];
   /**
    * Fold the new feature rows against the CURRENT posterior states → the posterior
-   * rows to upsert. This runs INSIDE the storage transaction, AFTER the current
-   * states are read under a per-entity lock, so the read-modify-write is atomic:
-   * two concurrent ingestions for the same player each observe the other's
-   * committed seasons and neither is silently overwritten.
+   * rows to upsert. Runs INSIDE the storage transaction, AFTER the current states are
+   * read under a per-entity lock, so the read-modify-write is atomic.
    */
   foldPosteriors: (lockedPriors: Map<string, PosteriorState>) => InsertPregamePosteriorState[];
 }
 
 export interface IngestionStorePort {
-  /** Fast idempotency probe (short-circuits the no-op common case). */
-  getRawSnapshotById(snapshotId: string): Promise<{ snapshotId: string } | null>;
   /**
-   * ALL-OR-NOTHING, serialized-per-entity write. Inserts the immutable raw snapshot
-   * (idempotent on the content-identity unique index), and ONLY if that insert is
-   * new: acquires a per-entity advisory lock, reads the current posterior states
-   * under it, invokes `foldPosteriors`, then writes the feature rows + folded
-   * posteriors — inside ONE transaction. A failure rolls the whole thing back;
-   * concurrent same-player ingestions serialize instead of losing updates. Returns
-   * `{ inserted: false }` when the content already existed (a no-op).
+   * ALL-OR-NOTHING, serialized-per-entity commit of one OBSERVED state transition.
+   * Under a per-entity advisory lock, loads the HEAD for `semanticSourceKey` ordered
+   * by observation chronology (knownAt), decides vs. that head (first_capture / noop
+   * when equal to head / appended when a later differing state incl. A→B→A / stale
+   * when knownAt < head / conflict when same knownAt & different payload), and on an
+   * accepted capture folds + writes features + posteriors — all in ONE transaction.
+   * Idempotency is equality to the CURRENT head, never "content ever existed".
    */
-  ingestSnapshotAtomic(args: AtomicIngestArgs): Promise<{ inserted: boolean }>;
+  ingestSnapshotAtomic(args: AtomicIngestArgs): Promise<{ decision: IngestDecision; snapshotId: string | null; supersedes: string | null }>;
 }
 
 export interface GameLogFetchArgs {
@@ -152,7 +156,13 @@ export type GameLogFetchResult =
   | { ok: false; reason: string; failedAt: string; requestedAt?: string };
 export type GameLogFetcher = (args: GameLogFetchArgs) => Promise<GameLogFetchResult>;
 
-export type IngestStatus = "provider_failure" | "incomplete" | "noop_identical" | "ingested";
+export type IngestStatus =
+  | "provider_failure"
+  | "incomplete"
+  | "noop_identical"
+  | "ingested"
+  | "stale_observation" // knownAt < current head — write nothing, fail closed
+  | "conflicting_observation"; // same knownAt as head, different payload — fail closed
 
 export interface IngestOutcome {
   status: IngestStatus;
@@ -253,15 +263,15 @@ export async function ingestPlayerSeason(
     return { status: "incomplete", sourceKey, snapshotId: null, recordCount: 0, featureRowsWritten: 0, posteriorsUpdated: [], coverage };
   }
 
-  const identity = buildRawSnapshotIdentity(kind, sourceKey, parsed.rawPayload);
-  const existing = await deps.store.getRawSnapshotById(identity.snapshotId);
-  if (existing !== null) {
-    // Byte-identical content already ingested — a true no-op (no duplicate, no rewrite).
-    return { status: "noop_identical", sourceKey, snapshotId: identity.snapshotId, recordCount: parsed.records.length, featureRowsWritten: 0, posteriorsUpdated: [], coverage };
-  }
+  // CAPTURE identity (audit-4): binds the STABLE semantic key to the honest
+  // observation instant, so a return to earlier content (A→B→A) is a distinct capture,
+  // not a content-identity collision. Idempotency is decided under the lock vs. the
+  // current head — NOT by a pre-transaction "has this content ever existed" probe.
+  const semanticSourceKey = sourceKey;
+  const identity = buildCaptureSnapshotIdentity({ sourceKind: kind, semanticSourceKey, observationInstant: fetched.fetchedAt, payload: parsed.rawPayload });
 
-  // New content (first capture or a genuine correction). Build the immutable raw
-  // snapshot + feature rows; the posterior fold is deferred INTO the transaction.
+  // Build the immutable raw capture + feature rows; the head decision + posterior fold
+  // are deferred INTO the transaction.
   const validAtIso = maxGameDateIso(parsed.records) ?? gameDateToIso(parsed.records[0].gameDate);
   // Timestamp-policy metadata persisted as audit fields (survives the DB, not just the
   // transient TS object). `sourcePublishedAt` is explicitly null for these endpoints
@@ -269,13 +279,15 @@ export async function ingestPlayerSeason(
   // here — the correction predecessor is resolved by storage UNDER the same lock as the
   // insert (a caller can never pick its own predecessor). `createdAt` (defaultNow) is
   // the immutable ingestion instant.
+  const knownAt = new Date(fetched.fetchedAt);
   const rawRow: InsertPregameRawSourceSnapshot = {
     snapshotId: identity.snapshotId,
     sport: "nba",
     sourceKind: kind,
-    sourceKey,
+    sourceKey: identity.captureKey, // capture-specific (semantic key + observation instant)
+    semanticSourceKey, // stable identity — drives head/lineage
     validAt: new Date(validAtIso),
-    knownAt: new Date(fetched.fetchedAt),
+    knownAt,
     sourcePublishedAt: parsed.records[0].timestamps.sourcePublishedAt === null ? null : new Date(parsed.records[0].timestamps.sourcePublishedAt),
     knownAtPolicyVersion: parsed.records[0].timestamps.knownAtPolicyVersion ?? NBA_KNOWN_AT_POLICY_VERSION,
     payload: parsed.rawPayload as InsertPregameRawSourceSnapshot["payload"],
@@ -295,17 +307,31 @@ export async function ingestPlayerSeason(
     return Array.from(folded.values()).map((state) => toPosteriorInsert(state, "nba"));
   };
 
-  const { inserted } = await deps.store.ingestSnapshotAtomic({
+  const result = await deps.store.ingestSnapshotAtomic({
     entityCanonicalId,
     featureVersion: NBA_FEATURE_VERSION,
     featureKeys,
+    semanticSourceKey,
+    incomingKnownAt: knownAt,
+    incomingContentHash: identity.contentHash,
     raw: rawRow,
     features,
     foldPosteriors,
   });
-  if (!inserted) {
-    return { status: "noop_identical", sourceKey, snapshotId: identity.snapshotId, recordCount: parsed.records.length, featureRowsWritten: 0, posteriorsUpdated: [], coverage };
-  }
 
-  return { status: "ingested", sourceKey, snapshotId: identity.snapshotId, recordCount: parsed.records.length, featureRowsWritten: features.length, posteriorsUpdated, coverage };
+  const base = { sourceKey, recordCount: parsed.records.length, coverage };
+  switch (result.decision) {
+    case "first_capture":
+    case "appended":
+      return { status: "ingested", ...base, snapshotId: result.snapshotId, featureRowsWritten: features.length, posteriorsUpdated };
+    case "noop":
+      // Equality to the current head — a true idempotent rerun (state unchanged).
+      return { status: "noop_identical", ...base, snapshotId: result.snapshotId, featureRowsWritten: 0, posteriorsUpdated: [] };
+    case "stale":
+      // knownAt < current head — an out-of-order arrival. Fail closed, write nothing.
+      return { status: "stale_observation", ...base, snapshotId: null, featureRowsWritten: 0, posteriorsUpdated: [] };
+    case "conflict":
+      // same knownAt as head, different payload — ambiguous. Fail closed, write nothing.
+      return { status: "conflicting_observation", ...base, snapshotId: null, featureRowsWritten: 0, posteriorsUpdated: [] };
+  }
 }
