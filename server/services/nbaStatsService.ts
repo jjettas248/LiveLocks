@@ -400,18 +400,31 @@ export interface PlayerGameLogRow {
   STL?: number;
   BLK?: number;
   TOV?: number;
+  FG3M?: number;
+}
+
+/**
+ * Resolve the NBA season string for a game-log request. An explicit, non-blank
+ * `season` (e.g. "2023-24") is used verbatim for a historical pull; otherwise the
+ * current season is used — so omitting `season` yields byte-identical behavior to
+ * the pre-existing current-season-only requests. Pure + exported for testing.
+ */
+export function resolveGameLogSeason(explicit?: string | null): string {
+  return typeof explicit === "string" && explicit.trim() !== "" ? explicit.trim() : getCurrentSeason();
 }
 
 export async function getPlayerGameLogs(args: {
   playerId?: string | number | null;
   seasonType?: NBASeasonType;
   limit?: number;
+  /** Optional NBA season string ("2023-24"). Omitted → current season (unchanged behavior). */
+  season?: string | null;
 }): Promise<PlayerGameLogRow[]> {
   const seasonType = args.seasonType ?? "Regular Season";
   const limit = args.limit ?? 25;
   if (args.playerId == null) return [];
   const pid = String(args.playerId);
-  const season = getCurrentSeason();
+  const season = resolveGameLogSeason(args.season);
   const cacheKey = `${season}:${seasonType}:${pid}`;
   const cached = playerGameLogsCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < GAME_LOGS_TTL) {
@@ -441,6 +454,7 @@ export async function getPlayerGameLogs(args: {
     STL: r.STL != null ? Number(r.STL) : undefined,
     BLK: r.BLK != null ? Number(r.BLK) : undefined,
     TOV: r.TOV != null ? Number(r.TOV) : undefined,
+    FG3M: r.FG3M != null ? Number(r.FG3M) : undefined,
   }));
   // playergamelog is most-recent-first
   playerGameLogsCache.set(cacheKey, { data: rows, fetchedAt: Date.now() });
@@ -468,10 +482,12 @@ export async function getTeamGameLogs(args: {
   teamAbbr: string;
   seasonType?: NBASeasonType;
   limit?: number;
+  /** Optional NBA season string ("2023-24"). Omitted → current season (unchanged behavior). */
+  season?: string | null;
 }): Promise<TeamGameLogRow[]> {
   const seasonType = args.seasonType ?? "Regular Season";
   const limit = args.limit ?? 25;
-  const season = getCurrentSeason();
+  const season = resolveGameLogSeason(args.season);
   const norm = args.teamAbbr.toUpperCase();
   const cacheKey = `${season}:${seasonType}:${norm}`;
   const cached = teamGameLogsCache.get(cacheKey);
