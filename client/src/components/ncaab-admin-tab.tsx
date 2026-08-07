@@ -1002,7 +1002,7 @@ function FullGameMarkets({
   const awaySpread  = absSpread != null
     ? (isFavHome ? absSpread : isFavAway ? -absSpread : null)
     : null;
-  if (process.env.NODE_ENV !== "production" && resolvedSpreadTeam == null && absSpread != null) {
+  if (import.meta.env.DEV && resolvedSpreadTeam == null && absSpread != null) {
     console.warn("Spread sign resolution — unresolved spreadTeam", {
       gameId: play.gameId,
       homeTeam: homeAbbr,
