@@ -1,0 +1,958 @@
+{
+  "interrupted": {
+    "interruptedBattingEventCount": 930,
+    "nonBattingEventRowCount": 230,
+    "note": "A batting PA that spans records surfaces as ONE BAT_EVENT_FL=T row; the interruption (SB/WP/injury/sub) is a separate BAT_EVENT_FL=F row. cwevent passes PITCH_SEQ_TX verbatim and does NOT strip the \".\" marker — the adapter must strip it.",
+    "examples": [
+      {
+        "game": "ANA201904040",
+        "inn": "3",
+        "homeBat": "0",
+        "balls": "0",
+        "strikes": "2",
+        "seq": "..CFX",
+        "bat": "cabra002",
+        "batHand": "L",
+        "respBat": "cabra002",
+        "respBatHand": "L",
+        "pit": "harvm001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "63/G6M",
+        "lineup": "5",
+        "eventCd": "2",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "CFX",
+        "derivedCountEnteringTerminal": {
+          "balls": 0,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "0",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "3",
+        "homeBat": "1",
+        "balls": "3",
+        "strikes": "2",
+        "seq": "BCBB.CX",
+        "bat": "lastt001",
+        "batHand": "L",
+        "respBat": "lastt001",
+        "respBatHand": "L",
+        "pit": "volqe001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "8/L8RD+",
+        "lineup": "6",
+        "eventCd": "2",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "BCBBCX",
+        "derivedCountEnteringTerminal": {
+          "balls": 3,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "3",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "4",
+        "homeBat": "1",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".FFBS",
+        "bat": "calhk001",
+        "batHand": "L",
+        "respBat": "calhk001",
+        "respBatHand": "L",
+        "pit": "sprij001",
+        "pitHand": "L",
+        "respPitHand": "L",
+        "event": "K",
+        "lineup": "1",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "FFBS",
+        "derivedCountEnteringTerminal": {
+          "balls": 1,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "1",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "5",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "1",
+        "seq": ".BBCX",
+        "bat": "forsl001",
+        "batHand": "R",
+        "respBat": "forsl001",
+        "respBatHand": "R",
+        "pit": "bardl001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "S7/L7S+.2-3;1-2",
+        "lineup": "7",
+        "eventCd": "20",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "BBCX",
+        "derivedCountEnteringTerminal": {
+          "balls": 2,
+          "strikes": 1
+        },
+        "cweventCount": {
+          "balls": "2",
+          "strikes": "1"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "7",
+        "homeBat": "0",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".CSFBX",
+        "bat": "guzmr001",
+        "batHand": "L",
+        "respBat": "guzmr001",
+        "respBatHand": "L",
+        "pit": "ramin002",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "5/F56-",
+        "lineup": "6",
+        "eventCd": "2",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "CSFBX",
+        "derivedCountEnteringTerminal": {
+          "balls": 1,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "1",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "7",
+        "homeBat": "1",
+        "balls": "2",
+        "strikes": "2",
+        "seq": ".CBBFX",
+        "bat": "fletd002",
+        "batHand": "R",
+        "respBat": "fletd002",
+        "respBatHand": "R",
+        "pit": "gomej002",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "S9/L89S",
+        "lineup": "4",
+        "eventCd": "20",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "CBBFX",
+        "derivedCountEnteringTerminal": {
+          "balls": 2,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "2",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "8",
+        "homeBat": "0",
+        "balls": "0",
+        "strikes": "1",
+        "seq": ".SX",
+        "bat": "deshd002",
+        "batHand": "R",
+        "respBat": "deshd002",
+        "respBatHand": "R",
+        "pit": "bedrc001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "S4/G4MD",
+        "lineup": "9",
+        "eventCd": "20",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "SX",
+        "derivedCountEnteringTerminal": {
+          "balls": 0,
+          "strikes": 1
+        },
+        "cweventCount": {
+          "balls": "0",
+          "strikes": "1"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "8",
+        "homeBat": "0",
+        "balls": "3",
+        "strikes": "2",
+        "seq": "BF*B.F*BF*B",
+        "bat": "choos001",
+        "batHand": "L",
+        "respBat": "choos001",
+        "respBatHand": "L",
+        "pit": "bedrc001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "W",
+        "lineup": "1",
+        "eventCd": "14",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "BFBFBFB",
+        "derivedCountEnteringTerminal": {
+          "balls": 3,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "3",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "8",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "2",
+        "seq": "TCB*B.S",
+        "bat": "odorr001",
+        "batHand": "L",
+        "respBat": "odorr001",
+        "respBatHand": "L",
+        "pit": "bedrc001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "2",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "TCBBS",
+        "derivedCountEnteringTerminal": {
+          "balls": 2,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "2",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "8",
+        "homeBat": "1",
+        "balls": "2",
+        "strikes": "2",
+        "seq": ".BFBFFFS",
+        "bat": "goodb001",
+        "batHand": "L",
+        "respBat": "goodb001",
+        "respBatHand": "L",
+        "pit": "dowdk001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "8",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "BFBFFFS",
+        "derivedCountEnteringTerminal": {
+          "balls": 2,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "2",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "9",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "2",
+        "seq": "..FBBCFS",
+        "bat": "forsl001",
+        "batHand": "R",
+        "respBat": "forsl001",
+        "respBatHand": "R",
+        "pit": "allec002",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "7",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "FBBCFS",
+        "derivedCountEnteringTerminal": {
+          "balls": 2,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "2",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      },
+      {
+        "game": "ANA201904050",
+        "inn": "3",
+        "homeBat": "0",
+        "balls": "3",
+        "strikes": "2",
+        "seq": "1SB.F*BBFFX",
+        "bat": "odorr001",
+        "batHand": "L",
+        "respBat": "odorr001",
+        "respBatHand": "L",
+        "pit": "penaf002",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "163.2-3",
+        "lineup": "2",
+        "eventCd": "2",
+        "batEventFl": "T",
+        "removedForPh": "",
+        "strippedSeq": "SBFBBFFX",
+        "derivedCountEnteringTerminal": {
+          "balls": 3,
+          "strikes": 2
+        },
+        "cweventCount": {
+          "balls": "3",
+          "strikes": "2"
+        },
+        "countConsistent": true
+      }
+    ]
+  },
+  "responsibleBatter": {
+    "question": "For a two-strike substitution (original batter leaves with 2 strikes, sub completes the K), does cwevent charge RESP_BAT_ID to the ORIGINAL batter (fixture 03 assumption) or the COMPLETING batter?",
+    "tRowsWhereRespBatDiffersFromBat": 3,
+    "respDiffersExamples": [
+      {
+        "game": "ARI201908060",
+        "inn": "8",
+        "homeBat": "1",
+        "balls": "0",
+        "strikes": "2",
+        "seq": "CC.FS",
+        "bat": "jonea003",
+        "batHand": "R",
+        "respBat": "dysoj001",
+        "respBatHand": "L",
+        "pit": "efliz001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "1",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": "dysoj001"
+      },
+      {
+        "game": "ARI201909140",
+        "inn": "7",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "2",
+        "seq": "BSBS.C",
+        "bat": "blana002",
+        "batHand": "R",
+        "respBat": "galvf001",
+        "respBatHand": "L",
+        "pit": "kellm002",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "6",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": "galvf001"
+      },
+      {
+        "game": "BAL201908010",
+        "inn": "9",
+        "homeBat": "0",
+        "balls": "1",
+        "strikes": "2",
+        "seq": "CF.BS",
+        "bat": "fishd001",
+        "batHand": "L",
+        "respBat": "gricr001",
+        "respBatHand": "R",
+        "pit": "tated001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "5",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": "gricr001"
+      }
+    ],
+    "dottedStrikeoutCount": 241,
+    "dottedStrikeoutExamples": [
+      {
+        "game": "ANA201904040",
+        "inn": "4",
+        "homeBat": "1",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".FFBS",
+        "bat": "calhk001",
+        "batHand": "L",
+        "respBat": "calhk001",
+        "respBatHand": "L",
+        "pit": "sprij001",
+        "pitHand": "L",
+        "respPitHand": "L",
+        "event": "K",
+        "lineup": "1",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "8",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "2",
+        "seq": "TCB*B.S",
+        "bat": "odorr001",
+        "batHand": "L",
+        "respBat": "odorr001",
+        "respBatHand": "L",
+        "pit": "bedrc001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "2",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "8",
+        "homeBat": "1",
+        "balls": "2",
+        "strikes": "2",
+        "seq": ".BFBFFFS",
+        "bat": "goodb001",
+        "batHand": "L",
+        "respBat": "goodb001",
+        "respBatHand": "L",
+        "pit": "dowdk001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "8",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904040",
+        "inn": "9",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "2",
+        "seq": "..FBBCFS",
+        "bat": "forsl001",
+        "batHand": "R",
+        "respBat": "forsl001",
+        "respBatHand": "R",
+        "pit": "allec002",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "7",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904050",
+        "inn": "5",
+        "homeBat": "0",
+        "balls": "3",
+        "strikes": "2",
+        "seq": ".BBSFFB.S",
+        "bat": "odorr001",
+        "batHand": "L",
+        "respBat": "odorr001",
+        "respBatHand": "L",
+        "pit": "andej005",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "2",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904050",
+        "inn": "7",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "2",
+        "seq": ".SBBSFFS",
+        "bat": "guzmr001",
+        "batHand": "L",
+        "respBat": "guzmr001",
+        "respBatHand": "L",
+        "pit": "roblh001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "7",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904050",
+        "inn": "8",
+        "homeBat": "0",
+        "balls": "1",
+        "strikes": "2",
+        "seq": "..CBSS",
+        "bat": "odorr001",
+        "batHand": "L",
+        "respBat": "odorr001",
+        "respBatHand": "L",
+        "pit": "buttt001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "2",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904060",
+        "inn": "3",
+        "homeBat": "1",
+        "balls": "3",
+        "strikes": "2",
+        "seq": "SF*B*B.BC",
+        "bat": "calhk001",
+        "batHand": "L",
+        "respBat": "calhk001",
+        "respBatHand": "L",
+        "pit": "smyld001",
+        "pitHand": "L",
+        "respPitHand": "L",
+        "event": "K",
+        "lineup": "6",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904060",
+        "inn": "8",
+        "homeBat": "0",
+        "balls": "3",
+        "strikes": "2",
+        "seq": ".BBFSBT",
+        "bat": "deshd002",
+        "batHand": "R",
+        "respBat": "deshd002",
+        "respBatHand": "R",
+        "pit": "roblh001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "1",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904060",
+        "inn": "8",
+        "homeBat": "1",
+        "balls": "3",
+        "strikes": "2",
+        "seq": ".BCBFBFFS",
+        "bat": "pujoa001",
+        "batHand": "R",
+        "respBat": "pujoa001",
+        "respBatHand": "R",
+        "pit": "gomej002",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "4",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904060",
+        "inn": "9",
+        "homeBat": "0",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".BSSS",
+        "bat": "mazan001",
+        "batHand": "L",
+        "respBat": "mazan001",
+        "respBatHand": "L",
+        "pit": "bardl001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "5",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904070",
+        "inn": "3",
+        "homeBat": "1",
+        "balls": "3",
+        "strikes": "2",
+        "seq": ".BCSFBBFS",
+        "bat": "lucrj001",
+        "batHand": "R",
+        "respBat": "lucrj001",
+        "respBatHand": "R",
+        "pit": "sprij001",
+        "pitHand": "L",
+        "respPitHand": "L",
+        "event": "K",
+        "lineup": "7",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904070",
+        "inn": "5",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "2",
+        "seq": ".CF*B*BS",
+        "bat": "choos001",
+        "batHand": "L",
+        "respBat": "choos001",
+        "respBatHand": "L",
+        "pit": "andej005",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "1",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904070",
+        "inn": "8",
+        "homeBat": "1",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".BFFS",
+        "bat": "lastt001",
+        "batHand": "L",
+        "respBat": "lastt001",
+        "respBatHand": "L",
+        "pit": "martc007",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "1",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904080",
+        "inn": "1",
+        "homeBat": "0",
+        "balls": "0",
+        "strikes": "2",
+        "seq": "C.FC",
+        "bat": "shawt001",
+        "batHand": "L",
+        "respBat": "shawt001",
+        "respBatHand": "L",
+        "pit": "cahit001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "4",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904080",
+        "inn": "8",
+        "homeBat": "1",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".BSFS",
+        "bat": "simma001",
+        "batHand": "R",
+        "respBat": "simma001",
+        "respBatHand": "R",
+        "pit": "wilsa001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K23",
+        "lineup": "4",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904090",
+        "inn": "4",
+        "homeBat": "1",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".FFBF1C",
+        "bat": "bourp001",
+        "batHand": "R",
+        "respBat": "bourp001",
+        "respBatHand": "R",
+        "pit": "albem001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "2",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904090",
+        "inn": "7",
+        "homeBat": "0",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".CFBS",
+        "bat": "shawt001",
+        "batHand": "L",
+        "respBat": "shawt001",
+        "respBatHand": "L",
+        "pit": "bedrc001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "4",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904090",
+        "inn": "7",
+        "homeBat": "1",
+        "balls": "1",
+        "strikes": "2",
+        "seq": ".CCBC",
+        "bat": "cozaz001",
+        "batHand": "R",
+        "respBat": "cozaz001",
+        "respBatHand": "R",
+        "pit": "wilsa001",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "9",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      },
+      {
+        "game": "ANA201904090",
+        "inn": "8",
+        "homeBat": "0",
+        "balls": "2",
+        "strikes": "2",
+        "seq": "..BCFBFFS",
+        "bat": "gameb001",
+        "batHand": "L",
+        "respBat": "gameb001",
+        "respBatHand": "L",
+        "pit": "garcl005",
+        "pitHand": "R",
+        "respPitHand": "R",
+        "event": "K",
+        "lineup": "8",
+        "eventCd": "3",
+        "batEventFl": "T",
+        "removedForPh": ""
+      }
+    ],
+    "interpretationNote": "If RESP_BAT_ID equals BAT_ID on the dotted strikeouts (i.e. the completing batter), fixture 03 (two_strike_substitution_charges_original_batter) is CONTRADICTED by real cwevent output. The removed batter, when present, appears in REMOVED_FOR_PH_BAT_ID, not RESP_BAT_ID."
+  },
+  "handedness": {
+    "respBatHandDistribution": {
+      "L": 2737,
+      "R": 3820
+    },
+    "respPitHandDistribution": {
+      "R": 4804,
+      "L": 1753
+    },
+    "switchHittersResolvedBothWays": [
+      {
+        "batter": "cabra002",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "rengl001",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "galvf001",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "smoaj001",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "hansa001",
+        "resolvedHands": [
+          "R",
+          "L"
+        ]
+      },
+      {
+        "batter": "mondr003",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "hamib001",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "adrie001",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "gonzm002",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "santd001",
+        "resolvedHands": [
+          "R",
+          "L"
+        ]
+      },
+      {
+        "batter": "grosr001",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "profj001",
+        "resolvedHands": [
+          "L",
+          "R"
+        ]
+      },
+      {
+        "batter": "santa003",
+        "resolvedHands": [
+          "R",
+          "L"
+        ]
+      },
+      {
+        "batter": "villj001",
+        "resolvedHands": [
+          "R",
+          "L"
+        ]
+      },
+      {
+        "batter": "wilks001",
+        "resolvedHands": [
+          "R",
+          "L"
+        ]
+      }
+    ],
+    "unknownHandednessExamples": [],
+    "note": "Handedness is emitted per-event and resolves switch-hitters against the opposing pitcher (a switch hitter shows both L and R across PAs). \"?\" marks unresolved handedness — the split attribution is withheld, not the overall."
+  }
+}
