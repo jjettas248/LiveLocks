@@ -8,10 +8,11 @@
 // FAILS CLOSED — an id that cannot be resolved to exactly one entity is rejected,
 // never guessed.
 //
-// PR1 scope: contract + pure resolution logic only. No provider wiring, no NFL
-// (the sport union is intentionally single-membered until a later PR adds it).
+// PR1 scope: contract + pure resolution logic only. NFL was added in PR6 (data &
+// entitlement); the resolver + id scheme extend to it unchanged. MLB/NCAAB are
+// deliberately NOT pregame-target sports in this program.
 
-export const PREGAME_SPORTS = ["nba"] as const;
+export const PREGAME_SPORTS = ["nba", "nfl"] as const;
 export type PregameSport = (typeof PREGAME_SPORTS)[number];
 
 export const PREGAME_ENTITY_KINDS = ["player", "team", "game", "market"] as const;
