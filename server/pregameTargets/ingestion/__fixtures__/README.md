@@ -1,6 +1,6 @@
 # PR5 NBA ingestion fixtures — case ledger
 
-Nine representative fixtures — in `cases.json` (`{ headers, cases: [{ id, description,
+Thirteen representative fixtures — in `cases.json` (`{ headers, cases: [{ id, description,
 kind, season, entityNativeId, fetchedAtIso, raw, expected }] }`) — freeze the raw NBA
 Stats `playergamelog` / `teamgamelog` response shapes and the **expected normalized +
 as-of classification** for each case. They are the in-repo feasibility gate (no live

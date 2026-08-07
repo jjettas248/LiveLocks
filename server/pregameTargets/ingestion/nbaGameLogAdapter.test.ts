@@ -13,13 +13,21 @@ const args = (rawPayload: unknown, over: Partial<Parameters<typeof parseNbaGameL
   kind: "nba_stats_playergamelog" as const, season: 2026, sourceKey: "sk", entityNativeId: "201939", rawPayload, fetchedAt: "2026-08-05T18:00:00Z", ...over,
 });
 
-// ── Season string ↔ int ─────────────────────────────────────────────────────
+// ── Season string ↔ int (SEMANTIC validation, not just structural) ──────────
 {
   ok(nbaSeasonIntFromString("2025-26") === 2026, "2025-26 → 2026");
   ok(nbaSeasonIntFromString("2023-24") === 2024, "2023-24 → 2024");
+  ok(nbaSeasonIntFromString("1999-00") === 2000, "1999-00 → 2000 (century rollover suffix)");
   ok(nbaSeasonIntFromString("garbage") === null, "bad season → null");
+  // Structurally shaped but semantically impossible seasons are REJECTED, never
+  // silently normalized to a season the caller never asked for.
+  ok(nbaSeasonIntFromString("2025-99") === null, "2025-99 → null (suffix must be 26)");
+  ok(nbaSeasonIntFromString("2025-25") === null, "2025-25 → null (suffix must be 26, not the start year)");
+  ok(nbaSeasonIntFromString("2025-2") === null, "2025-2 → null (suffix must be two digits)");
+  ok(nbaSeasonIntFromString("2024-26") === null, "2024-26 → null (suffix must be 25)");
   ok(nbaSeasonStringFromInt(2026) === "2025-26", "2026 → 2025-26");
   ok(nbaSeasonStringFromInt(2024) === "2023-24", "2024 → 2023-24");
+  ok(nbaSeasonStringFromInt(2000) === "1999-00", "2000 → 1999-00 (round-trips the century rollover)");
 }
 
 // ── GAME_DATE → ISO source-effective anchor (both provider formats) ─────────
@@ -107,6 +115,60 @@ const args = (rawPayload: unknown, over: Partial<Parameters<typeof parseNbaGameL
   const res = parseNbaGameLog(args(extra));
   ok(res.ok, "unknown extra header ignored (still parses)");
   if (res.ok) ok(res.records[0].points === 30, "named columns unaffected by an unknown extra header");
+}
+
+// ── Duplicate CONSUMED (optional) headers fail closed — not just required ────
+{
+  const dupPts = { resultSets: [{ headers: ["GAME_ID", "GAME_DATE", "MIN", "PTS", "PTS"], rowSet: [["0022300500", "2024-01-15", 34, 30, 99]] }] };
+  const r1 = parseNbaGameLog(args(dupPts));
+  ok(!r1.ok && r1.reason === "incomplete_response", "duplicate PTS header → incomplete_response (ambiguous, no silent last-wins)");
+  const dupMin = { resultSets: [{ headers: ["GAME_ID", "GAME_DATE", "MIN", "MIN", "PTS"], rowSet: [["0022300500", "2024-01-15", 34, 20, 30]] }] };
+  const r2 = parseNbaGameLog(args(dupMin));
+  ok(!r2.ok && r2.reason === "incomplete_response", "duplicate MIN header → incomplete_response");
+  const dupReb = { resultSets: [{ headers: ["GAME_ID", "GAME_DATE", "REB", "REB", "PTS"], rowSet: [["0022300500", "2024-01-15", 8, 9, 30]] }] };
+  ok(parseNbaGameLog(args(dupReb)).ok === false, "duplicate REB header → not ok");
+}
+
+// ── Conflicting duplicate GAME_ID rows fail closed (never fold by row order) ─
+{
+  const conflict = parseNbaGameLog(args(base([
+    ["0022300500", "2024-01-15", "DEN vs. LAL", 34, 30, 8, 6, 3],
+    ["0022300500", "2024-01-15", "DEN vs. LAL", 34, 33, 8, 6, 3], // same game, DIFFERENT pts
+  ])));
+  ok(!conflict.ok && conflict.reason === "conflicting_rows", "conflicting duplicate GAME_ID rows → conflicting_rows (fail closed)");
+  // Order must not decide the outcome — swap the two rows, still fails.
+  const conflictSwapped = parseNbaGameLog(args(base([
+    ["0022300500", "2024-01-15", "DEN vs. LAL", 34, 33, 8, 6, 3],
+    ["0022300500", "2024-01-15", "DEN vs. LAL", 34, 30, 8, 6, 3],
+  ])));
+  ok(!conflictSwapped.ok && conflictSwapped.reason === "conflicting_rows", "conflict is order-independent (swap still fails)");
+}
+
+// ── Exact-duplicate GAME_ID rows are collapsed deterministically ────────────
+{
+  const exactDup = parseNbaGameLog(args(base([
+    ["0022300500", "2024-01-15", "DEN vs. LAL", 34, 30, 8, 6, 3],
+    ["0022300500", "2024-01-15", "DEN vs. LAL", 34, 30, 8, 6, 3], // byte-identical
+    ["0022300480", "2024-01-13", "DEN @ BOS", 20, 18, 5, 4, 1],
+  ])));
+  ok(exactDup.ok, "byte-identical duplicate rows parse (collapsed, not a failure)");
+  if (exactDup.ok) {
+    ok(exactDup.records.length === 2, "exact-duplicate row collapsed to a single observation (no double count)");
+    ok(exactDup.diagnostics.duplicateRowsCollapsed === 1, "collapsed-duplicate count surfaced in diagnostics");
+  }
+}
+
+// ── Blank GAME_ID rows are surfaced in diagnostics, not silently swallowed ───
+{
+  const withBlank = parseNbaGameLog(args(base([
+    ["0022300500", "2024-01-15", "DEN vs. LAL", 34, 30, 8, 6, 3],
+    ["", "2024-01-14", "DEN vs. SAC", 12, 5, 2, 1, 0], // blank game id — cannot be an observation
+  ])));
+  ok(withBlank.ok, "a blank-game-id row does not fail the whole response");
+  if (withBlank.ok) {
+    ok(withBlank.records.length === 1, "blank-game-id row dropped");
+    ok(withBlank.diagnostics.blankGameIdRows === 1, "blank-game-id drop surfaced in diagnostics (depth not silently reduced)");
+  }
 }
 
 console.log(`\nnbaGameLogAdapter.test: ${passed} passed, ${failed} failed`);

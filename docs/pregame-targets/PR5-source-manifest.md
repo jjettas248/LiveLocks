@@ -11,7 +11,9 @@ live pull is labeled `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT`.
 | --- | --- |
 | Provider | NBA Stats (`stats.nba.com`), **unofficial/undocumented** endpoints, via `server/services/nbaStatsService.ts` |
 | API versioning | NBA Stats endpoints are **unversioned**. We pin a repo-owned `sourceVersion` string per adapter (`nba_stats_gamelog_v1`) plus the captured response `headers[]` array, so a provider schema drift (added/removed/reordered columns) is detected rather than silently absorbed. |
-| Endpoints used | `playergamelog` (params `PlayerID`, `Season`, `SeasonType`), `teamgamelog` (params `TeamID`, `Season`, `SeasonType`). Team-id resolution reuses the existing league-team-stats path. |
+| **Operationally ingested by PR5** | **`playergamelog` ONLY.** The ingestion job + runner fetch and persist player game logs. `teamgamelog` received **season-plumbing support only** (an optional `season` param on `getTeamGameLogs`, for a future scoped consumer) — there is **no** team ingestion job in PR5 and no team snapshot is written. Team feature ingestion is deliberately out of scope pending explicit approval. |
+| Raw capture path | The runner ingests the **verbatim** provider JSON via `fetchRawNbaPlayerGameLog` (`server/services/nbaStatsService.ts`) — NOT the presentation `getPlayerGameLogs()`/`PlayerGameLogRow` path, which drops response metadata and coerces missing `MIN`/`PTS` to `0`. So the immutable snapshot IS the provider payload, and the adapter sees real schema drift (missing/duplicate headers) and genuine missing values (`null`, not a fabricated `0`). The captured `headers[]` therefore reflect the true provider schema. |
+| Request == identity | A pull requests the **exact** `Season` label and `SeasonType` it stores under; `SeasonType` is restricted to `Regular Season`/`Playoffs` and forwarded verbatim, so regular-season rows can never be stored under a Playoffs identity (or vice-versa). |
 | Response shape | `resultSets[0]` with `headers: string[]` + `rowSet: any[][]`; one row per game, most-recent-first. |
 
 ## 2. Timestamp semantics available from each source (the honesty gate)
@@ -53,15 +55,20 @@ requires a live pull to measure and is therefore pending:
 | Source | Current season | Prior-1 | Prior-2 | Historical `knownAt` |
 | --- | --- | --- | --- | --- |
 | `playergamelog` | `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT` | `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT` | `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT` | **unsupported** (source exposes no publish instant) |
-| `teamgamelog` | `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT` | `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT` | `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT` | **unsupported** (source exposes no publish instant) |
+| `teamgamelog` | **NOT INGESTED BY PR5** (season-plumbing only; no team ingestion job) | — | — | n/a — not ingested |
 
 No measured three-season coverage matrix is fabricated. Live historical ingestion is
 **not** performed in this sandbox; the fixture set + this manifest are the in-repo gate.
 
 ## 6. Representative fixtures (committed)
 
-Eight representative raw fixtures + expected normalized outputs live in
+**Thirteen** representative **synthetic** raw fixtures (`cases.json` carries
+`"synthetic": true`) + expected normalized outputs live in
 `server/pregameTargets/ingestion/__fixtures__/`, covering: current season, each prior
 season, a traded player, a team change, a missing game, an observed zero, a corrected
-source record, and a provider failure / incomplete response. See that directory's
-`README.md` for the case ledger and the honesty classification of each.
+source record, a provider failure / incomplete response, reordered headers, a missing
+required header, a duplicate required header, and identical content in two different
+games (no identity collision). They are hand-authored to be structurally faithful to
+the endpoint shape — **not** captured live payloads (no NBA Stats access in this
+sandbox). See that directory's `README.md` for the case ledger and the honesty
+classification of each.
