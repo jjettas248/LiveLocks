@@ -78,6 +78,9 @@ import {
   mlbLanePredictions,
   type MlbLanePredictionRow,
   type InsertMlbLanePrediction,
+  mlbCalibrationArtifacts,
+  type MlbCalibrationArtifactRow,
+  type InsertMlbCalibrationArtifact,
   type MlbRecommendationEpisodeRow,
   type InsertMlbRecommendationEpisode,
   moundV2ShadowPredictions,
@@ -571,6 +574,12 @@ export interface IStorage {
   voidMlbLanePrediction(predictionId: string, voidReason: MlbLedgerVoidReason, settledAt: Date): Promise<MlbLanePrediction | null>;
   /** Recent captured predictions (any status), newest-first, for the admin read surface. */
   listRecentMlbLanePredictions(opts?: { capturedAfterMs?: number; limit?: number }): Promise<MlbLanePrediction[]>;
+
+  // ── MLB Live Edge Stage C — offline calibration artifacts (research-only) ───
+  /** Append-only save of fitted artifacts. Duplicate artifactId is a no-op. Returns inserted count. Producing a row NEVER promotes it. */
+  saveMlbCalibrationArtifacts(rows: InsertMlbCalibrationArtifact[]): Promise<number>;
+  /** Artifacts newest-first (optionally one segment) for the admin read surface. */
+  listMlbCalibrationArtifacts(opts?: { segment?: string; limit?: number }): Promise<MlbCalibrationArtifactRow[]>;
 
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
   // Immutable raw source snapshots and append-only as-of feature readings; no
@@ -4485,6 +4494,34 @@ export class DatabaseStorage implements IStorage {
           .orderBy(desc(mlbLanePredictions.capturedAt))
           .limit(limit);
     return rows.map(mlbLanePredictionRowToDomain);
+  }
+
+  // ── MLB Live Edge Stage C — offline calibration artifacts (research-only) ───
+  async saveMlbCalibrationArtifacts(rows: InsertMlbCalibrationArtifact[]): Promise<number> {
+    if (rows.length === 0) return 0;
+    // Append-only: a duplicate artifactId (same segment + built-at retried) is a
+    // no-op, never an overwrite.
+    const inserted = await db
+      .insert(mlbCalibrationArtifacts)
+      .values(rows)
+      .onConflictDoNothing({ target: mlbCalibrationArtifacts.artifactId })
+      .returning({ id: mlbCalibrationArtifacts.artifactId });
+    return inserted.length;
+  }
+
+  async listMlbCalibrationArtifacts(
+    opts: { segment?: string; limit?: number } = {},
+  ): Promise<MlbCalibrationArtifactRow[]> {
+    const limit = opts.limit ?? 500;
+    if (opts.segment) {
+      return db.select().from(mlbCalibrationArtifacts)
+        .where(eq(mlbCalibrationArtifacts.segment, opts.segment))
+        .orderBy(desc(mlbCalibrationArtifacts.builtAt))
+        .limit(limit);
+    }
+    return db.select().from(mlbCalibrationArtifacts)
+      .orderBy(desc(mlbCalibrationArtifacts.builtAt))
+      .limit(limit);
   }
 
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──

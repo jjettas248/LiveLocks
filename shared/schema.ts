@@ -1891,6 +1891,47 @@ export type MlbLanePredictionRow = typeof mlbLanePredictions.$inferSelect;
 export type InsertMlbLanePrediction = z.infer<typeof insertMlbLanePredictionSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// MLB Live Edge Stage C — offline calibration artifacts (research-only).
+// APPEND-ONLY history of fitted raw→calibrated mappings (one row per segment per
+// fit run). See shared/mlbCalibration.ts for the artifact contract. Producing a
+// row NEVER promotes it — nothing in the live engine reads these until an
+// explicit, human-reviewed promotion step exists. `artifact` holds the full
+// MlbCalibrationArtifact (bins + fitStats); the flattened columns are for
+// admin queries. `artifact_id` = `${segment}:${builtAtMs}` (PK); a re-insert is
+// a no-op (onConflictDoNothing).
+// ─────────────────────────────────────────────────────────────────────────────
+export const mlbCalibrationArtifacts = pgTable("mlb_calibration_artifacts", {
+  artifactId: text("artifact_id").primaryKey(),
+  segment: text("segment").notNull(),
+  method: text("method").notNull(),
+  builtAt: timestamp("built_at").notNull(),
+  sampleSize: integer("sample_size").notNull(),
+  distinctSlateDates: integer("distinct_slate_dates").notNull(),
+  rawBrier: numeric("raw_brier"),
+  calibratedBrier: numeric("calibrated_brier"),
+  rawEcePct: numeric("raw_ece_pct"),
+  calibratedEcePct: numeric("calibrated_ece_pct"),
+  basePositiveRate: numeric("base_positive_rate"),
+  // In-sample promotion-gate result at fit time (always fail-closed here since
+  // held-out evidence is absent). Informational for admins; NEVER auto-promotes.
+  promotionReady: boolean("promotion_ready").notNull().default(false),
+  promotionReasons: jsonb("promotion_reasons"),
+  // The full MlbCalibrationArtifact (bins + fitStats).
+  artifact: jsonb("artifact").notNull(),
+  ledgerContractVersion: text("ledger_contract_version").notNull(),
+  artifactVersion: text("artifact_version").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) => ({
+  segmentIdx: index("mlb_calibration_artifacts_segment_idx").on(table.segment),
+  builtAtIdx: index("mlb_calibration_artifacts_built_at_idx").on(table.builtAt),
+  segmentBuiltAtIdx: index("mlb_calibration_artifacts_segment_built_at_idx").on(table.segment, table.builtAt),
+}));
+
+export const insertMlbCalibrationArtifactSchema = createInsertSchema(mlbCalibrationArtifacts).omit({ createdAt: true });
+export type MlbCalibrationArtifactRow = typeof mlbCalibrationArtifacts.$inferSelect;
+export type InsertMlbCalibrationArtifact = z.infer<typeof insertMlbCalibrationArtifactSchema>;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Mound Radar V2 (Flagship Program Phase 2) — shadow prediction capture.
 // One row per (snapshotId, market) — a pitcher's frozen shadow snapshot
 // produces TWO rows (pitcher_strikeouts, pitcher_outs), never one blended

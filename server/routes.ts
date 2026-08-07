@@ -356,6 +356,42 @@ export async function registerRoutes(
     }
   });
 
+  // ── MLB Live Edge Stage C — calibration artifacts (research, offline) ──────
+  // Read-only: latest fitted raw→calibrated artifact per segment (or history for
+  // one `?segment=`), with fit stats + in-sample promotion-readiness reasons.
+  // Nothing here promotes a calibrator — production stays calibratedProbability
+  // = null until a separate, human-reviewed promotion step exists.
+  app.get("/api/admin/mlb/calibration-artifacts", requireAdmin, async (req, res) => {
+    try {
+      const { latestArtifactPerSegment } = await import("./mlb/stageC/calibrationRunner");
+      const segment = typeof req.query.segment === "string" ? req.query.segment : undefined;
+      const limit = req.query.limit ? Math.min(2000, Math.max(1, Number(req.query.limit) || 500)) : 500;
+      const rows = await storage.listMlbCalibrationArtifacts({ segment, limit });
+      // For a single segment, return its history; otherwise the latest per segment.
+      const selected = segment ? rows : latestArtifactPerSegment(rows);
+      const artifacts = selected.map((r) => ({
+        artifactId: r.artifactId,
+        segment: r.segment,
+        method: r.method,
+        builtAt: r.builtAt,
+        sampleSize: r.sampleSize,
+        distinctSlateDates: r.distinctSlateDates,
+        rawBrier: r.rawBrier != null ? Number(r.rawBrier) : null,
+        calibratedBrier: r.calibratedBrier != null ? Number(r.calibratedBrier) : null,
+        rawEcePct: r.rawEcePct != null ? Number(r.rawEcePct) : null,
+        calibratedEcePct: r.calibratedEcePct != null ? Number(r.calibratedEcePct) : null,
+        basePositiveRate: r.basePositiveRate != null ? Number(r.basePositiveRate) : null,
+        promotionReady: r.promotionReady,
+        promotionReasons: r.promotionReasons ?? [],
+        artifactVersion: r.artifactVersion,
+      }));
+      return res.json({ count: artifacts.length, segment: segment ?? null, artifacts });
+    } catch (err) {
+      console.error("[admin/mlb/calibration-artifacts]", err);
+      return res.status(500).json({ error: "Failed to list calibration artifacts" });
+    }
+  });
+
   // ── LiveLocks Batch C — LiveSignalBus runtime metrics (constraint 14) ──
   // Read-only admin surface exposing registration / dedupe / freshness /
   // legacy-consumer counts and propagation timing percentiles. Used to
