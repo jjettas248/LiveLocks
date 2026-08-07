@@ -580,6 +580,10 @@ export interface IStorage {
   saveMlbCalibrationArtifacts(rows: InsertMlbCalibrationArtifact[]): Promise<number>;
   /** Artifacts newest-first (optionally one segment) for the admin read surface. */
   listMlbCalibrationArtifacts(opts?: { segment?: string; limit?: number }): Promise<MlbCalibrationArtifactRow[]>;
+  /** The newest artifact for EACH segment (DISTINCT ON), regardless of overall volume — the admin "latest per segment" view. */
+  listLatestMlbCalibrationArtifactPerSegment(): Promise<MlbCalibrationArtifactRow[]>;
+  /** Settled decided (cashed/missed only) predictions in the window — the exact fit input for the Stage C runner (far smaller than all captures). */
+  listSettledMlbLanePredictionsForCalibration(opts?: { capturedAfterMs?: number; limit?: number }): Promise<MlbLanePrediction[]>;
 
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──
   // Immutable raw source snapshots and append-only as-of feature readings; no
@@ -4522,6 +4526,36 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(mlbCalibrationArtifacts)
       .orderBy(desc(mlbCalibrationArtifacts.builtAt))
       .limit(limit);
+  }
+
+  async listLatestMlbCalibrationArtifactPerSegment(): Promise<MlbCalibrationArtifactRow[]> {
+    // DISTINCT ON (segment) with segment-then-newest ordering returns exactly the
+    // most-recent artifact per segment regardless of total row volume — never
+    // truncated by a global limit window.
+    return db
+      .selectDistinctOn([mlbCalibrationArtifacts.segment])
+      .from(mlbCalibrationArtifacts)
+      .orderBy(mlbCalibrationArtifacts.segment, desc(mlbCalibrationArtifacts.builtAt));
+  }
+
+  async listSettledMlbLanePredictionsForCalibration(
+    opts: { capturedAfterMs?: number; limit?: number } = {},
+  ): Promise<MlbLanePrediction[]> {
+    const limit = opts.limit ?? 20000;
+    const conditions = [
+      eq(mlbLanePredictions.status, "settled"),
+      inArray(mlbLanePredictions.settlementResult, ["cashed", "missed"]),
+    ];
+    if (opts.capturedAfterMs != null) {
+      conditions.push(gte(mlbLanePredictions.capturedAt, new Date(opts.capturedAfterMs)));
+    }
+    const rows = await db
+      .select()
+      .from(mlbLanePredictions)
+      .where(and(...conditions))
+      .orderBy(desc(mlbLanePredictions.capturedAt))
+      .limit(limit);
+    return rows.map(mlbLanePredictionRowToDomain);
   }
 
   // ── Pregame Targets temporal foundation (PR1) — additive, INSERT-first ──

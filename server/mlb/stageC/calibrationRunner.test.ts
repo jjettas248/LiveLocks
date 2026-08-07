@@ -98,13 +98,28 @@ function makeLedger(): MlbLanePrediction[] {
 // window bound is applied to the ledger read
 {
   let capturedAfter = -1;
+  let limitSeen = -1;
   const deps: CalibrationRunnerDeps = {
-    listLedgerRows: async (o) => { capturedAfter = o.capturedAfterMs; return []; },
+    listLedgerRows: async (o) => { capturedAfter = o.capturedAfterMs; limitSeen = o.limit; return []; },
     saveArtifacts: async (r) => r.length,
     now: () => NOW,
   };
-  await runCalibrationFit(deps, { windowDays: 30, maxRows: 100, bins: 10, pseudoCount: 20, segmentByLane: false });
+  const s = await runCalibrationFit(deps, { windowDays: 30, maxRows: 100, bins: 10, pseudoCount: 20, segmentByLane: false });
   ok(capturedAfter === NOW - 30 * 24 * 3600 * 1000, "reads ledger with the policy window bound");
+  ok(limitSeen === 100, "passes maxRows as the read limit");
+  ok(s.truncated === false, "empty read ⇒ not truncated");
+}
+
+// Truncation is reported (not silent) when the read hits maxRows
+{
+  const rows = makeLedger().slice(0, 2); // exactly maxRows=2
+  const deps: CalibrationRunnerDeps = {
+    listLedgerRows: async () => rows,
+    saveArtifacts: async (r) => r.length,
+    now: () => NOW,
+  };
+  const s = await runCalibrationFit(deps, { windowDays: 120, maxRows: 2, bins: 10, pseudoCount: 20, segmentByLane: false });
+  ok(s.truncated === true, "rows.length >= maxRows ⇒ summary.truncated true (window truncation surfaced)");
 }
 
 // artifactToInsertRow — numeric→string, jsonb passthrough, id format

@@ -42,6 +42,9 @@ export interface CalibrationRunSummary {
   observationsScanned: number;
   segments: number;
   artifactsSaved: number;
+  // True when the read hit the maxRows cap — the effective window was shorter
+  // than windowDays; logged (not silent) so it can be tuned.
+  truncated: boolean;
   error: boolean;
 }
 
@@ -88,6 +91,12 @@ export async function runCalibrationFit(
     const now = deps.now();
     const capturedAfterMs = now - policy.windowDays * 24 * 60 * 60 * 1000;
     const rows = await deps.listLedgerRows({ capturedAfterMs, limit: policy.maxRows });
+    const truncated = rows.length >= policy.maxRows;
+    if (truncated) {
+      console.warn(
+        `[MLB_STAGE_C_CALIBRATION] window truncated at maxRows=${policy.maxRows} (windowDays=${policy.windowDays}) — effective window is shorter than configured; raise maxRows or narrow windowDays`,
+      );
+    }
 
     const segmentKey = policy.segmentByLane
       ? (p: MlbLanePrediction) => `${p.market}:${p.lane}`
@@ -111,12 +120,12 @@ export async function runCalibrationFit(
 
     const saved = insertRows.length > 0 ? await deps.saveArtifacts(insertRows) : 0;
     console.log(
-      `[MLB_STAGE_C_CALIBRATION] window=${policy.windowDays}d scanned=${rows.length} segments=${insertRows.length} saved=${saved}`,
+      `[MLB_STAGE_C_CALIBRATION] window=${policy.windowDays}d scanned=${rows.length} truncated=${truncated} segments=${insertRows.length} saved=${saved}`,
     );
-    return { observationsScanned: rows.length, segments: insertRows.length, artifactsSaved: saved, error: false };
+    return { observationsScanned: rows.length, segments: insertRows.length, artifactsSaved: saved, truncated, error: false };
   } catch (err) {
     console.warn(`[MLB_STAGE_C_CALIBRATION_ERROR] ${(err as Error)?.message ?? err}`);
-    return { observationsScanned: 0, segments: 0, artifactsSaved: 0, error: true };
+    return { observationsScanned: 0, segments: 0, artifactsSaved: 0, truncated: false, error: true };
   }
 }
 
@@ -136,7 +145,9 @@ export function latestArtifactPerSegment(rows: readonly MlbCalibrationArtifactRo
 export async function defaultCalibrationRunnerDeps(): Promise<CalibrationRunnerDeps> {
   const { storage } = await import("../../storage");
   return {
-    listLedgerRows: (opts) => storage.listRecentMlbLanePredictions(opts),
+    // Settled decided (cashed/missed) rows only — the exact fit input, far
+    // smaller than all captures, so the maxRows cap rarely truncates the window.
+    listLedgerRows: (opts) => storage.listSettledMlbLanePredictionsForCalibration(opts),
     saveArtifacts: (rows) => storage.saveMlbCalibrationArtifacts(rows),
     now: () => Date.now(),
   };

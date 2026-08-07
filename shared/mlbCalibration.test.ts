@@ -4,6 +4,7 @@
 
 import {
   applyCalibrator,
+  isWithinCalibratorSupport,
   clamp01,
   MLB_CALIBRATION_ARTIFACT_VERSION,
   type MlbCalibrationArtifact,
@@ -87,6 +88,17 @@ function artifact(bins: Array<Pick<MlbCalibrationBin, "center" | "calibratedRate
     if (!(v >= 0 && v <= 100)) { ok(false, `output in range for x=${x} (got ${v})`); break; }
   }
   ok(true, "output clamped within [0,100] across out-of-range inputs");
+}
+
+// isWithinCalibratorSupport — fitted-support range guard (for PR3c application)
+{
+  const a = artifact([{ center: 0.2, calibratedRate: 0.1 }, { center: 0.5, calibratedRate: 0.5 }, { center: 0.8, calibratedRate: 0.9 }]);
+  ok(isWithinCalibratorSupport(a, 20) && isWithinCalibratorSupport(a, 50) && isWithinCalibratorSupport(a, 80), "in-support at bin centers");
+  ok(isWithinCalibratorSupport(a, 35) && isWithinCalibratorSupport(a, 65), "in-support between centers");
+  ok(!isWithinCalibratorSupport(a, 10), "below lowest center ⇒ out of support");
+  ok(!isWithinCalibratorSupport(a, 95), "above highest center ⇒ out of support");
+  ok(!isWithinCalibratorSupport(a, NaN), "non-finite ⇒ out of support (fail-closed)");
+  ok(!isWithinCalibratorSupport(artifact([]), 50), "no bins ⇒ out of support");
 }
 
 console.log(`\nmlbCalibration.test.ts — ${passed} passed, ${failed} failed`);

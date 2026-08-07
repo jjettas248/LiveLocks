@@ -363,12 +363,13 @@ export async function registerRoutes(
   // = null until a separate, human-reviewed promotion step exists.
   app.get("/api/admin/mlb/calibration-artifacts", requireAdmin, async (req, res) => {
     try {
-      const { latestArtifactPerSegment } = await import("./mlb/stageC/calibrationRunner");
       const segment = typeof req.query.segment === "string" ? req.query.segment : undefined;
       const limit = req.query.limit ? Math.min(2000, Math.max(1, Number(req.query.limit) || 500)) : 500;
-      const rows = await storage.listMlbCalibrationArtifacts({ segment, limit });
-      // For a single segment, return its history; otherwise the latest per segment.
-      const selected = segment ? rows : latestArtifactPerSegment(rows);
+      // Single segment ⇒ its history (newest-first). No segment ⇒ the newest
+      // artifact per segment via DISTINCT ON — never dropped by a global limit.
+      const selected = segment
+        ? await storage.listMlbCalibrationArtifacts({ segment, limit })
+        : await storage.listLatestMlbCalibrationArtifactPerSegment();
       const artifacts = selected.map((r) => ({
         artifactId: r.artifactId,
         segment: r.segment,

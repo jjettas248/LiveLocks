@@ -121,3 +121,26 @@ export function applyCalibrator(artifact: MlbCalibrationArtifact, rawProbPct: nu
 function round2(x: number): number {
   return Math.round(x * 100) / 100;
 }
+
+/**
+ * True when `rawProbPct` falls within the artifact's FITTED support — i.e.
+ * between the lowest and highest bin centers. Outside that range applyCalibrator
+ * flat-extrapolates (monotonic but distorted for the most confident inputs), so
+ * a future promotion's application layer should treat out-of-support inputs as
+ * uncalibrated (calibratedProbability = null) rather than ship an extrapolated
+ * value. Fail-closed: no bins / non-finite input ⇒ false (not in support).
+ */
+export function isWithinCalibratorSupport(artifact: MlbCalibrationArtifact, rawProbPct: number): boolean {
+  const bins = artifact.bins;
+  if (!bins || bins.length === 0) return false;
+  if (!Number.isFinite(rawProbPct)) return false;
+  const x = clamp01(rawProbPct / 100);
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const b of bins) {
+    const c = clamp01(b.center);
+    if (c < lo) lo = c;
+    if (c > hi) hi = c;
+  }
+  return x >= lo && x <= hi;
+}
