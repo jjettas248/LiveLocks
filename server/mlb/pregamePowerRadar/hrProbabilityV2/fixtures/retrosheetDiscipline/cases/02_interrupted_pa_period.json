@@ -1,31 +1,50 @@
 {
   "case": "02_interrupted_pa_period",
-  "fixtureOrigin": "synthetic",
+  "fixtureOrigin": "real_retrosheet_chadwick_v0_10_0",
   "purpose": "contract_and_normalization_specification",
-  "notValidatedAgainstRealRetrosheetOutput": true,
-  "description": "A single plate appearance that spans TWO play records because a stolen base occurred mid-AB. The continuation record's PITCH_SEQ_TX begins with the Retrosheet period '.' denoting pitches already recorded. Must reassemble to ONE PA with pitches B,B,C,X — never double-count, never treat as malformed.",
+  "notValidatedAgainstRealRetrosheetOutput": false,
+  "validatedAgainstProof": {
+    "runbook": "docs/plate/pr7a0ToolchainProofRunbook.md",
+    "proofBundle": "docs/plate/pr7a0-proof/",
+    "cweventOutputFile": "docs/plate/pr7a0-proof/cwevent_output/ANA201904040.csv",
+    "cweventOutputSha256": "ea825b16d71c39d1c87ddef1c507e1c99795d94fbb25bb679d662a374cfe1de2",
+    "eventFile": "2019ANA.EVA",
+    "eventFileSha256": "ca8cc579c8550942527b320519e6317ed719654cebac5e32827aca9bba126628",
+    "parser": "Chadwick cwevent 0.10.0 (8f7e0ecd8984cd752e6aca5deba81b86fb369602)",
+    "githubActionsRun": "31135930818"
+  },
+  "description": "A plate appearance interrupted by a mid-AB baserunning event. In ACTUAL Chadwick cwevent OUTPUT the completed PA surfaces as ONE BAT_EVENT_FL=T row whose PITCH_SEQ_TX carries the FULL CUMULATIVE pitch sequence with the Retrosheet '.' interruption marker preserved verbatim; the interrupting event is a separate BAT_EVENT_FL=F row and is NEVER a second PA. Normalization strips the '.' marker in a single pass (it never concatenates fragments from separate records). Real example: batter forsl001 vs pitcher bardl001, ANA201904040, top of the 5th, PITCH_SEQ_TX '.BBCX' -> single (a runner had reached on the prior walk; the baserunning play created the record boundary the leading '.' marks).",
   "raw": {
-    "records": [
-      "id,SLN201905010",
-      "info,site,STL10",
-      "info,date,2019/05/01",
-      "start,markn001,\"Nicholas Markakis\",0,3,9",
-      "play,4,0,markn001,20,BB,SB2",
-      "play,4,0,markn001,21,.CX,S8"
-    ]
+    "sourceFormat": "chadwick_cwevent_output_row",
+    "note": "Fields are the exact cwevent output columns emitted under the frozen argument set (docs/plate/pr7a0-proof/PARSER_IDENTITY.txt). cwevent passes PITCH_SEQ_TX verbatim and does NOT strip the '.'. The interrupting baserunning event is emitted separately as a BAT_EVENT_FL=F row (it carries no pitches for this PA and creates no second plate appearance); there is nothing to concatenate.",
+    "terminalBatterEventRecord": {
+      "GAME_ID": "ANA201904040",
+      "INN_CT": 5,
+      "BAT_HOME_ID": 0,
+      "BAT_ID": "forsl001",
+      "RESP_BAT_ID": "forsl001",
+      "PIT_ID": "bardl001",
+      "PITCH_SEQ_TX": ".BBCX",
+      "EVENT_TX": "S7/L7S+.2-3;1-2",
+      "EVENT_CD": 20,
+      "BAT_EVENT_FL": "T",
+      "BALLS_CT": 2,
+      "STRIKES_CT": 1
+    }
   },
   "expected": {
-    "gameId": "SLN201905010",
-    "batterId": "markn001",
+    "gameId": "ANA201904040",
+    "batterId": "forsl001",
     "reassembly": {
-      "recordCount": 2,
+      "terminalRecordCount": 1,
       "interruptionMarker": ".",
-      "interruptingPlay": "SB2",
-      "note": "SB2 is a baserunning event within the AB — it must NOT create a second PA. The '.' on the continuation marks already-recorded pitches [B,B]; only [C,X] are new."
+      "markerStrippedExactlyOnce": true,
+      "concatenatedFragments": false,
+      "note": "The single BAT_EVENT_FL=T row already carries the full cumulative sequence '.BBCX'. Normalization removes the '.' interruption marker (a non-pitch marker) in one pass -> [B,B,C,X]. There is NO second record to concatenate; the interrupting baserunning event is a distinct BAT_EVENT_FL=F row that adds no pitches and no PA."
     },
     "plateAppearances": [
       {
-        "seq": "BB.CX", "reassembledPitches": ["B","B","C","X"], "count": {"balls": 2, "strikes": 1},
+        "seq": ".BBCX", "reassembledPitches": ["B", "B", "C", "X"], "count": {"balls": 2, "strikes": 1},
         "balls": 2, "calledStrikes": 1, "swingingStrikes": 0, "fouls": 0, "inPlay": 1, "takenPitches": 3, "swings": 1,
         "firstPitchStrike": false, "reachedTwoStrikes": false, "struckOut": false, "twoStrikeSurvived": null,
         "eventCd": 20, "outcome": "single", "sequenceComplete": true, "doubleCounted": false
