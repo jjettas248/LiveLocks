@@ -2,7 +2,7 @@
 // Pregame Targets PR5 — raw-snapshot identity: deterministic content hash +
 // snapshotId, identical content → same id (idempotent), correction → new id +
 // supersession classification.
-import { canonicalJson, computeContentHash, computeSnapshotId, buildRawSnapshotIdentity, classifySupersession } from "./rawSnapshotIdentity";
+import { canonicalJson, computeContentHash, computeSnapshotId, buildRawSnapshotIdentity, buildCaptureSnapshotIdentity, classifySupersession } from "./rawSnapshotIdentity";
 import { buildNbaGameLogSourceKey } from "./nbaSourceContracts";
 
 let passed = 0, failed = 0;
@@ -69,6 +69,21 @@ const payloadB = { resultSets: [{ headers: ["GAME_ID", "PTS"], rowSet: [["1", 21
   const gameX = { resultSets: [{ headers: ["GAME_ID", "PTS"], rowSet: [["GAME_X", 20]] }] };
   const gameY = { resultSets: [{ headers: ["GAME_ID", "PTS"], rowSet: [["GAME_Y", 20]] }] };
   ok(computeContentHash(gameX) !== computeContentHash(gameY), "two games with identical stats but different GAME_ID → different content hash (no collision)");
+}
+
+// ── CAPTURE identity (audit-4): observation identity is NOT content identity ─
+{
+  const semanticKey = buildNbaGameLogSourceKey({ sourceKind: "nba_stats_playergamelog", entityCanonicalId: "nba:player:1", season: 2026, seasonType: "Regular Season" });
+  const capA1 = buildCaptureSnapshotIdentity({ sourceKind: "nba_stats_playergamelog", semanticSourceKey: semanticKey, observationInstant: "2026-01-01T00:00:00Z", payload: payloadA });
+  const capA2 = buildCaptureSnapshotIdentity({ sourceKind: "nba_stats_playergamelog", semanticSourceKey: semanticKey, observationInstant: "2026-01-03T00:00:00Z", payload: payloadA }); // SAME bytes, later instant
+  ok(capA1.contentHash === capA2.contentHash, "same payload → same contentHash (pure payload hash, uncontaminated)");
+  ok(capA1.snapshotId !== capA2.snapshotId, "same content at different instants → DIFFERENT capture ids (A→B→A recurrence works)");
+  ok(capA1.semanticSourceKey === capA2.semanticSourceKey, "semantic source key is stable across observations");
+  ok(capA1.captureKey.includes("|obs=2026-01-01T00:00:00Z") && capA2.captureKey.includes("|obs=2026-01-03T00:00:00Z"), "capture key binds semantic key to the observation instant");
+  // contentHash is a function of the payload ONLY — not the instant or predecessor.
+  ok(capA1.contentHash === computeContentHash(payloadA), "contentHash equals the pure canonical payload hash");
+  const capB = buildCaptureSnapshotIdentity({ sourceKind: "nba_stats_playergamelog", semanticSourceKey: semanticKey, observationInstant: "2026-01-02T00:00:00Z", payload: payloadB });
+  ok(capB.contentHash !== capA1.contentHash && capB.snapshotId !== capA1.snapshotId, "different payload → different content + capture id");
 }
 
 console.log(`\nrawSnapshotIdentity.test: ${passed} passed, ${failed} failed`);

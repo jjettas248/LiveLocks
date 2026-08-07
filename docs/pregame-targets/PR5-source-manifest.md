@@ -38,26 +38,44 @@ published / finalized / last-updated timestamp**. This governs the `knownAt` con
 
 **Consequence, stated plainly:** with only `playergamelog`/`teamgamelog`, honest *historical* as-of replay of prior-season box-score features is **not source-supported**; those rows are ingested (raw snapshot + source-effective/fetched/ingested preserved) but marked `unsupported` for historical `knownAt`. A leakage-safe historical backfill would require a source that publishes a per-record finalize/publish instant — a provider-selection question flagged here, not silently resolved.
 
-### Persisted audit metadata + correction lineage
+### Three identities: semantic vs. capture vs. content (audit-4)
 
-The timestamp policy and correction lineage are **durable columns** on
-`pregame_raw_source_snapshots` (additive `ADD COLUMN IF NOT EXISTS` self-heal,
-`server/dbMigrations/pregameTargetsRawProvenancePersistence.ts`), not transient
+Content identity is **not** observation identity. Three distinct notions are kept
+separate so a valid `A → B → A` state sequence (a return to earlier content) is honestly
+recorded instead of collapsing the third observation onto the first:
+
+1. **Semantic source identity** (`semantic_source_key`, additive column) — stable across
+   **every** observation of the same request identity (sport | provider | kind | canonical
+   entity | season | seasonType | sourceVersion; = `buildNbaGameLogSourceKey`'s output).
+   Drives head/lineage selection.
+2. **Capture / observation identity** (`source_key`, now capture-specific = semantic key +
+   the honest post-decode observation instant; `snapshot_id = hash(sourceKind | captureKey
+   | contentHash)`) — **distinct per accepted observation**, so two observations of the
+   same bytes at different instants are different captures.
+3. **Payload content identity** (`content_hash`) — the canonical payload hash, and only
+   that. Never contaminated with timestamps, predecessors, or chain identity.
+
+### Persisted audit metadata + observation chain
+
+Durable columns on `pregame_raw_source_snapshots` (additive `ADD COLUMN IF NOT EXISTS`
+self-heal, `server/dbMigrations/pregameTargetsRawProvenancePersistence.ts`), not transient
 TypeScript fields:
 
-- `source_published_at` — nullable; **NULL is the explicit, durable "provider exposes
-  no publish instant"** (never fabricated).
+- `source_published_at` — nullable; **NULL is the explicit, durable "provider exposes no
+  publish instant"** (never fabricated).
 - `known_at_policy_version` — the rule that produced `knownAt`.
 - `created_at` — the immutable ingestion instant (`ingestedAt`).
-- `supersedes_snapshot_id` — the immediately-prior immutable snapshot for the **same
-  semantic source identity** (`source_kind` + `source_key`) that a correction supersedes;
-  NULL for a first capture. It is resolved by storage **under the same transaction and
-  per-entity advisory lock** as the immutable insert and the posterior fold — never
-  chosen by the caller, never computed outside the transaction. Prior snapshots are never
-  updated/deleted/repointed, so corrections form a deterministic chain (A←B←C), and two
-  concurrent corrections serialize into one linear chain (no fork). Feature rows retain
-  `source_id`, so a reading's timestamp policy and correction lineage resolve through the
-  raw snapshot join.
+- `supersedes_snapshot_id` — the prior capture in the observation chain for the **stable
+  `semantic_source_key`**. Selection happens **inside the ingest transaction, under the
+  per-entity advisory lock**, against the current **head ordered by `known_at`
+  (observation chronology) — never `created_at`/lock order**. Decision vs. head:
+  first capture → `supersedes` null; payload equal to head → true no-op (write nothing);
+  a later differing observation → append (`supersedes` = head), **including a return to
+  earlier content (A→B→A)**; an older `known_at` than head → fail closed `stale_observation`
+  (write nothing, no false chronology); the same `known_at` with a different payload → fail
+  closed conflict (no fabricated tiebreak, no `created_at` ordering). Prior captures are
+  never updated/deleted/repointed. Feature rows retain `source_id`, so a reading's timestamp
+  policy and observation lineage resolve through the capture snapshot join.
 
 ## 3. Licensing & production-use assumptions
 

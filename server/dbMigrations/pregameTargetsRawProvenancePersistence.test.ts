@@ -25,6 +25,7 @@ const ALL_SQL = STMTS.join("\n").toUpperCase();
     ["source_published_at", "TIMESTAMPTZ"],
     ["known_at_policy_version", "TEXT"],
     ["supersedes_snapshot_id", "TEXT"],
+    ["semantic_source_key", "TEXT"], // audit-4: stable identity distinct from capture source_key
   ];
   for (const [col, type] of required) {
     ok(new RegExp(`ADD COLUMN IF NOT EXISTS ${col.toUpperCase()} ${type}\\b`).test(ALL_SQL), `adds ${col} ${type}`);
@@ -32,10 +33,12 @@ const ALL_SQL = STMTS.join("\n").toUpperCase();
   ok(/ALTER TABLE PREGAME_RAW_SOURCE_SNAPSHOTS/.test(ALL_SQL), "targets pregame_raw_source_snapshots only");
 }
 
-// ── Partial supersedes index for chain traversal ────────────────────────────
+// ── Partial supersedes index + semantic-head index ──────────────────────────
 {
   ok(/CREATE INDEX IF NOT EXISTS PREGAME_RAW_SOURCE_SNAPSHOTS_SUPERSEDES_IDX/.test(ALL_SQL), "creates the supersedes index (IF NOT EXISTS)");
   ok(/WHERE SUPERSEDES_SNAPSHOT_ID IS NOT NULL/.test(ALL_SQL), "supersedes index is partial (non-null predecessors only)");
+  ok(/CREATE INDEX IF NOT EXISTS PREGAME_RAW_SOURCE_SNAPSHOTS_SEMANTIC_HEAD_IDX/.test(ALL_SQL), "creates the semantic-head index (IF NOT EXISTS)");
+  ok(/\(SEMANTIC_SOURCE_KEY, KNOWN_AT\)/.test(ALL_SQL), "semantic-head index is (semantic_source_key, known_at) for head selection");
 }
 
 // ── Additive only: every ALTER is ADD COLUMN IF NOT EXISTS; NO destructive SQL ─

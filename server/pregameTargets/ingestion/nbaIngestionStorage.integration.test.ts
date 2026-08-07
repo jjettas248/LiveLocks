@@ -1,15 +1,16 @@
-// NBA ingestion storage — REAL database invariants (Pregame Targets PR5).
-// Exercises storage.ts's ACTUAL ingestPregameNbaSnapshotAtomic transaction against
-// a live Postgres connection — no monkey-patching. Proves what the mock-port unit
-// test cannot: genuine all-or-nothing rollback, content-identity idempotency, and
-// that two concurrent same-player season ingests do NOT lose a posterior update
-// (the per-entity advisory lock + in-transaction read/fold/write).
+// NBA ingestion storage — REAL database invariants (Pregame Targets PR5, audit-4).
+// Exercises storage.ts's ACTUAL ingestPregameNbaSnapshotAtomic transaction against a
+// live Postgres connection — no monkey-patching. Proves what the mock-port unit test
+// cannot: genuine all-or-nothing rollback; head selection by OBSERVATION chronology
+// (known_at), not insertion order; A→B→A recurrence as distinct captures; consecutive
+// identical content as a no-op; out-of-order arrival failing closed without inverting
+// the chain; the semantic key surviving a round trip; and feature source_id resolving
+// to the exact capture.
 //
 // Run: DATABASE_URL=postgresql://... npx tsx server/pregameTargets/ingestion/nbaIngestionStorage.integration.test.ts
 //
-// CLASSIFICATION: when DATABASE_URL is absent this suite is EXCLUDED_ENV (it prints
-// that token and exits 0) — it is NOT a silent pass and NOT a failure. Point it at a
-// disposable database (never production) with the PR1 foundation schema present.
+// CLASSIFICATION: without DATABASE_URL this suite is EXCLUDED_ENV (prints that token,
+// exits 0) — not a silent pass, not a failure. Point it at a disposable database.
 
 import type { GameLogFetcher } from "./nbaIngestionJob"; // type-only (erased) — no runtime DB import
 
@@ -18,11 +19,10 @@ function ok(c: boolean, m: string) { if (c) passed++; else { failed++; console.e
 
 async function run(): Promise<void> {
   if (!process.env.DATABASE_URL) {
-    console.log("EXCLUDED_ENV: nbaIngestionStorage.integration.test — no DATABASE_URL (real-DB atomicity/concurrency not exercised here).");
+    console.log("EXCLUDED_ENV: nbaIngestionStorage.integration.test — no DATABASE_URL (real-DB atomicity/concurrency/recurrence not exercised here).");
     process.exit(0);
   }
 
-  // Deferred imports: only reached when a DB is actually configured.
   const { storage } = await import("../../storage");
   const { db, pool } = await import("../../db");
   const { pregameRawSourceSnapshots, pregameFeatureSnapshots, pregamePosteriorStates } = await import("@shared/schema");
@@ -32,125 +32,132 @@ async function run(): Promise<void> {
   const { buildStorePort } = await import("../../scripts/nbaPregameBackfill");
   const { ingestPlayerSeason } = await import("./nbaIngestionJob");
   const { buildNbaFeatureRows } = await import("./nbaFeatureBuilder");
-  const { buildRawSnapshotIdentity } = await import("./rawSnapshotIdentity");
+  const { buildCaptureSnapshotIdentity, computeContentHash } = await import("./rawSnapshotIdentity");
+  const { buildNbaGameLogSourceKey } = await import("./nbaSourceContracts");
 
   await ensurePregameTargetsFoundationSchema({ query: (s: string) => pool.query(s) } as never);
   await ensurePregameTargetsRawProvenanceColumns({ query: (s: string) => pool.query(s) } as never);
 
-  const ENTITY = "nba:player:itest_pr5_777";
-  // All test artifacts are scoped by the "itest_pr5" marker (entity id / source key)
-  // so cleanup never touches real rows even on a shared disposable database.
+  // All artifacts scoped by the "itest_pr5" marker so cleanup never touches real rows.
   const cleanup = async () => {
     await db.delete(pregameFeatureSnapshots).where(like(pregameFeatureSnapshots.entityCanonicalId, "%itest_pr5%"));
     await db.delete(pregamePosteriorStates).where(like(pregamePosteriorStates.entityCanonicalId, "%itest_pr5%"));
     await db.delete(pregameRawSourceSnapshots).where(
-      or(like(pregameRawSourceSnapshots.sourceKey, "%itest_pr5%"), eq(pregameRawSourceSnapshots.sport, "nba_itest_pr5")),
+      or(like(pregameRawSourceSnapshots.semanticSourceKey, "%itest_pr5%"), like(pregameRawSourceSnapshots.sourceKey, "%itest_pr5%"), eq(pregameRawSourceSnapshots.sport, "nba_itest_pr5")),
     );
   };
   await cleanup();
 
+  const port = buildStorePort(storage as never);
   const H = ["GAME_ID", "GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "FG3M"];
   const raw = (gid: string, date: string, pts: number) => ({ resultSets: [{ headers: H, rowSet: [[gid, date, "DEN vs. LAL", 34, pts, 8, 6, 3]] }] });
+  const fetchAt = (p: unknown, iso: string): GameLogFetcher => async () => ({ ok: true, rawPayload: p, fetchedAt: iso });
 
-  // ── (1) A failure AFTER the raw insert rolls back raw + features + posteriors ─
+  // ── (1) A failure AFTER capture prep but before commit rolls everything back ─
   {
+    const ENTITY = "nba:player:itest_pr5_rb";
+    const semanticSourceKey = buildNbaGameLogSourceKey({ sourceKind: "nba_stats_playergamelog", entityCanonicalId: ENTITY, season: 2025, seasonType: "Regular Season" });
     const payload = raw("0022400900", "2025-01-15", 30);
-    const identity = buildRawSnapshotIdentity("nba_stats_playergamelog", "itest|sk|1", payload);
-    const built = buildNbaFeatureRows({ season: 2025, playerNativeId: "itest_pr5_777", sourceId: identity.snapshotId, records: [] });
+    const obs = "2025-02-01T00:00:00.000Z";
+    const identity = buildCaptureSnapshotIdentity({ sourceKind: "nba_stats_playergamelog", semanticSourceKey, observationInstant: obs, payload });
+    const built = buildNbaFeatureRows({ season: 2025, playerNativeId: "itest_pr5_rb", sourceId: identity.snapshotId, records: [] });
     let threw = false;
     try {
       await storage.ingestPregameNbaSnapshotAtomic({
         entityCanonicalId: ENTITY,
         featureVersion: "nba_gamelog_v1",
         featureKeys: ["nba.player.points_per_min"],
-        raw: { snapshotId: identity.snapshotId, sport: "nba_itest_pr5", sourceKind: "nba_stats_playergamelog", sourceKey: "itest|sk|1", validAt: new Date("2025-01-15T00:00:00Z"), knownAt: new Date(), payload: payload as never, contentHash: identity.contentHash },
-        features: built.rows.map((r) => ({ featureRowId: `itest_${r.featureKey}`, sport: "nba", entityCanonicalId: ENTITY, entityKind: "player", featureKey: r.featureKey, featureVersion: r.featureVersion, season: 2025, validAt: new Date(r.validAt), knownAt: new Date(r.knownAt), state: r.state, value: r.value === null ? null : String(r.value), sourceId: identity.snapshotId, derivedFromGameIds: null })),
-        foldPosteriors: () => { throw new Error("injected failure after raw insert"); },
+        semanticSourceKey,
+        incomingKnownAt: new Date(obs),
+        incomingContentHash: identity.contentHash,
+        raw: { snapshotId: identity.snapshotId, sport: "nba_itest_pr5", sourceKind: "nba_stats_playergamelog", sourceKey: identity.captureKey, semanticSourceKey, validAt: new Date("2025-01-15T00:00:00Z"), knownAt: new Date(obs), payload: payload as never, contentHash: identity.contentHash },
+        features: built.rows.map((r) => ({ featureRowId: `itest_pr5_${r.featureKey}`, sport: "nba", entityCanonicalId: ENTITY, entityKind: "player", featureKey: r.featureKey, featureVersion: r.featureVersion, season: 2025, validAt: new Date(r.validAt), knownAt: new Date(r.knownAt), state: r.state, value: r.value === null ? null : String(r.value), sourceId: identity.snapshotId, derivedFromGameIds: null })),
+        foldPosteriors: () => { throw new Error("injected failure after capture prep"); },
       });
     } catch { threw = true; }
-    ok(threw, "injected post-raw-insert failure propagates");
-    const rawRows = await db.select().from(pregameRawSourceSnapshots).where(eq(pregameRawSourceSnapshots.snapshotId, identity.snapshotId));
-    ok(rawRows.length === 0, "atomic rollback: the raw snapshot was NOT committed");
+    ok(threw, "injected post-capture-prep failure propagates");
+    const rows = await db.select().from(pregameRawSourceSnapshots).where(eq(pregameRawSourceSnapshots.snapshotId, identity.snapshotId));
+    ok(rows.length === 0, "atomic rollback: no raw capture committed");
+    const fr = await db.select().from(pregameFeatureSnapshots).where(eq(pregameFeatureSnapshots.entityCanonicalId, ENTITY));
+    ok(fr.length === 0, "atomic rollback: no feature rows, no posterior mutation");
   }
 
-  const port = buildStorePort(storage as never);
-  const fetcherOf = (p: unknown): GameLogFetcher => async () => ({ ok: true, rawPayload: p, fetchedAt: new Date().toISOString() });
-  const baseParams = { playerNativeId: "itest_pr5_777", seasonType: "Regular Season", currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z" };
+  const CH = "itest_pr5_chain", CH_ENTITY = "nba:player:itest_pr5_chain";
+  const chParams = { playerNativeId: CH, seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z", season: 2026, seasonLabel: "2025-26" };
+  const t1 = "2026-01-10T00:00:00.000Z", t2 = "2026-01-11T00:00:00.000Z", t3 = "2026-01-12T00:00:00.000Z";
 
-  // ── (2) Identical rerun is a no-op ──────────────────────────────────────────
+  // ── (2) A→B→A recurrence + metadata round trip + replay chronology ──────────
   {
-    const first = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500500", "2026-01-15", 30)) }, { ...baseParams, season: 2026, seasonLabel: "2025-26" });
-    const again = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500500", "2026-01-15", 30)) }, { ...baseParams, season: 2026, seasonLabel: "2025-26" });
-    ok(first.status === "ingested", "first real ingest → ingested");
-    ok(again.status === "noop_identical", "identical rerun → noop_identical (content-identity idempotent)");
+    const a1 = await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500910", "2026-01-05", 30), t1) }, chParams); // A
+    const b = await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500910", "2026-01-05", 31), t2) }, chParams);  // B
+    const a2 = await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500910", "2026-01-05", 30), t3) }, chParams); // A again
+    ok(a1.status === "ingested" && b.status === "ingested" && a2.status === "ingested", "A→B→A: three accepted captures");
+    const rowA1 = (await storage.getPregameRawSourceSnapshot(a1.snapshotId!))!;
+    const rowB = (await storage.getPregameRawSourceSnapshot(b.snapshotId!))!;
+    const rowA2 = (await storage.getPregameRawSourceSnapshot(a2.snapshotId!))!;
+    ok(a1.snapshotId !== a2.snapshotId, "A1 and A2 have different capture IDs");
+    ok(rowA1.contentHash === rowA2.contentHash, "A1 and A2 share the same contentHash");
+    ok(rowB.supersedesSnapshotId === a1.snapshotId && rowA2.supersedesSnapshotId === b.snapshotId, "chain A1←B←A2 by observation chronology");
+    ok(rowA1.semanticSourceKey === rowA2.semanticSourceKey && rowA1.semanticSourceKey!.includes("itest_pr5"), "semantic source key survives round trip and is stable across observations");
+    ok(rowA1.sourceKey !== rowA2.sourceKey, "capture-specific source_key differs across A→B→A");
+    ok(rowA1.knownAtPolicyVersion === "nba_gamelog_knownAt_v1" && rowA1.sourcePublishedAt === null, "timestamp-policy metadata round trips (sourcePublishedAt null explicit)");
+    // Replay: before t2 → A(30/34); between t2/t3 → B(31/34); after t3 → A(30/34).
+    const asOf = async (iso: string) => storage.getPregameFeatureAsOf({ sport: "nba", entityCanonicalId: CH_ENTITY, featureKey: "nba.player.points_per_min", featureVersion: "nba_gamelog_v1", predictionAt: new Date(iso) });
+    const rBefore = await asOf("2026-01-10T12:00:00Z"), rBetween = await asOf("2026-01-11T12:00:00Z"), rAfter = await asOf("2026-01-13T00:00:00Z");
+    ok(rBefore !== null && Math.abs(Number(rBefore!.value) - 30 / 34) < 1e-9, "replay before t2 sees A1 (30/34)");
+    ok(rBetween !== null && Math.abs(Number(rBetween!.value) - 31 / 34) < 1e-9, "replay between t2/t3 sees B (31/34)");
+    ok(rAfter !== null && Math.abs(Number(rAfter!.value) - 30 / 34) < 1e-9, "replay after t3 sees A2 (30/34)");
+    // feature sourceId resolves to a real capture for this entity.
+    const feats = await db.select().from(pregameFeatureSnapshots).where(eq(pregameFeatureSnapshots.entityCanonicalId, CH_ENTITY));
+    const ids = new Set([a1.snapshotId, b.snapshotId, a2.snapshotId]);
+    ok(feats.length > 0 && feats.every((f) => ids.has(f.sourceId)), "feature sourceId resolves to the correct immutable capture");
   }
 
-  // ── (3) Concurrent season ingests do not lose posterior state ───────────────
+  // ── (3) Consecutive identical content is a no-op (unchanged counts) ──────────
   {
-    const a = ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500600", "2026-02-01", 28)) }, { ...baseParams, season: 2026, seasonLabel: "2025-26" });
-    const b = ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022400700", "2025-02-01", 22)) }, { ...baseParams, season: 2025, seasonLabel: "2024-25" });
+    const E = "nba:player:itest_pr5_idem";
+    const p = { playerNativeId: "itest_pr5_idem", seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z", season: 2026, seasonLabel: "2025-26" };
+    await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500920", "2026-02-01", 20), "2026-02-02T00:00:00Z") }, p);
+    const again = await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500920", "2026-02-01", 20), "2026-02-03T00:00:00Z") }, p); // same content, later
+    ok(again.status === "noop_identical", "consecutive identical content → no-op");
+    const rows = await db.select().from(pregameRawSourceSnapshots).where(eq(pregameRawSourceSnapshots.semanticSourceKey, buildNbaGameLogSourceKey({ sourceKind: "nba_stats_playergamelog", entityCanonicalId: E, season: 2026, seasonType: "Regular Season" })));
+    ok(rows.length === 1, "only one accepted capture for a no-op rerun");
+  }
+
+  // ── (4) Out-of-order arrival fails closed; head not inverted ────────────────
+  {
+    const p = { playerNativeId: "itest_pr5_ooo", seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z", season: 2026, seasonLabel: "2025-26" };
+    await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500930", "2026-03-01", 20), t1) }, p);
+    await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500930", "2026-03-01", 22), t3) }, p); // head
+    const stale = await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500930", "2026-03-01", 21), t2) }, p); // older
+    ok(stale.status === "stale_observation", "older-knownAt arrival → stale_observation (wrote nothing)");
+    const semKey = buildNbaGameLogSourceKey({ sourceKind: "nba_stats_playergamelog", entityCanonicalId: "nba:player:itest_pr5_ooo", season: 2026, seasonType: "Regular Season" });
+    const rows = await db.select().from(pregameRawSourceSnapshots).where(eq(pregameRawSourceSnapshots.semanticSourceKey, semKey));
+    ok(rows.length === 2, "stale observation created no capture");
+    const preds = rows.map((r) => r.supersedesSnapshotId).filter((x): x is string => x != null);
+    ok(new Set(preds).size === preds.length, "no lineage fork from the stale arrival");
+  }
+
+  // ── (5) Same-knownAt different payload → conflict (no fake tiebreak) ─────────
+  {
+    const p = { playerNativeId: "itest_pr5_conf", seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z", season: 2026, seasonLabel: "2025-26" };
+    await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500940", "2026-03-05", 20), t1) }, p);
+    const conflict = await ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500940", "2026-03-05", 21), t1) }, p); // same instant, diff payload
+    ok(conflict.status === "conflicting_observation", "same knownAt + different payload → conflicting_observation (fail closed)");
+  }
+
+  // ── (6) Concurrent DIFFERENT seasons keep both posteriors ───────────────────
+  {
+    const p = { playerNativeId: "itest_pr5_conc", seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z" };
+    const a = ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022500950", "2026-02-01", 28), t1) }, { ...p, season: 2026, seasonLabel: "2025-26" });
+    const b = ingestPlayerSeason({ store: port, fetch: fetchAt(raw("0022400960", "2025-02-01", 22), t1) }, { ...p, season: 2025, seasonLabel: "2024-25" });
     await Promise.all([a, b]);
-    const rows = await db.select().from(pregamePosteriorStates).where(eq(pregamePosteriorStates.entityCanonicalId, ENTITY));
+    const rows = await db.select().from(pregamePosteriorStates).where(eq(pregamePosteriorStates.entityCanonicalId, "nba:player:itest_pr5_conc"));
     const pts = rows.find((r) => r.featureKey === "nba.player.points_per_min");
     const seasons = pts ? Object.keys((pts.bySeason ?? {}) as Record<string, unknown>) : [];
-    ok(seasons.includes("2026") && seasons.includes("2025"), "concurrent ingests: final posterior contains BOTH seasons (advisory lock prevented lost update)");
+    ok(seasons.includes("2026") && seasons.includes("2025"), "concurrent seasons: final posterior contains both (no lost update)");
   }
 
-  // ── (4) Timestamp-policy metadata survives a DB round trip ──────────────────
-  const CH_PLAYER = "itest_pr5_chain";
-  const CH_ENTITY = "nba:player:itest_pr5_chain";
-  const chParams = { playerNativeId: CH_PLAYER, seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z", season: 2026, seasonLabel: "2025-26" };
-  {
-    const out = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500910", "2026-01-15", 30)) }, chParams);
-    const row = await storage.getPregameRawSourceSnapshot(out.snapshotId!);
-    ok(row !== null && row!.knownAtPolicyVersion === "nba_gamelog_knownAt_v1", "knownAtPolicyVersion survives the DB round trip");
-    ok(row !== null && row!.sourcePublishedAt === null, "sourcePublishedAt = null remains explicitly unknown after round trip");
-    ok(row !== null && row!.createdAt != null, "immutable ingestion instant (created_at) present");
-    ok(row !== null && (row!.supersedesSnapshotId ?? null) === null, "first capture has no predecessor");
-    // Feature sourceId resolves back to this immutable raw snapshot + its policy version.
-    const feats = await db.select().from(pregameFeatureSnapshots).where(eq(pregameFeatureSnapshots.entityCanonicalId, CH_ENTITY));
-    ok(feats.length > 0 && feats.every((f) => f.sourceId === out.snapshotId), "feature sourceId resolves to the correct immutable raw snapshot");
-  }
-
-  // ── (5) Correction chain A←B←C is deterministic + serialized ────────────────
-  {
-    const a = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500910", "2026-01-15", 30)) }, chParams); // == (4)'s content → no-op
-    ok(a.status === "noop_identical", "re-ingesting identical content is a no-op (no lineage change)");
-    const firstId = a.snapshotId!;
-    const b = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500910", "2026-01-15", 31)) }, chParams); // correction B
-    const between = new Date();
-    await new Promise((r) => setTimeout(r, 5));
-    const c = await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500910", "2026-01-15", 33)) }, chParams); // correction C
-    const rowB = await storage.getPregameRawSourceSnapshot(b.snapshotId!);
-    const rowC = await storage.getPregameRawSourceSnapshot(c.snapshotId!);
-    ok(rowB!.supersedesSnapshotId === firstId, "correction B supersedes A");
-    ok(rowC!.supersedesSnapshotId === b.snapshotId, "correction C supersedes B (deterministic chain)");
-    const rowA = await storage.getPregameRawSourceSnapshot(firstId);
-    ok((rowA!.supersedesSnapshotId ?? null) === null, "prior snapshot A never repointed by a later correction");
-
-    // Replay: as-of BETWEEN B and C sees B's value; as-of NOW sees C's value.
-    const asB = await storage.getPregameFeatureAsOf({ sport: "nba", entityCanonicalId: CH_ENTITY, featureKey: "nba.player.points_per_min", featureVersion: "nba_gamelog_v1", predictionAt: between });
-    const asNow = await storage.getPregameFeatureAsOf({ sport: "nba", entityCanonicalId: CH_ENTITY, featureKey: "nba.player.points_per_min", featureVersion: "nba_gamelog_v1", predictionAt: new Date() });
-    ok(asB !== null && Math.abs(Number(asB!.value) - 31 / 34) < 1e-9, "replay before C sees correction B (31/34)");
-    ok(asNow !== null && Math.abs(Number(asNow!.value) - 33 / 34) < 1e-9, "replay after C sees correction C (33/34)");
-  }
-
-  // ── (6) Concurrent corrections serialize into one deterministic chain ───────
-  {
-    const CC_PLAYER = "itest_pr5_ccorr", CC_ENTITY = "nba:player:itest_pr5_ccorr";
-    const ccParams = { playerNativeId: CC_PLAYER, seasonType: "Regular Season" as const, currentSeason: 2026, asOfDate: "2026-08-06T00:00:00Z", season: 2026, seasonLabel: "2025-26" };
-    await ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500999", "2026-03-01", 20)) }, ccParams); // base
-    const x = ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500999", "2026-03-01", 21)) }, ccParams);
-    const y = ingestPlayerSeason({ store: port, fetch: fetcherOf(raw("0022500999", "2026-03-01", 22)) }, ccParams);
-    await Promise.all([x, y]);
-    const rows = await db.select().from(pregameRawSourceSnapshots).where(eq(pregameRawSourceSnapshots.entityCanonicalId, CC_ENTITY));
-    // Exactly one chain: no two snapshots share a predecessor (a fork would mean a lost update).
-    const preds = rows.map((r) => r.supersedesSnapshotId).filter((p): p is string => p != null);
-    ok(new Set(preds).size === preds.length, "concurrent corrections form a single linear chain (no shared predecessor / fork)");
-    void CC_ENTITY;
-  }
-
-  void CH_ENTITY;
   await cleanup();
   await pool.end();
   console.log(`\nnbaIngestionStorage.integration.test: ${passed} passed, ${failed} failed`);
