@@ -30,6 +30,37 @@ function art(fit: Partial<MlbCalibrationArtifact["fitStats"]>): MlbCalibrationAr
   const r = evaluateCalibratorPromotionReadiness({ artifact: art({}) });
   ok(!r.ready, "in-sample artifact is not promotion-ready");
   ok(r.reasons.includes("in_sample_only"), "reason: in_sample_only");
+  ok(!r.usedOutOfSample, "usedOutOfSample false when no held-out evidence");
+}
+
+// FAIL-CLOSED: outOfSample=true but a held-out metric is MISSING ⇒ blocked, and
+// it must NOT silently pass on the in-sample fit (the overfit-promotion guard).
+{
+  // art({}) has in-sample calibratedBrier 0.20 < rawBrier 0.30, ece 3 — which
+  // WOULD pass every metric check if the gate fell back to in-sample.
+  const r = evaluateCalibratorPromotionReadiness({
+    artifact: art({}),
+    outOfSample: true,
+    heldOutBrier: null, // incomplete
+    heldOutRawBrier: 0.30,
+    heldOutEcePct: 3,
+    forwardRoiUnits: 4.2,
+    tierMonotonic: true,
+  });
+  ok(!r.ready, "partial out-of-sample evidence ⇒ NOT ready (no silent in-sample fallback)");
+  ok(r.reasons.includes("held_out_evidence_incomplete"), "reason: held_out_evidence_incomplete");
+  ok(!r.reasons.includes("in_sample_only"), "distinct from in_sample_only (outOfSample was claimed)");
+  ok(!r.usedOutOfSample && r.evaluatedBrier === 0.20, "falls back to coherent in-sample metrics (not a held-out/in-sample mix), but blocks");
+}
+
+// Another partial: ECE missing ⇒ still blocked
+{
+  const r = evaluateCalibratorPromotionReadiness({
+    artifact: art({}), outOfSample: true,
+    heldOutBrier: 0.2, heldOutRawBrier: 0.3, heldOutEcePct: null,
+    forwardRoiUnits: 1, tierMonotonic: true,
+  });
+  ok(!r.ready && r.reasons.includes("held_out_evidence_incomplete"), "missing held-out ECE ⇒ blocked");
 }
 
 // Fully-qualified out-of-sample evidence ⇒ ready

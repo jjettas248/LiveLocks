@@ -35,6 +35,7 @@ export type CalibratorPromotionReason =
   | "insufficient_sample"
   | "insufficient_slate_dates"
   | "in_sample_only"
+  | "held_out_evidence_incomplete"
   | "calibrated_brier_above_max"
   | "no_brier_improvement"
   | "ece_above_max"
@@ -62,19 +63,33 @@ export function evaluateCalibratorPromotionReadiness(
 ): CalibratorPromotionResult {
   const reasons: CalibratorPromotionReason[] = [];
   const fit = evidence.artifact.fitStats;
-  const usedOutOfSample = evidence.outOfSample === true;
 
-  // Prefer held-out metrics when supplied; otherwise fall back to in-sample and
-  // block on in_sample_only below.
-  const evaluatedBrier = usedOutOfSample && evidence.heldOutBrier != null ? evidence.heldOutBrier : fit.calibratedBrier;
-  const evaluatedRawBrier = usedOutOfSample && evidence.heldOutRawBrier != null ? evidence.heldOutRawBrier : fit.rawBrier;
-  const evaluatedEcePct = usedOutOfSample && evidence.heldOutEcePct != null ? evidence.heldOutEcePct : fit.calibratedEcePct;
+  // Out-of-sample evidence must be COMPLETE to be trusted. A caller claiming
+  // outOfSample=true while leaving any held-out metric null must NOT silently
+  // fall back to the in-sample fit and pass — that is the exact overfit
+  // promotion this gate exists to prevent. Fail-closed: incomplete held-out
+  // evidence blocks, and the evaluated metrics stay coherently in-sample (never
+  // a held-out-vs-in-sample mix), since the result is blocked regardless.
+  const hasCompleteHeldOut =
+    evidence.outOfSample === true &&
+    evidence.heldOutBrier != null &&
+    evidence.heldOutRawBrier != null &&
+    evidence.heldOutEcePct != null;
+  const usedOutOfSample = hasCompleteHeldOut;
+
+  const evaluatedBrier = hasCompleteHeldOut ? evidence.heldOutBrier! : fit.calibratedBrier;
+  const evaluatedRawBrier = hasCompleteHeldOut ? evidence.heldOutRawBrier! : fit.rawBrier;
+  const evaluatedEcePct = hasCompleteHeldOut ? evidence.heldOutEcePct! : fit.calibratedEcePct;
 
   if (fit.sampleSize < thresholds.minDecidedPredictions) reasons.push("insufficient_sample");
   if (fit.distinctSlateDates < thresholds.minDistinctSlateDates) reasons.push("insufficient_slate_dates");
 
-  // A model cannot be promoted on the same data it was fit to.
-  if (!usedOutOfSample) reasons.push("in_sample_only");
+  // A model cannot be promoted on the same data it was fit to. Distinguish
+  // "no out-of-sample evidence offered" from "out-of-sample claimed but
+  // incomplete" so the caller knows which — both block.
+  if (!usedOutOfSample) {
+    reasons.push(evidence.outOfSample === true ? "held_out_evidence_incomplete" : "in_sample_only");
+  }
 
   if (!(evaluatedBrier <= thresholds.maxBrier)) reasons.push("calibrated_brier_above_max");
   // Calibration must IMPROVE on the raw probabilities, not merely be under the cap.

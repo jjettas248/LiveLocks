@@ -101,6 +101,19 @@ function pred(o: {
   ok("hits:official" in map && "hits:shadow" in map, "lane-split segment key produces per-lane artifacts");
 }
 
+// distinctSlateDates uses the 6am-ET SLATE day, not the ET calendar date.
+// Two captures on the same ET calendar date (2026-08-10) straddling 6am ET
+// (05:00 ET and 07:00 ET, i.e. 09:00Z and 11:00Z in EDT) belong to DIFFERENT
+// slates (Aug 9 vs Aug 10) ⇒ 2 distinct slate dates. (toEtDateKey would give 1.)
+{
+  const rows = [
+    pred({ probPct: 70, status: "settled", result: "cashed", capturedAt: "2026-08-10T09:00:00.000Z" }), // 05:00 ET → slate Aug 9
+    pred({ probPct: 60, status: "settled", result: "missed", capturedAt: "2026-08-10T11:00:00.000Z" }), // 07:00 ET → slate Aug 10
+  ];
+  const art = fitSegmentCalibrator("hits", toCalibrationObservations(rows), { builtAtMs: 1 });
+  ok(art !== null && art.fitStats.distinctSlateDates === 2, "6am-ET slate rollover ⇒ 2 distinct slates from one ET calendar date");
+}
+
 // Empty / no-decided ⇒ no artifact
 {
   ok(fitSegmentCalibrator("hits", [], { builtAtMs: 1 }) === null, "empty observations ⇒ null");

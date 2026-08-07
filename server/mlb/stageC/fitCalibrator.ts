@@ -17,7 +17,7 @@ import {
   MLB_PREDICTION_LEDGER_CONTRACT_VERSION,
   type MlbLanePrediction,
 } from "@shared/mlbPredictionLedger";
-import { toEtDateKey } from "../../utils/dateUtils";
+import { slateDateET } from "../../utils/dateUtils";
 import {
   brierScore,
   logLoss,
@@ -70,7 +70,11 @@ export function toCalibrationObservations(
       segment: segmentKey(pred),
       p: clamp01(pred.candidateProbabilityPct / 100),
       y: pred.settlementResult === "cashed" ? 1 : 0,
-      slateDate: toEtDateKey(pred.capturedAt),
+      // Slate day (6am-ET rollover), NOT the ET calendar date — a post-midnight
+      // West-Coast capture belongs to the slate that started the evening before,
+      // so distinctSlateDates counts real slates for the promotion-gate's
+      // temporal-independence check.
+      slateDate: slateDateET(new Date(pred.capturedAt)),
     });
   }
   return out;
