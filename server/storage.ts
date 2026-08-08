@@ -658,21 +658,25 @@ export interface IStorage {
 
   /**
    * PR6 NFL ingestion — DATASET-scoped variant of the above. One nflverse whole-season
-   * capture yields MANY players' feature rows + posteriors, so (unlike the per-entity
-   * method) the advisory lock is on the DATASET `semanticSourceKey`, and posterior priors
-   * are read for the SET of (entityCanonicalId, featureKey) pairs in the fold. The audit-4
-   * head-by-`known_at` observation-chain decision (first_capture/noop/appended/stale/
-   * conflict, incl. A→B→A) is IDENTICAL. `foldPosteriors` receives priors keyed
-   * `${entityCanonicalId}|${featureKey}`. All-or-nothing in one transaction.
+   * capture yields MANY players' feature rows + posteriors. Posterior priors are read for
+   * the SET of (entityCanonicalId, featureKey) pairs, and mutation is serialized under a
+   * STABLE cross-season `posteriorLockKey` (not the season-specific semanticSourceKey), so
+   * concurrent cross-season ingests cannot lose an update. The audit-4 head-by-`known_at`
+   * decision (first_capture/noop/appended/stale/conflict, incl. A→B→A) is on the
+   * season-specific semanticSourceKey. `provenanceRaws` (schedule + join) are inserted
+   * content-identity (insert-if-new) so both inputs behind each feature row are recoverable.
+   * `foldPosteriors` receives priors keyed `${entityCanonicalId}|${featureKey}`. One tx.
    */
   ingestPregameDatasetSnapshotAtomic(args: {
     featureVersion: string;
     entityCanonicalIds: string[];
     featureKeys: string[];
     semanticSourceKey: string;
+    posteriorLockKey: string;
     incomingKnownAt: Date;
     incomingContentHash: string;
     raw: InsertPregameRawSourceSnapshot;
+    provenanceRaws?: InsertPregameRawSourceSnapshot[];
     features: InsertPregameFeatureSnapshot[];
     foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
   }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }>;
@@ -4958,17 +4962,28 @@ export class DatabaseStorage implements IStorage {
     entityCanonicalIds: string[];
     featureKeys: string[];
     semanticSourceKey: string;
+    /** STABLE cross-season posterior serialization key (e.g. "nfl|pregame_dataset_ingest|<fv>").
+     *  All NFL dataset ingests take THIS lock — so concurrent 2023/2024 ingests that touch the
+     *  SAME players' posteriors serialize and cannot lose an update. Head/lineage stays keyed by
+     *  the season-specific semanticSourceKey (independent chains). */
+    posteriorLockKey: string;
     incomingKnownAt: Date;
     incomingContentHash: string;
     raw: InsertPregameRawSourceSnapshot;
+    /** Supporting immutable captures (schedule + join-provenance) inserted content-identity
+     *  (insert-if-new) so the exact inputs behind each feature row are recoverable. */
+    provenanceRaws?: InsertPregameRawSourceSnapshot[];
     features: InsertPregameFeatureSnapshot[];
     foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
   }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }> {
     return await db.transaction(async (tx) => {
-      // Serialize the whole read-modify-write for this DATASET before touching any row.
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${args.semanticSourceKey}))`);
+      // Serialize ALL NFL dataset posterior mutation under one stable sport+feature-version
+      // lock (NOT the season-specific semanticSourceKey), so cross-season concurrent ingests
+      // that update the same players' posteriors cannot lose an update.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${args.posteriorLockKey}))`);
 
-      // HEAD of the observation chain for this semantic identity, by known_at (audit-4).
+      // HEAD of the observation chain for this (season-specific) semantic identity, by
+      // known_at (audit-4). Independent per season even though the lock is shared.
       const [head] = await tx
         .select({ snapshotId: pregameRawSourceSnapshots.snapshotId, knownAt: pregameRawSourceSnapshots.knownAt, contentHash: pregameRawSourceSnapshots.contentHash })
         .from(pregameRawSourceSnapshots)
@@ -4996,6 +5011,12 @@ export class DatabaseStorage implements IStorage {
         .onConflictDoNothing({ target: [pregameRawSourceSnapshots.sourceKind, pregameRawSourceSnapshots.sourceKey, pregameRawSourceSnapshots.contentHash] })
         .returning();
       if (!insertedRaw) return { decision: "noop", snapshotId: args.raw.snapshotId, supersedes: null };
+
+      // Supporting captures (schedule + join provenance) — content-identity insert-if-new;
+      // a re-fetch of identical content reuses the existing immutable capture.
+      for (const pr of args.provenanceRaws ?? []) {
+        await tx.insert(pregameRawSourceSnapshots).values(pr).onConflictDoNothing({ target: [pregameRawSourceSnapshots.sourceKind, pregameRawSourceSnapshots.sourceKey, pregameRawSourceSnapshots.contentHash] });
+      }
 
       const decision: "first_capture" | "appended" = supersedes === null ? "first_capture" : "appended";
 

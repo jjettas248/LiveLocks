@@ -14,14 +14,10 @@
 // and the module typechecks without a DATABASE_URL. This environment has no nflverse
 // access — a live pull is deferred to the authorized environment.
 
-import { fetchRawNflverseCsv } from "../pregameTargets/ingestion/nfl/nflverseProvider";
+import { fetchRawNflverseCsv, weeklyStatsUrl, schedulesUrl } from "../pregameTargets/ingestion/nfl/nflverseProvider";
 import { isNflIngestEnabled } from "../pregameTargets/ingestion/nfl/nflIngestionFlags";
 import { ingestNflSeason, NflIngestInvocationError, type CsvFetcher, type NflIngestionStorePort } from "../pregameTargets/ingestion/nfl/nflIngestionJob";
 import { buildNflIngestErrorRecord } from "../pregameTargets/ingestion/nfl/nflIngestionErrors";
-
-/** nflverse asset naming (pinned by sourceVersion; confirmed in the authorized env). */
-const weeklyAsset = (season: number) => ({ release: "player_stats", asset: `player_stats_${season}.csv` });
-const scheduleAsset = () => ({ release: "schedules", asset: "games.csv" });
 
 export function buildStorePort(storage: {
   ingestPregameDatasetSnapshotAtomic(args: unknown): Promise<{ decision: string; snapshotId: string | null; supersedes: string | null }>;
@@ -63,13 +59,11 @@ async function main(): Promise<void> {
   const asOfDate = new Date().toISOString();
 
   const fetchWeekly: CsvFetcher = async ({ season }) => {
-    const { release, asset } = weeklyAsset(season);
-    const res = await fetchRawNflverseCsv({ release, asset });
+    const res = await fetchRawNflverseCsv({ url: weeklyStatsUrl(season) });
     return res.ok ? { ok: true, rawCsv: res.rawCsv, fetchedAt: res.fetchedAt, sourcePublishedAt: res.sourcePublishedAt } : { ok: false, reason: res.reason, failedAt: res.failedAt };
   };
   const fetchSchedule: CsvFetcher = async () => {
-    const { release, asset } = scheduleAsset();
-    const res = await fetchRawNflverseCsv({ release, asset });
+    const res = await fetchRawNflverseCsv({ url: schedulesUrl() });
     return res.ok ? { ok: true, rawCsv: res.rawCsv, fetchedAt: res.fetchedAt, sourcePublishedAt: res.sourcePublishedAt } : { ok: false, reason: res.reason, failedAt: res.failedAt };
   };
 
@@ -77,8 +71,9 @@ async function main(): Promise<void> {
   for (const season of seasons) {
     try {
       const out = await ingestNflSeason({ store, fetchSchedule, fetchWeekly }, { season, currentSeason, asOfDate });
-      if (out.status.startsWith("provider_failure") || out.status.startsWith("incomplete") || out.status === "conflicting_observation") failures++;
-      console.log(`[NFL_INGEST] season=${season} status=${out.status} records=${out.recordCount} features=${out.featureRowsWritten} players=${out.playersUpdated} coverage=${out.coverage?.coverage ?? "n/a"}/${out.coverage?.knownAtSupport ?? "n/a"}`);
+      if (out.status.startsWith("provider_failure") || out.status.startsWith("incomplete") || out.status === "unresolvable" || out.status === "conflicting_observation") failures++;
+      const c = out.coverage?.counts;
+      console.log(`[NFL_INGEST] season=${season} status=${out.status} accepted=${c?.structurallyAcceptedWeeklyRows ?? 0} resolved=${c?.scheduleResolvedRows ?? 0} unresolved=${c?.unresolvedGameIds ?? 0} features=${out.featureRowsWritten} players=${out.playersUpdated} rawCaptures=${c?.rawCapturesPersisted ?? 0} coverage=${out.coverage?.coverage ?? "n/a"}/${out.coverage?.knownAtSupport ?? "n/a"}`);
     } catch (err) {
       if (err instanceof NflIngestInvocationError) {
         console.error(`[NFL_INGEST] refused: invalid invocation (${err.kind}) for season=${season}.`);
