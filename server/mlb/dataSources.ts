@@ -10,6 +10,17 @@ import {
   type PlateHrV2SufficientStatsRaw,
 } from "./pregamePowerRadar/hrProbabilityV2/plateHrV2SufficientStats";
 import { parseOptionalNumber, isRecognizedBbType } from "./pregamePowerRadar/hrProbabilityV2/statParsers";
+import { dateToET } from "../utils/dateUtils";
+
+// Baseball Savant CSV query upper bound (game_date_lt) — must be the current
+// Eastern calendar date (CLAUDE.md §3.4: server-side date logic uses ET, not
+// UTC), not a raw new Date() UTC calendar date. Pure and parameterized by
+// `now` (defaults to real "now", identical in effect to todayET()) so the
+// UTC/ET calendar-boundary case is deterministically testable — see
+// dataSources.test.ts.
+export function resolveSavantQueryUpperBoundDate(now: Date = new Date()): string {
+  return dateToET(now);
+}
 
 export interface BaseballSavantData {
   exitVelocity: number | null;
@@ -612,7 +623,7 @@ export async function fetchBaseballSavantData(
   try {
     const currentYear = new Date().getFullYear();
     const seasonStart = `${currentYear}-01-01`;
-    const today = new Date().toISOString().split("T")[0];
+    const today = resolveSavantQueryUpperBoundDate();
 
     const batterUrl = `https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfPT=&hfAB=&hfGT=R%7C&hfPR=&hfZ=&hfStadium=&hfBBL=&hfNewZones=&hfPull=&hfC=&hfSea=${currentYear}%7C&hfSit=&player_type=batter&hfOuts=&hfOpponent=&pitcher_throws=&batter_stands=&hfSA=&game_date_gt=${seasonStart}&game_date_lt=${today}&hfMo=&hfTeam=&home_road=&hfRO=&position=&hfInfield=&hfOutfield=&hfInn=&hfBBT=&hfFlag=&metric_1=&group_by=name&min_pitches=0&min_results=0&min_pa=1&sort_col=pitches&player_event_sort=api_p_release_speed&sort_order=desc&batters_lookup%5B%5D=${mlbPlayerId}&type=details`;
     const pitcherUrl = `https://baseballsavant.mlb.com/statcast_search/csv?all=true&hfPT=&hfAB=&hfGT=R%7C&hfPR=&hfZ=&hfStadium=&hfBBL=&hfNewZones=&hfPull=&hfC=&hfSea=${currentYear}%7C&hfSit=&player_type=pitcher&hfOuts=&hfOpponent=&pitcher_throws=&batter_stands=&hfSA=&game_date_gt=${seasonStart}&game_date_lt=${today}&hfMo=&hfTeam=&home_road=&hfRO=&position=&hfInfield=&hfOutfield=&hfInn=&hfBBT=&hfFlag=&metric_1=&group_by=name&min_pitches=0&min_results=0&min_pa=1&sort_col=pitches&player_event_sort=api_p_release_speed&sort_order=desc&pitchers_lookup%5B%5D=${mlbPlayerId}&type=details`;
