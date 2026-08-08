@@ -656,6 +656,31 @@ export interface IStorage {
     foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
   }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }>;
 
+  /**
+   * PR6 NFL ingestion — DATASET-scoped variant of the above. One nflverse whole-season
+   * capture yields MANY players' feature rows + posteriors. Posterior priors are read for
+   * the SET of (entityCanonicalId, featureKey) pairs, and mutation is serialized under a
+   * STABLE cross-season `posteriorLockKey` (not the season-specific semanticSourceKey), so
+   * concurrent cross-season ingests cannot lose an update. The audit-4 head-by-`known_at`
+   * decision (first_capture/noop/appended/stale/conflict, incl. A→B→A) is on the
+   * season-specific semanticSourceKey. `provenanceRaws` (schedule + join) are inserted
+   * content-identity (insert-if-new) so both inputs behind each feature row are recoverable.
+   * `foldPosteriors` receives priors keyed `${entityCanonicalId}|${featureKey}`. One tx.
+   */
+  ingestPregameDatasetSnapshotAtomic(args: {
+    featureVersion: string;
+    entityCanonicalIds: string[];
+    featureKeys: string[];
+    semanticSourceKey: string;
+    posteriorLockKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
+    raw: InsertPregameRawSourceSnapshot;
+    provenanceRaws?: InsertPregameRawSourceSnapshot[];
+    features: InsertPregameFeatureSnapshot[];
+    foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
+  }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }>;
+
   // ── Mound Radar V2 shadow prediction capture (Flagship Program Phase 2) ──
   // Creation is INSERT-only with ON CONFLICT DO NOTHING — a repeated
   // evaluation of the exact same frozen (snapshotId, market) is a harmless
@@ -4925,6 +4950,110 @@ export class DatabaseStorage implements IStorage {
               pregamePosteriorStates.featureKey,
               pregamePosteriorStates.featureVersion,
             ],
+            set: { sport: p.sport, stateVersion: p.stateVersion, bySeason: p.bySeason, updatedAt: new Date() },
+          });
+      }
+      return { decision, snapshotId: insertedRaw.snapshotId, supersedes };
+    });
+  }
+
+  async ingestPregameDatasetSnapshotAtomic(args: {
+    featureVersion: string;
+    entityCanonicalIds: string[];
+    featureKeys: string[];
+    semanticSourceKey: string;
+    /** STABLE cross-season posterior serialization key (e.g. "nfl|pregame_dataset_ingest|<fv>").
+     *  All NFL dataset ingests take THIS lock — so concurrent 2023/2024 ingests that touch the
+     *  SAME players' posteriors serialize and cannot lose an update. Head/lineage stays keyed by
+     *  the season-specific semanticSourceKey (independent chains). */
+    posteriorLockKey: string;
+    incomingKnownAt: Date;
+    incomingContentHash: string;
+    raw: InsertPregameRawSourceSnapshot;
+    /** Supporting immutable captures (schedule + join-provenance) inserted content-identity
+     *  (insert-if-new) so the exact inputs behind each feature row are recoverable. */
+    provenanceRaws?: InsertPregameRawSourceSnapshot[];
+    features: InsertPregameFeatureSnapshot[];
+    foldPosteriors: (lockedPriors: Map<string, PregamePosteriorState>) => InsertPregamePosteriorState[];
+  }): Promise<{ decision: "first_capture" | "appended" | "noop" | "stale" | "conflict"; snapshotId: string | null; supersedes: string | null }> {
+    return await db.transaction(async (tx) => {
+      // Serialize ALL NFL dataset posterior mutation under one stable sport+feature-version
+      // lock (NOT the season-specific semanticSourceKey), so cross-season concurrent ingests
+      // that update the same players' posteriors cannot lose an update.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${args.posteriorLockKey}))`);
+
+      // HEAD of the observation chain for this (season-specific) semantic identity, by
+      // known_at (audit-4). Independent per season even though the lock is shared.
+      const [head] = await tx
+        .select({ snapshotId: pregameRawSourceSnapshots.snapshotId, knownAt: pregameRawSourceSnapshots.knownAt, contentHash: pregameRawSourceSnapshots.contentHash })
+        .from(pregameRawSourceSnapshots)
+        .where(eq(pregameRawSourceSnapshots.semanticSourceKey, args.semanticSourceKey))
+        .orderBy(desc(pregameRawSourceSnapshots.knownAt), desc(pregameRawSourceSnapshots.snapshotId))
+        .limit(1);
+
+      let supersedes: string | null = null;
+      if (head) {
+        const inMs = args.incomingKnownAt.getTime();
+        const headMs = new Date(head.knownAt).getTime();
+        if (inMs < headMs) return { decision: "stale", snapshotId: null, supersedes: null };
+        if (inMs === headMs) {
+          return args.incomingContentHash === head.contentHash
+            ? { decision: "noop", snapshotId: head.snapshotId, supersedes: null }
+            : { decision: "conflict", snapshotId: null, supersedes: null };
+        }
+        if (args.incomingContentHash === head.contentHash) return { decision: "noop", snapshotId: head.snapshotId, supersedes: null };
+        supersedes = head.snapshotId;
+      }
+
+      const [insertedRaw] = await tx
+        .insert(pregameRawSourceSnapshots)
+        .values({ ...args.raw, semanticSourceKey: args.semanticSourceKey, supersedesSnapshotId: supersedes })
+        .onConflictDoNothing({ target: [pregameRawSourceSnapshots.sourceKind, pregameRawSourceSnapshots.sourceKey, pregameRawSourceSnapshots.contentHash] })
+        .returning();
+      if (!insertedRaw) return { decision: "noop", snapshotId: args.raw.snapshotId, supersedes: null };
+
+      // Supporting captures (schedule + join provenance) — content-identity insert-if-new;
+      // a re-fetch of identical content reuses the existing immutable capture.
+      for (const pr of args.provenanceRaws ?? []) {
+        await tx.insert(pregameRawSourceSnapshots).values(pr).onConflictDoNothing({ target: [pregameRawSourceSnapshots.sourceKind, pregameRawSourceSnapshots.sourceKey, pregameRawSourceSnapshots.contentHash] });
+      }
+
+      const decision: "first_capture" | "appended" = supersedes === null ? "first_capture" : "appended";
+
+      // Read priors for the SET of (entity, featureKey) pairs, keyed `${entity}|${featureKey}`.
+      const priorRows = args.entityCanonicalIds.length === 0 || args.featureKeys.length === 0
+        ? []
+        : await tx
+            .select()
+            .from(pregamePosteriorStates)
+            .where(
+              and(
+                eq(pregamePosteriorStates.featureVersion, args.featureVersion),
+                inArray(pregamePosteriorStates.entityCanonicalId, args.entityCanonicalIds),
+                inArray(pregamePosteriorStates.featureKey, args.featureKeys),
+              ),
+            );
+      const lockedPriors = new Map<string, PregamePosteriorState>();
+      for (const r of priorRows) {
+        lockedPriors.set(`${r.entityCanonicalId}|${r.featureKey}`, {
+          version: r.stateVersion,
+          featureKey: r.featureKey,
+          featureVersion: r.featureVersion,
+          entityCanonicalId: r.entityCanonicalId,
+          bySeason: (r.bySeason ?? {}) as PregamePosteriorState["bySeason"],
+        });
+      }
+      const posteriors = args.foldPosteriors(lockedPriors);
+
+      for (const f of args.features) {
+        await tx.insert(pregameFeatureSnapshots).values(f).onConflictDoNothing({ target: pregameFeatureSnapshots.featureRowId });
+      }
+      for (const p of posteriors) {
+        await tx
+          .insert(pregamePosteriorStates)
+          .values(p)
+          .onConflictDoUpdate({
+            target: [pregamePosteriorStates.entityCanonicalId, pregamePosteriorStates.featureKey, pregamePosteriorStates.featureVersion],
             set: { sport: p.sport, stateVersion: p.stateVersion, bySeason: p.bySeason, updatedAt: new Date() },
           });
       }

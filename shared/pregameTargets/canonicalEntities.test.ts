@@ -29,6 +29,14 @@ function ok(cond: boolean, msg: string) {
   ok(parseCanonicalId("nbaplayer12345") === null, "no separators → null");
   ok(parseCanonicalId("nba:sasquatch:1") === null, "unknown kind → null (parse)");
   ok(parseCanonicalId("xfl:player:1") === null, "unknown sport → null (parse)");
+  // PR6: NFL is now a canonical pregame sport; MLB/NCAAB are NOT.
+  const nflId = buildCanonicalId("nfl", "player", "00-0036355");
+  ok(nflId === "nfl:player:00-0036355", "NFL canonical id (gsis-style native id) builds");
+  const np = parseCanonicalId(nflId);
+  ok(np !== null && np.sport === "nfl" && np.kind === "player" && np.nativeId === "00-0036355", "NFL id round-trips");
+  ok(buildCanonicalId("nfl", "team", "KC") === "nfl:team:KC", "NFL team canonical id builds");
+  ok(parseCanonicalId("mlb:player:1") === null, "MLB is not a pregame sport → null (parse)");
+  ok(parseCanonicalId("ncaab:player:1") === null, "NCAAB is not a pregame sport → null (parse)");
   // Native id is trimmed so incidental whitespace can't split identity.
   ok(buildCanonicalId("nba", "player", "  123 ") === "nba:player:123", "buildCanonicalId trims native-id whitespace");
   const trimmedDir: EntityDirectoryEntry[] = [
@@ -58,7 +66,7 @@ const dir: EntityDirectoryEntry[] = [
   const bad = resolveCanonicalEntity("nba:player:999", dir, asOf);
   ok(!bad.ok && bad.reason === "unknown_id", "unknown native id → unknown_id");
   const badSport = resolveCanonicalEntity("xfl:player:1", dir, asOf);
-  ok(!badSport.ok && badSport.reason === "unknown_sport", "unknown sport → unknown_sport");
+  ok(!badSport.ok && badSport.reason === "unknown_sport", "unknown sport → unknown_sport (xfl still rejected)");
   const badKind = resolveCanonicalEntity("nba:sasquatch:1", dir, asOf);
   ok(!badKind.ok && badKind.reason === "unknown_kind", "unknown kind → unknown_kind");
   const malformed = resolveCanonicalEntity("garbage", dir, asOf);

@@ -1,0 +1,177 @@
+{
+  "synthetic": true,
+  "note": "SYNTHETIC-but-upstream-faithful NFL (nflverse) fixtures. These mirror the real weekly (stats_player_week_{season}.csv) + schedule (nfldata data/games.csv) CSV SCHEMAS and the honest normalized/classified outputs. They are NOT captured live nflverse payloads (this environment has no nflverse access). If live captured fixtures become available later, keep them distinguished from these synthetic ones. Every case is validated against the REAL adapter / feature builder / coverage in fixtures.test.ts.",
+  "weeklyHeader": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards",
+  "scheduleHeader": "game_id,season,game_type,week,gameday,away_team,home_team",
+  "weeklyCases": [
+    {
+      "id": "weekly_normal_current",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,7,110,0,0\n00-0033040,2024_01_SF_KC,2024,1,REG,KC,SF,TE,8,6,70,1,4\n",
+      "expected": { "adapter": { "ok": true, "recordCount": 2 } }
+    },
+    {
+      "id": "weekly_observed_zero_and_missing",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,,110,0,0\n",
+      "expected": {
+        "adapter": { "ok": true, "recordCount": 1 },
+        "record0": { "targets": 10, "receptions": null, "carries": 0 }
+      }
+    },
+    {
+      "id": "weekly_na_stat_is_missing",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,NA,NA,NA,7,42\n",
+      "expected": {
+        "adapter": { "ok": true, "recordCount": 1 },
+        "record0": { "targets": null, "receptions": null, "carries": 7 }
+      }
+    },
+    {
+      "id": "weekly_traded_player_two_teams",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0099999,2024_01_SF_KC,2024,1,REG,SF,KC,RB,2,2,15,12,60\n00-0099999,2024_10_DAL_NYG,2024,10,REG,DAL,NYG,RB,3,3,20,14,71\n",
+      "expected": { "adapter": { "ok": true, "recordCount": 2 }, "teamTricodes": ["SF", "DAL"] }
+    },
+    {
+      "id": "weekly_exact_duplicate_collapsed",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,7,110,0,0\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,7,110,0,0\n",
+      "expected": { "adapter": { "ok": true, "recordCount": 1, "duplicateRowsCollapsed": 1 } }
+    },
+    {
+      "id": "weekly_conflicting_duplicate_key",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,7,110,0,0\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,8,121,0,0\n",
+      "expected": { "adapter": { "ok": false, "reason": "conflicting_rows" } }
+    },
+    {
+      "id": "weekly_missing_required_header",
+      "requestedSeason": 2024,
+      "raw": "player_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024,1,REG,SF,KC,WR,10,7,110,0,0\n",
+      "expected": { "adapter": { "ok": false, "reason": "incomplete_response" } }
+    },
+    {
+      "id": "weekly_duplicate_consumed_header",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,targets,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,7,110,0,0\n",
+      "expected": { "adapter": { "ok": false, "reason": "incomplete_response" } }
+    },
+    {
+      "id": "weekly_wrong_width_row",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,7,110\n",
+      "expected": { "adapter": { "ok": false, "reason": "incomplete_response" } }
+    },
+    {
+      "id": "weekly_season_mismatch",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2023_01_SF_KC,2023,1,REG,SF,KC,WR,10,7,110,0,0\n",
+      "expected": { "adapter": { "ok": false, "reason": "season_mismatch" } }
+    },
+    {
+      "id": "weekly_noninteger_week",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1.0,REG,SF,KC,WR,10,7,110,0,0\n",
+      "expected": { "adapter": { "ok": false, "reason": "invalid_identifier" } }
+    },
+    {
+      "id": "weekly_out_of_range_week",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_23_SF_KC,2024,23,REG,SF,KC,WR,10,7,110,0,0\n",
+      "expected": { "adapter": { "ok": false, "reason": "invalid_identifier" } }
+    },
+    {
+      "id": "weekly_blank_game_id_dropped",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,,2024,1,REG,SF,KC,WR,10,7,110,0,0\n00-0033040,2024_01_SF_KC,2024,1,REG,KC,SF,TE,8,6,70,1,4\n",
+      "expected": { "adapter": { "ok": true, "recordCount": 1, "blankKeyRows": 1 } }
+    },
+    {
+      "id": "weekly_empty_after_header",
+      "requestedSeason": 2024,
+      "raw": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n",
+      "expected": { "adapter": { "ok": false, "reason": "empty_result" } }
+    }
+  ],
+  "scheduleCases": [
+    {
+      "id": "schedule_multiseason_filtered",
+      "requestedSeason": 2024,
+      "raw": "game_id,season,game_type,week,gameday,away_team,home_team\n2023_01_AAA_BBB,2023,REG,1,2023-09-07,AAA,BBB\n2024_01_SF_KC,2024,REG,1,2024-09-08,SF,KC\n2024_10_DAL_NYG,2024,REG,10,2024-11-10,DAL,NYG\n2025_01_CCC_DDD,2025,REG,1,2025-09-05,CCC,DDD\n",
+      "expected": { "adapter": { "ok": true, "recordCount": 2, "seasonFilteredRows": 2 } }
+    },
+    {
+      "id": "schedule_no_rows_for_season",
+      "requestedSeason": 2024,
+      "raw": "game_id,season,game_type,week,gameday,away_team,home_team\n2023_01_AAA_BBB,2023,REG,1,2023-09-07,AAA,BBB\n",
+      "expected": { "adapter": { "ok": false, "reason": "empty_result" } }
+    },
+    {
+      "id": "schedule_missing_required_header",
+      "requestedSeason": 2024,
+      "raw": "game_id,season,week,away_team,home_team\n2024_01_SF_KC,2024,1,SF,KC\n",
+      "expected": { "adapter": { "ok": false, "reason": "incomplete_response" } }
+    }
+  ],
+  "joinCases": [
+    {
+      "id": "join_resolved_features",
+      "requestedSeason": 2024,
+      "weekly": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,SF,KC,WR,10,,110,0,0\n",
+      "schedule": "game_id,season,game_type,week,gameday,away_team,home_team\n2024_01_SF_KC,2024,REG,1,2024-09-08,SF,KC\n",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "expected": {
+        "featureRows": 5,
+        "featureBearingPlayers": 1,
+        "featureStates": {
+          "nfl.player.targets_per_game": "observed",
+          "nfl.player.receptions_per_game": "missing",
+          "nfl.player.carries_per_game": "observed_zero"
+        },
+        "validAt": "2024-09-08T00:00:00Z"
+      }
+    },
+    {
+      "id": "join_unresolved_game",
+      "requestedSeason": 2024,
+      "weekly": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_09_XX_YY,2024,9,REG,SF,KC,WR,10,7,110,0,0\n",
+      "schedule": "game_id,season,game_type,week,gameday,away_team,home_team\n2024_01_SF_KC,2024,REG,1,2024-09-08,SF,KC\n",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "expected": { "featureRows": 0, "unresolvedGameIds": 1, "skipReason": "unresolved_schedule_game" }
+    },
+    {
+      "id": "join_team_contradiction",
+      "requestedSeason": 2024,
+      "weekly": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,1,REG,DEN,KC,WR,10,7,110,0,0\n",
+      "schedule": "game_id,season,game_type,week,gameday,away_team,home_team\n2024_01_SF_KC,2024,REG,1,2024-09-08,SF,KC\n",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "expected": { "featureRows": 0, "contradictoryRows": 1, "skipReason": "team_contradicts_schedule" }
+    },
+    {
+      "id": "join_week_contradiction",
+      "requestedSeason": 2024,
+      "weekly": "player_id,game_id,season,week,season_type,team,opponent_team,position,targets,receptions,receiving_yards,carries,rushing_yards\n00-0036355,2024_01_SF_KC,2024,2,REG,SF,KC,WR,10,7,110,0,0\n",
+      "schedule": "game_id,season,game_type,week,gameday,away_team,home_team\n2024_01_SF_KC,2024,REG,1,2024-09-08,SF,KC\n",
+      "fetchedAtIso": "2026-08-05T18:00:00Z",
+      "expected": { "featureRows": 0, "contradictoryRows": 1, "skipReason": "week_mismatch_vs_schedule" }
+    }
+  ],
+  "coverageCases": [
+    {
+      "id": "coverage_current_forward_supported",
+      "season": 2024,
+      "currentSeason": 2024,
+      "coverage": "adapter_retrievable",
+      "expected": { "knownAtSupport": "forward_supported" }
+    },
+    {
+      "id": "coverage_prior_historical_unsupported",
+      "season": 2022,
+      "currentSeason": 2024,
+      "coverage": "adapter_retrievable",
+      "expected": { "knownAtSupport": "historical_unsupported" }
+    }
+  ]
+}

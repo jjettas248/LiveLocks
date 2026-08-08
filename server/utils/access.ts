@@ -2,13 +2,32 @@ interface AccessFlags {
   hasNBA: boolean;
   hasNCAAB: boolean;
   hasMLB: boolean;
-  // Contract-only (PR2, migration plan C3). NFL is not operational, so NO
-  // assignable subscription tier grants it — `hasNFL` is `false` for every real
-  // tier and only `true` under the global admin bypass. The NFL entitlement
-  // mapping is deliberately deferred to a later PR (data layer). Adding this
-  // flag does not change hasNBA/hasNCAAB/hasMLB/hasUnlimited for any tier.
+  // PR6 (NFL data & entitlement): the tier→NFL MAPPING is now defined
+  // (`tierMapsToNfl`), but kept GATED OFF behind the default-off, fail-closed
+  // `NFL_ENTITLEMENT_ENABLED` flag — because no NFL product is operational yet.
+  // With the flag off (the default), `hasNFL` is `false` for every real tier,
+  // exactly as before; only the global admin bypass sets it `true`. Enabling the
+  // flag grants NFL to the mapped tier ("elite"/All Sports) and nothing else.
+  // Adding/using this NEVER changes hasNBA/hasNCAAB/hasMLB/hasUnlimited.
   hasNFL: boolean;
   hasUnlimited: boolean;
+}
+
+/** Env flag that ACTIVATES the NFL entitlement mapping. Default OFF (fail-closed). */
+export const NFL_ENTITLEMENT_ENABLED_ENV = "NFL_ENTITLEMENT_ENABLED" as const;
+const NFL_FLAG_AFFIRMATIVE = new Set(["true", "1", "on", "yes"]);
+export function isNflEntitlementEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[NFL_ENTITLEMENT_ENABLED_ENV];
+  return raw != null && NFL_FLAG_AFFIRMATIVE.has(raw.trim().toLowerCase());
+}
+
+/**
+ * Contract mapping: which NORMALIZED tier WOULD grant NFL once the entitlement is
+ * enabled. NFL is an "All Sports" sport (like MLB), so it maps to `elite`. Pure —
+ * does NOT read the flag; the flag gates whether this mapping takes effect.
+ */
+export function tierMapsToNfl(normalizedTier: string): boolean {
+  return normalizedTier === "elite";
 }
 
 export function resolveAccess(tier?: string | null, isAdmin?: boolean): AccessFlags {
@@ -32,8 +51,9 @@ export function resolveAccess(tier?: string | null, isAdmin?: boolean): AccessFl
     hasNBA:       ["all", "elite"].includes(t),
     hasNCAAB:     ["all", "elite"].includes(t),
     hasMLB:       ["elite"].includes(t),
-    // No assignable tier grants NFL (contract-only until the entitlement lands).
-    hasNFL:       false,
+    // Gated off by default → false for every tier (unchanged). Only when the
+    // fail-closed NFL_ENTITLEMENT_ENABLED flag is on does the mapped tier grant NFL.
+    hasNFL:       isNflEntitlementEnabled() && tierMapsToNfl(t),
     hasUnlimited: ["all", "elite"].includes(t),
   };
 }
