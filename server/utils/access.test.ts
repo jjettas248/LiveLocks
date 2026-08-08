@@ -17,6 +17,23 @@ const setFlag = (v: string | undefined) => { if (v === undefined) delete process
   ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "true" }) === true, "'true' → enabled");
   ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: " ON " }) === true, "trims + case-insensitive");
   ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "maybe" }) === false, "non-affirmative → disabled");
+  // Explicit re-audit: blank / negative / unknown affirmatives all fail closed.
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "" }) === false, "blank string → disabled");
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "   " }) === false, "whitespace-only → disabled");
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "false" }) === false, "'false' → disabled");
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "0" }) === false, "'0' → disabled");
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "no" }) === false, "'no' → disabled");
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "off" }) === false, "'off' → disabled");
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "TRUE" }) === true, "'TRUE' (uppercase) → enabled");
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "1" }) === true, "'1' → enabled");
+  ok(isNflEntitlementEnabled({ [NFL_ENTITLEMENT_ENABLED_ENV]: "yes" }) === true, "'yes' → enabled");
+}
+
+// ── tierMapsToNfl: unknown / alias-normalized inputs never map ───────────────
+{
+  ok(tierMapsToNfl("unknown") === false, "unknown tier does not map to NFL");
+  ok(tierMapsToNfl("ELITE") === false, "tierMapsToNfl is exact-match on the NORMALIZED tier (uppercase not normalized here)");
+  ok(tierMapsToNfl("all_sports") === false, "raw alias does not map (normalization happens in resolveAccess, before this)");
 }
 
 // ── Pure mapping: NFL is an All-Sports (elite) sport ────────────────────────
@@ -57,6 +74,22 @@ const setFlag = (v: string | undefined) => { if (v === undefined) delete process
   ok(all.hasNFL === false, "flag on: 'all' (Pro) still no NFL (only elite maps)");
   ok(all.hasNBA && all.hasNCAAB && !all.hasMLB, "flag on: 'all' other flags unchanged");
   ok(resolveAccess("free", false).hasNFL === false, "flag on: no-tier still no NFL");
+}
+
+// ── Strict invariance: toggling the flag moves ONLY hasNFL, nothing else ────
+{
+  for (const tier of ["elite", "all", "free", "all_sports", "pro_nba"]) {
+    setFlag(undefined);
+    const off = resolveAccess(tier, false);
+    setFlag("true");
+    const on = resolveAccess(tier, false);
+    ok(off.hasNBA === on.hasNBA && off.hasNCAAB === on.hasNCAAB && off.hasMLB === on.hasMLB && off.hasUnlimited === on.hasUnlimited,
+      `flag toggle leaves NBA/NCAAB/MLB/unlimited unchanged for "${tier}"`);
+    // hasNFL only ever differs (off→on) for the mapped tier; every other tier stays false both ways.
+    const normalizedIsElite = tier === "elite" || tier === "all_sports";
+    ok(off.hasNFL === false, `"${tier}" hasNFL false when flag off`);
+    ok(on.hasNFL === normalizedIsElite, `"${tier}" hasNFL on-flag === maps-to-elite (${normalizedIsElite})`);
+  }
 }
 
 setFlag(saved); // restore
