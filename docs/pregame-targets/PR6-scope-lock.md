@@ -83,3 +83,19 @@ PR6 does not implement an NFL projection engine (no PR3/PR4 analog), does not bu
 public NFL surface, does not begin PR7 (inferred NBA shadow build) or PR8 (analytics),
 and does not enable NFL entitlement operationally. PR9 remains unapproved pending its own
 scope lock.
+
+## 5. Branch-name artifact (documented, deliberately not renamed)
+
+PR6's work lives on the branch **`claude/nba-pregame-ingestion`** (draft PR #178), whose
+name reads as NBA even though PR6 delivers **NFL** data + entitlement. This is a naming
+artifact only — the branch was continued from the PR5 lineage rather than cut fresh, and
+the actual diff is entirely NFL-scoped (see §3 and the scope audit in the PR6 convergence
+audit comment). A cleaner name would be `claude/nfl-pregame-data-entitlement`.
+
+**Why it is not renamed:** renaming the branch of an already-open PR is not safely
+available through the tooling in this environment without closing/recreating PR #178,
+which the reviewer explicitly asked to keep as a single draft. GitHub branch-rename is not
+exposed via the MCP surface, and a local rename + force-push under a new ref would orphan
+the PR. Per the sanctioned fallback, the branch is **left alone and the naming artifact is
+documented here** rather than churning the PR. The next fresh-cut branch in the program
+should adopt the sport-accurate naming convention.
