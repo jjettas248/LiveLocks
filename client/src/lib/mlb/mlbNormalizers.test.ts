@@ -10,7 +10,10 @@ import {
   normalizeMlbGameChip,
   formatMlbDisplayStatus,
   formatMlbDisplayInning,
+  deriveBestPlay,
+  deriveAllPlayerPlays,
   type GameLike,
+  type SignalLike,
 } from "@/lib/mlb/mlbNormalizers";
 
 let pass = 0;
@@ -148,6 +151,91 @@ console.log("\ninning display");
   assert("bottom 9 → ▼9", formatMlbDisplayInning(game({ status: "live", inning: 9, isTopInning: false })) === "▼9");
   assert("final → Final", formatMlbDisplayInning(game({ status: "final" })) === "Final");
   assert("pregame → empty", formatMlbDisplayInning(game({ status: "pregame" })) === "");
+}
+
+// ── 7. deriveBestPlay / deriveAllPlayerPlays — CURRENT enginePct-tier characterization ──
+// These two functions derive their 3-bucket confidenceTier ("strong"/"building"/
+// "monitor"/null) from raw enginePct thresholds (75/65/55), NOT from the
+// server-stamped signalTier/confidenceTier fields also present on SignalLike —
+// unlike the sibling deriveMlbRibbonChipSignal above, which reads signalTier
+// exclusively. This is a known, documented vocabulary mismatch (see
+// docs/architecture/TECH_DEBT_REMAINING.md — "MLB Client Normalizer Contract
+// Convergence" follow-up) and is INTENTIONALLY left unconverged on this branch.
+// This suite pins the CURRENT behavior as a regression guard so the follow-up
+// branch has a precise before/after diff to work against, and so no other
+// change accidentally alters this mapping in the meantime.
+console.log("\nderiveBestPlay / deriveAllPlayerPlays — enginePct-tier characterization");
+{
+  function sig(p: Partial<SignalLike> & { playerId: string }): SignalLike {
+    return { enginePct: 0, recommendedSide: "OVER", market: "hits", signalScore: 0, ...p };
+  }
+
+  // 7a. Threshold boundaries, driven by enginePct alone.
+  const strong = deriveBestPlay([sig({ playerId: "p1", enginePct: 75, signalScore: 10 })], "p1");
+  assert("enginePct=75 → strong (boundary, inclusive)", strong?.confidenceTier === "strong");
+
+  const building = deriveBestPlay([sig({ playerId: "p1", enginePct: 65, signalScore: 10 })], "p1");
+  assert("enginePct=65 → building (boundary, inclusive)", building?.confidenceTier === "building");
+
+  const monitor = deriveBestPlay([sig({ playerId: "p1", enginePct: 55, signalScore: 10 })], "p1");
+  assert("enginePct=55 → monitor (boundary, inclusive)", monitor?.confidenceTier === "monitor");
+
+  const belowFloor = deriveBestPlay([sig({ playerId: "p1", enginePct: 54, signalScore: 10 })], "p1");
+  assert("enginePct=54 → null (below monitor floor)", belowFloor?.confidenceTier === null);
+
+  // 7b. CURRENT known gap: a server-stamped elite signalTier/confidenceTier is
+  // ignored entirely when enginePct is low — this is the exact mismatch the
+  // follow-up (MLB Client Normalizer Contract Convergence) is queued to fix.
+  const ignoresServerTier = deriveBestPlay(
+    [sig({ playerId: "p1", enginePct: 40, signalScore: 10, confidenceTier: "ELITE" })],
+    "p1",
+  );
+  assert(
+    "CURRENT: high server confidenceTier does not override a low enginePct-derived tier",
+    ignoresServerTier?.confidenceTier === null,
+    `got ${JSON.stringify(ignoresServerTier?.confidenceTier)} (expected null under CURRENT unconverged behavior)`,
+  );
+
+  // 7c. Best-of pool selection is by signalScore, not enginePct.
+  const byScore = deriveBestPlay(
+    [
+      sig({ playerId: "p1", enginePct: 90, signalScore: 1, market: "hits" }),
+      sig({ playerId: "p1", enginePct: 60, signalScore: 99, market: "total_bases" }),
+    ],
+    "p1",
+  );
+  assert("best play picked by signalScore, not enginePct", byScore?.market === "total_bases");
+
+  // 7d. alreadyHit signals are excluded from the primary pool but used as a
+  // fallback when no active signal exists.
+  const excludesAlreadyHit = deriveBestPlay(
+    [
+      sig({ playerId: "p1", enginePct: 80, signalScore: 5, alreadyHit: true, market: "hits" }),
+      sig({ playerId: "p1", enginePct: 70, signalScore: 1, alreadyHit: false, market: "total_bases" }),
+    ],
+    "p1",
+  );
+  assert("active (non-alreadyHit) signal preferred over a higher-score alreadyHit one", excludesAlreadyHit?.market === "total_bases");
+
+  const fallsBackToAlreadyHit = deriveBestPlay(
+    [sig({ playerId: "p1", enginePct: 80, signalScore: 5, alreadyHit: true, market: "hits" })],
+    "p1",
+  );
+  assert("falls back to alreadyHit signal when no active signal exists", fallsBackToAlreadyHit?.market === "hits");
+
+  assert("null when no signals for playerId at all", deriveBestPlay([sig({ playerId: "other", enginePct: 90 })], "p1") === null);
+
+  // 7e. deriveAllPlayerPlays applies the identical per-item tier mapping,
+  // sorted by signalScore descending.
+  const all = deriveAllPlayerPlays(
+    [
+      sig({ playerId: "p1", enginePct: 55, signalScore: 1, market: "hits" }),
+      sig({ playerId: "p1", enginePct: 75, signalScore: 2, market: "total_bases" }),
+    ],
+    "p1",
+  );
+  assert("deriveAllPlayerPlays sorts by signalScore desc", all.map(p => p.market).join(",") === "total_bases,hits");
+  assert("deriveAllPlayerPlays applies the same enginePct thresholds", all[0].confidenceTier === "strong" && all[1].confidenceTier === "monitor");
 }
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===\n`);

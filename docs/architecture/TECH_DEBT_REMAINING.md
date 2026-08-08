@@ -97,13 +97,17 @@ Two "debug MLB" endpoints exist with different auth patterns (`requireAuth` + ma
 
 ---
 
-## 11. `mlbNormalizers.ts` tier-collapse mapping (RISK-C, proposal ready — deferred, no go-ahead received this pass)
+## 11. `mlbNormalizers.ts` tier-collapse mapping — queued follow-up: **MLB Client Normalizer Contract Convergence**
 
-`deriveBestPlay()`/`deriveAllPlayerPlays()` in `client/src/lib/mlb/mlbNormalizers.ts` ignore the already-available, reliably-populated, server-stamped `confidenceTier`/`signalTier` fields on their own input type (`SignalLike`) and instead re-derive a 3-bucket tier (`"monitor"|"building"|"strong"|null`) from raw `enginePct` thresholds (75/65/55) — inconsistent with the sibling function `deriveMlbRibbonChipSignal` in the same file, which correctly reads `signalTier` exclusively and documents that contract.
+`deriveBestPlay()`/`deriveAllPlayerPlays()` in `client/src/lib/mlb/mlbNormalizers.ts` ignore the already-available, reliably-populated, server-stamped `confidenceTier`/`signalTier` fields on their own input type (`SignalLike`) and instead re-derive a 3-bucket tier (`"monitor"|"building"|"strong"|null`) from raw `enginePct` thresholds (75/65/55) — inconsistent with the sibling function `deriveMlbRibbonChipSignal` in the same file, which correctly reads `signalTier` exclusively and documents that contract. This is a real server/client vocabulary mismatch: two functions in the same file disagree about which field is authoritative for tier.
 
 Both `confidenceTier` (`server/mlb/normalizeSignal.ts:518`, always defaulted to `"WATCHLIST"`) and `signalTier` (derived via the canonical `deriveSignalTier()` in `server/mlb/signalScore.ts`) are confirmed non-sparse, reliable fields — this is not blocked on missing data.
 
-**Ready-to-apply proposed fix:** prefer `signalTier`/`confidenceTier` when present, mapped `elite→strong, strong→strong, lean→building, watch→monitor`, falling back to the existing `enginePct`-threshold heuristic only when the field is absent (matching this file's own established cache-rollover fallback pattern elsewhere). This was presented for a go-ahead during the cleanup pass and not confirmed in time — proposal stands ready for the next pass. Verification path: since no dedicated regression test exists for this file, write a throwaway parity script comparing old-vs-new tier assignment across a snapshot of real cached signal payloads before merging.
+**This branch characterizes but does NOT change production mapping behavior**, per the blast-radius ceiling (tier-semantic changes are explicitly out of scope — changing which field/threshold drives the tier shown on the live UI is a user-visible sorting/badge change). What this branch did instead:
+- Made `SignalLike` exported (`client/src/lib/mlb/mlbNormalizers.ts`) — type-only, zero runtime effect — so it can be referenced from a test.
+- Added a characterization suite (`client/src/lib/mlb/mlbNormalizers.test.ts`, section 7 — 11 new checks, run via `npx tsx client/src/lib/mlb/mlbNormalizers.test.ts`) that pins the CURRENT enginePct-threshold behavior of both functions, including the explicit gap: a signal with `confidenceTier: "ELITE"` but low `enginePct` currently returns `confidenceTier: null` (server tier is silently ignored). This is a regression guard, not a fix — it exists so the follow-up branch has a precise, automated before/after diff and so nothing else accidentally changes this mapping in the meantime.
+
+**Proposed mapping for the follow-up branch (unapplied here):** prefer `signalTier`/`confidenceTier` when present, mapped `elite→strong, strong→strong, lean→building, watch→monitor`, falling back to the existing `enginePct`-threshold heuristic only when the field is absent (matching this file's own established cache-rollover fallback pattern elsewhere, e.g. `deriveMlbRibbonChipSignal`'s own cache-rollover branch). Verification path for that branch: update section 7's characterization assertions to the new expected mapping (they will fail against the old behavior by design, proving the change), plus a parity comparison against a snapshot of real cached signal payloads before merging, since this changes live-UI sort/badge output.
 
 ---
 
@@ -137,10 +141,29 @@ Same fix pattern applies (wouter `navigate`/`Link` instead of anchor tag) if a f
 
 ---
 
-## 16. `server/mlb/dataSources.ts:615` UTC-vs-ET query boundary (RISK-C, proposal ready — deferred, no go-ahead received this pass)
+## 16. `server/mlb/dataSources.ts` UTC-vs-ET query boundary — **BLOCKED-D FOR THIS BRANCH / MLB CORRECTNESS FIX FOR FOLLOW-UP**
 
-`const today = new Date().toISOString().split("T")[0]` (UTC) is used as the `game_date_lt` upper bound for a Baseball Savant season-stats CSV pull, instead of `todayET()` like everywhere else in the codebase — a genuine Hard-Rule-4 violation (`CLAUDE.md` §4: "Do not use `new Date()` for slate/window logic"). Near ET midnight (~7–8pm ET), the query window can be one calendar day off from the intended ET slate day.
+Per the charter's blast-radius ceiling, this item feeds probability-relevant MLB systems and is explicitly **not modified on this branch**. It is characterized here only, for a dedicated follow-up.
 
-**Why not applied this pass:** `fetchBaseballSavantData()` (the containing function) feeds directly into `buildMlbMoundRadar.ts`, `contactRisk.ts`, `buildPregamePowerRadar.ts`, `pitchFamilyMatchup.ts`, `plateHrV2SufficientStats.ts`, and `batterPowerProfile.ts` — a direct input to HR-probability/Mound-radar engine computations. The fix is mechanical (swap in `todayET()`), but its effect shifts which calendar day's stat window feeds probability-relevant season aggregates, which crosses into BLOCKED-D territory by the charter's own definition even though the code change is one line touched twice.
+**Exact file/function:** `server/mlb/dataSources.ts`, function `fetchBaseballSavantData` (declared line 532). The UTC date is built at line 615:
+```ts
+const today = new Date().toISOString().split("T")[0];
+```
+used two lines later (617–618) as the `game_date_lt` upper bound in both the batter- and pitcher-side Baseball Savant Statcast CSV query URLs. (`seasonStart`, the lower bound at line 614, is a fixed `${currentYear}-01-01` and is not affected by this issue.)
 
-**Ready-to-apply fix:** swap both occurrences of `new Date().toISOString().split("T")[0]` for `todayET()` (already imported/available via `server/utils/dateUtils.ts` elsewhere in the codebase). This was presented for a go-ahead during the cleanup pass and not confirmed in time — proposal stands ready for a future engine-adjacent pass, ideally paired with re-running whatever MLB regression suites exercise Baseball Savant-fed HR/Mound inputs.
+**Current UTC behavior:** `new Date().toISOString()` renders the instant in UTC, so `today` is UTC's current calendar date. Between roughly 8:00 PM and midnight ET (UTC is 4–5 hours ahead of ET depending on DST), `today` has already rolled over to the *next* calendar date in UTC while it is still the prior date in US Eastern time. The CSV query's `game_date_lt` bound is therefore one day later than intended during that window, silently admitting one extra UTC-day of Statcast rows into the season aggregate.
+
+**Expected `todayET()` behavior:** `server/utils/dateUtils.ts`'s `todayET()` (line 1) returns the current date already resolved to `America/New_York`, matching every other slate/window computation in the codebase (CLAUDE.md §3.4 / Hard Rule 9: "Do not use `new Date()` for slate/window logic — use `todayET()`"). Swapping line 615 to `const today = todayET();` would make the query's upper bound agree with the ET slate day the rest of the MLB pipeline already uses, eliminating the evening UTC/ET mismatch window.
+
+**Downstream consumers** (direct callers of `fetchBaseballSavantData`, confirmed via repo-wide grep, `server/mlb/dataSources.ts` itself excluded):
+- `server/mlb/pregame/mound/buildMlbMoundRadar.ts`
+- `server/mlb/pregame/mound/contactRisk.ts`
+- `server/mlb/dataPullService.ts`
+- `server/mlb/pregamePowerRadar/buildPregamePowerRadar.ts`
+- `server/mlb/pregamePowerRadar/hrProbabilityV2/plateHrV2SufficientStats.ts`
+
+Each of these feeds season-aggregate Statcast inputs (xwOBA, ISO, pull rate, batted-ball mix, pitcher whiff/CSW, etc.) into pregame HR-probability and Mound Radar scoring — probability-relevant engine inputs, not display-only fields.
+
+**Why it needs dedicated MLB regression verification (not a mechanical swap):** the fix is a one-line-touched-twice change, but its *effect* shifts which calendar day's row set is included in season aggregates that feed live probability computations for Mound Radar and Pregame Power Radar — this is an engine-input behavior change under CLAUDE.md §7a ("Sanctioned Engine Changes"), which requires: making the change in the engine-input layer (satisfied — `dataSources.ts` is upstream of the engine, not a composition/bus layer), confirming no payload-shape change, and — critically — **re-baselining the goldmaster** (`MLB_GOLDMASTER_VERSION` in `server/mlb/goldmasterGuard.ts`) plus running the Baseball-Savant-adjacent MLB regression suites (at minimum `pregamePowerRadar/plateChampionJul20Regression.test.ts`, `plateModelShadowIsolation.test.ts`, `isoAssessment.test.ts`, and the Mound Radar `contactRisk.test.ts`/`matchupAdjustedKs.test.ts`) before merge, since a champion-score/tier drift here would trip the plate-champion policy lock. That verification work is explicitly out of scope for a structure-only cleanup branch.
+
+**Ready-to-apply fix for the follow-up branch:** swap `new Date().toISOString().split("T")[0]` for `todayET()` at line 615 (already available via `server/utils/dateUtils.ts`, imported elsewhere in the MLB codebase), then run the regression suites listed above and re-baseline the goldmaster per §7a.

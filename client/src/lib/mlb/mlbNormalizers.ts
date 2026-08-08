@@ -137,7 +137,7 @@ export function normalizeMlbGameChip(game: GameLike): MlbGameChipViewModel {
   };
 }
 
-type SignalLike = {
+export type SignalLike = {
   playerId: string;
   enginePct?: number;
   recommendedSide?: string;
