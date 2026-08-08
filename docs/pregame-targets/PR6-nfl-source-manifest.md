@@ -1,78 +1,92 @@
-# PR6 — NFL Source & Version Manifest (feasibility gate)
+# PR6 — NFL Source & Version Manifest (frozen)
 
-Frozen before implementation, per the PR6 source-feasibility gate. **No value in this
-document was measured against a live provider** — this environment has no outbound
-provider access. Every value that would require a live pull is labeled `PENDING
-MEASUREMENT IN THE AUTHORIZED ENVIRONMENT`.
+The exact upstream sources below were **recovered from the authoritative nflverse/nflreadr
+open-source loaders and verified against the real files**. They are frozen here (no
+"to be confirmed" placeholders). No live production pull is performed by PR6.
 
-## 1. Source & version manifest
+## 1. Frozen source manifest
+
+### 1a. Weekly player stats (feature source)
 
 | Field | Value |
 | --- | --- |
-| Provider | **nflverse** (`nflverse-data` GitHub releases; the data behind `nflreadr`/`nflfastR`). |
-| API versioning | nflverse assets are **unversioned per row** but are published as dated GitHub **releases**. We pin a repo-owned `sourceVersion` (`nflverse_weekly_v1` / `nflverse_schedule_v1`) plus the captured CSV `headers[]`, so a provider schema drift (added/removed/reordered columns) is detected rather than silently absorbed. |
-| **Operationally ingested by PR6** | **weekly player stats** (feature source) joined to **schedules** (temporal anchor). Rosters/PBP are NOT ingested in PR6 (out of scope). |
-| Endpoints used | `player_stats` release → `player_stats_{season}.csv` (per-player-per-week stats); `schedules` release → `games.csv` (game_id, season, week, gameday, home/away team). Exact asset URLs/filenames are pinned in `sourceVersion` and confirmed in the authorized environment. |
-| Raw capture path | The runner ingests the **verbatim** provider CSV — original headers/cells, genuine blanks — via a raw fetch that does NOT coerce missing values. So the immutable capture IS the provider payload, and the adapter sees real schema drift and genuine missing values (`null`, never a fabricated `0`). |
-| Request == identity | A pull requests the **exact** season + release it stores under; the season and source kind are part of the stable semantic source key. |
-| Response shape | CSV with a header row + data rows; one weekly-stats row per (player, season, week); one schedule row per game. |
+| Repository | `nflverse/nflverse-data` (GitHub releases) |
+| Release/tag | `stats_player` |
+| Asset (per season) | `stats_player_week_{season}.csv` |
+| Exact URL | `https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_{season}.csv` |
+| Source version | `nflverse_stats_player_week_v1` |
+| Content type | `text/csv` (served `application/octet-stream`) |
+| Required headers | `player_id`, `game_id`, `season`, `week`, `season_type`, `team` |
+| Also consumed | `opponent_team`, `position`, `targets`, `receptions`, `receiving_yards`, `carries`, `rushing_yards` |
+| Game identity | provider-native **`game_id`** (e.g. `2024_01_SF_KC`) — canonical game identity, never reconstructed |
 
-## 2. Timestamp semantics available from each source (the honesty gate)
+### 1b. Schedules (temporal anchor + cross-check)
 
-nflverse weekly player stats key by **(player, season, week)** and carry **no per-record
-game date**; the date is resolved by joining to the **schedule** (`gameday` per
-`game_id`/`(season, week, team)`). This governs the `knownAt` contract:
+| Field | Value |
+| --- | --- |
+| Repository | `nflverse/nfldata` |
+| Path | `data/games.csv` (multi-season, 2006+) |
+| Exact URL | `https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv` |
+| Source version | `nflverse_nfldata_games_v1` |
+| Content type | `text/csv` |
+| Required headers | `game_id`, `season`, `week`, `gameday` |
+| Also consumed | `home_team`, `away_team`, `game_type` |
+| Note | `load_schedules()` reads the R-serialized `games.rds`; PR6 uses the equivalent CSV mirror `data/games.csv` (same dataset) since the pipeline parses CSV. |
+
+The weekly row is JOINED to the schedule **BY `game_id`**; the schedule supplies only the
+calendar anchor (`gameday`) and cross-checks (season/week/home/away). A join is failed
+closed on: no matching `game_id`, season mismatch, week mismatch, or a team/opponent that
+contradicts the matched game.
+
+## 2. Timestamp semantics (the honesty gate)
 
 | Timestamp | Availability |
 | --- | --- |
-| **source-effective** (`sourceEffectiveAt`) | the game's `gameday` (from the schedule join) — a `validAt` anchor, **not** `knownAt`. |
-| **source-published / updated** (`sourcePublishedAt`) | the nflverse **release** publish instant, **if** captured from the release metadata; otherwise `null` (explicit, durable unknown). nflverse *can* expose a release timestamp — when available it is persisted, never fabricated. |
-| **fetched** (`fetchedAt`) | the instant the CSV body was received AND decoded (the true observation instant → `knownAt`); captured post-decode, never at request start. |
-| **ingested** (`ingestedAt`) | the raw snapshot row's immutable `created_at`. |
+| **source-effective** (`sourceEffectiveAt`) | schedule `gameday` (via the game_id join) — a `validAt` anchor, not `knownAt`. |
+| **source-published** (`sourcePublishedAt`) | the response `Last-Modified` instant if present (guarded against a malformed header), else `null` (durable unknown) — never fabricated. |
+| **fetched** (`fetchedAt`) | the instant the CSV body was received AND decoded (→ `knownAt`); captured post-decode, never at request start. |
+| **ingested** (`ingestedAt`) | the raw snapshot's immutable `created_at`. |
 | `knownAtPolicyVersion` | `nfl_nflverse_knownAt_v1` (persisted). |
 
-### `knownAt` policy (`nfl_nflverse_knownAt_v1`)
+**`knownAt` policy (`nfl_nflverse_knownAt_v1`):** forward ingestion → `knownAt = fetchedAt`
+(honest upper bound). Historical backfill → `knownAt` is **`unsupported`** (nflverse exposes
+no per-record finalize instant); `sourcePublishedAt` may still be persisted as metadata.
+`gameday` is never substituted for `knownAt`; a present-day `fetchedAt` is never back-dated.
 
-- **Forward ingestion** (fetching a completed week's stats going forward): `fetchedAt` is
-  an honest upper bound on knowability → `knownAt = fetchedAt`.
-- **Historical backfill** (fetching a prior season now): even though nflverse may expose a
-  release timestamp, we do **not** back-date `knownAt` to it for leakage-safe replay
-  unless a per-record finalize instant is proven; historical box-score `knownAt` is
-  therefore **`unsupported`** (a distinct as-of state), never fabricated. `sourcePublishedAt`
-  (the release instant) may still be persisted as durable metadata.
-- **Never** substitute `gameday` for `knownAt`. **Never** assign a present-day `fetchedAt`
-  as a synthetic earlier historical `knownAt`.
+## 3. Licensing & production-use
 
-## 3. Licensing & production-use assumptions
+- **nflverse-data license:** the `nflverse-data` repository is published under **CC BY 4.0**.
+  Downstream use must **attribute nflverse** (e.g. "Data via the nflverse project,
+  CC BY 4.0"). `nfldata` (schedules) is likewise community-maintained nflverse data.
+- **NFL trademark / affiliation disclaimer:** NFL team names, logos, and marks are
+  trademarks of the National Football League; this project is **not affiliated with or
+  endorsed by the NFL**. No NFL marks are redistributed here — only statistical data.
+- **PRODUCTION USE: `PENDING OWNER CONFIRMATION`.** The owner has not authorized production
+  ingestion. PR6 commits code + synthetic fixtures + a manual runner; it performs **no**
+  live production ingestion, enables **no** ingestion flag, and activates **no** entitlement.
 
-nflverse redistributes NFL data under its own community terms; NFL trademarks/marks are
-not licensed here. **Production use is an owner decision — `PENDING OWNER CONFIRMATION`.**
-PR6 commits code + fixtures + a manual runner; it performs **no** live production
-ingestion and makes **no** licensing claim.
+## 4. Rate-limit & pagination
 
-## 4. Rate-limit & pagination behavior
+Each asset is a **whole-file** CSV (weekly = one season; schedule = all seasons) — no
+pagination cursor. A truncated/missing/HTTP-failed response is an **incomplete** coverage
+gap, never reported complete. Bulk multi-season throughput is
+`PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT`.
 
-- **Bulk, no pagination:** each release asset is a **whole-season CSV** — there is no
-  pagination cursor. A truncated CSV, a missing asset, or an HTTP failure is an
-  **incomplete response** classified as a coverage gap, **never** reported as complete.
-- Bulk multi-season throughput is `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT`.
+## 5. Per-season coverage matrix
 
-## 5. Per-source / per-season coverage matrix
+Current + two prior seasons kept **separate**. Every live cell requires a real pull and is
+pending. Coverage reporting spans the full pipeline (raw → structurally-accepted →
+schedule-resolved → feature-bearing → persisted); a weekly parse is never counted as usable
+coverage when the schedule join drops rows.
 
-Current + two prior seasons kept **separate**. Every cell requires a live pull to measure
-and is therefore pending:
-
-| Source | Current season | Prior-1 | Prior-2 | Historical `knownAt` |
+| Source | Current | Prior-1 | Prior-2 | Historical `knownAt` |
 | --- | --- | --- | --- | --- |
-| `player_stats` (weekly) | `PENDING MEASUREMENT IN THE AUTHORIZED ENVIRONMENT` | `PENDING MEASUREMENT …` | `PENDING MEASUREMENT …` | **unsupported** (no per-record finalize instant) |
-| `schedules` | `PENDING MEASUREMENT …` (temporal anchor only, not a feature source) | — | — | n/a |
+| `stats_player_week` | `PENDING MEASUREMENT …` | `PENDING MEASUREMENT …` | `PENDING MEASUREMENT …` | **unsupported** |
+| `nfldata/games.csv` | `PENDING MEASUREMENT …` (anchor only) | — | — | n/a |
 
-No measured coverage is fabricated. Live historical ingestion is **not** performed in
-this environment; the fixture set + this manifest are the in-repo gate.
+## 6. Fixtures (committed, SYNTHETIC)
 
-## 6. Representative fixtures (committed, SYNTHETIC)
-
-Synthetic, structurally-faithful fixtures (`"synthetic": true`) mirror the nflverse
-weekly-stats and schedule CSV shapes and the honest normalized/classified outputs, since
-this environment has no nflverse access. They are the in-repo feasibility gate — **not**
-captured live payloads.
+Synthetic-but-upstream-faithful fixtures (`__fixtures__/`, `"synthetic": true`) mirror the
+real weekly + schedule CSV schemas and the honest normalized/classified outputs — **not**
+captured live payloads (no nflverse access in this environment). If live captured fixtures
+become available later, they are kept distinguished from synthetic ones.
