@@ -30,6 +30,13 @@ export const PLATE_HR_V2_FEATURES_V1 = "plate_hr_v2_features_v1" as const;
 // historical V1 snapshots still parse; a single feature version never represents
 // two shapes. New snapshots are written as PLATE_HR_V2_FEATURES_CURRENT (= V2).
 export const PLATE_HR_V2_FEATURES_V2 = "plate_hr_v2_features_v2" as const;
+// V3 (PR7A) adds Retrosheet-backed, zone-independent plate discipline: it extends
+// `contactOpportunity` with non-location discipline leaves + hand-splits, adds a new
+// `pitcherDiscipline` group, and reshapes `zoneLocation` into the explicit
+// unavailable record (§3.5). V1/V2 are PRESERVED unchanged so historical snapshots
+// still parse. V3 is ADDITIVE and SHADOW-ONLY: CURRENT stays V2, so no producer
+// emits V3 until the Retrosheet adapter (PR7A stage 5) is separately authorized.
+export const PLATE_HR_V2_FEATURES_V3 = "plate_hr_v2_features_v3" as const;
 export const PLATE_HR_V2_FEATURES_CURRENT = PLATE_HR_V2_FEATURES_V2;
 
 // Independently-versioned raw-input envelope contract version — distinct from
@@ -38,7 +45,30 @@ export const PLATE_HR_V2_FEATURES_CURRENT = PLATE_HR_V2_FEATURES_V2;
 export const PLATE_HR_V2_RAW_INPUTS_V1 = "plate_hr_v2_raw_inputs_v1" as const;
 
 const numericLeaf = z.number().nullable();
+// A count/denominator leaf: a non-negative integer, or explicit null when absent.
+const nonNegIntLeaf = z.number().int().nonnegative().nullable();
+// A ratio leaf: a real number in [0,1], or explicit null when absent.
+const ratioLeaf = z.number().min(0).max(1).nullable();
 const extraLeaves = z.record(z.string(), z.number().nullable());
+
+// Calendar-valid STRICT ISO date (YYYY-MM-DD) or RFC3339 datetime. Rejects loose
+// formats (2019/09/14, "Sept 14 2019") AND non-calendar dates (2019-02-30, 2019-13-40)
+// that a permissive Date.parse could roll over. Used to validate dataset provenance.
+const STRICT_ISO_CAL_RE = /^(\d{4})-(\d{2})-(\d{2})(T(\d{2}):(\d{2}):(\d{2})(\.\d{1,9})?(Z|[+-]\d{2}:\d{2}))?$/;
+export function isStrictIsoCalendarTimestamp(s: unknown): boolean {
+  if (typeof s !== "string") return false;
+  const m = STRICT_ISO_CAL_RE.exec(s);
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return false;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return false;
+  if (m[4]) {
+    const hh = Number(m[5]), mi = Number(m[6]), ss = Number(m[7]);
+    if (hh > 23 || mi > 59 || ss > 59) return false;
+  }
+  return true;
+}
 const handednessSchema = z.enum(["L", "R", "S"]).nullable();
 
 // ── A. Batter true-power skill ──────────────────────────────────────────────
@@ -226,6 +256,103 @@ export const plateHrV2RecentContactFormFeaturesSchema = z.object({
 }).strict();
 export type PlateHrV2RecentContactFormFeatures = z.infer<typeof plateHrV2RecentContactFormFeaturesSchema>;
 
+// ── PR7A (V3) — Retrosheet-backed, zone-INDEPENDENT plate discipline ──────────
+// Additive/shadow contract only (no producer until the adapter, PR7A stage 5).
+// See docs/plate/pr7aPlateDisciplineNoLocationContract.md §3.
+
+// V3 contactOpportunity = the existing group + new non-location discipline leaves,
+// evidence-quality leaves, and top-line hand-splits. `chaseRatePct` and
+// `zoneContactRatePct` are RETAINED and stay permanently null (zone-dependent,
+// never proxied under Retrosheet — §2.2). `datasetVersion`/`dataThroughAt`/`gameIds`
+// live in the evidence descriptor (§4), not as leaves here (leaves stay all-numeric).
+export const plateHrV2ContactOpportunityV3FeaturesSchema = plateHrV2ContactOpportunityFeaturesSchema.extend({
+  // zone-dependent leaves are RETAINED but pinned to literal `null` under Retrosheet
+  // (never proxied, §2.2). Typed `z.null()` (not nullable) so a populated value is
+  // STRUCTURALLY rejected — the no-proxy rule is enforced by the type, not convention.
+  chaseRatePct: z.null(),
+  zoneContactRatePct: z.null(),
+  // new v3 non-location discipline rates:
+  foulStrikeRatePct: numericLeaf,        // foul strikes (F/T/L/O/R) / swings
+  firstPitchStrikeRatePct: numericLeaf,  // strike seen on pitch 1 / PA
+  twoStrikeSurvivalRatePct: numericLeaf, // (reached 2 strikes, not K) / reached 2 strikes
+  inPlayRatePct: numericLeaf,            // (X + Y) terminal / PA
+  // co-located evidence-quality leaves (a rate is never read without its provenance):
+  batterPa: nonNegIntLeaf,        // count denominator — non-negative int or null
+  codedPitchPa: nonNegIntLeaf,    // count denominator — non-negative int or null
+  pitchSequenceCoverage: ratioLeaf, // a ratio in [0,1], not a count
+  // top-line hand-splits (cardinality-bounded per §3.1):
+  kRatePctVsL: numericLeaf, kRatePctVsR: numericLeaf,
+  bbRatePctVsL: numericLeaf, bbRatePctVsR: numericLeaf,
+  contactRatePctVsL: numericLeaf, contactRatePctVsR: numericLeaf,
+  whiffRatePctVsL: numericLeaf, whiffRatePctVsR: numericLeaf,
+  paVsL: nonNegIntLeaf, paVsR: nonNegIntLeaf,   // per-hand count denominators
+}).strict();
+export type PlateHrV2ContactOpportunityV3Features = z.infer<typeof plateHrV2ContactOpportunityV3FeaturesSchema>;
+
+// V3 pitcherDiscipline = a separate pitcher-actor discipline group (§3.3). Batter
+// K/BB/contact are NEVER duplicated here. Conditional on the pitcher being known.
+export const plateHrV2PitcherDisciplineFeaturesSchema = z.object({
+  pitcherKnown: z.boolean(),
+  pitcherThrows: z.enum(["L", "R"]).nullable(),
+  pitcherKRatePct: numericLeaf,
+  pitcherBbRatePct: numericLeaf,                 // unintentional
+  pitcherWhiffRatePct: numericLeaf,             // whiff / swings induced
+  pitcherCalledStrikeRatePct: numericLeaf,      // calledStrikes / pitches (NOT / BF)
+  pitcherFirstPitchStrikeRatePct: numericLeaf,  // strike seen on pitch 1 / BF
+  // IMMUTABLE vs-L / vs-R history — the pitcher's own record against each batter
+  // hand, NOT a prediction-specific "vsHand" bucket. The consumer selects the
+  // relevant side at scoring time; the stored feature is hand-agnostic and stable.
+  pitcherKRatePctVsL: numericLeaf, pitcherKRatePctVsR: numericLeaf,
+  pitcherBbRatePctVsL: numericLeaf, pitcherBbRatePctVsR: numericLeaf,
+  pitcherPitches: nonNegIntLeaf,                // pitch denominator for calledStrikeRate
+  pitcherBf: nonNegIntLeaf,
+  pitcherBfVsL: nonNegIntLeaf, pitcherBfVsR: nonNegIntLeaf,
+  extra: extraLeaves,
+}).strict();
+export type PlateHrV2PitcherDisciplineFeatures = z.infer<typeof plateHrV2PitcherDisciplineFeaturesSchema>;
+
+// New reason-enum home for zone unavailability. Retrosheet carries no location,
+// so PR7A reshapes zoneLocation into an EXPLICIT unavailable record (§3.5) rather
+// than silently dropping it — the seam a future licensed zone source would fill.
+export const PLATE_HR_V2_ZONE_UNAVAILABLE_REASONS = ["licensed_source_unavailable"] as const;
+export type PlateHrV2ZoneUnavailableReason = (typeof PLATE_HR_V2_ZONE_UNAVAILABLE_REASONS)[number];
+
+// The closed set of explicit null-with-reason codes a v3 discipline rate carries
+// when a capture floor (§3.4) is not met. The affected rate is null; raw counts are
+// always preserved so PR8 can re-shrink. One reason per floor — no others.
+export const PLATE_DISCIPLINE_FLOOR_NULL_REASONS = [
+  "below_sequence_coverage",   // pitchSequenceCoverage < 0.90
+  "below_batter_pa_floor",     // batter overall PA < 150
+  "below_pitcher_bf_floor",    // pitcher overall BF < 300
+  "below_hand_split_pa_floor", // a batter hand-split < 75 PA
+  "below_hand_split_bf_floor", // a pitcher hand-split < 150 BF
+] as const;
+export type PlateDisciplineFloorNullReason = (typeof PLATE_DISCIPLINE_FLOOR_NULL_REASONS)[number];
+
+// V3 zoneLocation = the explicit unavailable record. Every location leaf is a
+// literal `null` (not merely nullable) so the schema STRUCTURALLY rejects any
+// attempt to carry a plate coordinate/zone — location-blindness is enforced by the
+// type, not by convention.
+export const plateHrV2ZoneLocationV3FeaturesSchema = z.object({
+  status: z.literal("unavailable"),
+  reason: z.enum(PLATE_HR_V2_ZONE_UNAVAILABLE_REASONS),
+  plateX: z.null(),
+  plateZ: z.null(),
+  zone: z.null(),
+  szTop: z.null(),
+  szBot: z.null(),
+}).strict();
+export type PlateHrV2ZoneLocationV3Features = z.infer<typeof plateHrV2ZoneLocationV3FeaturesSchema>;
+
+/** The canonical explicit-unavailable zoneLocation value for a V3 vector. */
+export function plateHrV2UnavailableZoneLocationV3(): PlateHrV2ZoneLocationV3Features {
+  return {
+    status: "unavailable",
+    reason: "licensed_source_unavailable",
+    plateX: null, plateZ: null, zone: null, szTop: null, szBot: null,
+  };
+}
+
 // ── Data quality (feature-vector-level summary) — no `extra`, this block IS
 // the escape hatch's own accounting. ────────────────────────────────────────
 export const plateHrV2DataQualityFeaturesSchema = z.object({
@@ -237,6 +364,39 @@ export const plateHrV2DataQualityFeaturesSchema = z.object({
   overallQuality: z.enum(["full", "degraded", "missing"]),
 }).strict();
 export type PlateHrV2DataQualityFeatures = z.infer<typeof plateHrV2DataQualityFeaturesSchema>;
+
+// ── PR7A (V3) — Retrosheet quality/provenance block + V3 dataQuality extension.
+// V3 carries a Retrosheet-specific provenance/quality block (§3.4) with TYPED null
+// reasons, on top of the base V1/V2 dataQuality fields — so a V3 rate is never read
+// without its dataset provenance and the reasons any leaf was nulled. ────────────────
+export const plateHrV2RetrosheetQualityBlockSchema = z.object({
+  datasetVersion: z.string().min(1),
+  dataThroughDate: z.string().refine(isStrictIsoCalendarTimestamp, "dataThroughDate must be a calendar-valid strict ISO/RFC3339 date"),
+  pitchSequenceCoverage: ratioLeaf,
+  sequenceFloorMet: z.boolean(),
+  overallQuality: z.enum(["full", "degraded", "missing"]),
+  nullReasons: z.array(z.enum(PLATE_DISCIPLINE_FLOOR_NULL_REASONS)),
+}).strict().superRefine((v, ctx) => {
+  // below_sequence_coverage present  IFF  sequenceFloorMet === false
+  const belowSeq = v.nullReasons.includes("below_sequence_coverage");
+  if (belowSeq !== (v.sequenceFloorMet === false)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["nullReasons"], message: "below_sequence_coverage must be present iff sequenceFloorMet===false" });
+  }
+  // nullReasons must be unique
+  if (new Set(v.nullReasons).size !== v.nullReasons.length) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["nullReasons"], message: "nullReasons must be unique" });
+  }
+  // non-empty nullReasons cannot coexist with overallQuality === "full"
+  if (v.nullReasons.length > 0 && v.overallQuality === "full") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["overallQuality"], message: "non-empty nullReasons cannot coexist with overallQuality=full" });
+  }
+});
+export type PlateHrV2RetrosheetQualityBlock = z.infer<typeof plateHrV2RetrosheetQualityBlockSchema>;
+
+export const plateHrV2DataQualityV3FeaturesSchema = plateHrV2DataQualityFeaturesSchema.extend({
+  retrosheetDiscipline: plateHrV2RetrosheetQualityBlockSchema,
+}).strict();
+export type PlateHrV2DataQualityV3Features = z.infer<typeof plateHrV2DataQualityV3FeaturesSchema>;
 
 // ── Derived feature vector (validated against the `derived_features` jsonb
 // column) ────────────────────────────────────────────────────────────────────
@@ -266,11 +426,25 @@ export const plateHrV2DerivedFeatureVectorV2Schema = plateHrV2DerivedFeatureVect
 }).strict();
 export type PlateHrV2DerivedFeatureVectorV2 = z.infer<typeof plateHrV2DerivedFeatureVectorV2Schema>;
 
-/** Accepts either version, discriminated on featureVersion — the reader for a
- * heterogeneous store of historical (V1) + current (V2) snapshots. */
+// ── V3 derived vector = V2 + pitcherDiscipline, with contactOpportunity extended
+// and zoneLocation reshaped to the explicit unavailable record (PR7A). A distinct
+// featureVersion literal so the shapes never collide; STRICT so no extra group
+// rides along. ADDITIVE/SHADOW — nothing writes V3 until the adapter lands. ──────
+export const plateHrV2DerivedFeatureVectorV3Schema = plateHrV2DerivedFeatureVectorV2Schema.extend({
+  featureVersion: z.literal(PLATE_HR_V2_FEATURES_V3),
+  contactOpportunity: plateHrV2ContactOpportunityV3FeaturesSchema,
+  zoneLocation: plateHrV2ZoneLocationV3FeaturesSchema,
+  pitcherDiscipline: plateHrV2PitcherDisciplineFeaturesSchema,
+  dataQuality: plateHrV2DataQualityV3FeaturesSchema,
+}).strict();
+export type PlateHrV2DerivedFeatureVectorV3 = z.infer<typeof plateHrV2DerivedFeatureVectorV3Schema>;
+
+/** Accepts any version, discriminated on featureVersion — the reader for a
+ * heterogeneous store of historical (V1), current (V2), and shadow (V3) snapshots. */
 export const plateHrV2DerivedFeatureVectorAnySchema = z.discriminatedUnion("featureVersion", [
   plateHrV2DerivedFeatureVectorV1Schema,
   plateHrV2DerivedFeatureVectorV2Schema,
+  plateHrV2DerivedFeatureVectorV3Schema,
 ]);
 export type PlateHrV2DerivedFeatureVectorAny = z.infer<typeof plateHrV2DerivedFeatureVectorAnySchema>;
 
@@ -288,13 +462,21 @@ export const plateHrV2AuthorizedProjectionV2Schema = plateHrV2DerivedFeatureVect
   .omit({ market: true, zoneLocation: true }).strict();
 export type PlateHrV2AuthorizedProjectionV2 = z.infer<typeof plateHrV2AuthorizedProjectionV2Schema>;
 
+// V3 authorized projection strips market + zoneLocation exactly as V1/V2 do (§3.5):
+// the FULL derived vector carries the explicit unavailable zoneLocation record, but
+// the persisted training projection omits it, so no zone field ever reaches training.
+export const plateHrV2AuthorizedProjectionV3Schema = plateHrV2DerivedFeatureVectorV3Schema
+  .omit({ market: true, zoneLocation: true }).strict();
+export type PlateHrV2AuthorizedProjectionV3 = z.infer<typeof plateHrV2AuthorizedProjectionV3Schema>;
+
 /** Strictly parse a persisted derived-features projection against the schema for
  * `featureVersion`; also enforces top-level version === embedded version. */
 export function parseAuthorizedProjection(
   featureVersion: string,
   derivedFeatures: unknown,
 ): { ok: true; version: string } | { ok: false; reason: string } {
-  const schema = featureVersion === PLATE_HR_V2_FEATURES_V2 ? plateHrV2AuthorizedProjectionV2Schema
+  const schema = featureVersion === PLATE_HR_V2_FEATURES_V3 ? plateHrV2AuthorizedProjectionV3Schema
+    : featureVersion === PLATE_HR_V2_FEATURES_V2 ? plateHrV2AuthorizedProjectionV2Schema
     : featureVersion === PLATE_HR_V2_FEATURES_V1 ? plateHrV2AuthorizedProjectionV1Schema
     : null;
   if (schema == null) return { ok: false, reason: `unknown_feature_version:${featureVersion}` };
@@ -334,6 +516,13 @@ export const plateHrV2FeatureAvailabilityVectorV2Schema = plateHrV2FeatureAvaila
   recentContactForm: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
 });
 export type PlateHrV2FeatureAvailabilityVectorV2 = z.infer<typeof plateHrV2FeatureAvailabilityVectorV2Schema>;
+
+// ── V3 availability = V2 + pitcherDiscipline (PR7A). ──────────────────────────
+export const plateHrV2FeatureAvailabilityVectorV3Schema = plateHrV2FeatureAvailabilityVectorV2Schema.extend({
+  featureVersion: z.literal(PLATE_HR_V2_FEATURES_V3),
+  pitcherDiscipline: z.record(z.string(), plateHrV2FeatureAvailabilityLeafSchema),
+});
+export type PlateHrV2FeatureAvailabilityVectorV3 = z.infer<typeof plateHrV2FeatureAvailabilityVectorV3Schema>;
 
 /** Guard: a single training artifact must not mix feature versions. Returns the
  * common version, or an error listing the distinct versions seen. */
