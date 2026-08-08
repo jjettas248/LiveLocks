@@ -517,7 +517,20 @@ network, no dataset download.
    `plateDisciplineNoLocationFlag.test.ts`, `retrosheetDisciplineEvidence.test.ts`,
    `retrosheetDisciplineIsolation.test.ts`, `retrosheetDisciplineReadIntegrity.test.ts`. No adapter,
    capture wiring, ingestion, DB DDL, fitting, or champion/public change.
-5. **[BLOCKED — separate authorization]** Write the Retrosheet normalization adapter against the validated fixtures (fail-closed).
+5. **[IN REVIEW — PR7A.3]** Write the Retrosheet normalization adapter against the validated fixtures
+   (fail-closed). Two pure, deterministic layers — PA normalization (validated cwevent raw rows +
+   caller-supplied provenance → canonical PA facts) and actor aggregation (PA facts → batter/pitcher
+   `RetrosheetDisciplineEvidencePayload` + `contactOpportunity`/`pitcherDiscipline` V3 fragments +
+   `retrosheetDiscipline` dataQuality fragment) — in
+   `hrProbabilityV2/retrosheetDisciplineAdapter.ts`. No network/DB/env/clock/scheduler/route/champion/
+   public dependency; interrupted-PA single-terminal-row + marker-strip-once + responsible-batter
+   substitution + unknown-handedness-withholds-split + fail-closed on unsupported sequences; raw integer
+   sufficient stats preserved, derived rates floor-nulled with reasons (coverage>=0.90, batter>=150 PA,
+   pitcher>=300 BF, split>=75 PA / >=150 BF), `pitcherCalledStrikeRatePct=calledStrikes/pitches`,
+   immutable vsL/vsR history (no `batterHand`/`vsHand`), every result revalidated through the merged
+   `validateRetrosheetDisciplinePayload` + V3 schemas, byte-deterministic output. Tests:
+   `retrosheetDisciplineAdapter.test.ts` (8 fixtures as executable adapter tests + mutation/determinism).
+   Does NOT construct a full prediction snapshot or wire into capture. Stage 6 not started.
 6. **[BLOCKED]** Wire shadow forward-capture behind both flags; leakage + re-derivability + isolation tests.
 7. **[BLOCKED]** Run the §3.6 season matrix in the authorized environment; then, only on separate
    authorization, begin model fitting.
